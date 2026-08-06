@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+    from unify.workflow_manager.workflow_manager import WorkflowManager
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +657,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "without rediscovering the right setup.\n\n"
     "The same applies to trajectories that unrolled as "
     "`execute_code` -> observe -> agent reasoning -> `execute_code` loops. "
-    "Do not assume the future workflow needs a full CodeActActor. First "
+    "Do not assume the future procedure needs a full CodeActActor. First "
     "ask whether the agent's intermediate reasoning was open-ended "
     "planning or bounded semantic judgment inside an otherwise stable "
     "control flow. If it was bounded, distill the trajectory into one "
@@ -678,7 +679,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "Generalize by preserving the LLM call, not by memorizing the sample "
     "cases.\n\n"
     "### Preserving user-facing communication points\n\n"
-    "When wrapping a workflow into a stored function, pay attention to "
+    "When wrapping a procedure into a stored function, pay attention to "
     "points where the original code depended on the user being "
     "informed — especially states that block until the user takes an "
     "external action. If the original trajectory included a step like "
@@ -687,7 +688,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "it out creates a silent deadlock: the function blocks waiting for "
     "a condition the user does not know about.\n\n"
     "The general principle: a stored function inherits the execution "
-    "environment's `notify()` helper. Any workflow state where "
+    "environment's `notify()` helper. Any state where "
     "progress depends on external human action (approving an auth "
     "prompt, granting a permission, confirming a destructive "
     "operation) must include a `notify()` call *before* entering the "
@@ -745,7 +746,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "a virtual environment**. `FunctionManager_add_functions` will "
     "reject the function if third-party imports are detected without "
     "a `venv_id`.\n\n"
-    "Workflow:\n"
+    "Steps:\n"
     "1. Check existing venvs with `FunctionManager_list_venvs` — if "
     "one already declares the needed packages, reuse it.\n"
     "2. If no suitable venv exists, create one with "
@@ -809,7 +810,7 @@ _STORAGE_THREE_STORES = (
     "when the trajectory reveals a non-obvious multi-step "
     "composition strategy that would be hard to rediscover. "
     "A single function call, a linear sequence of obvious steps, "
-    "or a workflow fully explained by the individual function "
+    "or a procedure fully explained by the individual function "
     "docstrings does NOT need guidance. Exception: if a simple "
     "*domain* operation required a non-obvious correction (an "
     "error-recovery loop against an external API, a silent data "
@@ -829,9 +830,9 @@ _STORAGE_THREE_STORES = (
     "procedure that merely restates the function contract, and do not "
     "turn the act of writing/testing that function into guidance.\n\n"
     "**Shared rules and policies are the other first-class use of "
-    "guidance.** When the instructions a workflow was built from embed a "
+    "guidance.** When the instructions a procedure was built from embed a "
     "durable rule, policy, or convention that is not intrinsic to that one "
-    "workflow — a rule that could equally govern other workflows, now or "
+    "procedure — a rule that could equally govern other procedures, now or "
     "later (thresholds, routing or escalation criteria, formatting or tone "
     "conventions, approval rules) — the canonical statement of that rule "
     "belongs in ONE guidance entry, linked via `function_ids` to every "
@@ -840,7 +841,7 @@ _STORAGE_THREE_STORES = (
     "the new function's id in `function_ids` instead of writing a second "
     "copy; when none exists, add a single entry carrying the rule and link "
     "it. A shared rule qualifies for a guidance entry even when its "
-    "workflow is simple — the entry's value is having one canonical, "
+    "procedure is simple — the entry's value is having one canonical, "
     "linked home for the rule, not procedural complexity. Functions may "
     "still bake the rule's current parameters into their implementation "
     "for deterministic execution; name the linked guidance entry in the "
@@ -851,7 +852,7 @@ _STORAGE_THREE_STORES = (
     "maintenance reliable.\n\n"
     "Actions:\n"
     "- **Add** guidance for a genuinely non-trivial compositional "
-    "workflow (`GuidanceManager_add_guidance`). Include `function_ids` "
+    "procedure (`GuidanceManager_add_guidance`). Include `function_ids` "
     "to cross-reference the concrete functions it describes.\n"
     "- **Update** existing guidance that is incomplete or "
     "superseded (`GuidanceManager_update_guidance`).\n"
@@ -859,7 +860,7 @@ _STORAGE_THREE_STORES = (
     "(`GuidanceManager_delete_guidance`).\n\n"
     "Do NOT duplicate information that already lives in a "
     "function's docstring. Do NOT create guidance for simple or "
-    "self-explanatory workflows.\n\n"
+    "self-explanatory procedures.\n\n"
     "### Knowledge Store — the *is*\n\n"
     "The KnowledgeManager stores durable sourced claims: facts, "
     "policies, definitions, decisions, constraints, insights, and "
@@ -887,11 +888,11 @@ _STORAGE_THREE_STORES = (
     "| Aspect | FunctionManager | GuidanceManager | KnowledgeManager |\n"
     "|--------|----------------|----------------|------------------|\n"
     "| Role | the *what* | the *how* | the *is* |\n"
-    "| Granularity | Single callable | Multi-step workflow | Typed claim |\n"
+    "| Granularity | Single callable | Multi-step procedure | Typed claim |\n"
     "| Content | Executable implementation | Natural-language recipe | Sourced statement |\n"
     "| Analogy | A tool's docstring | A prompt that references tools | A fact with provenance |\n\n"
     "When a trajectory reveals both a useful function AND a non-trivial "
-    "workflow that uses it, store the function first, then create a "
+    "procedure that uses it, store the function first, then create a "
     "guidance entry referencing it via `function_ids`. Store knowledge "
     "claims only when the trajectory surfaces durable domain facts "
     "worth remembering independently of how to act on them.\n\n"
@@ -1201,7 +1202,7 @@ def _build_storage_tools(
             """Record a stored FunctionManager entrypoint candidate for future runs.
 
             Use this only after you have reviewed the completed trajectory and
-            decided that the stored function captures a stable reusable workflow
+            decided that the stored function captures a stable reusable procedure
             that preserves the observed operational contract. Calling this tool
             records the function as a symbolic executor candidate on future
             non-terminal instances; it does not promote those instances to
@@ -1338,7 +1339,7 @@ def _build_storage_tools(
               effect ordering, keep validation/recovery branches, and leave
               managed surfaces under their manager-owned primitives.
             - Antipatterns: hardcoding observations from the live run, flattening
-              a multi-step primitive workflow into one request, using raw
+              a multi-step primitive sequence into one request, using raw
               HTTP/storage access instead of manager APIs, dropping blocker
               handling, changing output shape, hiding side effects in helpers, or
               swapping in cheaper but behaviorally different data sources.
@@ -1552,7 +1553,7 @@ def _start_storage_check_loop(
             "work to be saved:\n\n"
             f"> {stop_reason}\n\n"
             "Weigh this context when deciding what to store. If the reason "
-            "indicates the user wanted the workflow remembered or saved, that "
+            "indicates the user wanted the procedure remembered or saved, that "
             "is a strong positive signal — look for reusable patterns in the "
             "trajectory. If the reason indicates cancellation or abandonment, "
             "the trajectory is less likely to contain patterns worth "
@@ -1568,11 +1569,11 @@ def _start_storage_check_loop(
             "## Recurring Task Entrypoint Review\n\n"
             "This trajectory completed a scheduled or triggered task that had "
             "no stored entrypoint when it ran. You must explicitly consider "
-            "whether the successful run revealed a stable reusable workflow "
+            "whether the successful run revealed a stable reusable procedure "
             "worth attaching to future task instances.\n\n"
             "No-op is valid: keep the task description-driven if future runs "
             "need broad planning, changing tool discovery, or open-ended "
-            "judgment. If the workflow can be stabilized as code, it may still "
+            "judgment. If the procedure can be stabilized as code, it may still "
             "use focused `query_llm(...)` calls for bounded semantic substeps "
             "such as summarization, classification, ranking, drafting, or "
             "source selection.\n\n"
@@ -2309,6 +2310,7 @@ class CodeActActor(BaseCodeActActor):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
+        workflow_manager: Optional["WorkflowManager"] = None,
         can_compose: object = _UNSET,
         can_store: object = _UNSET,
         timeout: object = _UNSET,
@@ -2335,6 +2337,10 @@ class CodeActActor(BaseCodeActActor):
             knowledge_manager: Manages durable sourced knowledge claims (the *is*).
                 Exposes JSON CRUD/lifecycle tools on the main loop and in the
                 post-completion storage check loop when present.
+            workflow_manager: Catalogue of installable workflow bundles. Exposes
+                JSON install/uninstall/list/get tools on the main loop when the
+                curated catalogue is configured; absent otherwise, so the tool
+                schema is unchanged for deployments without the shelf.
             can_compose: Whether the LLM can write and execute arbitrary code via
                 ``execute_code``. Set to False for function-execution-only mode.
             can_store: Whether a post-completion review loop should run to
@@ -2371,6 +2377,7 @@ class CodeActActor(BaseCodeActActor):
             function_manager=function_manager,
             guidance_manager=guidance_manager,
             knowledge_manager=knowledge_manager,
+            workflow_manager=workflow_manager,
         )
 
         can_compose = can_compose if can_compose is not _UNSET else True
@@ -3626,6 +3633,34 @@ class CodeActActor(BaseCodeActActor):
                 ),
             )
 
+        if self.workflow_manager:
+            wm = self.workflow_manager
+            tools.update(
+                methods_to_tool_dict(
+                    ToolSpec(
+                        fn=wm.list_workflows,
+                        display_label="Listing installable workflows",
+                    ),
+                    ToolSpec(
+                        fn=wm.get_workflow,
+                        display_label="Reading a workflow's record",
+                    ),
+                    ToolSpec(
+                        fn=wm.install_workflow,
+                        display_label="Installing a workflow",
+                    ),
+                    ToolSpec(
+                        fn=wm.uninstall_workflow,
+                        display_label="Uninstalling a workflow",
+                    ),
+                    ToolSpec(
+                        fn=wm.get_installation_params,
+                        display_label="Reading a workflow's settings",
+                    ),
+                    include_class_name=True,
+                ),
+            )
+
         # ── Proactive skill storage tool ──────────────────────────────
         if self.function_manager and self.guidance_manager:
             _actor_ref = self
@@ -3640,7 +3675,7 @@ class CodeActActor(BaseCodeActActor):
 
                 Use this when you have just completed a complex subtask and recognize
                 a reusable pattern worth preserving — for example, a non-obvious
-                configuration of primitives.actor.act, a multi-step workflow, a
+                configuration of primitives.actor.act, a multi-step procedure, a
                 function that bakes in hard-won configuration, or a durable sourced
                 fact discovered during the run.
 
@@ -5443,8 +5478,8 @@ class CodeActActor(BaseCodeActActor):
                 "in the FunctionManager by exact name. Functions discovered via the\n"
                 "FunctionManager discovery tools are automatically available.\n"
                 "\n"
-                "Workflow\n"
-                "-------\n"
+                "Steps\n"
+                "-----\n"
                 "1. Discover stored functions via ``FunctionManager_search_functions``,\n"
                 "   ``FunctionManager_filter_functions``, or\n"
                 "   ``FunctionManager_list_functions``.\n"

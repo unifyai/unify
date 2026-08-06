@@ -29,21 +29,20 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
     workflow put it there — so a workflow can later be updated or removed
     as a unit.
 
-    Modes
-    -----
-    Installation chooses how long the bundle keeps ownership:
+    Upkeep
+    ------
+    Installed content is kept matched to the catalogue: reinstalling or
+    reconciling brings the planted rows to the current bundle version,
+    overwriting local edits to them and pruning entries the bundle
+    dropped. Content the user wants to diverge from the workflow belongs
+    in a copy of their own, alongside the planted original.
 
-    - ``"seed"`` plants the content once and then lets go. Edits stick,
-      and later versions of the bundle leave the rows alone. Use this
-      when the workflow is a starting point the user is expected to
-      shape.
-    - ``"pinned"`` keeps reconciling. Edits to planted rows are
-      overwritten from the bundle on the next pass, and content dropped
-      from the bundle is removed. Use this when the workflow must stay
-      correct centrally and local drift is a defect.
-
-    Mode is about upkeep, not secrecy: under both modes the planted rows
-    are visible, readable, and attributed to the workflow.
+    Requirements
+    ------------
+    A bundle declares which integrations its jobs need. Installing with a
+    requirement unmet still plants everything, but the workflow's
+    recurring jobs stay disarmed — planted and visible, firing nothing —
+    until the connection lands. Reinstalling after connecting arms them.
 
     Parameters
     ----------
@@ -108,7 +107,6 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         *,
         slug: str,
-        mode: str = "seed",
         params: Optional[Dict[str, Any]] = None,
         destination: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -123,23 +121,20 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         on its own later.
 
         Installing a workflow that is already installed reconciles it to
-        the current bundle instead of duplicating it.
+        the current bundle instead of duplicating it — a repeat install is
+        also how a partial install is retried and how jobs held on a
+        missing connection are armed once it lands.
 
         Parameters
         ----------
         slug:
             Bundle identifier from ``list_workflows``.
-        mode:
-            ``"seed"`` (default) to plant once and leave the content
-            editable, or ``"pinned"`` to keep it reconciled to the bundle.
-            Prefer ``"seed"`` unless the user wants the workflow to stay
-            centrally managed: pinned content silently reverts local edits,
-            which surprises people who tuned a procedure and found it back
-            the way it started.
         params:
             Install-time settings declared by the bundle, e.g. which
             mailbox to work from. Ask the user for any the bundle requires
-            rather than guessing.
+            rather than guessing. On a reinstall, omitting this keeps the
+            settings already recorded; passing it replaces them, which is
+            also how an installed workflow's settings are changed.
         destination:
             ``None`` for personal, or ``team:<id>`` to install for a whole
             team. A team install plants content for every member.
@@ -147,7 +142,70 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         Returns
         -------
         A dict with the resulting installation and a ``planted`` summary
-        of what was written per surface.
+        of what was written per surface. When a declared integration is
+        not connected it also carries ``connect_required`` naming what is
+        missing; the workflow's jobs stay disarmed until then.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def reconcile_installed(
+        self,
+        *,
+        slugs: Optional[list[str]] = None,
+        destination: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Bring installed workflows back in line with the current catalogue.
+
+        Use this to apply a newer version of a workflow the user already
+        has, or to re-check all of them at once — it reconciles each
+        installation's content to its bundle and re-arms or holds its
+        jobs according to what is currently connected. Settings recorded
+        on each installation are kept.
+
+        Parameters
+        ----------
+        slugs:
+            Limit the pass to these workflows; ``None`` reconciles every
+            installed one.
+        destination:
+            ``None`` for personal installations, or ``team:<id>``.
+
+        Returns
+        -------
+        A dict with ``reconciled`` (per-slug install results) and, when
+        some installations no longer have a bundle in the catalogue,
+        ``orphaned`` naming them; those are left untouched.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_installation_params(
+        self,
+        *,
+        slug: str,
+        destination: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Read the settings an installation was configured with.
+
+        This is how a workflow's own recurring tasks resolve their
+        per-install settings at run time — which mailbox to read, which
+        calendar to write — since settings are never written into the
+        planted content itself.
+
+        Parameters
+        ----------
+        slug:
+            Bundle identifier of the installation.
+        destination:
+            ``None`` for personal, or ``team:<id>``.
+
+        Returns
+        -------
+        The installation's settings as a dict; an error result if the
+        workflow is not installed at that destination.
         """
         raise NotImplementedError
 
@@ -164,8 +222,8 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         This deletes the rows the workflow put in place, including any
         recurring tasks it created, so those stop firing. Content the user
         added themselves is untouched, and so is anything another workflow
-        planted. Confirm before calling: under ``"seed"`` mode the user may
-        have spent time editing the planted rows, and those edits go too.
+        planted. Confirm before calling: the user may have spent time
+        editing the planted rows, and those edits go too.
 
         Parameters
         ----------
@@ -184,8 +242,9 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
     def get_workflow(self, *, slug: str) -> Dict[str, Any]:
         """
         Read one workflow's full record: its description, whether it is
-        installed, at which version and mode, its current settings, and
-        which surfaces it covers.
+        installed and at which version, its current settings, its
+        requirements and their connection state, and which surfaces it
+        covers.
 
         Use this to answer questions about what a workflow does or what a
         given installation is currently set to, and to read back the

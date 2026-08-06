@@ -1,9 +1,10 @@
 from .meta import WorkflowMeta
-from .workflow import UNASSIGNED, WorkflowInstallation, WorkflowMode
+from .catalog_entry import WorkflowCatalogEntry
+from .workflow import UNASSIGNED, WorkflowInstallation
 
 __all__ = [
     "UNASSIGNED",
+    "WorkflowCatalogEntry",
     "WorkflowInstallation",
     "WorkflowMeta",
-    "WorkflowMode",
 ]

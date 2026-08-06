@@ -8,7 +8,7 @@ When the actor is in persist mode and receives ``[Fast-path result]``
 interjections, it should:
 
 - Escalate via ``notify()`` when the fast path clearly failed or attempted
-  work requiring capabilities it lacks (credentials, multi-step workflows).
+  work requiring capabilities it lacks (credentials, multi-step procedures).
 - Stay quiet (no escalation) when the fast path succeeded at a simple
   atomic action.
 """
@@ -136,7 +136,7 @@ async def test_actor_escalates_on_failed_credential_fast_path():
             "If this result looks wrong or incomplete — especially if the "
             "task falls within your loaded guidance or requires capabilities "
             "the fast path lacks (credentials, secrets, multi-step "
-            "workflows) — escalate via execute_code by calling "
+            "procedures) — escalate via execute_code by calling "
             '```python\nnotify({"type": "escalation", "message": "<what you can do '
             'better>"})\n```.  Otherwise, no action needed.',
         )
@@ -195,7 +195,7 @@ async def test_actor_no_escalation_on_successful_atomic_fast_path():
             "If this result looks wrong or incomplete — especially if the "
             "task falls within your loaded guidance or requires capabilities "
             "the fast path lacks (credentials, secrets, multi-step "
-            "workflows) — escalate via execute_code by calling "
+            "procedures) — escalate via execute_code by calling "
             '```python\nnotify({"type": "escalation", "message": "<what you can do '
             'better>"})\n```.  Otherwise, no action needed.',
         )
@@ -252,7 +252,7 @@ async def test_actor_escalates_on_multi_step_fast_path_attempt():
             "If this result looks wrong or incomplete — especially if the "
             "task falls within your loaded guidance or requires capabilities "
             "the fast path lacks (credentials, secrets, multi-step "
-            "workflows) — escalate via execute_code by calling "
+            "procedures) — escalate via execute_code by calling "
             '```python\nnotify({"type": "escalation", "message": "<what you can do '
             'better>"})\n```.  Otherwise, no action needed.',
         )

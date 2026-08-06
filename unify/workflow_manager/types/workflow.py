@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import ClassVar
 
 from pydantic import Field, model_validator
@@ -12,36 +11,14 @@ from unify.common.authorship import AuthoredRow
 UNASSIGNED = -1
 
 
-class WorkflowMode(str, Enum):
-    """How long a workflow keeps ownership of the rows it planted.
-
-    The mode is policy, not provenance. Every row a workflow writes
-    carries its ``source_id`` under either mode, so "what did this
-    workflow plant?" always has an answer. What the mode decides is
-    whether the bundle keeps reconciling those rows.
-    """
-
-    pinned = "pinned"
-    """Reconciled on every pass. Source supremacy applies: local edits to
-    a planted row are overwritten from the bundle, and a row whose key
-    left the bundle is pruned. Use for content the workflow must be able
-    to fix or evolve centrally."""
-
-    seed = "seed"
-    """Reconciled exactly once, at install. The rows are then left alone
-    forever — later passes skip the bundle entirely, so edits survive and
-    a key leaving the bundle prunes nothing. Use for a starting point the
-    user is meant to grow past."""
-
-
 class WorkflowInstallation(AuthoredRow):
     """One installed workflow bundle.
 
     The row is the installation, not the bundle: it records which bundle
-    was installed, at which version, under which mode, and which surfaces
-    it wrote to. The bundle's *content* lives in the surfaces themselves
-    (guidance rows, task rows, ...), each stamped with this row's
-    :attr:`slug` as its ``source_id``.
+    was installed, at which version, and which surfaces it wrote to. The
+    bundle's *content* lives in the surfaces themselves (guidance rows,
+    task rows, ...), each stamped with this row's :attr:`slug` as its
+    ``managed_by``.
     """
 
     SHORTHAND_MAP: ClassVar[dict[str, str]] = {
@@ -49,7 +26,6 @@ class WorkflowInstallation(AuthoredRow):
         "slug": "s",
         "name": "n",
         "version": "v",
-        "mode": "m",
         "status": "st",
         "params": "p",
         "surfaces": "sf",
@@ -64,7 +40,7 @@ class WorkflowInstallation(AuthoredRow):
     slug: str = Field(
         description=(
             "Stable bundle identifier, e.g. 'draft_email_replies'. Doubles "
-            "as the custom-sync source_id stamped onto every row this "
+            "as the custom-sync managed_by stamped onto every row this "
             "workflow plants, so it must not change across versions."
         ),
     )
@@ -80,18 +56,14 @@ class WorkflowInstallation(AuthoredRow):
         default="",
         description="What the workflow does, shown when listing workflows.",
     )
-    mode: WorkflowMode = Field(
-        default=WorkflowMode.seed,
-        description=(
-            "'pinned' to keep reconciling the planted rows from the "
-            "bundle, 'seed' to plant once and leave them to the user."
-        ),
-    )
     status: str = Field(
-        default="installed",
+        default="active",
         description=(
-            "'installed' when the last reconcile completed, 'partial' when "
-            "some entries failed and the next pass will retry them."
+            "'active' when the last reconcile completed, 'partial' when "
+            "some entries failed and the next pass will retry them. "
+            "'needs_connection' is never stored — connections change "
+            "without this row being touched, so reads derive it from the "
+            "bundle's requirements and the current secret keyset."
         ),
     )
     params: str = Field(

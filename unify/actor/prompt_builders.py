@@ -142,6 +142,41 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     | **read_only** | `await func.read_only(...)` | Sees current state, changes discarded |
 """).strip()
 
+_WORKFLOW_SHELF = textwrap.dedent("""
+    ### Installable workflows
+
+    The `WorkflowManager_*` tools manage a shelf of curated, versioned
+    packages — each one sets an assistant up for a recurring job (its
+    procedures, functions, recurring tasks, typed claims) in one install.
+
+    **Install vs. build.** When the user asks for a capability shaped like
+    a packaged job ("set me up to draft email replies each morning"),
+    check the shelf first with `WorkflowManager_list_workflows`. Install
+    when a workflow matches; build with tasks/guidance/functions only for
+    genuinely bespoke requests. Do not hand-assemble what a workflow
+    already packages, and do not install a workflow to get just one of
+    its pieces.
+
+    **Installing is consequential.** It plants content and creates
+    recurring jobs that will act on their own later. Confirm with the
+    user before installing anything they did not explicitly ask for, and
+    afterwards report exactly what was set up — every recurring job and
+    its schedule in plain language, and any settings recorded.
+
+    **A missing connection is not an error.** When the result carries
+    `connect_required`, the workflow is installed but held: tell the user
+    which app to connect and that nothing fires in the meantime.
+    Reinstalling after they connect arms the jobs.
+
+    **After install, everything is ordinary.** Planted procedures are
+    found by the same guidance search as any other; planted tasks are
+    ordinary tasks, run and steered through the usual task tools. There
+    is no workflow-level "run": running means triggering the workflow's
+    own task. Uninstalling removes what the workflow planted and stops
+    its jobs — name them before confirming.
+""")
+
+
 _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
     ### Discovery-First Policy (Active) — HARD REQUIREMENT
 
@@ -411,13 +446,13 @@ _EXECUTION_RULES = textwrap.dedent("""
 
        **Notifications as action triggers**
 
-       Some workflows reach a point where progress is blocked until the
+       Some procedures reach a point where progress is blocked until the
        user takes an external action — approving an MFA prompt on their
        phone, granting an OAuth consent, clicking a confirmation link,
        physically plugging in a device, or any state where *your* process
        cannot continue without *their* intervention. In these situations
        `notify()` is not merely informational — it is the mechanism that
-       unblocks the workflow. Without it, both sides are stuck: the code
+       unblocks the procedure. Without it, both sides are stuck: the code
        waits for a condition that will never be met because the user does
        not know they need to act.
 
@@ -526,7 +561,7 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     calls, API calls, deterministic filters, arithmetic, date comparisons,
     dedupe, schema reshaping, and format conversion do not need semantic
     reasoning. Keep those parts as ordinary Python or direct primitive/function
-    calls, even inside a larger workflow that uses `query_llm(...)` elsewhere.
+    calls, even inside a larger procedure that uses `query_llm(...)` elsewhere.
 
     **LLMs are the fuzzy operator for unstructured data:** Use
     `query_llm(...)` liberally when the task processes meaning, intent, nuance, or
@@ -627,7 +662,7 @@ _STORAGE_DEFERRED_NOTICE = textwrap.dedent("""
     it valuable, not as a routine step.
 
     When to use `store_skills`:
-    - After completing a complex workflow that discovered non-obvious
+    - After completing a complex procedure that discovered non-obvious
       configuration or composition strategies.
     - When the user explicitly asks you to remember or store a skill.
     - Before transitioning to a different phase, to capture learnings
@@ -660,8 +695,8 @@ _STORAGE_DEFERRED_NOTICE = textwrap.dedent("""
     straight to `compress_context`.
 """).strip()
 
-_TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
-    ### Durable Scheduled And Triggered Workflows
+_TASK_SCHEDULING = textwrap.dedent("""
+    ### Durable Scheduled And Triggered Tasks
 
     When the user asks for work to happen later, repeatedly, or in response to
     future inbound events, represent that durable intent with the task
@@ -674,7 +709,7 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     - "Repeat this every Monday at 12:00 UTC"
     - "Send me this report every day"
     - "Whenever Alice emails about invoices, summarize it and draft a reply"
-    - "Turn what we just did into a recurring workflow"
+    - "Turn what we just did into a recurring task"
 
     Prefer a single ``execute_function`` call for one create/update/ask:
 
@@ -730,15 +765,15 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     `primitives.tasks.execute(task_id=...)`; execution then runs a contained
     child actor dedicated to that task. Do not write and attach an untested
     entrypoint function at task creation unless the user explicitly requested a
-    stored function-backed workflow. When you do store an entrypoint or helper,
+    stored function-backed executor. When you do store an entrypoint or helper,
     prefer ``async def`` with ``await`` for LLM / I/O work; keep expressive
     stdlib `logging` (PHASE/SKIP/SOFT_FAIL markers) in the body — soft failures
     need logs, not only exceptions.
 
-    If a workflow has just been completed interactively and the user wants it
+    If a procedure has just been completed interactively and the user wants it
     repeated, include the relevant context in the task description. Use
     `store_skills` or direct FunctionManager writes only when the user asks to
-    store the workflow, or when the completed trajectory clearly reveals a
+    store the procedure, or when the completed trajectory clearly reveals a
     reusable function worth saving. Offline delivery is independent from
     execution style: an offline task can still be description-driven, and a
     stored entrypoint is only a symbolic executor candidate until certification
@@ -850,7 +885,7 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
       `https://graph.microsoft.com/Sites.Read.All`, plus the bare base
       scope `offline_access`.
 
-    **Workflow.** Look up the scope(s) the specific API call requires
+    **Procedure.** Look up the scope(s) the specific API call requires
     from the provider's official docs or SDK at call time, then check
     membership against the granted-scopes secret.  Do not rely on a
     per-feature catalog in this prompt — there isn't one.
@@ -895,7 +930,7 @@ _FAST_PATH_AWARENESS = textwrap.dedent("""
     - The task falls within guidance you have loaded (e.g. a login procedure
       with specific credential handling steps)
     - The task requires capabilities the fast path lacks: stored credentials
-      (`${SECRET_NAME}` injection via `type_text`), multi-step workflows,
+      (`${SECRET_NAME}` injection via `type_text`), multi-step procedures,
       or data extraction with structured schemas
 
     **How to escalate:**
@@ -1157,7 +1192,7 @@ def _build_code_act_rules_and_examples(
         discovery_first = get_code_act_discovery_first_examples()
         if discovery_first:
             parts.append(
-                f"### Discovery-First Workflow\n\n{discovery_first}",
+                f"### Discovery-First Procedure\n\n{discovery_first}",
             )
 
         session_examples = get_code_act_session_examples()
@@ -1186,7 +1221,7 @@ def _build_code_act_rules_and_examples(
             for k in env.get_tools()
         )
         if _has_tasks:
-            parts.append(_TASK_SCHEDULING_WORKFLOWS)
+            parts.append(_TASK_SCHEDULING)
         if _has_computer and _has_state:
             from unify.actor.prompt_examples import get_mixed_examples
 
@@ -1231,6 +1266,9 @@ def build_code_act_prompt(
     )
     has_km_tools = bool(
         tools and any(str(k).startswith("KnowledgeManager_") for k in tools.keys()),
+    )
+    has_wm_tools = bool(
+        tools and any(str(k).startswith("WorkflowManager_") for k in tools.keys()),
     )
 
     additional_tools_block = _build_additional_tools_block(
@@ -1299,6 +1337,9 @@ def build_code_act_prompt(
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
+        if has_wm_tools:
+            parts.append(_WORKFLOW_SHELF)
+
         if can_store:
             parts.append(_STORAGE_DEFERRED_NOTICE)
 
@@ -1327,8 +1368,11 @@ def build_code_act_prompt(
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
-        workflow = (
-            "### Workflow\n\n"
+        if has_wm_tools:
+            parts.append(_WORKFLOW_SHELF)
+
+        procedure = (
+            "### Procedure\n\n"
             "1. **Discover** stored functions using `FunctionManager_search_functions`,\n"
             "   `FunctionManager_filter_functions`, or `FunctionManager_list_functions`.\n"
             "2. **Execute** via `execute_function` — a stored match from discovery,\n"
@@ -1338,8 +1382,8 @@ def build_code_act_prompt(
             "   code yourself."
         )
         if additional_tools_block:
-            workflow += f"\n\n{additional_tools_block}"
-        parts.append(workflow)
+            procedure += f"\n\n{additional_tools_block}"
+        parts.append(procedure)
 
         if rules_and_examples:
             parts.append(rules_and_examples)

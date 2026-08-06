@@ -239,10 +239,10 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         if task_entrypoint_review is not None:
             review_token = current_post_run_review_context.set(
                 PostRunReviewContext(
-                    display_label="Storing reusable workflow",
+                    display_label="Storing reusable procedure",
                     instructions=(
                         "Review the successful task trajectory and decide whether "
-                        "a stable reusable workflow should be stored and attached "
+                        "a stable reusable procedure should be stored and attached "
                         "to future scheduled or triggered task instances."
                     ),
                     extensions={"task_entrypoint_review": task_entrypoint_review},
