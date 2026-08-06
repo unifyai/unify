@@ -36,7 +36,7 @@ A targeted verification script can validate a fix in **seconds** rather than wai
 4. **Run fast**: Should complete in seconds, not minutes
 5. **Print clear pass/fail output**: Make success/failure obvious
 
-## Example Workflow
+## Example Sequence
 
 ```bash
 # 1. Implement the fix

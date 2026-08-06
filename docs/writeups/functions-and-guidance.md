@@ -16,7 +16,7 @@ The skill folder makes prose the front door. The `SKILL.md` is the retrievable u
 
 First, shared prose has nowhere to live. Take a rule like "use this tone when writing professional documents". That applies to email drafting, to deck building, to social posts — to any function that writes for an audience. In a folder world you paste it into every skill that needs it, and the copies drift apart. Or you make a standalone "tone" skill and hope the model happens to load two skills and merge them. There's no way to say *this one piece of guidance belongs to those five capabilities*.
 
-Second, code is second-class. A script can only be found through its skill's description. If the task in front of the agent matches the script but not the prose wrapped around it, the code may as well not exist. And sure — you could write the whole workflow into `scripts/` and leave a one-line `SKILL.md` that says "run the script". People do. But at that point the document exists only to make the program retrievable, which tells you the retrieval model is wrong. The unit you wanted was the program.
+Second, code is second-class. A script can only be found through its skill's description. If the task in front of the agent matches the script but not the prose wrapped around it, the code may as well not exist. And sure — you could write the whole procedure into `scripts/` and leave a one-line `SKILL.md` that says "run the script". People do. But at that point the document exists only to make the program retrievable, which tells you the retrieval model is wrong. The unit you wanted was the program.
 
 ## Two libraries, linked both ways
 
@@ -35,7 +35,7 @@ Retrieval treats the two libraries as peers. The actor's discovery step searches
 
 ## Whole tasks become functions
 
-The part I'd defend hardest is what happens after a task finishes. Every `act(...)` run can end with a librarian pass: a separate loop reviews the trajectory, searches the existing stores for duplicates, and decides what deserves to persist. Reusable code that ran successfully becomes a function. A non-obvious workflow insight becomes guidance, linked to the functions it composes via `function_ids`. Very often it stores nothing, which is the right call more than people expect.
+The part I'd defend hardest is what happens after a task finishes. Every `act(...)` run can end with a librarian pass: a separate loop reviews the trajectory, searches the existing stores for duplicates, and decides what deserves to persist. Reusable code that ran successfully becomes a function. A non-obvious procedural insight becomes guidance, linked to the functions it composes via `function_ids`. Very often it stores nothing, which is the right call more than people expect.
 
 <p align="center">
   <picture>
@@ -66,7 +66,7 @@ async def triage_inbox(label: str) -> list[str]:
     return to_reply
 ```
 
-The control flow is code, so it does the same thing every time. The model is invoked only where judgment is needed, on a small prompt, with a typed response format. The second time the task comes around, the agent doesn't re-derive the workflow — it finds `triage_inbox` in the library and calls it. Two focused LLM calls instead of forty open-ended ones. That's most of our cost story, and it falls out of making the program the stored unit rather than the paragraph.
+The control flow is code, so it does the same thing every time. The model is invoked only where judgment is needed, on a small prompt, with a typed response format. The second time the task comes around, the agent doesn't re-derive the procedure — it finds `triage_inbox` in the library and calls it. Two focused LLM calls instead of forty open-ended ones. That's most of our cost story, and it falls out of making the program the stored unit rather than the paragraph.
 
 ## What the folder design gets right
 

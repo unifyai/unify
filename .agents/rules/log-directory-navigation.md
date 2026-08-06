@@ -27,7 +27,7 @@ The `logs/` directory is gitignored, which affects tool availability:
 | `logs/orchestra/` | Orchestra session logs with per-request API traces |
 | `logs/all/` | Cross-repo OTEL traces |
 
-## Practical Workflow
+## Practical Steps
 
 **Step 1: Explore with Shell**
 ```bash

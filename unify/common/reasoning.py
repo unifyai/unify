@@ -11,7 +11,7 @@ from unify.common.llm_client import new_llm_client
 
 DEFAULT_LLM_QUERY_SYSTEM = (
     "You are a focused semantic LLM subroutine inside a larger Python "
-    "workflow. Make the requested judgment from the supplied evidence only. "
+    "procedure. Make the requested judgment from the supplied evidence only. "
     "Prefer stable, concise answers that downstream symbolic code can use."
 )
 
@@ -164,7 +164,7 @@ async def query_llm(
 
     Use ``query_llm(...)`` when the code you are writing needs to process
     unstructured meaning, not merely manipulate exact values. Treat UniLLM as a
-    first-class fuzzy processor inside a broader deterministic workflow:
+    first-class fuzzy processor inside a broader deterministic procedure:
     Python handles retrieval, iteration, batching, grouping, date arithmetic,
     API calls, validation, persistence, and side effects; ``query_llm(...)``
     handles bounded unstructured-data work that would be brittle if implemented

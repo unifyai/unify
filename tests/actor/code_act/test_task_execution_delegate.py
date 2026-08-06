@@ -465,7 +465,7 @@ async def test_offline_certification_evidence_tool_does_not_execute_entrypoint()
     result = await tool(
         function_id=321,
         certification_evidence=_certification_evidence(),
-        promotion_rationale="The stored function preserves the live workflow.",
+        promotion_rationale="The stored function preserves the live procedure.",
     )
 
     assert "offline_promoted" in result

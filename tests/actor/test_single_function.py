@@ -1557,8 +1557,8 @@ async def test_steerable_function_detected_and_forwarded():
     fm = FunctionManager()
 
     steerable_impl = '''
-async def steerable_workflow(goal: str):
-    """A workflow that returns a steerable handle."""
+async def steerable_procedure(goal: str):
+    """A procedure that returns a steerable handle."""
     from unify.common.async_tool_loop import start_async_tool_loop
     from unify.common.llm_client import new_llm_client
 
@@ -1576,7 +1576,7 @@ async def steerable_workflow(goal: str):
 '''
     fm.add_functions(implementations=[steerable_impl])
     functions = fm.list_functions(include_implementations=True)
-    func_data = functions["steerable_workflow"]
+    func_data = functions["steerable_procedure"]
 
     actor = SingleFunctionActor(
         computer_primitives=None,
@@ -1615,7 +1615,7 @@ async def test_steerable_function_result_forwarded():
 
     steerable_impl = '''
 async def steerable_brief_response(message: str):
-    """A workflow that returns a steerable handle for brief responses."""
+    """A procedure that returns a steerable handle for brief responses."""
     from unify.common.async_tool_loop import start_async_tool_loop
     from unify.common.llm_client import new_llm_client
 
@@ -1661,7 +1661,7 @@ async def test_steerable_function_stop_forwarded():
 
     steerable_impl = '''
 async def steerable_slow_task(duration: int):
-    """A slow steerable workflow."""
+    """A slow steerable procedure."""
     from unify.common.async_tool_loop import start_async_tool_loop
     from unify.common.llm_client import new_llm_client
 
@@ -1738,8 +1738,8 @@ async def test_codeact_actor_compositional_function_steerable():
     fm = FunctionManager()
 
     codeact_impl = '''
-async def codeact_workflow(goal: str):
-    """A workflow powered by CodeActActor."""
+async def codeact_procedure(goal: str):
+    """A procedure powered by CodeActActor."""
     from unify.actor.code_act_actor import CodeActActor
 
     actor = CodeActActor()
@@ -1751,7 +1751,7 @@ async def codeact_workflow(goal: str):
 '''
     fm.add_functions(implementations=[codeact_impl])
     functions = fm.list_functions(include_implementations=True)
-    func_data = functions["codeact_workflow"]
+    func_data = functions["codeact_procedure"]
 
     actor = SingleFunctionActor(
         computer_primitives=None,
@@ -1783,8 +1783,8 @@ async def test_codeact_compositional_search_no_primitives_with_interjection():
     fm = FunctionManager()
 
     codeact_impl = '''
-async def counting_workflow(target: int):
-    """A workflow that counts numbers slowly using CodeActActor.
+async def counting_procedure(target: int):
+    """A procedure that counts numbers slowly using CodeActActor.
 
     This function uses an AI agent to count from 1 to the target number,
     announcing each number one at a time.
@@ -1854,8 +1854,8 @@ async def test_compositional_function_forwards_context_and_queues_to_inner_actor
     # 3) forwards them to CodeActActor.act()
     # 4) returns the inner handle (which SFA detects as steerable)
     codeact_impl = '''
-async def context_aware_workflow(goal: str):
-    """A workflow that forwards parent context and clarification queues to CodeActActor."""
+async def context_aware_procedure(goal: str):
+    """A procedure that forwards parent context and clarification queues to CodeActActor."""
     from unify.actor.code_act_actor import CodeActActor
 
     ctx = __parent_chat_context__
@@ -1877,7 +1877,7 @@ async def context_aware_workflow(goal: str):
 '''
     fm.add_functions(implementations=[codeact_impl])
     functions = fm.list_functions(include_implementations=True)
-    func_data = functions["context_aware_workflow"]
+    func_data = functions["context_aware_procedure"]
 
     actor = SingleFunctionActor(
         computer_primitives=None,

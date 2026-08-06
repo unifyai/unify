@@ -634,7 +634,7 @@ class _LowLevelActionsMixin:
 
         Cost is on the order of $0.50-2 per 1000 v2 solves and a typical
         solve completes in ~10-30 seconds; ``timeout`` should be left at
-        its default unless a particular workflow needs a tighter bound.
+        its default unless a particular procedure needs a tighter bound.
 
         Requires ``ANTICAPTCHA_KEY`` to be set in the agent-service
         environment.  hCaptcha, Turnstile, FunCaptcha, GeeTest, and
@@ -901,7 +901,7 @@ class ComputerBackend(_LowLevelActionsMixin, ABC):
         Retrieves information from the agent's internal memory about past actions,
         observations, and page states encountered during the current session. This
         enables the agent to recall what it has done and seen, supporting multi-step
-        workflows that require context from earlier interactions.
+        procedures that require context from earlier interactions.
 
         **Key characteristics:**
         - **Memory-focused**: Uses the agent's accumulated memory and context from
@@ -962,7 +962,7 @@ class ComputerBackend(_LowLevelActionsMixin, ABC):
         In web mode, returns the current browser URL. In desktop mode, returns
         information about the currently active window (title, application name,
         or other identifying details). This helps track navigation state and
-        context across multi-step workflows.
+        context across multi-step procedures.
 
         Returns
         -------

@@ -34,11 +34,12 @@ produced real production defects:
 
 ## The identity contract
 
-1. **Two columns, one meaning, everywhere.** A deployment-owned row
-   carries `custom_key` (stable identity of the authored source entry)
-   and `custom_hash` (content fingerprint of that entry). Invariant:
-   `custom_key` is set **iff** `custom_hash` is set. Rows authored by
-   users or actors carry neither.
+1. **Three columns, one meaning, everywhere.** A managed row carries
+   `custom_key` (stable identity of the authored source entry),
+   `custom_hash` (content fingerprint of that entry), and `managed_by`
+   (which source reconciles it). Invariant: `custom_key` is set **iff**
+   `custom_hash` is set. Rows authored by users or actors carry none of
+   them.
 2. **`custom_key` is the identity; storage ids are handles.**
    Auto-counted ids (`task_id`, `function_id`, `guidance_id`, …) are
    environment-local surrogates allocated by Orchestra. Source code
@@ -120,6 +121,37 @@ loop):
 | `find_adoptable` | none | data seeds (by seed value), integration registry (by slug), functions/venvs (by name — legacy rows without `custom_key`) |
 | `should_update` | always | tasks: skip while an execution is running |
 | `max_workers` | 1 | tasks: parallel updates, serialized inserts |
+
+## Scoping: one source per pass
+
+`managed_by` names the source whose reconcile owns the row — the
+deployment (`MANAGED_BY_DEPLOYMENT`) or an installed workflow's slug.
+Every pass is scoped to exactly one value of it:
+
+- **`live_rows` and `find_collision` must filter with
+  `managed_rows_filter(managed_by)`**, never a bare
+  `custom_hash != None`. The loop prunes every managed row whose key
+  left the source, so an unscoped query hands one source its siblings'
+  rows and prune deletes them — the first workflow to sync a context
+  would silently uninstall the deployment's content there, and vice
+  versa.
+- **The engine stamps `managed_by` after `transform`**, so collected
+  content hashes stay identical regardless of who installs a bundle. A
+  writer that persists its field dict wholesale gets the stamp for
+  free; a transforming writer must consume it like any other field.
+- **Rows predating the column are the deployment's.** A null
+  `managed_by` is admitted only by the deployment's filter and stamped
+  on the row's next content change; no migration, no second writer.
+- **Aggregate hashes get one meta slot per source**
+  (`stored_hash_field`): the deployment keeps the original unsuffixed
+  field so existing installations do not re-sync on upgrade.
+- **Duplicate keys are per-source.** Two rows of *different* sources
+  may share a `custom_key` freely; they are distinct rows.
+
+`managed_by` is provenance-for-reconcile only: who may overwrite and
+prune the row. It says nothing about who *references* the row — that
+is workflow membership, a separate multi-valued concern tracked on the
+row, and deliberately not folded into this column.
 
 ## Functions: name-as-key, formalized
 

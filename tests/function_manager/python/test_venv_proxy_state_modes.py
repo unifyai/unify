@@ -587,14 +587,14 @@ async def test_proxy_stateless_works_without_pool(function_manager_factory):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 5. Mixed Mode Workflow Tests
+# 5. Mixed Mode Sequence Tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_proxy_mixed_mode_workflow(function_manager_factory):
-    """Complex workflow mixing stateful, stateless, and read_only modes."""
+async def test_proxy_mixed_mode_sequence(function_manager_factory):
+    """Complex sequence mixing stateful, stateless, and read_only modes."""
     fm = function_manager_factory()
     venv_id = await _create_prepared_venv(fm)
     pool = VenvPool()

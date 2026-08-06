@@ -38,7 +38,7 @@ from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
 from ..common.custom_sync import (
-    DEPLOYMENT_SOURCE_ID,
+    MANAGED_BY_DEPLOYMENT,
     CustomSyncAdapter,
     managed_rows_filter,
     run_custom_sync,
@@ -1037,9 +1037,9 @@ class KnowledgeManager(BaseKnowledgeManager):
 
     def _get_stored_custom_knowledge_hash(
         self,
-        source_id: str = DEPLOYMENT_SOURCE_ID,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> str:
-        field = stored_hash_field("custom_knowledge_hash", source_id)
+        field = stored_hash_field("custom_knowledge_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -1056,9 +1056,9 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         hash_value: str,
         *,
-        source_id: str = DEPLOYMENT_SOURCE_ID,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> None:
-        field = stored_hash_field("custom_knowledge_hash", source_id)
+        field = stored_hash_field("custom_knowledge_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -1085,12 +1085,13 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         custom_key: str,
         *,
-        source_id: str = DEPLOYMENT_SOURCE_ID,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
             filter=(
-                f"custom_key == '{custom_key}' and " f"{managed_rows_filter(source_id)}"
+                f"custom_key == '{custom_key}' and "
+                f"{managed_rows_filter(managed_by)}"
             ),
             limit=1,
         )
@@ -1153,11 +1154,11 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         source_claims: Optional[Dict[str, Dict[str, Any]]] = None,
         destination: str | None = None,
-        source_id: str = DEPLOYMENT_SOURCE_ID,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
         """Ensure custom knowledge claims match source definitions.
 
-        Reconciles only the rows *source_id* owns; rows planted in the same
+        Reconciles only the rows *managed_by* owns; rows planted in the same
         context by other sources are neither read nor pruned.
         """
         try:
@@ -1178,22 +1179,22 @@ class KnowledgeManager(BaseKnowledgeManager):
             self._temporary_knowledge_context("_meta_ctx", meta_context),
         ):
             source_claims = source_claims or {}
-            synced_key = (knowledge_context, source_id)
+            synced_key = (knowledge_context, managed_by)
 
             return run_custom_sync(
-                adapter=_KnowledgeSyncAdapter(self, source_id=source_id),
+                adapter=_KnowledgeSyncAdapter(self, managed_by=managed_by),
                 source=source_claims,
                 expected_hash=compute_custom_knowledge_hash(
                     source_claims=source_claims,
                 ),
-                stored_hash=self._get_stored_custom_knowledge_hash(source_id),
+                stored_hash=self._get_stored_custom_knowledge_hash(managed_by),
                 already_synced=synced_key in self._custom_knowledge_synced_sources,
                 mark_synced=lambda: self._custom_knowledge_synced_sources.add(
                     synced_key,
                 ),
                 store_hash=lambda value: self._store_custom_knowledge_hash(
                     value,
-                    source_id=source_id,
+                    managed_by=managed_by,
                 ),
             )
 
@@ -1201,7 +1202,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         source_claims: Optional[Dict[str, Dict[str, Any]]] = None,
-        source_id: str = DEPLOYMENT_SOURCE_ID,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
         """Sync custom knowledge claims from pre-collected sources."""
         if source_claims is None:
@@ -1218,7 +1219,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             changed |= self.sync_custom_knowledge(
                 source_claims=group,
                 destination=destination_arg,
-                source_id=source_id,
+                managed_by=managed_by,
             )
         return changed
 
@@ -1354,15 +1355,15 @@ class _KnowledgeSyncAdapter(CustomSyncAdapter):
         self,
         manager: KnowledgeManager,
         *,
-        source_id: str = DEPLOYMENT_SOURCE_ID,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> None:
         self._manager = manager
-        self.source_id = source_id
+        self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._manager._ctx,
-            filter=managed_rows_filter(self.source_id),
+            filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._ctx),
         )
         return [dict(lg.entries or {}) for lg in logs]
@@ -1386,7 +1387,7 @@ class _KnowledgeSyncAdapter(CustomSyncAdapter):
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_knowledge_by_key(key, source_id=self.source_id)
+        self._manager._delete_custom_knowledge_by_key(key, managed_by=self.managed_by)
 
     def find_collision(
         self,

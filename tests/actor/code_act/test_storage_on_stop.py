@@ -233,7 +233,7 @@ async def test_storage_check_incoming_event_has_instructions():
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_task_entrypoint_review_uses_reusable_workflow_event_label():
+async def test_task_entrypoint_review_uses_reusable_procedure_event_label():
     result_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
     inner = MagicMock()
@@ -261,8 +261,8 @@ async def test_task_entrypoint_review_uses_reusable_workflow_event_label():
     actor.guidance_manager = None
 
     review_context = PostRunReviewContext(
-        display_label="Storing reusable workflow",
-        instructions="Review the completed recurring workflow.",
+        display_label="Storing reusable procedure",
+        instructions="Review the completed recurring task.",
         extensions={"task_entrypoint_review": {"metadata": {"task_id": 1}}},
     )
 
@@ -293,10 +293,10 @@ async def test_task_entrypoint_review_uses_reusable_workflow_event_label():
         for call in mock_publish.call_args_list
         if call.kwargs.get("phase") == "incoming" and call.args[2] == "StorageCheck"
     ]
-    assert incoming_calls[0].kwargs["display_label"] == "Storing reusable workflow"
+    assert incoming_calls[0].kwargs["display_label"] == "Storing reusable procedure"
     assert (
         incoming_calls[0].kwargs["instructions"]
-        == "Review the completed recurring workflow."
+        == "Review the completed recurring task."
     )
     assert mock_loop.call_args.kwargs["post_run_review_context"] is review_context
 

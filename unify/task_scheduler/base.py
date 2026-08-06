@@ -235,7 +235,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         A live scheduled or triggered task may start with ``entrypoint=None``.
         In that case, execution wakes a contained actor run that interprets the
         task's natural-language name/description and metadata. This is the
-        normal default for newly described recurring workflows.
+        normal default for newly described recurring tasks.
 
         Offline tasks run in the hidden headless lane. Offline is a delivery
         choice only: description-driven offline tasks keep ``entrypoint=None``
@@ -249,7 +249,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         request or a successful execution reviewed as stable enough to store.
         Stored functions may still use focused ``query_llm(...)`` calls for bounded
         semantic judgment, but future offline promotion requires separate
-        certification that the stored executor preserves the observed workflow.
+        certification that the stored executor preserves the observed procedure.
 
         All parameters mirror :pymeth:`ask`; refer there for detailed
         semantics.
