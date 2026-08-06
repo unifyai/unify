@@ -963,6 +963,7 @@ def main(argv: list[str] | None = None) -> int:
     from unify.function_manager.builtins_catalog import seed_builtin_primitives
     from unify.guidance_manager.builtins_catalog import seed_builtin_guidance
     from unify.integrations.builtins_catalog import seed_builtin_integrations
+    from unify.workflow_manager.builtins_catalog import seed_builtin_workflows
 
     project = builtins_project()
     logging.info(
@@ -972,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     primitives_changed = seed_builtin_primitives()
     guidance_changed = seed_builtin_guidance()
+    workflows_changed = seed_builtin_workflows()
     if args.skip_integrations:
         integrations_changed = False
     elif args.integration_bootstrap_manifest:
@@ -994,6 +996,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, changed in (
         ("primitives", primitives_changed),
         ("guidance", guidance_changed),
+        ("workflows", workflows_changed),
         ("integrations", integrations_changed),
     ):
         state = "updated" if changed else "already up to date"
