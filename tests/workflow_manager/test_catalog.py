@@ -194,9 +194,8 @@ def test_human_schedule_reads_as_plain_language():
     """Reading surfaces show a workflow's cadence before it is installed,
     and that phrasing is the part a user actually weighs. Derived once
     here so every surface says it identically."""
-    from unify.workflow_manager.workflow_manager import WorkflowManager
+    from unify.workflow_manager.builtins_catalog import human_schedule as schedule
 
-    schedule = WorkflowManager._human_schedule
     weekdays = {
         "repeat": [
             {
@@ -233,10 +232,10 @@ def test_human_schedule_reads_as_plain_language():
 
 def test_bundle_sets_names_what_each_surface_receives(tmp_path: Path):
     """The 'what this installs' list a reader shows before installing."""
-    from unify.workflow_manager.workflow_manager import WorkflowManager
+    from unify.workflow_manager.builtins_catalog import bundle_sets
 
     bundle = load_bundle(_write_bundle(tmp_path))
-    sets = WorkflowManager._bundle_sets(bundle)
+    sets = bundle_sets(bundle)
 
     assert sets["guidance"] == [{"name": "Triage"}]
     assert sets["tasks"] == [{"name": "Morning run", "schedule": "Every day"}]
