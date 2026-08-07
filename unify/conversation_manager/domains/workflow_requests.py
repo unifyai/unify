@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict
 
 from unify.conversation_manager.events import WorkflowRequestRequested
 
@@ -93,3 +93,41 @@ async def handle_workflow_request_requested(
             event.request_id,
         )
     return False
+
+
+async def arm_workflows_for_connected_app(app_slug: str) -> Dict[str, Any]:
+    """Re-check requirements after an app connects, arming whatever was held.
+
+    A workflow installed before its app was connected is planted but disarmed,
+    and the reconcile that arms it is a repeat install — so this is that repeat
+    install, triggered by the connection instead of by the user going back to
+    click something. The Console copy promises exactly this ("connecting arms
+    held jobs"), and without it the promise was only true if you knew to
+    reinstall.
+
+    Reconciles every installed workflow rather than only those declaring
+    *app_slug*: requirements resolve through three authorities and an app can be
+    reached by more than one route, so "which installs does this connection
+    unblock" is not a question the slug alone answers. A reconcile of an
+    already-armed workflow is a no-op that short-circuits on its content hashes,
+    which is the cheap half of the trade.
+    """
+    from unify.manager_registry import ManagerRegistry
+
+    manager = ManagerRegistry.get_workflow_manager()
+    if manager is None:
+        return {}
+
+    report = await asyncio.to_thread(manager.reconcile_installed)
+    armed = {
+        slug: result["tasks_armed"]
+        for slug, result in (report.get("reconciled") or {}).items()
+        if result.get("tasks_armed")
+    }
+    if armed:
+        LOGGER.info(
+            "Connecting %s armed held workflow jobs: %s",
+            app_slug,
+            sorted(armed),
+        )
+    return armed
