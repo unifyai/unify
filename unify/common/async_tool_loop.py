@@ -434,6 +434,39 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             loop_chat_context_safe,
         )
 
+        # A transcript snapshot dead-ends silently while the loop is waiting on
+        # an LLM response — there is no message for "the model has not answered
+        # yet", so inspectors misread the pause as a stall and reach for
+        # progress tools that cannot help. Surface the in-flight window
+        # (stamped by ``generate_with_preprocess``) as an explicit final entry.
+        with suppress(Exception):
+            _inflight_since = (
+                getattr(self._client, "_llm_inflight_since", None)
+                if self._client is not None
+                else None
+            )
+            if _inflight_since:
+                import time as _time
+
+                _elapsed = max(0.0, _time.time() - float(_inflight_since))
+                loop_chat_context_transformed = [
+                    *loop_chat_context_transformed,
+                    {
+                        "role": "system",
+                        "_loop_status": True,
+                        "content": (
+                            "STATUS: the inspected loop is currently waiting on "
+                            f"an in-flight LLM request that started {_elapsed:.0f} "
+                            "seconds ago and has not returned yet. The transcript "
+                            "ends here because the model is still thinking, not "
+                            "because a tool is stuck or anything failed. Answer "
+                            "progress questions from this fact first; only reach "
+                            "for inspection tools if the question is about "
+                            "something this does not explain."
+                        ),
+                    },
+                ]
+
         transcript_description = (
             "This is the transcript of the tool/loop you are being asked about. "
             "Messages use 'inner_user' and 'inner_assistant' roles to clearly "
