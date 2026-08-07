@@ -193,6 +193,20 @@ class WorkflowBundle:
     """Integrations that must be connected before this workflow's jobs
     are armed. Checked at install and on every reconcile."""
 
+    install_task: str = ""
+    """``custom_key`` of a task in this bundle to run **once**, after content
+    lands on a first install.
+
+    The provisioning one-shot: a mailbox backfill, a CRM import — the long
+    thing a workflow needs done before its recurring job is meaningful. Named
+    rather than inferred so a bundle can ship several tasks and be explicit
+    about which one is setup. Empty means the workflow needs no provisioning.
+
+    Deliberately an ordinary task rather than new machinery: durability,
+    resumability, steering and observability come from TaskScheduler, and the
+    workflow/task boundary stays intact — a workflow still has no runtime, it
+    just asked for a task to be run."""
+
     capabilities: tuple[str, ...] = ()
     """Assistant capabilities the workflow needs beyond connected apps,
     e.g. ``"computer"`` or ``"filesystem"``. Declared for the catalogue;
