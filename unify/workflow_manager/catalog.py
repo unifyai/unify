@@ -114,6 +114,7 @@ def load_bundle(path: Path) -> WorkflowBundle:
             manifest.get("requirements"),
             slug=slug,
         ),
+        install_task=str(manifest.get("install_task", "")),
         capabilities=tuple(manifest.get("capabilities") or ()),
     )
 
