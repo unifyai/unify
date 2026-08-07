@@ -1,7 +1,8 @@
 {
   "extraPaths": [
     "../unillm",
-    "../unify"
+    "../unify",
+    "../unify-deploy"
   ],
   "exclude": [
     "**/.git",
