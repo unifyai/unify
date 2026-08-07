@@ -294,3 +294,17 @@ def test_content_rows_publish_what_the_artifacts_own_page_shows(tmp_path: Path):
     guidance_meta = _json.loads(rows["daily_briefing/guidance/wf/triage"]["meta"])
     # Nothing declared on this entry, so nothing is published for it.
     assert guidance_meta == {}
+
+
+def test_manifest_declares_its_provisioning_one_shot(tmp_path: Path):
+    """The long thing a workflow needs done before its recurring job means
+    anything — a mailbox backfill, a CRM import. Named rather than inferred so
+    a bundle can ship several tasks and be explicit about which is setup."""
+    bundle_dir = _write_bundle(tmp_path)
+
+    # Absent means the workflow needs no provisioning, not an error.
+    assert load_bundle(bundle_dir).install_task == ""
+
+    manifest = (bundle_dir / MANIFEST_FILENAME).read_text()
+    (bundle_dir / MANIFEST_FILENAME).write_text(manifest + "install_task: wf/morning\n")
+    assert load_bundle(bundle_dir).install_task == "wf/morning"

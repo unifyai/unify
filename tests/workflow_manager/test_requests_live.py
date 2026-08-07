@@ -358,3 +358,37 @@ async def test_a_read_says_which_root_it_is_describing(live_managers, bundle):
         assert "never_installed" in exc.payload["message"]
     else:
         raise AssertionError("reading params for an uninstalled slug must refuse")
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_keep_data_prunes_the_content_and_spares_the_tables(
+    live_managers,
+    bundle,
+):
+    """Removing the setup should not have to mean throwing away the work it
+    produced. The bundle's own content always goes — it is re-plantable from
+    git, and leaving it would leave a half-installed workflow — while a stored
+    table holds rows the workflow *made*.
+
+    This bundle covers no `data` surface, so `kept` is empty: the flag is
+    honest about sparing nothing rather than claiming it spared something.
+    """
+    gm, ts, wm, _ = live_managers
+    wm.register_bundle(bundle)
+    wm.install_workflow(slug=SLUG)
+
+    _record_request(
+        wm,
+        request_id="r-keep",
+        action="uninstall",
+        params={"keep_data": True},
+    )
+    assert wm.execute_requests()["settled"] == {"r-keep": "succeeded"}
+
+    # Content is gone either way.
+    assert _rows(gm._ctx, SLUG) == []
+    assert _rows(ts._ctx, SLUG) == []
+    outcome = json.loads(_request(wm, "r-keep")["outcome"])
+    assert "guidance" in outcome["removed"]
+    assert "kept" not in outcome
