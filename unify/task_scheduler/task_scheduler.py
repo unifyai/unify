@@ -40,9 +40,11 @@ from ..common.context_registry import (
     TableContext,
 )
 from ..common.custom_sync import (
+    CUSTOM_RELEASED_FIELD,
     MANAGED_BY_DEPLOYMENT,
     CustomSyncAdapter,
     managed_rows_filter,
+    released_rows_filter,
     require_consumed,
     run_custom_sync,
     stored_hash_field,
@@ -2061,6 +2063,25 @@ class TaskScheduler(BaseTaskScheduler):
             touched.append(int(task_id))
         return touched
 
+    def _task_reconcile_owner(self, task_id: int) -> tuple[Optional[str], bool]:
+        """Who reconciles this row, and whether the user already owns it.
+
+        Both live on the row rather than the typed model: ``managed_by`` is
+        reconcile provenance, not a task attribute. The pair is read together
+        because a null ``managed_by`` is ambiguous on its own — a released
+        row and a row written before ``managed_by`` existed both have none,
+        and only the first is the user's.
+        """
+        rows = self._store.get_rows(filter=f"task_id == {task_id}", limit=1)
+        if not rows:
+            return None, False
+        entries = dict(rows[0].entries or {})
+        managed_by = entries.get("managed_by")
+        return (
+            str(managed_by) if managed_by else None,
+            bool(entries.get(CUSTOM_RELEASED_FIELD)),
+        )
+
     def _update_task(
         self,
         *,
@@ -2125,13 +2146,21 @@ class TaskScheduler(BaseTaskScheduler):
         enabled_provided = enabled is not _UNSET
         task = self._resolve_task_for_mutation(task_id)
 
-        # Deployment-owned tasks (custom_hash set) get their authored fields
-        # from the bundle source. A runtime mutation of those fields silently
-        # diverges from the source until a resync overwrites it — and because
-        # the sync short-circuits on its aggregate hash, a mutation that
-        # damages a derived reference (e.g. nulling the entrypoint) is never
-        # healed. Runtime state (enabled) stays mutable; authored fields
-        # change in the source and land via deployment resync.
+        # A managed task (custom_hash set) gets its authored fields from a
+        # source, and who that source is decides what an edit means.
+        #
+        # The deployment's own tasks are infrastructure: a runtime mutation
+        # silently diverges from the source until a resync overwrites it, and
+        # because the sync short-circuits on its aggregate hash, a mutation
+        # that damages a derived reference (e.g. nulling the entrypoint) is
+        # never healed. Those refuse the edit; runtime state (enabled) stays
+        # mutable and authored fields change in the source.
+        #
+        # A task a workflow planted is the user's to shape. The first authored
+        # edit hands the row over — provenance is cleared, identity is kept —
+        # so the workflow stops reconciling it and later updates leave the
+        # edit standing instead of overwriting it.
+        release_ownership = False
         if task.custom_hash:
             authored_touched = sorted(
                 field
@@ -2151,12 +2180,20 @@ class TaskScheduler(BaseTaskScheduler):
                 if provided
             )
             if authored_touched:
-                raise ValueError(
-                    f"Task {task_id} is deployment-owned (custom_hash set); "
-                    "refusing runtime update of authored field(s) "
-                    f"{', '.join(authored_touched)}. Edit the bundle source "
-                    "and re-sync via deployment reconcile.",
-                )
+                managed_by, already_released = self._task_reconcile_owner(task_id)
+                if already_released:
+                    # Handed over on an earlier edit; nobody reconciles it now,
+                    # so there is nothing left to refuse or to release again.
+                    pass
+                elif not managed_by or managed_by == MANAGED_BY_DEPLOYMENT:
+                    raise ValueError(
+                        f"Task {task_id} is deployment-owned (custom_hash set); "
+                        "refusing runtime update of authored field(s) "
+                        f"{', '.join(authored_touched)}. Edit the bundle source "
+                        "and re-sync via deployment reconcile.",
+                    )
+                else:
+                    release_ownership = True
 
         if (
             name is None
@@ -2315,6 +2352,26 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
+
+        if release_ownership:
+            # Identity stays — ``custom_key`` still names the entry this row
+            # grew from, which is how the workflow keeps counting it as
+            # planted — and so does the content hash. Provenance goes, and
+            # the flag says the absence is deliberate rather than a row that
+            # predates ``managed_by``.
+            #
+            # A separate write, not part of the patch: a provider-event
+            # update routes its fields through a typed classifier that knows
+            # only authored and runtime task fields, and provenance is
+            # neither. Stamped *before* the edit so a failure leaves the row
+            # managed and unedited — the user retries and it works — rather
+            # than edited and still claimed by the workflow, which the next
+            # reconcile would silently overwrite.
+            self._write_log_entries(
+                logs=log_ids,
+                entries={"managed_by": None, CUSTOM_RELEASED_FIELD: True},
+            )
+
         if self._task_has_provider_event_trigger(task):
             return self._write_provider_event_task_update(
                 task_id=task_id,
@@ -3656,6 +3713,28 @@ class _TaskSyncAdapter(CustomSyncAdapter):
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
         self._scheduler._delete_custom_task_by_key(key, managed_by=self.managed_by)
+
+    def find_released(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """The row this key planted, once the user has taken it over.
+
+        A planted task is the user's to edit — the first authored edit
+        clears ``managed_by`` — and after that the source must leave it
+        alone. Without this probe the key reads as missing, because
+        ``live_rows`` filters on ``managed_by``, and the pass plants a
+        second copy beside the edited one.
+        """
+        existing = unisdk.get_logs(
+            context=self._scheduler._ctx,
+            filter=released_rows_filter(key),
+            limit=1,
+        )
+        if not existing:
+            return None
+        return dict(existing[0].entries or {})
 
     def find_collision(
         self,

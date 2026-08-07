@@ -605,3 +605,32 @@ def test_arming_uses_the_tasks_surface_armer():
 def test_arming_a_surface_without_an_armer_is_a_no_op():
     manager = _manager(_registry(tasks=RecordingSurface()))
     assert manager._arm_workflow_tasks(_bundle(), destination=None, enabled=True) == []
+
+
+def test_provenance_is_never_part_of_a_task_patch():
+    """Why releasing a task writes provenance on its own.
+
+    A provider-event task's update is routed through a typed classifier
+    that knows only authored and runtime task fields. ``managed_by`` and
+    ``custom_released`` are neither — they are reconcile provenance — so
+    folding them into the same patch raised "Unclassified provider-event
+    task fields" and releasing a trigger-based planted task crashed
+    instead of handing it over.
+
+    Symbolic on purpose: reproducing it live needs a real provider
+    connection, and the invariant that matters is this classification.
+    """
+    from unify.common.custom_sync import CUSTOM_RELEASED_FIELD
+    from unify.task_scheduler.types.task_row_field import (
+        split_provider_event_task_update,
+    )
+
+    for field in ("managed_by", CUSTOM_RELEASED_FIELD):
+        with pytest.raises(ValueError, match="Unclassified"):
+            split_provider_event_task_update({field: None})
+
+    # An ordinary authored edit still classifies, which is what makes the
+    # separate provenance write the only thing that had to move.
+    authored, runtime = split_provider_event_task_update({"description": "x"})
+    assert authored == {"description": "x"}
+    assert runtime == {}

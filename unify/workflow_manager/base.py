@@ -32,10 +32,16 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
     Upkeep
     ------
     Installed content is kept matched to the catalogue: reinstalling or
-    reconciling brings the planted rows to the current bundle version,
-    overwriting local edits to them and pruning entries the bundle
-    dropped. Content the user wants to diverge from the workflow belongs
-    in a copy of their own, alongside the planted original.
+    reconciling brings the planted rows to the current bundle version and
+    prunes entries the bundle dropped.
+
+    Editing a planted task makes it yours. The first change to what the
+    bundle authored — its brief, its schedule, what it runs — hands the row
+    over: it stops being reconciled, later versions leave it alone, and
+    uninstalling the workflow no longer removes it. The workflow's other
+    content stays managed, so a procedure or claim edited in place is
+    overwritten on the next reconcile; diverge from those by keeping a copy
+    of your own alongside the planted original.
 
     Requirements
     ------------
