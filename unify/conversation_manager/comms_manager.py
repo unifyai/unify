@@ -280,6 +280,18 @@ def _canvas_invocation_event_from_payload(
     return CanvasInvocationRequested.from_dict(payload, reason=reason)
 
 
+def _workflow_request_event_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> "WorkflowRequestRequested | None":
+    """Build a workflow install-state request event from a comms payload."""
+
+    from unify.conversation_manager.events import WorkflowRequestRequested
+
+    return WorkflowRequestRequested.from_dict(payload, reason=reason)
+
+
 def _provider_event_dispatch_event_from_payload(
     payload: dict[str, Any],
     *,
@@ -1087,6 +1099,9 @@ class CommsManager:
                     ),
                     "canvas_invocation": lambda r: (
                         _canvas_invocation_event_from_payload(event, reason=r)
+                    ),
+                    "workflow_request": lambda r: (
+                        _workflow_request_event_from_payload(event, reason=r)
                     ),
                     "provider_event_dispatch": lambda r: (
                         _provider_event_dispatch_event_from_payload(

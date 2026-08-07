@@ -19,6 +19,8 @@ import functools
 import json
 import logging
 import threading
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
 import unisdk
@@ -35,12 +37,31 @@ from .base import BaseWorkflowManager
 from .bundle import WORKFLOW_LIBRARY, SurfaceRegistry, WorkflowBundle
 from .requirements import RequirementResolver
 from .types.meta import WorkflowMeta
+from .types.request import ACTIONS, WorkflowRequest
 from .types.workflow import UNASSIGNED, WorkflowInstallation
 
 logger = logging.getLogger(__name__)
 
 WORKFLOW_TABLE = "Workflows"
 WORKFLOW_META_TABLE = "Workflows/Meta"
+WORKFLOW_REQUESTS_TABLE = "Workflows/Requests"
+
+STALE_CLAIM_SECONDS = 900
+"""How long a claimed request may sit before another executor may take it.
+
+Matches the canvas invocation window. Long enough that a slow reconcile
+(several surfaces against a cold backend) is never stolen mid-pass, short
+enough that an executor killed between claim and settle does not strand
+the user's install for a session."""
+
+_REQUEST_BATCH = 25
+"""Requests drained per pass. A bound, not a queue depth: whatever is left
+is picked up by the next wake, and the sweep runs on every boot."""
+
+
+def _now() -> str:
+    """Second-precision UTC stamp, the format lease timestamps parse from."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class WorkflowManager(BaseWorkflowManager):
@@ -61,12 +82,22 @@ class WorkflowManager(BaseWorkflowManager):
                 fields=model_to_fields(WorkflowMeta),
                 unique_keys={"meta_id": "int"},
             ),
+            TableContext(
+                name=WORKFLOW_REQUESTS_TABLE,
+                description="Requested changes to workflow install state.",
+                fields=model_to_fields(WorkflowRequest),
+                unique_keys={"request_id": "str"},
+            ),
         ]
 
     def __init__(self) -> None:
         super().__init__()
         self._ctx = ContextRegistry.get_context(self, WORKFLOW_TABLE)
         self._meta_ctx = ContextRegistry.get_context(self, WORKFLOW_META_TABLE)
+        self._requests_ctx = ContextRegistry.get_context(
+            self,
+            WORKFLOW_REQUESTS_TABLE,
+        )
         self._surfaces = SurfaceRegistry()
         self._catalogue: Dict[str, WorkflowBundle] = {}
         self._lock = threading.RLock()
@@ -118,6 +149,25 @@ class WorkflowManager(BaseWorkflowManager):
         )
         return f"{root.strip('/')}/{WORKFLOW_META_TABLE}"
 
+    def _requests_context_for_destination(self, destination: str | None) -> str:
+        root = ContextRegistry.write_root(
+            self,
+            WORKFLOW_REQUESTS_TABLE,
+            destination=destination,
+        )
+        return f"{root.strip('/')}/{WORKFLOW_REQUESTS_TABLE}"
+
+    @staticmethod
+    def _normalized_destination(value: Any) -> Optional[str]:
+        """``None`` for the personal root, matching every internal caller.
+
+        Rows store ``"personal"`` because a column cannot be absent, while
+        the methods take ``None`` for the same thing. Collapsing here keeps
+        one meaning of "personal" on the way in.
+        """
+        text = str(value or "").strip()
+        return None if text in ("", "personal") else text
+
     def _read_contexts(self) -> List[str]:
         roots = ContextRegistry.read_roots(self, WORKFLOW_TABLE)
         contexts = [f"{root.strip('/')}/{WORKFLOW_TABLE}" for root in roots]
@@ -141,6 +191,43 @@ class WorkflowManager(BaseWorkflowManager):
         if not logs:
             return None
         return dict(logs[0].entries or {})
+
+    def _installations_by_slug(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Every installation of every slug, grouped, across all read roots.
+
+        One slug can legitimately be installed more than once — personally and
+        for a team — and those are separate installations owning separate rows.
+        Collapsing them to one silently picks a winner.
+        """
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in self._installations():
+            slug = row.get("slug")
+            if slug:
+                grouped.setdefault(str(slug), []).append(row)
+        return grouped
+
+    @staticmethod
+    def _preferred_installation(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The installation a read should describe when a slug has several.
+
+        Personal first, because personal is the write default: a caller who
+        passes no destination acts on that one, so a read that described a team
+        installation instead would be describing something the next write will
+        not touch. That mismatch is exactly what made a team-installed slug read
+        as installed and then fail to uninstall.
+        """
+        return next(
+            (
+                row
+                for row in rows
+                if str(row.get("destination", "personal")) == "personal"
+            ),
+            rows[0],
+        )
+
+    @staticmethod
+    def _destinations_of(rows: List[Dict[str, Any]]) -> List[str]:
+        return sorted({str(row.get("destination", "personal")) for row in rows})
 
     def _installations(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
@@ -451,7 +538,10 @@ class WorkflowManager(BaseWorkflowManager):
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        by_slug = {row.get("slug"): row for row in self._installations()}
+        grouped = self._installations_by_slug()
+        by_slug = {
+            slug: self._preferred_installation(rows) for slug, rows in grouped.items()
+        }
         entries: List[Dict[str, Any]] = []
 
         for bundle in self.available_bundles():
@@ -482,6 +572,12 @@ class WorkflowManager(BaseWorkflowManager):
                             self._unmet_requirements(bundle),
                         ),
                         "params": json.loads(row.get("params") or "{}"),
+                        # Which installation this describes, and every root it
+                        # is installed at. Without these, "installed: true" for
+                        # a team-only install reads as personal and the next
+                        # uninstall — which defaults to personal — refuses.
+                        "destination": row.get("destination", "personal"),
+                        "installed_at": self._destinations_of(grouped[bundle.slug]),
                     },
                 )
             entries.append(entry)
@@ -522,11 +618,16 @@ class WorkflowManager(BaseWorkflowManager):
         with self._lock:
             bundle = self._catalogue.get(slug)
         if bundle is None:
+            available = [b.slug for b in self.available_bundles()]
             raise ToolErrorException(
                 {
                     "error": "unknown_workflow",
                     "slug": slug,
-                    "available": [b.slug for b in self.available_bundles()],
+                    "available": available,
+                    "message": (
+                        f"No workflow {slug!r} is on the shelf. Available: "
+                        f"{available or 'nothing — the catalogue is empty'}."
+                    ),
                 },
             )
 
@@ -597,6 +698,16 @@ class WorkflowManager(BaseWorkflowManager):
             }
         else:
             result["tasks_armed"] = armed
+            # Provisioning runs once, on a first install, and only when the
+            # workflow is not held: a backfill against an unconnected app would
+            # fail for exactly the reason its recurring job is disarmed.
+            if existing is None:
+                provisioned = self._trigger_install_task(
+                    bundle,
+                    destination=destination,
+                )
+                if provisioned is not None:
+                    result["provisioning_task_id"] = provisioned
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             logger.warning(
@@ -642,6 +753,313 @@ class WorkflowManager(BaseWorkflowManager):
             result["orphaned"] = orphaned
         return result
 
+    def _trigger_install_task(
+        self,
+        bundle: WorkflowBundle,
+        *,
+        destination: Optional[str],
+    ) -> Optional[int]:
+        """Run the bundle's provisioning one-shot. Returns its task id, or None.
+
+        Triggered rather than awaited: ``TaskScheduler.execute`` is async and
+        ``install_workflow`` is not, and the house rule is that work starts via
+        the trigger route, never via an update. Triggering also means the run is
+        an ordinary execution with the ordinary handle, history and steering —
+        the workflow contributes nothing of its own, which is what keeps it
+        runtime-free.
+        """
+        if not bundle.install_task:
+            return None
+
+        root = ContextRegistry.write_root(self, "Tasks", destination=destination)
+        rows = unisdk.get_logs(
+            context=f"{root.strip('/')}/Tasks",
+            filter=(
+                f"managed_by == '{bundle.slug}' and "
+                f"custom_key == '{bundle.install_task}'"
+            ),
+            limit=1,
+        )
+        if not rows:
+            logger.warning(
+                "Workflow %r declares install_task %r but no such planted task "
+                "exists; skipping provisioning",
+                bundle.slug,
+                bundle.install_task,
+            )
+            return None
+
+        task_id = (rows[0].entries or {}).get("task_id")
+        if task_id is None:
+            return None
+
+        from ..task_scheduler.typed_tasks_client import trigger_task
+
+        trigger_task(task_id=int(task_id))
+        return int(task_id)
+
+    # ------------------------------------------------------------------ #
+    # Requested changes (the mutation contract for reading surfaces)     #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _get_dm():
+        from ..data_manager.data_manager import DataManager
+
+        return DataManager()
+
+    def _claim_is_stale(self, row: Mapping[str, Any]) -> bool:
+        """Whether a running request's holder can no longer finish it.
+
+        A claim younger than the window is someone else's live work. Past
+        it with no terminal status written, the holder died mid-pass — the
+        one condition under which taking the request over cannot run it
+        twice. A running row with no claim at all predates claims, so its
+        age is unknowable and it is treated as stale rather than stuck.
+        """
+        stamp = str(row.get("claimed_at") or "")
+        if not stamp:
+            return True
+        try:
+            claimed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(
+                "Unparseable request claim stamp %r; treating as live",
+                stamp,
+            )
+            return False
+        if claimed.tzinfo is None:
+            claimed = claimed.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - claimed).total_seconds() >= (
+            STALE_CLAIM_SECONDS
+        )
+
+    def _claim_request(
+        self,
+        context: str,
+        row: Mapping[str, Any],
+    ) -> Optional[str]:
+        """Take exclusive execution of one request, or None when another won.
+
+        An atomic compare-and-set on the state this caller just observed, so
+        a wake dispatch racing the boot sweep produces exactly one winner —
+        which is what keeps at-least-once delivery from planting a workflow
+        twice. Expecting the observed ``claim_key`` on a stale takeover
+        fences out the dead holder: if it wrote again in between, the
+        expectation no longer matches and nobody double-runs.
+        """
+        nonce = uuid.uuid4().hex
+        expect: Dict[str, Any] = {
+            "request_id": str(row.get("request_id")),
+            "status": str(row.get("status") or ""),
+        }
+        if row.get("claim_key"):
+            expect["claim_key"] = str(row["claim_key"])
+
+        claimed = self._get_dm().claim(
+            context,
+            expect=expect,
+            updates={
+                "status": "running",
+                "claim_key": nonce,
+                "claimed_at": _now(),
+            },
+            limit=1,
+        )
+        return nonce if claimed else None
+
+    def _settle_request(
+        self,
+        context: str,
+        request_id: str,
+        *,
+        status: str,
+        outcome: Optional[Any] = None,
+        error: Optional[Any] = None,
+    ) -> None:
+        updates: Dict[str, Any] = {"status": status, "settled_at": _now()}
+        if outcome is not None:
+            updates["outcome"] = json.dumps(outcome, default=str)[:20000]
+        if error is not None:
+            updates["error"] = json.dumps(error, default=str)[:4000]
+        self._get_dm().update_rows(
+            context,
+            updates,
+            filter=f"request_id == {json.dumps(request_id)}",
+        )
+
+    def _run_request(self, row: Mapping[str, Any]) -> Dict[str, Any]:
+        """Perform one requested change and return what it produced."""
+        action = str(row.get("action") or "")
+        slug = str(row.get("slug") or "")
+        destination = self._normalized_destination(row.get("destination"))
+        params = json.loads(row.get("params") or "{}")
+
+        if action == "install":
+            # An empty params object means "keep what is recorded", which is
+            # install_workflow's own contract for params=None.
+            return self.install_workflow(
+                slug=slug,
+                params=params or None,
+                destination=destination,
+            )
+        if action == "update":
+            return self.install_workflow(
+                slug=slug,
+                params=None,
+                destination=destination,
+            )
+        if action == "uninstall":
+            # keep_data rides on the request's params rather than a column of
+            # its own: it is an argument to one action, not a property every
+            # request has.
+            return self.uninstall_workflow(
+                slug=slug,
+                destination=destination,
+                keep_data=bool(params.get("keep_data")),
+            )
+        if action == "save_params":
+            return self.set_workflow_params(
+                slug=slug,
+                params=params,
+                destination=destination,
+            )
+        raise ToolErrorException(
+            {
+                "error": "unknown_action",
+                "action": action,
+                "supported": list(ACTIONS),
+                "message": (
+                    f"Requested action {action!r} is not one of "
+                    f"{list(ACTIONS)}; nothing was changed."
+                ),
+            },
+        )
+
+    @functools.wraps(BaseWorkflowManager.execute_requests, updated=())
+    def execute_requests(
+        self,
+        *,
+        destination: Optional[str] = None,
+        limit: int = _REQUEST_BATCH,
+    ) -> Dict[str, Any]:
+        # The assistant's half of the mutation contract: a reading surface
+        # records intent as a row because planting needs the reconcile
+        # engine, which is the assistant's, and a hosted assistant is
+        # usually asleep when someone clicks Install. This runs on every
+        # boot and on the wake a dispatch triggers, so a missed dispatch
+        # costs latency rather than a lost request.
+        context = self._requests_context_for_destination(destination)
+        dm = self._get_dm()
+
+        pending = dm.filter(context, filter="status == 'pending'", limit=limit)
+        running = dm.filter(context, filter="status == 'running'", limit=limit)
+        stale = [row for row in running if self._claim_is_stale(row)]
+
+        # Oldest first: a user who clicked install then uninstall must not
+        # have them applied out of order.
+        queue = sorted(
+            [*pending, *stale],
+            key=lambda row: str(row.get("ts") or ""),
+        )
+
+        settled: Dict[str, str] = {}
+        for row in queue:
+            request_id = str(row.get("request_id") or "")
+            if not request_id:
+                continue
+            if self._claim_request(context, row) is None:
+                continue
+            try:
+                outcome = self._run_request(row)
+            except Exception as exc:
+                error = (
+                    exc.payload
+                    if isinstance(exc, ToolErrorException)
+                    else {"error": str(exc)}
+                )
+                self._settle_request(
+                    context,
+                    request_id,
+                    status="failed",
+                    error=error,
+                )
+                settled[request_id] = "failed"
+                logger.warning(
+                    "Workflow request %s (%s %s) failed: %s",
+                    request_id,
+                    row.get("action"),
+                    row.get("slug"),
+                    exc,
+                )
+                continue
+
+            # A per-surface failure means the user asked for an install that
+            # did not fully land, so the request is honest about it while the
+            # outcome still carries what did. `connect_required` is NOT a
+            # failure — a held workflow is the designed inert install.
+            failures = outcome.get("failures") if isinstance(outcome, Mapping) else None
+            self._settle_request(
+                context,
+                request_id,
+                status="failed" if failures else "succeeded",
+                outcome=outcome,
+                error=failures or None,
+            )
+            settled[request_id] = "failed" if failures else "succeeded"
+
+        return {"settled": settled}
+
+    @functools.wraps(BaseWorkflowManager.set_workflow_params, updated=())
+    def set_workflow_params(
+        self,
+        *,
+        slug: str,
+        params: Dict[str, Any],
+        destination: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with self._lock:
+            bundle = self._catalogue.get(slug)
+
+        context = self._workflow_context_for_destination(destination)
+        meta_context = self._meta_context_for_destination(destination)
+
+        with exclusive_sync_lease(f"{meta_context}:workflow_install"):
+            existing = self._read_installation(slug, context=context)
+            if existing is None:
+                raise ToolErrorException(
+                    {
+                        "error": "not_installed",
+                        "slug": slug,
+                        "destination": destination or "personal",
+                        "message": (
+                            f"Workflow {slug!r} is not installed at "
+                            f"{destination or 'personal'}, so there are no "
+                            "settings to change."
+                        ),
+                    },
+                )
+            # Validated against the bundle when the catalogue has it, so a
+            # settings write cannot drop a required value. An orphaned
+            # installation (bundle gone from this deployment) still accepts
+            # settings — refusing would strand it.
+            resolved = self._validate_params(bundle, params) if bundle else dict(params)
+            logs = unisdk.get_logs(
+                context=context,
+                filter=f"slug == '{slug}'",
+                limit=1,
+            )
+            if logs:
+                # overwrite=True because the row already carries params;
+                # Orchestra refuses to replace an existing value otherwise.
+                unisdk.update_logs(
+                    context=context,
+                    logs=[logs[0].id],
+                    entries={"params": json.dumps(resolved, sort_keys=True)},
+                    overwrite=True,
+                )
+
+        return {"slug": slug, "params": resolved}
+
     def _installations_in(self, context: str) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=context,
@@ -664,6 +1082,14 @@ class WorkflowManager(BaseWorkflowManager):
                     "error": "not_installed",
                     "slug": slug,
                     "destination": destination or "personal",
+                    "installed_at": self._destinations_of(
+                        self._installations_by_slug().get(slug) or [],
+                    ),
+                    "message": (
+                        f"Workflow {slug!r} is not installed at "
+                        f"{destination or 'personal'}, so it has no settings "
+                        "to read."
+                    ),
                 },
             )
         return json.loads(existing.get("params") or "{}")
@@ -674,6 +1100,7 @@ class WorkflowManager(BaseWorkflowManager):
         *,
         slug: str,
         destination: Optional[str] = None,
+        keep_data: bool = False,
     ) -> Dict[str, Any]:
         context = self._workflow_context_for_destination(destination)
         meta_context = self._meta_context_for_destination(destination)
@@ -684,12 +1111,8 @@ class WorkflowManager(BaseWorkflowManager):
                 # The slug may be installed at a different destination —
                 # say where, so the caller can retry with the right one
                 # instead of concluding the workflow does not exist.
-                installed_at = sorted(
-                    {
-                        row.get("destination", "personal")
-                        for row in self._installations()
-                        if row.get("slug") == slug
-                    },
+                installed_at = self._destinations_of(
+                    self._installations_by_slug().get(slug) or [],
                 )
                 raise ToolErrorException(
                     {
@@ -697,6 +1120,15 @@ class WorkflowManager(BaseWorkflowManager):
                         "slug": slug,
                         "destination": destination or "personal",
                         "installed_at": installed_at,
+                        "message": (
+                            f"Workflow {slug!r} is not installed at "
+                            f"{destination or 'personal'}."
+                            + (
+                                f" It is installed at {installed_at}."
+                                if installed_at
+                                else ""
+                            )
+                        ),
                     },
                 )
 
@@ -709,13 +1141,25 @@ class WorkflowManager(BaseWorkflowManager):
                 name=existing.get("name", slug),
             )
 
+            # keep_data preserves the stored tables and prunes everything
+            # else. A table is the only surface holding work the workflow
+            # *produced* rather than content it was given — invoices it
+            # reconciled, prospects it sourced — so removing the setup should
+            # not have to mean throwing that away. Procedures, claims, tasks
+            # and functions are the bundle's own content and always go: they
+            # are re-plantable from git, and leaving them would be leaving a
+            # half-installed workflow behind.
+            pruned_surfaces = (
+                [name for name in recorded if name != "data"] if keep_data else recorded
+            )
             removed, failures = self._plant(
                 bundle,
                 destination=destination,
                 installed=self._installed_bundles(context),
-                surface_names=recorded,
+                surface_names=pruned_surfaces,
                 empty=True,
             )
+            kept = sorted(set(recorded) - set(pruned_surfaces))
             # The installation row goes only after every surface actually
             # cleared. On failure it stays — it holds the recorded surfaces,
             # which are the only durable record of what still needs pruning.
@@ -723,6 +1167,8 @@ class WorkflowManager(BaseWorkflowManager):
                 self._delete_installation(slug, context=context)
 
         result: Dict[str, Any] = {"slug": slug, "removed": removed}
+        if kept:
+            result["kept"] = kept
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             result["retained"] = True
@@ -736,10 +1182,8 @@ class WorkflowManager(BaseWorkflowManager):
     @functools.wraps(BaseWorkflowManager.get_workflow, updated=())
     def get_workflow(self, *, slug: str) -> Dict[str, Any]:
         bundle = self._catalogue.get(slug)
-        row = next(
-            (r for r in self._installations() if r.get("slug") == slug),
-            None,
-        )
+        rows = self._installations_by_slug().get(slug) or []
+        row = self._preferred_installation(rows) if rows else None
         if bundle is None and row is None:
             return {"found": False, "slug": slug}
 
@@ -774,6 +1218,7 @@ class WorkflowManager(BaseWorkflowManager):
                     "params": json.loads(row.get("params") or "{}"),
                     "installed_surfaces": json.loads(row.get("surfaces") or "[]"),
                     "destination": row.get("destination", "personal"),
+                    "installed_at": self._destinations_of(rows),
                 },
             )
             if bundle is None:

@@ -181,9 +181,37 @@ _CONTENT_BODY_FIELD = {
     "functions": "docstring",
 }
 _CONTENT_META_FIELDS = {
-    "knowledge": ("kind", "topics"),
-    "tasks": ("tags",),
-    "functions": ("argspec",),
+    # Whatever the artifact's own page shows, so a reading surface can render
+    # the real view rather than an approximation of it. Everything here is
+    # already in the collected entry; the alternative is a second, thinner
+    # description of each artifact that drifts from the page it imitates.
+    "guidance": ("function_names",),
+    "knowledge": ("kind", "topics", "status", "source_refs"),
+    "tasks": (
+        "repeat",
+        "trigger",
+        "tags",
+        "priority",
+        "schedule",
+        "deadline",
+        "entrypoint_function",
+    ),
+    "functions": (
+        "argspec",
+        "depends_on",
+        "guidance_ids",
+        "precondition",
+        "is_primitive",
+        "verify",
+        "implementation",
+    ),
+}
+
+_CONTENT_META_CONSTANTS = {
+    # Bundles ship functions as `functions/*.py`, and the artifact's page names
+    # the language. Not on the collected entry because the deployment sync
+    # never needed it.
+    "functions": {"language": "python"},
 }
 
 
@@ -199,8 +227,9 @@ def content_rows(bundle: WorkflowBundle) -> List[Dict[str, Any]]:
             meta = {
                 name: fields[name]
                 for name in meta_fields
-                if fields.get(name) not in (None, "", [])
+                if fields.get(name) not in (None, "", [], {})
             }
+            meta.update(_CONTENT_META_CONSTANTS.get(surface, {}))
             row = WorkflowContentEntry(
                 content_key=f"{bundle.slug}/{surface}/{key}",
                 slug=bundle.slug,
