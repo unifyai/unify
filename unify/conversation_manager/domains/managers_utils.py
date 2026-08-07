@@ -1187,6 +1187,55 @@ def _conversation_exchange_metadata(
     return metadata
 
 
+# Exchanges already checked for missing routing this process. The backfill is
+# a no-op after the first repair, so re-reading the row on every subsequent
+# message in the conversation would be pure overhead.
+_routing_backfilled_exchanges: set[int] = set()
+
+
+def _backfill_exchange_routing(
+    cm: "ConversationManager",
+    *,
+    exchange_id: int,
+    event: "Event",
+    medium: "Medium",
+    conversation_key: str,
+) -> None:
+    """Add missing routing identity to an exchange that predates its capture.
+
+    Exchange metadata is written once, when the exchange is created, and
+    conversations are long-lived: a thread started before routing was
+    recorded would never acquire it, leaving outbound replies unable to
+    find the conversation for as long as the thread lives. Repair it from
+    the first message that arrives carrying the identifiers, in either
+    direction, so the gap closes on its own rather than needing a backfill.
+    """
+    if exchange_id in _routing_backfilled_exchanges:
+        return
+    _routing_backfilled_exchanges.add(exchange_id)
+
+    desired = _conversation_exchange_metadata(event, medium, conversation_key)
+    routing = {k: v for k, v in desired.items() if k != "medium"}
+    try:
+        stored = cm.transcript_manager.get_exchange_metadata(exchange_id).metadata or {}
+    except Exception:  # noqa: BLE001 — a missing/unreadable row is not fatal
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Could not read exchange "
+            f"{exchange_id} metadata for routing backfill.",
+        )
+        return
+
+    missing = {k: v for k, v in routing.items() if not stored.get(k)}
+    if not missing:
+        return
+    # Merges rather than replaces, so only the gap needs sending.
+    cm.transcript_manager.update_exchange_metadata(exchange_id, missing)
+    LOGGER.debug(
+        f"{ICONS['managers_worker']} [ManagersWorker] Backfilled routing "
+        f"{sorted(missing)} onto exchange {exchange_id}.",
+    )
+
+
 def _recover_exchange_id(
     cm: "ConversationManager",
     medium: "Medium",
@@ -1462,23 +1511,32 @@ async def log_message(
     # channels (group channels, email) reuse for the whole thread — both with no
     # inactivity window. Durable mediums (DMs and email) additionally recover their
     # exchange from Exchanges metadata on a cold (post-restart) cache.
+    # Derived whenever the medium groups, not only when the exchange is
+    # unknown: it is also stamped onto the message row as the join key that
+    # makes routing recoverable per message, and an already-resolved exchange
+    # is the common case.
     conversation_key: str | None = None
-    if exchange_id == UNASSIGNED and (
-        medium in _DM_MEDIA or medium in _PROVIDER_THREAD_MEDIA
-    ):
+    if medium in _DM_MEDIA or medium in _PROVIDER_THREAD_MEDIA:
         conversation_key = _derive_conversation_key(
             event,
             medium,
             contact_id,
         )
-        if conversation_key is not None:
-            cached = cm._conversation_exchange_ids.get(conversation_key)
-            if cached is not None:
-                exchange_id = cached
-            elif medium in _DURABLE_MEDIA:
-                recovered = _recover_exchange_id(cm, medium, conversation_key)
-                if recovered is not None:
-                    exchange_id = recovered
+    # An exchange handed to us by a live call session or carried on the event
+    # is not this conversation's own thread, so it must neither be bound to
+    # the conversation key nor repaired as though it were.
+    exchange_preset = exchange_id != UNASSIGNED
+    exchange_grouped = False
+    if not exchange_preset and conversation_key is not None:
+        cached = cm._conversation_exchange_ids.get(conversation_key)
+        if cached is not None:
+            exchange_id = cached
+            exchange_grouped = True
+        elif medium in _DURABLE_MEDIA:
+            recovered = _recover_exchange_id(cm, medium, conversation_key)
+            if recovered is not None:
+                exchange_id = recovered
+                exchange_grouped = True
 
     # A spoken line's audible start, when the voice agent observed one. The
     # event's own timestamp marks the commit that follows the line, so using it
@@ -1541,6 +1599,38 @@ async def log_message(
                     metadata["team_id"] = event.team_id
                 if event.group_id is not None:
                     metadata["group_id"] = event.group_id
+                metadata = metadata or None
+            elif isinstance(
+                event,
+                (
+                    MsTeamsBotMessageReceived,
+                    MsTeamsBotMessageSent,
+                    MsTeamsBotChannelMessageReceived,
+                    MsTeamsBotChannelMessageSent,
+                ),
+            ):
+                # An outbound Teams bot reply routes on
+                # (tenant_id, conversation_id), and the Bot Framework will not
+                # let us open a conversation to recover them. Recording them on
+                # every message — not only in the exchange metadata written
+                # once at exchange creation — is what lets a later run that saw
+                # no inbound activity still reply into the same conversation.
+                # ``conversation_key`` is stored alongside as the join key, so
+                # the lookup is an exact server-side match rather than a scan.
+                metadata = {}
+                for attr in (
+                    "tenant_id",
+                    "conversation_id",
+                    "channel_id",
+                    "team_id",
+                    "thread_id",
+                ):
+                    if value := getattr(event, attr, "") or "":
+                        metadata[attr] = value
+                if metadata and conversation_key is not None:
+                    metadata[conversation_keys.CONVERSATION_KEY_FIELD] = (
+                        conversation_key
+                    )
                 metadata = metadata or None
             elif isinstance(
                 event,
@@ -1672,6 +1762,14 @@ async def log_message(
                         f"{ICONS['managers_worker']} [ManagersWorker] Cached pre-hire exchange_id: {exchange_id}",
                     )
             else:
+                if exchange_grouped and conversation_key is not None:
+                    _backfill_exchange_routing(
+                        cm,
+                        exchange_id=exchange_id,
+                        event=event,
+                        medium=medium,
+                        conversation_key=conversation_key,
+                    )
                 msg_data = {
                     "medium": medium,
                     "sender_id": sender_id,
@@ -1753,7 +1851,7 @@ async def log_message(
         ):
             cm.call_manager.teams_meet_exchange_id = exchange_id
             cm.call_manager.call_exchange_destination = primary_destination
-        elif conversation_key is not None:
+        elif conversation_key is not None and not exchange_preset:
             # Record the exchange so the next message in this conversation reuses it.
             cm._conversation_exchange_ids[conversation_key] = exchange_id
 

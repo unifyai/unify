@@ -50,6 +50,14 @@ def _channel_lines() -> list[str]:
             "another channel.",
         )
     lines.append("- Unify platform messages: `send_unify_message`.")
+    lines.append(
+        "Send by calling the tool. Do not try to confirm a channel will work "
+        "by searching transcripts, logs or contact records first — routing "
+        "identifiers are resolved inside the send tools, so a search that "
+        "comes up empty is not evidence the send would fail, and refusing on "
+        "it drops a message that would have gone through. The tool's return "
+        "value is the source of truth for whether anything was delivered.",
+    )
     return lines
 
 

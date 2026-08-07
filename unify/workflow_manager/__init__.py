@@ -19,10 +19,12 @@ __all__ = [
     "UnscopedSurfaceError",
     "WorkflowBundle",
     "WorkflowCatalogEntry",
+    "WorkflowContentEntry",
     "WorkflowInstallation",
     "WorkflowManager",
     "WorkflowRequirement",
     "bootstrap_workflow_catalog",
+    "seed_builtin_workflows",
     "load_bundle",
     "load_catalog",
     "register_default_surfaces",
@@ -38,6 +40,7 @@ _lazy_map = {
     "WorkflowBundle": "unify.workflow_manager.bundle",
     "WorkflowRequirement": "unify.workflow_manager.bundle",
     "bootstrap_workflow_catalog": "unify.workflow_manager.catalog",
+    "seed_builtin_workflows": "unify.workflow_manager.builtins_catalog",
     "load_bundle": "unify.workflow_manager.catalog",
     "load_catalog": "unify.workflow_manager.catalog",
     "schedule_bootstrap_workflow_catalog": "unify.workflow_manager.catalog",
@@ -45,6 +48,7 @@ _lazy_map = {
     "SCOPED_SURFACES": "unify.workflow_manager.surfaces",
     "register_default_surfaces": "unify.workflow_manager.surfaces",
     "WorkflowCatalogEntry": "unify.workflow_manager.types.catalog_entry",
+    "WorkflowContentEntry": "unify.workflow_manager.types.content_entry",
     "WorkflowInstallation": "unify.workflow_manager.types.workflow",
     "WorkflowManager": "unify.workflow_manager.workflow_manager",
 }
@@ -71,6 +75,7 @@ if TYPE_CHECKING:
         WorkflowBundle,
         WorkflowRequirement,
     )
+    from .builtins_catalog import seed_builtin_workflows
     from .catalog import (
         bootstrap_workflow_catalog,
         load_bundle,
@@ -83,5 +88,6 @@ if TYPE_CHECKING:
         register_default_surfaces,
     )
     from .types.catalog_entry import WorkflowCatalogEntry
+    from .types.content_entry import WorkflowContentEntry
     from .types.workflow import WorkflowInstallation
     from .workflow_manager import WorkflowManager

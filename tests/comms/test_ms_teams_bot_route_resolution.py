@@ -64,9 +64,15 @@ def _stub_transport(monkeypatch) -> list[dict]:
     return sends
 
 
-def _stub_exchange(monkeypatch, metadata: dict | None) -> None:
-    """Stand in for the durable Transcripts exchange lookup."""
+def _stub_exchange(
+    monkeypatch,
+    metadata: dict | None,
+    *,
+    message_metadata: dict | None = None,
+) -> None:
+    """Stand in for the durable Transcripts lookups (messages + exchange)."""
     transcript_manager = SimpleNamespace(
+        latest_message_metadata_by_conversation=lambda key: message_metadata or {},
         resolve_exchange_id_by_metadata=lambda key, value: (
             91 if metadata is not None else None
         ),
@@ -138,6 +144,80 @@ async def test_resolves_from_durable_exchange_when_ids_omitted(monkeypatch):
     assert result == {"status": "ok"}
     assert sends[0]["tenant_id"] == "tenant-stored"
     assert sends[0]["conversation_id"] == "conv-stored"
+
+
+@pytest.mark.anyio
+async def test_resolves_from_message_history_when_exchange_predates_routing(
+    monkeypatch,
+):
+    """The reported failure: plenty of inbound Teams history, but an exchange
+    created before routing was captured. Messages carry it; the exchange
+    does not."""
+    comms = _make_comms(monkeypatch)
+    sends = _stub_transport(monkeypatch)
+    _stub_exchange(
+        monkeypatch,
+        {"conversation_key": "ms_teams_bot_message:dm:1"},
+        message_metadata={
+            "tenant_id": "tenant-from-message",
+            "conversation_id": "conv-from-message",
+        },
+    )
+    _stub_route(monkeypatch, None)
+
+    result = await comms.send_ms_teams_bot_message(
+        contact_id=TEST_CONTACT_ID,
+        content="the report is ready",
+    )
+
+    assert result == {"status": "ok"}
+    assert sends[0]["tenant_id"] == "tenant-from-message"
+    assert sends[0]["conversation_id"] == "conv-from-message"
+
+
+@pytest.mark.anyio
+async def test_message_history_outranks_stale_exchange(monkeypatch):
+    """Messages are the fresher record — an exchange keeps whatever was
+    written when the thread began."""
+    comms = _make_comms(monkeypatch)
+    sends = _stub_transport(monkeypatch)
+    _stub_exchange(
+        monkeypatch,
+        {"tenant_id": "tenant-old", "conversation_id": "conv-old"},
+        message_metadata={
+            "tenant_id": "tenant-new",
+            "conversation_id": "conv-new",
+        },
+    )
+    _stub_route(monkeypatch, None)
+
+    await comms.send_ms_teams_bot_message(
+        contact_id=TEST_CONTACT_ID,
+        content="ping",
+    )
+
+    assert sends[0]["conversation_id"] == "conv-new"
+
+
+@pytest.mark.anyio
+async def test_partial_message_metadata_falls_through_to_exchange(monkeypatch):
+    """Half a routing pair is unusable — keep looking rather than fail."""
+    comms = _make_comms(monkeypatch)
+    sends = _stub_transport(monkeypatch)
+    _stub_exchange(
+        monkeypatch,
+        {"tenant_id": "tenant-exchange", "conversation_id": "conv-exchange"},
+        message_metadata={"conversation_id": "conv-orphan"},
+    )
+    _stub_route(monkeypatch, None)
+
+    await comms.send_ms_teams_bot_message(
+        contact_id=TEST_CONTACT_ID,
+        content="ping",
+    )
+
+    assert sends[0]["tenant_id"] == "tenant-exchange"
+    assert sends[0]["conversation_id"] == "conv-exchange"
 
 
 @pytest.mark.anyio

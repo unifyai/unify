@@ -170,6 +170,13 @@ class WorkflowBundle:
     name: str
     version: str = ""
     description: str = ""
+    """One line for a card or a list row."""
+
+    about: str = ""
+    """Long-form markdown for a reader deciding whether to install: what
+    the workflow does, when it runs, what arrives, and how its settings
+    shape it. The ``description`` is the card; this is the page."""
+
     category: str = ""
     """Catalogue grouping, e.g. ``"comms"`` / ``"growth"`` / ``"ops"`` /
     ``"build"``."""
