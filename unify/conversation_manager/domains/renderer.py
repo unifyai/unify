@@ -41,8 +41,6 @@ from unify.conversation_manager.task_actions import (
     derive_short_name,
     iter_steering_tools_for_action,
     iter_steering_tools_for_completed_action,
-    build_action_name,
-    safe_call_id_suffix,
 )
 from unify.logger import LOGGER
 from unify.session_details import SESSION_DETAILS, is_boss_contact
@@ -1065,14 +1063,11 @@ class Renderer:
 
             if action_type == "clarification_request" and not a.get("response"):
                 call_id = a.get("call_id", "")
-                suffix = safe_call_id_suffix(call_id)
-                action = build_action_name(
-                    "answer_clarification",
-                    short_name,
-                    handle_id,
-                    suffix,
+                out += (
+                    "  <pending>Use answer_clarification_action("
+                    f"handle_id={handle_id}, call_id='{call_id}', "
+                    "answer=...) to respond</pending>\n"
                 )
-                out += f"  <pending>Use {action} to respond</pending>\n"
             out += "</event>\n"
         out += "</history>\n"
         return out
@@ -1113,9 +1108,10 @@ class Renderer:
                 if is_persistent:
                     action_render += (
                         "<note>Persistent session — will NOT self-complete. "
-                        "Use stop_* to end it. Responses marked 'awaiting_input' "
+                        "Use stop_action(handle_id=...) to end it. Responses marked "
+                        "'awaiting_input' "
                         "mean the actor finished its turn and needs your next "
-                        "interject_* to continue.</note>\n"
+                        "interject_action to continue.</note>\n"
                     )
 
                 action_render += "<steering_tools>\n"

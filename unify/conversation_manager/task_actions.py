@@ -265,9 +265,10 @@ def iter_steering_tools_for_action(
                    If None, include both (backward compatible behavior).
 
     Returns:
-        List of (action_name, description) tuples
+        List of (action_name, description) tuples, rendered as ready-to-use
+        invocations of the fixed steering tools
+        (``interject_action(handle_id=3, ...)``).
     """
-    short_name = derive_short_name(query)
     actions = []
 
     for op in STEERING_OPERATIONS:
@@ -279,18 +280,20 @@ def iter_steering_tools_for_action(
                 continue  # Skip resume when not paused (running)
 
         if op.requires_clarification:
-            # Only generate answer_clarification if there are pending ones
+            # Only surface answer_clarification if there are pending ones
             for clar in pending_clarifications or []:
                 call_id = clar.get("call_id", "")
-                suffix = safe_call_id_suffix(call_id)
-                name = build_action_name(op.name, short_name, handle_id, suffix)
+                name = (
+                    f"{op.name}_action(handle_id={handle_id}, "
+                    f"call_id='{call_id}', ...)"
+                )
                 desc = (
                     op.get_docstring()
                     or f"{op.name.replace('_', ' ').title()} this action"
                 )
                 actions.append((name, desc))
         else:
-            name = build_action_name(op.name, short_name, handle_id)
+            name = f"{op.name}_action(handle_id={handle_id}, ...)"
             desc = (
                 op.get_docstring() or f"{op.name.replace('_', ' ').title()} this action"
             )
@@ -314,11 +317,10 @@ def iter_steering_tools_for_completed_action(
     Returns:
         List of (action_name, description) tuples
     """
-    short_name = derive_short_name(query)
     actions = []
 
     ask_op = OPERATION_MAP["ask"]
-    ask_name = build_action_name(ask_op.name, short_name, handle_id)
+    ask_name = f"ask_action(handle_id={handle_id}, ...)"
     ask_desc = ask_op.get_docstring() or "Ask about this completed action"
     actions.append((ask_name, ask_desc))
 
