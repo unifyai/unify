@@ -194,6 +194,17 @@ def bootstrap_workflow_catalog(
     except Exception:
         logger.exception("Workflow reconcile at boot failed; will retry next boot")
 
+    # The sweep behind the wake dispatch: a request recorded while this
+    # assistant was asleep — or whose dispatch never arrived — is carried
+    # out here. Dispatch is an optimisation for latency; this is what makes
+    # the request contract durable.
+    try:
+        settled = manager.execute_requests().get("settled") or {}
+        if settled:
+            logger.info("Workflow requests settled at boot: %s", settled)
+    except Exception:
+        logger.exception("Workflow request sweep at boot failed; will retry next boot")
+
     return manager
 
 
