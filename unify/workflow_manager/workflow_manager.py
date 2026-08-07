@@ -192,6 +192,43 @@ class WorkflowManager(BaseWorkflowManager):
             return None
         return dict(logs[0].entries or {})
 
+    def _installations_by_slug(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Every installation of every slug, grouped, across all read roots.
+
+        One slug can legitimately be installed more than once — personally and
+        for a team — and those are separate installations owning separate rows.
+        Collapsing them to one silently picks a winner.
+        """
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in self._installations():
+            slug = row.get("slug")
+            if slug:
+                grouped.setdefault(str(slug), []).append(row)
+        return grouped
+
+    @staticmethod
+    def _preferred_installation(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The installation a read should describe when a slug has several.
+
+        Personal first, because personal is the write default: a caller who
+        passes no destination acts on that one, so a read that described a team
+        installation instead would be describing something the next write will
+        not touch. That mismatch is exactly what made a team-installed slug read
+        as installed and then fail to uninstall.
+        """
+        return next(
+            (
+                row
+                for row in rows
+                if str(row.get("destination", "personal")) == "personal"
+            ),
+            rows[0],
+        )
+
+    @staticmethod
+    def _destinations_of(rows: List[Dict[str, Any]]) -> List[str]:
+        return sorted({str(row.get("destination", "personal")) for row in rows})
+
     def _installations(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
         for context in self._read_contexts():
@@ -501,7 +538,10 @@ class WorkflowManager(BaseWorkflowManager):
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        by_slug = {row.get("slug"): row for row in self._installations()}
+        grouped = self._installations_by_slug()
+        by_slug = {
+            slug: self._preferred_installation(rows) for slug, rows in grouped.items()
+        }
         entries: List[Dict[str, Any]] = []
 
         for bundle in self.available_bundles():
@@ -532,6 +572,12 @@ class WorkflowManager(BaseWorkflowManager):
                             self._unmet_requirements(bundle),
                         ),
                         "params": json.loads(row.get("params") or "{}"),
+                        # Which installation this describes, and every root it
+                        # is installed at. Without these, "installed: true" for
+                        # a team-only install reads as personal and the next
+                        # uninstall — which defaults to personal — refuses.
+                        "destination": row.get("destination", "personal"),
+                        "installed_at": self._destinations_of(grouped[bundle.slug]),
                     },
                 )
             entries.append(entry)
@@ -974,6 +1020,9 @@ class WorkflowManager(BaseWorkflowManager):
                     "error": "not_installed",
                     "slug": slug,
                     "destination": destination or "personal",
+                    "installed_at": self._destinations_of(
+                        self._installations_by_slug().get(slug) or [],
+                    ),
                     "message": (
                         f"Workflow {slug!r} is not installed at "
                         f"{destination or 'personal'}, so it has no settings "
@@ -999,12 +1048,8 @@ class WorkflowManager(BaseWorkflowManager):
                 # The slug may be installed at a different destination —
                 # say where, so the caller can retry with the right one
                 # instead of concluding the workflow does not exist.
-                installed_at = sorted(
-                    {
-                        row.get("destination", "personal")
-                        for row in self._installations()
-                        if row.get("slug") == slug
-                    },
+                installed_at = self._destinations_of(
+                    self._installations_by_slug().get(slug) or [],
                 )
                 raise ToolErrorException(
                     {
@@ -1060,10 +1105,8 @@ class WorkflowManager(BaseWorkflowManager):
     @functools.wraps(BaseWorkflowManager.get_workflow, updated=())
     def get_workflow(self, *, slug: str) -> Dict[str, Any]:
         bundle = self._catalogue.get(slug)
-        row = next(
-            (r for r in self._installations() if r.get("slug") == slug),
-            None,
-        )
+        rows = self._installations_by_slug().get(slug) or []
+        row = self._preferred_installation(rows) if rows else None
         if bundle is None and row is None:
             return {"found": False, "slug": slug}
 
@@ -1098,6 +1141,7 @@ class WorkflowManager(BaseWorkflowManager):
                     "params": json.loads(row.get("params") or "{}"),
                     "installed_surfaces": json.loads(row.get("surfaces") or "[]"),
                     "destination": row.get("destination", "personal"),
+                    "installed_at": self._destinations_of(rows),
                 },
             )
             if bundle is None:
