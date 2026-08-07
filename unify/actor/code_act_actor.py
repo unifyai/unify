@@ -2828,6 +2828,21 @@ class CodeActActor(BaseCodeActActor):
         if self._computer_primitives is None:
             return None
 
+        # Only offer the computer-progress probe when the managed desktop is
+        # actually in use. Constructing ComputerPrimitives is unconditional in
+        # deployments (container_url=None, no VM), and without a live session
+        # ``desktop.query`` blocks on ``_vm_ready.wait(300)`` for five minutes
+        # before failing — an inspection loop whose only progress tool is a
+        # guaranteed 300s dead-end. ``has_live_desktop_session`` is missing on
+        # older/mocked primitives; treat absence as live to preserve behaviour.
+        _is_live = getattr(
+            self._computer_primitives,
+            "has_live_desktop_session",
+            None,
+        )
+        if callable(_is_live) and not _is_live():
+            return None
+
         computer_query = self._computer_primitives.desktop.query
 
         async def ask_computer_progress(
@@ -2835,21 +2850,23 @@ class CodeActActor(BaseCodeActActor):
             *,
             _parent_chat_context: list[dict] | None = None,
         ) -> str:
-            """Inspect the in-flight computer action loop via browser-agent memory.
+            """Inspect ONLY the magnitude browser/computer agent's trajectory.
 
-            Use this to check progress/state of ongoing ``session.act(...)``
-            work when the inspected transcript lacks enough detail (for example,
-            placeholders or terse summaries).             This is memory/history introspection,
-            not a fresh page read and not a way to trigger new actions.
+            Scope: this reads the browser-agent's own memory of in-flight
+            ``session.act(...)`` / desktop work. It knows nothing about code
+            execution, shell commands, API calls, file syncs, or LLM steps —
+            all of those run outside the computer agent, so do NOT call this
+            for them. Use it only when the inspected transcript shows an
+            ongoing browser/desktop action whose detail is missing (for
+            example, placeholders or terse summaries). This is memory/history
+            introspection, not a fresh page read and not a way to trigger new
+            actions.
             """
             _ = _parent_chat_context
-            # This tool is offered to every ``handle.ask()`` inspection loop
-            # whenever computer primitives exist, but the work being inspected
-            # is often not a browser/computer ``session.act`` (e.g. an SFTP file
-            # sync). In those cases the computer-agent backend may be unreachable
-            # or have nothing to report. A read-only progress probe failing must
-            # not look like an error: degrade to a plain answer so it cannot burn
-            # the inspection loop's failure budget or be mistaken for the
+            # Even with the live-session gate above, the backend can become
+            # unreachable mid-flight. A read-only progress probe failing must
+            # not look like an error: degrade to a plain answer so it cannot
+            # burn the inspection loop's failure budget or be mistaken for the
             # inspected task failing.
             try:
                 return await computer_query(question)
