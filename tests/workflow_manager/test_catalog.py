@@ -273,3 +273,24 @@ def test_content_rows_carry_each_artifact_whole(tmp_path: Path):
     assert morning["name"] == "Morning run"
     assert morning["body"] == "The recurring job."
     assert morning["schedule"] == "Every day"
+
+
+def test_content_rows_publish_what_the_artifacts_own_page_shows(tmp_path: Path):
+    """A preview is meant to *be* the artifact's page, not a thinner retelling
+    of it, so the fields that page renders travel with the row. Anything absent
+    is simply absent — the reader degrades rather than inventing."""
+    import json as _json
+
+    from unify.workflow_manager.builtins_catalog import content_rows
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    rows = {row["content_key"]: row for row in content_rows(bundle)}
+
+    task_meta = _json.loads(rows["daily_briefing/tasks/wf/morning"]["meta"])
+    # The cadence the page shows comes from `repeat`; `schedule` on the row is
+    # the already-phrased prose, and both are needed for different fields.
+    assert task_meta["repeat"] == [{"frequency": "daily"}]
+
+    guidance_meta = _json.loads(rows["daily_briefing/guidance/wf/triage"]["meta"])
+    # Nothing declared on this entry, so nothing is published for it.
+    assert guidance_meta == {}
