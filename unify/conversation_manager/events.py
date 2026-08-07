@@ -2072,6 +2072,66 @@ class CanvasInvocationRequested(Event):
 
 
 @dataclass
+class WorkflowRequestRequested(Event):
+    """Someone asked, from a reading surface, to change a workflow's install state.
+
+    Console cannot install a workflow itself — planting content needs the
+    custom-sync engine, which is the assistant's — so it records the intent as a
+    ``Workflows/Requests`` row and Orchestra publishes this. The event therefore
+    carries identifiers only: what to do is already on the row, which is what
+    makes the change survive a lost event.
+
+    Delivery is at-least-once and the boot sweep drains the same queue, so a
+    redelivery is expected rather than exceptional. Nothing here guards against
+    double execution: the atomic claim inside ``execute_requests`` does, because
+    a retry from any source needs the same protection.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:workflow_request"
+
+    request_id: str
+    slug: str = ""
+    action: str = ""
+    destination: str = "personal"
+    reason: str = ""
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+        *,
+        reason: str = "",
+    ) -> "WorkflowRequestRequested | None":
+        """Build a workflow request event from a comms Pub/Sub payload."""
+
+        if not isinstance(payload, _Mapping):
+            return None
+        extra = payload.get("extra_event_fields")
+        fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+
+        # The id addresses the row on its own, so it is the only requirement;
+        # slug and action are for the log line and the reason text.
+        request_id = str(fields.get("request_id") or "")
+        if not request_id:
+            return None
+
+        slug = str(fields.get("slug") or "")
+        action = str(fields.get("action") or "")
+        return cls(
+            request_id=request_id,
+            slug=slug,
+            action=action,
+            destination=str(fields.get("destination") or "personal"),
+            reason=reason
+            or (
+                f"{action} was requested for the {slug!r} workflow."
+                if action and slug
+                else "A workflow install-state change was requested."
+            ),
+        )
+
+
+@dataclass
 class ProviderEventDispatchRequested(Event):
     """Orchestra asked Unity to adopt one live provider-event dispatch.
 

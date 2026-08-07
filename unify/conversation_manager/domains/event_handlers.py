@@ -18,6 +18,9 @@ from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.canvas_actions import (
     handle_canvas_invocation_requested,
 )
+from unify.conversation_manager.domains.workflow_requests import (
+    handle_workflow_request_requested,
+)
 from unify.conversation_manager.domains.comms_utils import (
     post_call_utterances_to_orchestra,
     publish_system_error,
@@ -3602,6 +3605,19 @@ async def _(
     # to the invocation row and streamed to the canvas, so waking the slow brain
     # would add a conversational turn nobody asked for.
     await handle_canvas_invocation_requested(event, cm)
+
+
+@EventHandler.register(WorkflowRequestRequested)
+async def _(
+    event: WorkflowRequestRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # No `request_llm_run`: reconciling an installation is deterministic work
+    # whose outcome is written to the request row Console reads, so waking the
+    # slow brain would add a conversational turn nobody asked for.
+    await handle_workflow_request_requested(event, cm)
 
 
 @EventHandler.register(ProviderEventDispatchRequested)
