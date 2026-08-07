@@ -215,6 +215,7 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         *,
         slug: str,
         destination: Optional[str] = None,
+        keep_data: bool = False,
     ) -> Dict[str, Any]:
         """
         Remove a workflow and the content it planted.
@@ -231,10 +232,18 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
             Bundle identifier of the installation to remove.
         destination:
             ``None`` for personal, or ``team:<id>``.
+        keep_data:
+            Keep the stored tables the workflow filled and remove everything
+            else. Use it when the user wants the setup gone but not the work
+            it produced — the invoices it reconciled, the prospects it
+            sourced. Its procedures, claims, tasks and functions always go:
+            they are the bundle's own content, and leaving them would leave a
+            half-installed workflow behind.
 
         Returns
         -------
-        A dict with a ``removed`` summary of what was deleted per surface.
+        A dict with a ``removed`` summary of what was deleted per surface, and
+        ``kept`` naming any surface deliberately left in place.
         """
         raise NotImplementedError
 

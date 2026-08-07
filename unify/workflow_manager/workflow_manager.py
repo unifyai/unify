@@ -698,6 +698,16 @@ class WorkflowManager(BaseWorkflowManager):
             }
         else:
             result["tasks_armed"] = armed
+            # Provisioning runs once, on a first install, and only when the
+            # workflow is not held: a backfill against an unconnected app would
+            # fail for exactly the reason its recurring job is disarmed.
+            if existing is None:
+                provisioned = self._trigger_install_task(
+                    bundle,
+                    destination=destination,
+                )
+                if provisioned is not None:
+                    result["provisioning_task_id"] = provisioned
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             logger.warning(
@@ -742,6 +752,51 @@ class WorkflowManager(BaseWorkflowManager):
         if orphaned:
             result["orphaned"] = orphaned
         return result
+
+    def _trigger_install_task(
+        self,
+        bundle: WorkflowBundle,
+        *,
+        destination: Optional[str],
+    ) -> Optional[int]:
+        """Run the bundle's provisioning one-shot. Returns its task id, or None.
+
+        Triggered rather than awaited: ``TaskScheduler.execute`` is async and
+        ``install_workflow`` is not, and the house rule is that work starts via
+        the trigger route, never via an update. Triggering also means the run is
+        an ordinary execution with the ordinary handle, history and steering —
+        the workflow contributes nothing of its own, which is what keeps it
+        runtime-free.
+        """
+        if not bundle.install_task:
+            return None
+
+        root = ContextRegistry.write_root(self, "Tasks", destination=destination)
+        rows = unisdk.get_logs(
+            context=f"{root.strip('/')}/Tasks",
+            filter=(
+                f"managed_by == '{bundle.slug}' and "
+                f"custom_key == '{bundle.install_task}'"
+            ),
+            limit=1,
+        )
+        if not rows:
+            logger.warning(
+                "Workflow %r declares install_task %r but no such planted task "
+                "exists; skipping provisioning",
+                bundle.slug,
+                bundle.install_task,
+            )
+            return None
+
+        task_id = (rows[0].entries or {}).get("task_id")
+        if task_id is None:
+            return None
+
+        from ..task_scheduler.typed_tasks_client import trigger_task
+
+        trigger_task(task_id=int(task_id))
+        return int(task_id)
 
     # ------------------------------------------------------------------ #
     # Requested changes (the mutation contract for reading surfaces)     #
@@ -854,7 +909,14 @@ class WorkflowManager(BaseWorkflowManager):
                 destination=destination,
             )
         if action == "uninstall":
-            return self.uninstall_workflow(slug=slug, destination=destination)
+            # keep_data rides on the request's params rather than a column of
+            # its own: it is an argument to one action, not a property every
+            # request has.
+            return self.uninstall_workflow(
+                slug=slug,
+                destination=destination,
+                keep_data=bool(params.get("keep_data")),
+            )
         if action == "save_params":
             return self.set_workflow_params(
                 slug=slug,
@@ -1038,6 +1100,7 @@ class WorkflowManager(BaseWorkflowManager):
         *,
         slug: str,
         destination: Optional[str] = None,
+        keep_data: bool = False,
     ) -> Dict[str, Any]:
         context = self._workflow_context_for_destination(destination)
         meta_context = self._meta_context_for_destination(destination)
@@ -1078,13 +1141,25 @@ class WorkflowManager(BaseWorkflowManager):
                 name=existing.get("name", slug),
             )
 
+            # keep_data preserves the stored tables and prunes everything
+            # else. A table is the only surface holding work the workflow
+            # *produced* rather than content it was given — invoices it
+            # reconciled, prospects it sourced — so removing the setup should
+            # not have to mean throwing that away. Procedures, claims, tasks
+            # and functions are the bundle's own content and always go: they
+            # are re-plantable from git, and leaving them would be leaving a
+            # half-installed workflow behind.
+            pruned_surfaces = (
+                [name for name in recorded if name != "data"] if keep_data else recorded
+            )
             removed, failures = self._plant(
                 bundle,
                 destination=destination,
                 installed=self._installed_bundles(context),
-                surface_names=recorded,
+                surface_names=pruned_surfaces,
                 empty=True,
             )
+            kept = sorted(set(recorded) - set(pruned_surfaces))
             # The installation row goes only after every surface actually
             # cleared. On failure it stays — it holds the recorded surfaces,
             # which are the only durable record of what still needs pruning.
@@ -1092,6 +1167,8 @@ class WorkflowManager(BaseWorkflowManager):
                 self._delete_installation(slug, context=context)
 
         result: Dict[str, Any] = {"slug": slug, "removed": removed}
+        if kept:
+            result["kept"] = kept
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             result["retained"] = True
