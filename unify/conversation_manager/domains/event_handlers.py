@@ -19,6 +19,7 @@ from unify.conversation_manager.domains.canvas_actions import (
     handle_canvas_invocation_requested,
 )
 from unify.conversation_manager.domains.workflow_requests import (
+    arm_workflows_for_connected_app,
     handle_workflow_request_requested,
 )
 from unify.conversation_manager.domains.comms_utils import (
@@ -3709,6 +3710,19 @@ async def _(
     *args,
     **kwargs,
 ):
+    # A workflow held on this app is armed by a reconcile, and the reconcile
+    # that arms it is a repeat install. Doing it here is what makes the
+    # Console promise ("connecting arms held jobs") true without the user
+    # going back to reinstall. Best-effort: a failure here must not cost the
+    # tool sync its own turn.
+    try:
+        await arm_workflows_for_connected_app(event.app_slug)
+    except Exception:
+        LOGGER.exception(
+            "Could not re-check workflow requirements after %s connected",
+            event.app_slug,
+        )
+
     if await _handle_integration_tools_sync_completed(event, cm):
         await cm.request_llm_run(delay=0)
 
