@@ -215,6 +215,7 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         *,
         slug: str,
         destination: Optional[str] = None,
+        keep_data: bool = False,
     ) -> Dict[str, Any]:
         """
         Remove a workflow and the content it planted.
@@ -231,10 +232,18 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
             Bundle identifier of the installation to remove.
         destination:
             ``None`` for personal, or ``team:<id>``.
+        keep_data:
+            Keep the stored tables the workflow filled and remove everything
+            else. Use it when the user wants the setup gone but not the work
+            it produced — the invoices it reconciled, the prospects it
+            sourced. Its procedures, claims, tasks and functions always go:
+            they are the bundle's own content, and leaving them would leave a
+            half-installed workflow behind.
 
         Returns
         -------
-        A dict with a ``removed`` summary of what was deleted per surface.
+        A dict with a ``removed`` summary of what was deleted per surface, and
+        ``kept`` naming any surface deliberately left in place.
         """
         raise NotImplementedError
 
@@ -258,5 +267,66 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         Returns
         -------
         The workflow record, or a not-found result if no such bundle exists.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_workflow_params(
+        self,
+        *,
+        slug: str,
+        params: Dict[str, Any],
+        destination: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Change an installed workflow's settings without replanting it.
+
+        Settings are read when the workflow's jobs run and are never baked
+        into the content it planted, so changing them touches the
+        installation and nothing else — no surface is re-synced and no job
+        is re-armed. Use this for a settings edit; install the workflow
+        again when the intent is to also bring its content up to date.
+
+        Parameters
+        ----------
+        slug:
+            Bundle identifier.
+        params:
+            The complete settings object; it replaces what was recorded.
+        destination:
+            ``None`` for a personal installation, or ``team:<id>``.
+
+        Returns
+        -------
+        The slug and the settings as recorded.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def execute_requests(
+        self,
+        *,
+        destination: Optional[str] = None,
+        limit: int = 25,
+    ) -> Dict[str, Any]:
+        """
+        Carry out install-state changes that were recorded for later.
+
+        A surface that cannot install a workflow itself records what the
+        user asked for and leaves it; this performs whatever is waiting and
+        marks each one done or failed. Requests are taken exclusively, so
+        running this twice at once cannot apply the same change twice, and
+        anything left over is picked up on the next pass.
+
+        Parameters
+        ----------
+        destination:
+            ``None`` for personal requests, or ``team:<id>``.
+        limit:
+            Maximum requests to carry out in this pass.
+
+        Returns
+        -------
+        A dict with ``settled`` mapping each request handled to its outcome.
         """
         raise NotImplementedError
