@@ -22,6 +22,7 @@ __all__ = [
     "WorkflowContentEntry",
     "WorkflowInstallation",
     "WorkflowManager",
+    "WorkflowRequest",
     "WorkflowRequirement",
     "bootstrap_workflow_catalog",
     "seed_builtin_workflows",
@@ -50,6 +51,7 @@ _lazy_map = {
     "WorkflowCatalogEntry": "unify.workflow_manager.types.catalog_entry",
     "WorkflowContentEntry": "unify.workflow_manager.types.content_entry",
     "WorkflowInstallation": "unify.workflow_manager.types.workflow",
+    "WorkflowRequest": "unify.workflow_manager.types.request",
     "WorkflowManager": "unify.workflow_manager.workflow_manager",
 }
 
@@ -89,5 +91,6 @@ if TYPE_CHECKING:
     )
     from .types.catalog_entry import WorkflowCatalogEntry
     from .types.content_entry import WorkflowContentEntry
+    from .types.request import WorkflowRequest
     from .types.workflow import WorkflowInstallation
     from .workflow_manager import WorkflowManager
