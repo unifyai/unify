@@ -9,8 +9,6 @@ syncs, not a second reconcile mechanism.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping
 
@@ -208,23 +206,6 @@ class WorkflowBundle:
                 f"{self.slug!r} is a reserved managed_by value; a bundle "
                 "may not claim it.",
             )
-
-    def content_hash(self) -> str:
-        """Fingerprint of everything this bundle would plant.
-
-        Covers the collected sources and the version, so a bundle whose
-        content is unchanged short-circuits its whole fan-out. Params are
-        excluded by construction: they are not part of what gets planted,
-        and folding them in would give two installations of one bundle
-        different hashes for identical rows.
-        """
-
-        payload = json.dumps(
-            {"version": self.version, "surfaces": self.surfaces},
-            sort_keys=True,
-            default=str,
-        )
-        return hashlib.sha256(payload.encode()).hexdigest()
 
     def surface_names(self) -> list[str]:
         return sorted(self.surfaces)

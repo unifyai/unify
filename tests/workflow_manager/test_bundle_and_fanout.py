@@ -130,32 +130,6 @@ def test_bundle_covering_an_unregistered_surface_is_refused_at_registration():
 # --------------------------------------------------------------------- #
 # Content hash                                                          #
 # --------------------------------------------------------------------- #
-def test_content_hash_ignores_params():
-    """Two people installing one bundle plant byte-identical rows.
-
-    Params are read at run time, never baked in, so folding them into the
-    hash would split one bundle into per-installation content and
-    foreclose ever federating a single pinned copy.
-    """
-    work = _bundle(params_schema={"mailbox": {"required": True}})
-    personal = _bundle(params_schema={"mailbox": {"required": True}})
-    assert work.content_hash() == personal.content_hash()
-
-
-def test_content_hash_moves_with_content():
-    before = _bundle()
-    after = _bundle(
-        surfaces={
-            "guidance": {"triage": {"custom_key": "triage", "custom_hash": "CHANGED"}},
-            "tasks": {"morning": {"custom_key": "morning", "custom_hash": "h2"}},
-        },
-    )
-    assert before.content_hash() != after.content_hash()
-
-
-# --------------------------------------------------------------------- #
-# Fan-out                                                               #
-# --------------------------------------------------------------------- #
 def test_install_stamps_every_surface_with_the_slug():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
