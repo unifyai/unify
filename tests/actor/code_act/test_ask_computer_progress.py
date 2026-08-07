@@ -260,3 +260,43 @@ async def test_code_act_ask_uses_computer_progress_for_inflight_action(monkeypat
         except Exception:
             pass
         await actor.close()
+
+
+# ---------------------------------------------------------------------------
+# Live-session gate (pure unit, no LLM / orchestra)
+# ---------------------------------------------------------------------------
+
+
+def test_ask_computer_progress_gated_on_live_desktop_session():
+    """The tool is only offered when the managed desktop is actually in use.
+
+    Deployments always construct ComputerPrimitives (container_url=None, no
+    VM); without this gate the inspection loop's only progress tool was a
+    guaranteed 300s `_vm_ready.wait` dead-end.
+    """
+    actor = CodeActActor.__new__(CodeActActor)
+
+    # No primitives at all -> no tools.
+    actor._computer_primitives = None
+    assert actor._get_extra_ask_tools() is None
+
+    # Primitives exist but no live desktop session -> gated off.
+    cp = MagicMock()
+    cp.has_live_desktop_session = lambda: False
+    actor._computer_primitives = cp
+    assert actor._get_extra_ask_tools() is None
+
+    # Live session -> tool offered, scoped to the browser agent.
+    cp_live = MagicMock()
+    cp_live.has_live_desktop_session = lambda: True
+    actor._computer_primitives = cp_live
+    tools = actor._get_extra_ask_tools()
+    assert tools is not None and "ask_computer_progress" in tools
+    assert "magnitude browser/computer agent" in tools["ask_computer_progress"].__doc__
+
+    # Primitives without the method (mocks/legacy) keep the old behaviour.
+    class _Bare:
+        desktop = MagicMock()
+
+    actor._computer_primitives = _Bare()
+    assert actor._get_extra_ask_tools() is not None
