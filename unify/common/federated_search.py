@@ -11,9 +11,8 @@ from unisdk.utils.http import RequestError as _UnifyRequestError
 from .metrics_utils import SUPPORTED_REDUCTION_METRICS, reduce_logs
 from .semantic_search import (
     backfill_rows,
-    ensure_vector_for_source,
     fetch_top_k_by_terms_with_score,
-    resolve_existing_vector_for_source,
+    vector_for_source_read_path,
 )
 from .tool_outcome import ToolErrorException
 
@@ -123,25 +122,22 @@ def default_ranked_fetcher(
 ) -> tuple[list[dict], str]:
     """Fetch ranked rows from one context and expose the score column.
 
-    Contexts in the active project create missing embedding columns on the
-    fly. Foreign-project contexts (public-read catalogues) are strictly
-    read-only: only terms whose embedding column was pre-created at seed
-    time participate, and terms without one are treated as having no
-    embeddings in that context (consistent with the per-row
-    missing-embedding semantics of multi-term scoring).
+    Strictly read-only for every context: embedding columns are provisioned
+    at manager startup and row coverage is owned by the write path, so a
+    search never creates or backfills anything. Terms whose embedding column
+    does not exist yet are treated as having no embeddings in that context
+    (consistent with the per-row missing-embedding semantics of multi-term
+    scoring).
     """
     terms: list[tuple[str, str]] = []
     for source_expr, ref_text in references.items():
-        if spec.project is None:
-            embed_col = ensure_vector_for_source(spec.context, source_expr)
-        else:
-            embed_col = resolve_existing_vector_for_source(
-                spec.context,
-                source_expr,
-                project=spec.project,
-            )
-            if embed_col is None:
-                continue
+        embed_col = vector_for_source_read_path(
+            spec.context,
+            source_expr,
+            project=spec.project,
+        )
+        if embed_col is None:
+            continue
         terms.append((embed_col, str(ref_text)))
     return fetch_top_k_by_terms_with_score(
         spec.context,
