@@ -344,6 +344,184 @@ async def test_reconcile_applies_a_new_bundle_version_and_keeps_params(
 
 @_handle_project
 @pytest.mark.asyncio
+async def test_editing_a_planted_task_makes_it_the_users(
+    live_managers,
+    bundle,
+    tmp_path: Path,
+):
+    """Decision 6: a planted task is the user's to shape.
+
+    The first authored edit hands the row over — provenance cleared,
+    identity kept — and from then on the workflow leaves it alone. The
+    trap this pins: clearing ``managed_by`` removes the row from the
+    engine's ``live_rows``, so a key the engine cannot see reads as
+    *missing*, and without the released probe the next reconcile plants a
+    second copy beside the edited one.
+    """
+    gm, ts, wm = live_managers
+    wm.register_bundle(bundle)
+    wm.install_workflow(slug=SLUG)
+
+    (planted,) = _rows(ts._ctx, SLUG)
+    task_id = int(planted["task_id"])
+
+    ts._update_task(task_id=task_id, description="My own brief for this job.")
+
+    # Provenance is gone; identity and content fingerprint remain, so the
+    # workflow still knows what the row grew from.
+    assert _rows(ts._ctx, SLUG) == []
+    released = unisdk.get_logs(context=ts._ctx, filter=f"task_id == {task_id}")
+    (row,) = [dict(lg.entries or {}) for lg in released]
+    assert row["managed_by"] is None
+    assert row["custom_released"] is True
+    assert row["custom_key"] == "wf/morning"
+    assert row["custom_hash"]
+    assert row["description"] == "My own brief for this job."
+
+    # A second edit is an ordinary edit: the row is already theirs, so it is
+    # neither refused as deployment-owned nor released again.
+    ts._update_task(task_id=task_id, description="Refined again.")
+
+    # A version bump reaches every other surface and leaves this row alone —
+    # no overwrite, and crucially no second copy.
+    revised_tasks = _write_jsonl(
+        tmp_path / "revised_tasks",
+        TASKS_JSONL_FILENAME,
+        [
+            {
+                "key": "wf/morning",
+                "name": "Workflow morning run",
+                "description": "The catalogue's revised brief.",
+                "repeat": [{"frequency": "daily"}],
+            },
+        ],
+    )
+    wm.register_bundle(
+        WorkflowBundle(
+            slug=bundle.slug,
+            name=bundle.name,
+            version="2.0.0",
+            surfaces={
+                "guidance": bundle.surfaces["guidance"],
+                "tasks": collect_custom_tasks(path=revised_tasks),
+            },
+        ),
+    )
+    result = wm.reconcile_installed()
+    assert SLUG in result["reconciled"]
+
+    all_tasks = [
+        dict(lg.entries or {})
+        for lg in unisdk.get_logs(context=ts._ctx, filter="custom_key == 'wf/morning'")
+    ]
+    assert len(all_tasks) == 1, "a released row must not be duplicated by reconcile"
+    assert all_tasks[0]["description"] == "Refined again."
+
+    # Uninstalling the workflow takes back what it still owns and leaves the
+    # user's row standing.
+    wm.uninstall_workflow(slug=SLUG)
+    survivors = [
+        dict(lg.entries or {})
+        for lg in unisdk.get_logs(context=ts._ctx, filter=f"task_id == {task_id}")
+    ]
+    assert len(survivors) == 1
+    assert survivors[0]["description"] == "Refined again."
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_releasing_a_trigger_task_keeps_its_trigger(
+    live_managers,
+    tmp_path: Path,
+):
+    """A trigger-based planted task releases like a scheduled one.
+
+    Worth its own case because releasing writes provenance and the edit
+    writes content, and a trigger row reaches a different writer than a
+    scheduled one — see ``test_provenance_is_never_part_of_a_task_patch``
+    for the invariant that keeps the two writes separate.
+    """
+    _gm, ts, wm = live_managers
+    tasks_dir = _write_jsonl(
+        tmp_path / "trigger_tasks",
+        TASKS_JSONL_FILENAME,
+        [
+            {
+                "key": "wf/on_mention",
+                "name": "Answer when mentioned",
+                "description": "Runs when an inbound message arrives.",
+                "trigger": {"kind": "communication", "medium": "email"},
+            },
+        ],
+    )
+    wm.register_bundle(
+        WorkflowBundle(
+            slug=SLUG,
+            name="Trigger demo workflow",
+            version="1.0.0",
+            surfaces={"tasks": collect_custom_tasks(path=tasks_dir)},
+        ),
+    )
+    wm.install_workflow(slug=SLUG)
+
+    (planted,) = _rows(ts._ctx, SLUG)
+    task_id = int(planted["task_id"])
+
+    ts._update_task(task_id=task_id, description="My own trigger brief.")
+
+    (row,) = [
+        dict(lg.entries or {})
+        for lg in unisdk.get_logs(context=ts._ctx, filter=f"task_id == {task_id}")
+    ]
+    assert row["managed_by"] is None
+    assert row["custom_released"] is True
+    assert row["description"] == "My own trigger brief."
+    assert _rows(ts._ctx, SLUG) == []
+
+    wm.uninstall_workflow(slug=SLUG)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_a_deployment_task_still_refuses_a_runtime_edit(
+    live_managers,
+    tmp_path: Path,
+):
+    """The other half of decision 6: the deployment's own rows are
+    infrastructure, not the user's, and refuse an authored edit as before.
+    Releasing them would let a runtime mutation damage a derived reference
+    that the aggregate-hash short-circuit then never heals."""
+    _gm, ts, _wm = live_managers
+    tasks_dir = _write_jsonl(
+        tmp_path / "deployment_tasks",
+        TASKS_JSONL_FILENAME,
+        [
+            {
+                "key": "deployment/nightly",
+                "name": "Deployment nightly job",
+                "description": "Owned by the deployment source.",
+                "repeat": [{"frequency": "daily"}],
+            },
+        ],
+    )
+    ts.sync_custom_tasks(source_tasks=collect_custom_tasks(path=tasks_dir))
+
+    rows = [
+        dict(lg.entries or {})
+        for lg in unisdk.get_logs(
+            context=ts._ctx,
+            filter="custom_key == 'deployment/nightly'",
+        )
+    ]
+    assert len(rows) == 1
+    task_id = int(rows[0]["task_id"])
+
+    with pytest.raises(ValueError, match="deployment-owned"):
+        ts._update_task(task_id=task_id, description="Not mine to change.")
+
+
+@_handle_project
+@pytest.mark.asyncio
 async def test_bootstrap_fills_the_shelf_and_reconciles_installed(
     live_managers,
     tmp_path: Path,
