@@ -1264,6 +1264,41 @@ class TranscriptManager(BaseTranscriptManager):
         except (TypeError, ValueError):
             return None
 
+    def latest_message_metadata_by_conversation(
+        self,
+        conversation_key: str,
+    ) -> dict:
+        """Metadata of the newest message stored under a conversation key.
+
+        Routing identifiers are recorded on every message of a grouped
+        conversation, not only on the exchange row written when the thread
+        began. Reading the newest message is therefore the resilient way to
+        recover them: it survives an exchange created before routing was
+        captured, and it reflects the most recent values if a provider ever
+        re-keys the conversation.
+
+        Returns ``{}`` when nothing matches, which callers should read as
+        "no conversation on record" rather than as an error.
+        """
+        needle = str(conversation_key or "").strip()
+        if not needle:
+            return {}
+        escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
+        for context in self._read_transcript_contexts():
+            rows = unisdk.get_logs(
+                context=context,
+                filter=f'metadata.conversation_key == "{escaped}"',
+                sorting={"timestamp": "descending"},
+                limit=1,
+            )
+            if not rows:
+                continue
+            entries = getattr(rows[0], "entries", {}) or {}
+            metadata = entries.get("metadata") or {}
+            if isinstance(metadata, dict) and metadata:
+                return dict(metadata)
+        return {}
+
     def resolve_message_id_by_chat_message_id(
         self,
         chat_message_id: int,

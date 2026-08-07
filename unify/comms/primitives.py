@@ -742,12 +742,17 @@ class CommsPrimitives:
         return None
 
     def _stored_ms_teams_bot_route(self, contact_id: int) -> tuple[str, str] | None:
-        """Teams routing recovered from the durable conversation exchange.
+        """Teams routing recovered from durable transcript history.
 
         The live renderer surfaces these ids on an inbound message, which is
         the only way they normally reach a reply. A headless run has no
-        rendered thread, so it reads them back off the Transcripts exchange
-        the conversation is grouped under instead.
+        rendered thread, so it reads them back out of what was written down.
+
+        Messages first, exchange second. Exchange metadata is written once,
+        when the conversation's exchange is created, so a thread that began
+        before routing was recorded has none — which is the common case for
+        any conversation older than the feature. Per-message routing has no
+        such gap.
         """
         key = conversation_keys.conversation_key(
             Medium.MS_TEAMS_BOT_MESSAGE,
@@ -756,18 +761,29 @@ class CommsPrimitives:
         if not key:
             return None
         transcript_manager = ManagerRegistry.get_transcript_manager()
+
+        sources = [
+            lambda: transcript_manager.latest_message_metadata_by_conversation(key),
+            lambda: self._exchange_metadata_for_conversation(transcript_manager, key),
+        ]
+        for source in sources:
+            metadata = source() or {}
+            tenant_id = str(metadata.get("tenant_id") or "")
+            conversation_id = str(metadata.get("conversation_id") or "")
+            if tenant_id and conversation_id:
+                return tenant_id, conversation_id
+        return None
+
+    @staticmethod
+    def _exchange_metadata_for_conversation(transcript_manager, key: str) -> dict:
+        """Exchange metadata for a conversation key, or ``{}`` if absent."""
         exchange_id = transcript_manager.resolve_exchange_id_by_metadata(
             conversation_keys.CONVERSATION_KEY_FIELD,
             key,
         )
         if exchange_id is None:
-            return None
-        metadata = transcript_manager.get_exchange_metadata(exchange_id).metadata or {}
-        tenant_id = str(metadata.get("tenant_id") or "")
-        conversation_id = str(metadata.get("conversation_id") or "")
-        if tenant_id and conversation_id:
-            return tenant_id, conversation_id
-        return None
+            return {}
+        return transcript_manager.get_exchange_metadata(exchange_id).metadata or {}
 
     async def _routed_ms_teams_bot_conversation(
         self,
@@ -1993,6 +2009,15 @@ class CommsPrimitives:
         shared bot token are resolved server-side; the assistant never handles
         bot credentials. The send pins the conversation to this assistant so
         later replies route back to it.
+
+        **Do not verify the conversation before calling this.** Searching
+        transcripts, logs or contact records for a ``tenant_id`` /
+        ``conversation_id`` pair does not work and will make you refuse a
+        send that would have succeeded: the identifiers live in places those
+        searches do not reach, and resolving them is this tool's job. Call it
+        with ``contact_id`` and the message, and treat what it returns as the
+        answer — a success means the message was delivered, and only an error
+        means it was not.
 
         The Teams bot **cannot open a conversation** — it can only speak
         inside a chat or thread the person has already messaged it in. So if
