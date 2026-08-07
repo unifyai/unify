@@ -1277,13 +1277,30 @@ class ToolSurfaceRegistry:
 
         return "\n".join(result_lines)
 
+    def core_prompt_methods(self, primitive_scope: PrimitiveScope) -> set[str]:
+        """The methods documented inline in the actor prompt: each manager's
+        ``ask``.
+
+        Everything else stays out of the prompt and is discovered through
+        FunctionManager search, backed by the platform Functions/Primitives
+        catalogue rows.
+        """
+        core: set[str] = set()
+        for spec in self.manager_specs(primitive_scope):
+            methods = self.primitive_methods(manager_alias=spec.manager_alias)
+            for name in methods:
+                if name == "ask":
+                    core.add(f"primitives.{spec.manager_alias}.{name}")
+        return core
+
     def prompt_context(self, primitive_scope: PrimitiveScope) -> str:
         """
         Generate prompt context for exposed managers.
 
         Structure: routing guidance first (which manager to pick), then
-        detailed method documentation. This ensures the LLM reads selection
-        criteria before wading through method signatures.
+        inline documentation for the core methods only. Everything beyond
+        the core is discovered at run time through
+        ``FunctionManager_search_functions``.
 
         Args:
             primitive_scope: The scope defining which managers are exposed.
@@ -1404,13 +1421,30 @@ class ToolSurfaceRegistry:
                     "full-mirror a remote REST DB into Orchestra.",
                 )
 
-        # ── Section 5: Detailed method documentation ──
+        # ── Section 5: Core method documentation + discovery note ──
         lines.append("\n---\n")
-        lines.append("### Method Reference\n")
+        core = self.core_prompt_methods(primitive_scope)
+        lines.append("### Method Reference (core)\n")
+        lines.append(
+            "Only the core methods below are documented inline. Every "
+            "other `primitives.<manager>.<method>` exists and is callable "
+            "exactly as usual — its signature and docs live in the "
+            "function catalogue. **To discover methods for a task, call "
+            "`FunctionManager_search_functions` with a natural-language "
+            'query** (e.g. "store rows in a structured table"); '
+            "primitive methods come back with `is_primitive`, `argspec` "
+            "and `docstring`. Do not guess signatures — search first, "
+            "then call.\n",
+        )
 
         for spec in specs:
             mgr_cls = self._load_manager_class(spec.primitive_class_path)
             method_names = self.primitive_methods(manager_alias=spec.manager_alias)
+            method_names = [
+                m
+                for m in method_names
+                if f"primitives.{spec.manager_alias}.{m}" in core
+            ]
             if not method_names:
                 continue
 
