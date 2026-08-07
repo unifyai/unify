@@ -317,3 +317,44 @@ async def test_a_failed_request_says_why_in_the_shape_the_caller_reads(
     action_error = json.loads(_request(wm, "r-bad-action")["error"])
     assert action_error["error"] == "unknown_action"
     assert "save_params" in action_error["supported"]
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_a_read_says_which_root_it_is_describing(live_managers, bundle):
+    """W8: reads span every root while writes default to personal, so a read
+    that only said "installed" described something the next write might not
+    touch. Reads now name the root, and a write that finds nothing says where
+    the workflow actually is.
+
+    The team half of W8 is currently unreachable rather than fixed: `Workflows`
+    is not in `SHARED_SCOPED_TABLES`, so any team destination is refused as
+    `invalid_destination` long before scoping matters. This pins the part that
+    is live, and the ledger records why the rest is latent.
+    """
+    _gm, _ts, wm, _ = live_managers
+    wm.register_bundle(bundle)
+
+    wm.install_workflow(slug=SLUG)
+
+    listed = wm.list_workflows(installed=True)
+    entry = next(e for e in listed["workflows"] if e["slug"] == SLUG)
+    assert entry["destination"] == "personal"
+    assert entry["installed_at"] == ["personal"]
+
+    record = wm.get_workflow(slug=SLUG)
+    assert record["destination"] == "personal"
+    assert record["installed_at"] == ["personal"]
+
+    # An unactionable error is now actionable: it reports where the workflow is
+    # installed, which for something never installed is plainly nowhere.
+    from unify.common.tool_outcome import ToolErrorException
+
+    try:
+        wm.get_installation_params(slug="never_installed")
+    except ToolErrorException as exc:
+        assert exc.payload["error"] == "not_installed"
+        assert exc.payload["installed_at"] == []
+        assert "never_installed" in exc.payload["message"]
+    else:
+        raise AssertionError("reading params for an uninstalled slug must refuse")
