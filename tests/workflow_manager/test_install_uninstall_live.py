@@ -236,18 +236,16 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
         name=bundle.name,
         version=bundle.version,
         surfaces=bundle.surfaces,
-        requirements=(
-            WorkflowRequirement(slug="gmail", required_secrets=("GMAIL_TOKEN",)),
-        ),
+        requirements=(WorkflowRequirement(slug="gmail", name="Gmail"),),
     )
     wm.register_bundle(held_bundle)
 
-    # Isolate the secret keyset as the only authority: no gallery
-    # connection and no native package for this slug, so the bundle's own
-    # declared secret decides.
+    # The gallery connection is the authority: no native package for this slug,
+    # and a provider-backed app is connected by connecting it, not by pasting a
+    # secret.
     monkeypatch.setattr(
         req_module.RequirementResolver,
-        "connected_apps",
+        "keyset",
         lambda self: frozenset(),
     )
     monkeypatch.setattr(
@@ -256,10 +254,10 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
         lambda self, slug: None,
     )
 
-    # No token yet: plants, holds, and says so.
+    # Not connected yet: plants, holds, and says so.
     monkeypatch.setattr(
         req_module.RequirementResolver,
-        "keyset",
+        "connected_apps",
         lambda self: frozenset(),
     )
     result = wm.install_workflow(slug=SLUG)
@@ -271,11 +269,11 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
     assert task_row["enabled"] is False
     assert wm.get_workflow(slug=SLUG)["status"] == "needs_connection"
 
-    # Token lands: the repeat install is the arm-on-connect path.
+    # The connection lands: the repeat install is the arm-on-connect path.
     monkeypatch.setattr(
         req_module.RequirementResolver,
-        "keyset",
-        lambda self: frozenset({"GMAIL_TOKEN"}),
+        "connected_apps",
+        lambda self: frozenset({"gmail"}),
     )
     result = wm.install_workflow(slug=SLUG)
 

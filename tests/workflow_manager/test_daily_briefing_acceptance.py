@@ -121,6 +121,10 @@ async def test_daily_briefing_full_lifecycle(live_managers, monkeypatch):
         "keyset",
         lambda self: frozenset(),
     )
+    # Gmail is provider-backed, so with no connection row it is simply not
+    # connected and the fix is the gallery's connect flow. The bundle declares
+    # no secret precisely because pasting a refresh token is not how you
+    # connect an app the gallery can OAuth.
     result = wm.install_workflow(slug=SLUG, params={"focus": "the Q3 launch"})
 
     assert "failures" not in result
@@ -129,8 +133,7 @@ async def test_daily_briefing_full_lifecycle(live_managers, monkeypatch):
             "slug": "gmail",
             "name": "Gmail",
             "connected": False,
-            "via": "secret",
-            "missing_secrets": ["GOOGLE_REFRESH_TOKEN"],
+            "via": "connection",
         },
     ]
     (task_row,) = _rows(ts._ctx, SLUG)
@@ -153,8 +156,8 @@ async def test_daily_briefing_full_lifecycle(live_managers, monkeypatch):
     # omitting params keeps the recorded settings.
     monkeypatch.setattr(
         req_module.RequirementResolver,
-        "keyset",
-        lambda self: frozenset({"GOOGLE_REFRESH_TOKEN"}),
+        "connected_apps",
+        lambda self: frozenset({"gmail"}),
     )
     result = wm.install_workflow(slug=SLUG)
 
