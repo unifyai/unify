@@ -122,6 +122,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - **Steers**: `DataManager.ingest` (row writes), the file parse pipeline, and the hosted pipeline control plane (`/infra/pipeline/*`) for dispatched runs.
 
 ### CanvasManager
+*(Replaces `DashboardManager`, which is deprecated and slated for removal — decision 8 of the workflows design.)*
 - **Role**: Assistant-authored generative React UI. The actor writes real TSX against `@unity/canvas-kit`; it is linted, typechecked, bundled, rendered headlessly and critiqued before publish; Console displays it in a genuinely isolated frame.
 - **Scope**: `create_view`, `update_view`, `refresh_props`, `get_view`, `list_views`, `delete_view`, `preview`, `run_invocation`, `list_invocations` via `primitives.canvas.*`. Rows live in `Canvas/Views` / `Canvas/Actions` / `Canvas/Invocations`; a routing token is registered with the backend on publish.
 - **Data plane**: query bindings (context-backed tables, executed server-side per view) and materialised props (LLM-shaped reads frozen at author/refresh time). Connected-app data must be **stored first** (via `primitives.ingestion.submit`) and bound as an ordinary table.
@@ -166,6 +167,16 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Connections**:
   - **Steered by**: `Actor` (via top-level `GuidanceManager_*` JSON tool calls, not primitives).
   - **Steers**: reads functions from the shared "Functions" context to surface linked functions.
+
+### WorkflowManager
+- **Role**: Catalogue of installable **workflows** — hand-curated, versioned packages that set an assistant up for a recurring job in one install (procedures, claims, functions and a recurring task, planted together). Owner of install state and settings, nothing else.
+- **Scope**: `list_workflows`, `get_workflow`, `install_workflow`, `uninstall_workflow`, `get_installation_params` as first-class `WorkflowManager_*` JSON tool calls — **not** primitives. Installing fans out each surface's existing `sync_custom`; there is no second content store and no second reconcile loop. `reconcile_installed` and `execute_requests` are upkeep, deliberately **not** tools (boot/ops, and a single-slug update is `install_workflow` re-run). Tools enter the actor's schema only when a catalogue is configured (`UNITY_WORKFLOWS_DIR`), so deployments without a shelf keep byte-identical tool schemas and LLM caches.
+- **Negative scope**: **has no runtime.** No executions, no steering handle, no run-now, no run history — that all belongs to the tasks it plants (`TaskScheduler`). "Run the workflow now" resolves to triggering its task. It also does not own connections (declared as requirements, resolved against the integrations layer), does not author bundles (git-only, curated in unify-deploy), and never pre-seeds contacts, transcripts or blacklist entries.
+- **Requirements gate arming, never planting**: an install with an unmet requirement still plants everything and returns `connect_required`; the planted tasks stay disarmed until the connection lands, and a repeat install arms them.
+- **Shelf vs installation**: the catalogue listing and each artifact's published copy are platform data in the public-read `Builtins` project (`Workflows/Catalog`, `Workflows/Content`), admin-seeded and hash-guarded. Everything per-assistant — installations, params, planted rows, requested changes (`Workflows/Requests`) — lives in the assistant's own contexts.
+- **Connections**:
+  - **Steered by**: `Actor` (via top-level `WorkflowManager_*` JSON tool calls, not primitives); boot (`bootstrap_workflow_catalog` → `reconcile_installed` + `execute_requests`); `ConversationManager` on a `WorkflowRequestRequested` event.
+  - **Steers**: each surface's `sync_custom` — `GuidanceManager`, `KnowledgeManager`, `TaskScheduler`, `FunctionManager` — plus `TaskScheduler.set_custom_tasks_enabled` to arm or hold what it planted.
 
 ### MemoryManager
 - **Role**: Offline memory maintenance (periodic, non‑interactive).
