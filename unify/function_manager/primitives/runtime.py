@@ -1129,6 +1129,20 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
             if h._agent_session_id == agent_session_id:
                 h._active = False
 
+    def has_live_desktop_session(self) -> bool:
+        """Whether the managed desktop is actually in use right now.
+
+        True only when the managed VM has been confirmed ready AND a backend
+        has been created (i.e. some ``desktop.*`` call has run). Read-only
+        inspection tools (``ask_computer_progress``) key off this so they are
+        only offered when there is a browser/computer trajectory to inspect —
+        otherwise ``desktop.query`` would block on ``_vm_ready.wait(300)`` for
+        the full five minutes just to discover there is no VM.
+        """
+        if not _vm_ready.is_set():
+            return False
+        return self._backend is not None
+
     # ── Sub-namespace properties ─────────────────────────────────────────
 
     @property
