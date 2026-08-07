@@ -105,6 +105,7 @@ def load_bundle(path: Path) -> WorkflowBundle:
         name=name,
         version=str(manifest.get("version", "")),
         description=str(manifest.get("description", "")),
+        about=str(manifest.get("about", "")),
         category=str(manifest.get("category", "")),
         icon_id=str(manifest.get("icon_id", "")),
         surfaces=_collect_surfaces(path),
@@ -181,9 +182,10 @@ def bootstrap_workflow_catalog(
         except Exception:
             logger.exception("Skipping malformed workflow bundle at %s", entry)
 
-    # Publish before reconciling: the shelf is what a reading surface needs
-    # first, and it must not wait on installs that may be slow or partial.
-    manager.publish_catalog()
+    # The shelf itself is NOT published here: the catalogue listing is
+    # platform data in the public-read Builtins project, seeded by admin
+    # processes (see builtins_catalog.seed_builtin_workflows). An assistant
+    # key cannot write Builtins and must not try.
 
     try:
         report = manager.reconcile_installed()

@@ -36,6 +36,7 @@ import socketserver
 import subprocess
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -288,6 +289,36 @@ def _parent_html(
 </script></body>"""
 
 
+def _wait_for_theme(page: Any, child: Any, *, dark: bool) -> None:
+    """Block until the child frame has applied the theme it was sent.
+
+    Polled from here rather than with ``wait_for_function`` because the frame
+    is the real thing: opaque origin, ``script-src <origin> blob: <hash>``,
+    and deliberately no ``unsafe-eval`` — the runtime imports bundles as
+    blobs precisely so eval is never needed. Playwright's in-page predicate
+    poller evals the predicate string in that document, which the CSP
+    refuses, so the whole render reported "did not render" with a CSP error
+    the moment the gate began rendering for real.
+
+    Reading the class over CDP one tick at a time is CSP-exempt and asserts
+    the same condition. Relaxing the frame's CSP to suit the harness would
+    trade a real security property for a test convenience.
+    """
+    deadline = time.monotonic() + _RENDER_TIMEOUT_MS / 1000
+    while True:
+        applied = bool(
+            child.evaluate("document.documentElement.classList.contains('dark')"),
+        )
+        if applied is dark:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"child frame did not apply the {'dark' if dark else 'light'} "
+                f"theme within {_RENDER_TIMEOUT_MS}ms",
+            )
+        page.wait_for_timeout(50)
+
+
 def _render(
     *,
     host: Path,
@@ -376,11 +407,7 @@ def _render(
                     page.evaluate("theme => window.__setTheme(theme)", theme)
                     # Waiting on the class the child actually applied keeps this
                     # deterministic; a fixed delay would race a slow message.
-                    child.wait_for_function(
-                        "dark => document.documentElement.classList.contains('dark') === dark",
-                        arg=theme == "dark",
-                        timeout=_RENDER_TIMEOUT_MS,
-                    )
+                    _wait_for_theme(page, child, dark=theme == "dark")
                     shot = out_dir / f"canvas-{token}-{theme}.png"
                     element.screenshot(path=str(shot))
                     shots.append(str(shot))
