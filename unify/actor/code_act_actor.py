@@ -2402,8 +2402,15 @@ class CodeActActor(BaseCodeActActor):
             _excl_primitive: set[int] = set()
             _excl_compositional: set[int] = set()
             for env in self.environments.values():
-                for tool_meta in env.get_tools().values():
+                # The exclusion deduplicates search results against what the
+                # prompt documents. When an environment declares
+                # `prompt_documented_names`, only that subset is excluded —
+                # undocumented primitives must stay searchable.
+                _documented = getattr(env, "prompt_documented_names", None)
+                for tool_name, tool_meta in env.get_tools().items():
                     if tool_meta.function_id is not None:
+                        if _documented is not None and tool_name not in _documented:
+                            continue
                         if tool_meta.function_context == "primitive":
                             _excl_primitive.add(tool_meta.function_id)
                         elif tool_meta.function_context == "compositional":

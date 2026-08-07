@@ -62,6 +62,15 @@ class StateManagerEnvironment(BaseEnvironment):
         self._primitive_scope = primitives.primitive_scope
         self._allowed_methods = frozenset(allowed_methods) if allowed_methods else None
         self._registry = get_registry()
+        # Tools are not filtered — everything stays callable; only the
+        # inlined docs are limited to the core. `prompt_documented_names`
+        # tells the actor's search-overlap exclusion what the prompt covers,
+        # so undocumented primitives stay searchable.
+        self.prompt_documented_names: Optional[frozenset[str]] = None
+        if self._allowed_methods is None:
+            self.prompt_documented_names = frozenset(
+                self._registry.core_prompt_methods(self._primitive_scope),
+            )
 
     @property
     def namespace(self) -> str:
@@ -231,14 +240,11 @@ the handle.
             # Per-method filtering: build method docs only for allowed methods.
             parts.append(self._build_filtered_method_docs())
         else:
-            # Full registry-generated context (all methods for scoped managers).
+            # Routing overview + core method docs + discovery note; the
+            # rest of the method surface is discovered via search.
             registry_ctx = self._registry.prompt_context(self._primitive_scope)
             if registry_ctx:
                 parts.append(registry_ctx)
-
-            examples = self._registry.prompt_examples(self._primitive_scope)
-            if examples:
-                parts.append(f"### Implementation Examples\n\n{examples}")
 
         return "\n\n".join(p for p in parts if p and p.strip())
 
