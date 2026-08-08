@@ -55,7 +55,13 @@ _CATALOG_UNIT = "workflows"
 _CONTENT_UNIT = "workflows_content"
 
 
-def _ensure_catalog_storage(project: str) -> None:
+def ensure_catalog_storage(project: str) -> None:
+    """Create the catalogue contexts, without reading or writing a single row.
+
+    The storage-only half of seeding. A caller that only needs the contexts
+    to exist must reach this rather than the seeder, because the seeder
+    takes desired state and an empty desired state is a wipe.
+    """
     ensure_builtins_project(project)
     unisdk.create_context(
         BUILTINS_WORKFLOWS_CONTEXT,
@@ -311,13 +317,41 @@ def _default_bundles() -> Optional[List[WorkflowBundle]]:
 
     configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
     if configured:
-        return load_catalog(Path(configured))
-    try:
-        from unify_deploy.assistant_deployments.workflows import workflows_root
+        root = Path(configured)
+    else:
+        try:
+            from unify_deploy.assistant_deployments.workflows import workflows_root
 
-        return load_catalog(workflows_root())
-    except Exception:
+            root = workflows_root()
+        except ImportError:
+            return None
+
+    # A tree that is not there is "nothing to reconcile", never "the shelf is
+    # empty". `load_catalog` answers `[]` for a missing root, and `[]` here
+    # means *delete every published workflow* — so a mispointed
+    # UNITY_WORKFLOWS_DIR, or an image built without the curated tree, would
+    # silently empty the catalogue for everyone.
+    if not root.is_dir():
+        logger.warning(
+            "Workflow catalogue root %s does not exist; leaving the published "
+            "shelf untouched rather than treating it as empty",
+            root,
+        )
         return None
+
+    try:
+        return load_catalog(root)
+    except Exception:
+        # A malformed bundle must not read as "no shelf". Loud, because the
+        # seed's only other signal is "already up to date" — which is what a
+        # missing canvas source in the packaged tree reported for hours while
+        # the catalogue sat empty.
+        logger.exception(
+            "Workflow catalogue at %s failed to load; the published shelf is "
+            "left as it is and will not be updated until this is fixed",
+            root,
+        )
+        raise
 
 
 def seed_builtin_workflows(
@@ -351,7 +385,7 @@ def seed_builtin_workflows(
 
     if bundles is None:
         if not storage_ready:
-            _ensure_catalog_storage(project)
+            ensure_catalog_storage(project)
         return False
 
     catalog = {bundle.slug: catalog_row(bundle) for bundle in bundles}
@@ -390,7 +424,7 @@ def seed_builtin_workflows(
         logger.debug("Workflow catalogue unchanged; skipping seed")
         return False
 
-    _ensure_catalog_storage(project)
+    ensure_catalog_storage(project)
 
     for unit in sorted(stale_units):
         context, key_field, rows, _ = units[unit]
