@@ -310,3 +310,119 @@ def test_manifest_declares_its_provisioning_one_shot(tmp_path: Path):
     manifest = (bundle_dir / MANIFEST_FILENAME).read_text()
     (bundle_dir / MANIFEST_FILENAME).write_text(manifest + "install_task: wf/morning\n")
     assert load_bundle(bundle_dir).install_task == "wf/morning"
+
+
+# --------------------------------------------------------------------- #
+# Canvas + data: what a bundle may ship, and what it may not            #
+# --------------------------------------------------------------------- #
+def _write_canvas(bundle_dir: Path, name: str, manifest: dict, tsx: str) -> Path:
+    view_dir = bundle_dir / "canvas" / name
+    view_dir.mkdir(parents=True)
+    (view_dir / "view.json").write_text(json.dumps(manifest) + "\n")
+    (view_dir / "view.tsx").write_text(tsx)
+    return view_dir
+
+
+def test_a_bundle_ships_canvas_source_outside_the_surfaces(tmp_path: Path):
+    """A view is not a synced surface and must not become one.
+
+    It is TypeScript that has to be compiled, rendered and reviewed against
+    the kit installed *now*, and its routing token has a lifecycle the
+    reconcile engine does not own — so it loads onto its own field, where
+    the fan-out cannot reach it.
+    """
+    bundle_dir = _write_bundle(tmp_path)
+    _write_canvas(
+        bundle_dir,
+        "monthly_kpis",
+        {
+            "title": "Monthly KPIs",
+            "description": "Revenue and burn, by month.",
+            "bindings": [{"context": "Finance/Invoices"}],
+            "visibility": "private",
+        },
+        "export default function View() { return null; }\n",
+    )
+
+    bundle = load_bundle(bundle_dir)
+
+    assert "canvas" not in bundle.surfaces
+    assert [view.name for view in bundle.canvas] == ["monthly_kpis"]
+    view = bundle.canvas[0]
+    assert view.title == "Monthly KPIs"
+    assert view.bindings == ({"context": "Finance/Invoices"},)
+    assert view.tsx.startswith("export default")
+    # Identity across reinstalls, and a fingerprint that changes with the
+    # source rather than with the compiled output.
+    assert view.custom_key == "monthly_kpis"
+    first = view.content_hash()
+    assert first == load_bundle(bundle_dir).canvas[0].content_hash()
+    (bundle_dir / "canvas" / "monthly_kpis" / "view.tsx").write_text(
+        "export default 1;",
+    )
+    assert load_bundle(bundle_dir).canvas[0].content_hash() != first
+
+
+def test_a_prebuilt_canvas_is_refused(tmp_path: Path):
+    """The reason decision 9 was reversed. A compiled bundle in a git
+    bundle pins a host runtime: it is built against one kit and planted
+    into whatever host the deployment runs, so it breaks at *view* time,
+    for the user, with nothing failing at plant time."""
+    bundle_dir = _write_bundle(tmp_path)
+    view_dir = _write_canvas(
+        bundle_dir,
+        "monthly_kpis",
+        {"title": "Monthly KPIs"},
+        "export default function View() { return null; }\n",
+    )
+    (view_dir / "bundle.js").write_text("/* compiled elsewhere */")
+
+    with pytest.raises(ValueError, match="ships a built"):
+        load_bundle(bundle_dir)
+
+
+def test_a_canvas_needs_both_its_source_and_its_manifest(tmp_path: Path):
+    bundle_dir = _write_bundle(tmp_path)
+    view_dir = bundle_dir / "canvas" / "orphan"
+    view_dir.mkdir(parents=True)
+    (view_dir / "view.tsx").write_text(
+        "export default function View() { return null; }",
+    )
+
+    with pytest.raises(ValueError, match="no view.json"):
+        load_bundle(bundle_dir)
+
+
+def test_a_bundle_ships_table_schemas_but_never_rows(tmp_path: Path):
+    """A bundle is published verbatim and installed identically by
+    everyone, so rows in it are one author's data handed to every
+    installer. The table is the contract; filling it is the workflow's own
+    job at run time."""
+    bundle_dir = _write_bundle(tmp_path)
+    table_dir = bundle_dir / "data" / "Finance" / "Invoices"
+    table_dir.mkdir(parents=True)
+    (table_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "description": "Invoices this workflow reconciles.",
+                "fields": {"reference": "str", "amount": "float"},
+                "seed_key": "reference",
+            },
+        )
+        + "\n",
+    )
+
+    bundle = load_bundle(bundle_dir)
+    # Normalised into the Data namespace: a context outside it cannot be
+    # installed to a team and cannot be read by a canvas.
+    assert "Data/Finance/Invoices" in bundle.surfaces["data"]
+    assert bundle.surfaces["data"]["Data/Finance/Invoices"]["rows"] == []
+    assert bundle.surfaces["data"]["Data/Finance/Invoices"]["context"] == (
+        "Data/Finance/Invoices"
+    )
+
+    (table_dir / "rows.jsonl").write_text(
+        json.dumps({"reference": "INV-1", "amount": 10.0}) + "\n",
+    )
+    with pytest.raises(ValueError, match="ship seeded rows"):
+        load_bundle(bundle_dir)

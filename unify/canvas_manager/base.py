@@ -10,7 +10,7 @@ IMPORTANT: Do not duplicate docstrings in concrete implementations.
 
 from __future__ import annotations
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from unify.canvas_manager.types.action import CanvasAction, CanvasInvocationRecord
@@ -24,7 +24,7 @@ from unify.canvas_manager.types.view import (
 DEFAULT_VISIBILITY = "private"
 
 
-class BaseCanvasManager:
+class BaseCanvasManager(ABC):
     """
     Public contract for authoring generative user interfaces.
 

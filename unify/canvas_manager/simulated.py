@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +38,31 @@ SIMULATED_KIT_VERSION = "0.1.0-sim"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_EQUALITY = re.compile(r"^\s*(\w+)\s*==\s*['\"]?([^'\"]*)['\"]?\s*$")
+
+
+def _matches(record: CanvasViewRecord, expression: str) -> bool:
+    """Stand in for the backend's predicate push-down.
+
+    Two shapes, because two shapes are what callers use: an exact
+    ``field == 'value'`` — how a workflow finds the views it published, by
+    ``managed_by`` — and otherwise a substring over the text a human would
+    search. Anything richer belongs in the backend, not in a simulator
+    pretending to be one.
+    """
+    equality = _EQUALITY.match(expression)
+    if equality:
+        field, expected = equality.groups()
+        return str(getattr(record, field, "") or "") == expected
+
+    needle = expression.strip("'\" ").lower()
+    return (
+        needle in (record.title or "").lower()
+        or needle in (record.description or "").lower()
+        or needle in (record.custom_key or "").lower()
+    )
 
 
 class SimulatedCanvasManager(BaseCanvasManager):
@@ -100,6 +126,7 @@ class SimulatedCanvasManager(BaseCanvasManager):
         destination: Optional[str] = None,
         visibility: str = DEFAULT_VISIBILITY,
         review: bool = True,
+        provenance: Optional[Dict[str, str]] = None,
     ) -> CanvasResult:
         build = self._compile(tsx)
         if not build.ok:
@@ -132,6 +159,7 @@ class SimulatedCanvasManager(BaseCanvasManager):
             build_json=build.model_dump_json(),
             created_at=now,
             updated_at=now,
+            **(provenance or {}),
         )
 
         self._views[token] = record
@@ -160,6 +188,7 @@ class SimulatedCanvasManager(BaseCanvasManager):
         actions: Optional[List[CanvasAction]] = None,
         visibility: Optional[str] = None,
         review: bool = True,
+        provenance: Optional[Dict[str, str]] = None,
     ) -> CanvasResult:
         record = self._views.get(token)
         if record is None:
@@ -215,6 +244,9 @@ class SimulatedCanvasManager(BaseCanvasManager):
             except ValueError as error:
                 return CanvasResult(token=token, error=str(error))
 
+        if provenance:
+            updates.update(provenance)
+
         self._views[token] = record.model_copy(update=updates)
 
         return CanvasResult(
@@ -261,15 +293,7 @@ class SimulatedCanvasManager(BaseCanvasManager):
     ) -> List[CanvasViewRecord]:
         records = list(self._views.values())
         if filter:
-            # Substring match is enough to exercise callers; the real
-            # implementation pushes the predicate into the backend.
-            needle = filter.strip("'\" ").lower()
-            records = [
-                record
-                for record in records
-                if needle in (record.title or "").lower()
-                or needle in (record.description or "").lower()
-            ]
+            records = [record for record in records if _matches(record, filter)]
         return [
             record.model_copy(update={"tsx_source": ""}) for record in records[:limit]
         ]

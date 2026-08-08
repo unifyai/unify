@@ -245,6 +245,7 @@ def test_registered_specs_match_the_real_sync_signatures():
     """
     import inspect
 
+    from unify.data_manager.data_manager import DataManager
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
@@ -256,7 +257,12 @@ def test_registered_specs_match_the_real_sync_signatures():
         "knowledge": KnowledgeManager,
         "tasks": TaskScheduler,
         "functions": FunctionManager,
+        "data": DataManager,
     }
+    assert set(managers) == set(SCOPED_SURFACES), (
+        "a registered surface with no manager here is untested — add it "
+        "rather than letting the loop skip it"
+    )
     for surface, spec in SCOPED_SURFACES.items():
         method = getattr(managers[surface], spec.method)
         params = inspect.signature(method).parameters
