@@ -164,6 +164,14 @@ def catalog_row(bundle: WorkflowBundle) -> Dict[str, Any]:
                 {
                     "slug": requirement.slug,
                     "name": requirement.name or requirement.slug,
+                    # `kind` and the declared secrets travel with the
+                    # requirement or a reader cannot resolve it. A workspace
+                    # is not in the gallery by design, so a reader that knows
+                    # only the slug looks it up, finds nothing, and reports
+                    # "couldn't check this app" about the one requirement
+                    # whose answer never depended on the gallery.
+                    "kind": requirement.kind,
+                    "required_secrets": list(requirement.required_secrets),
                 }
                 for requirement in bundle.requirements
             ],
