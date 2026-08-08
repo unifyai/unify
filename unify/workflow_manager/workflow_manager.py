@@ -667,6 +667,16 @@ class WorkflowManager(BaseWorkflowManager):
                 enabled=not unmet,
             )
 
+            # Views are published after the surfaces land, because a view
+            # binds to tables the data surface just created. A publish that
+            # fails joins the surface failures: the installation stays and
+            # reports `partial`, so a repeat install retries exactly it.
+            canvases, canvas_failures = self._publish_canvases(
+                bundle,
+                destination=destination,
+            )
+            failures.update(canvas_failures)
+
             record = WorkflowInstallation(
                 workflow_id=(
                     existing.get("workflow_id", UNASSIGNED) if existing else UNASSIGNED
@@ -686,6 +696,8 @@ class WorkflowManager(BaseWorkflowManager):
             "installed": record.model_dump(mode="json"),
             "planted": planted,
         }
+        if canvases:
+            result["canvases"] = canvases
         if unmet:
             result["tasks_held"] = armed
             result["connect_required"] = {
@@ -752,6 +764,148 @@ class WorkflowManager(BaseWorkflowManager):
         if orphaned:
             result["orphaned"] = orphaned
         return result
+
+    # ------------------------------------------------------------------ #
+    # Canvas views (published, never reconciled)                         #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _get_canvas_manager():
+        from ..manager_registry import ManagerRegistry
+
+        return ManagerRegistry.get_canvas_manager()
+
+    def _published_canvases(
+        self,
+        slug: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Views this workflow has published, keyed by their ``custom_key``."""
+        try:
+            records = self._get_canvas_manager().list_views(
+                filter=f"managed_by == '{slug}'",
+                limit=200,
+            )
+        except Exception:
+            logger.exception("Could not read published canvases for %r", slug)
+            return {}
+        return {
+            str(record.custom_key): record.model_dump()
+            for record in records
+            if record.custom_key
+        }
+
+    def _publish_canvases(
+        self,
+        bundle: WorkflowBundle,
+        *,
+        destination: Optional[str],
+    ) -> tuple[Dict[str, Any], Dict[str, BaseException]]:
+        """Compile and publish the views a bundle ships.
+
+        Deliberately outside the surface fan-out. A view is TypeScript that
+        has to be linted, typechecked, bundled, rendered and reviewed
+        against the kit installed *now* — the reason a bundle ships source
+        and not a built artifact — and its routing token has a lifecycle
+        the reconcile engine has no business owning.
+
+        Idempotent by ``custom_key``: a repeat install revises the view it
+        published last time, and one whose source is unchanged is left
+        alone rather than recompiled, because the compile is the expensive
+        part of an otherwise cheap reconcile.
+        """
+        if not bundle.canvas:
+            return {}, {}
+
+        manager = self._get_canvas_manager()
+        published = self._published_canvases(bundle.slug)
+        report: Dict[str, Any] = {}
+        failures: Dict[str, BaseException] = {}
+
+        for source in bundle.canvas:
+            key = f"{bundle.slug}/{source.custom_key}"
+            content_hash = source.content_hash()
+            existing = published.get(key)
+            provenance = {
+                "custom_key": key,
+                "custom_hash": content_hash,
+                "managed_by": bundle.slug,
+            }
+            try:
+                if existing and existing.get("custom_hash") == content_hash:
+                    report[source.name] = {
+                        "token": existing.get("token"),
+                        "status": "unchanged",
+                    }
+                    continue
+                if existing:
+                    result = manager.update_view(
+                        str(existing["token"]),
+                        tsx=source.tsx,
+                        title=source.title,
+                        description=source.description,
+                        bindings=list(source.bindings),
+                        props=dict(source.props),
+                        actions=list(source.actions),
+                        visibility=source.visibility,
+                        provenance=provenance,
+                    )
+                else:
+                    result = manager.create_view(
+                        source.tsx,
+                        title=source.title,
+                        description=source.description,
+                        bindings=list(source.bindings),
+                        props=dict(source.props),
+                        actions=list(source.actions),
+                        destination=destination,
+                        visibility=source.visibility,
+                        provenance=provenance,
+                    )
+            except Exception as exc:
+                failures[f"canvas:{source.name}"] = exc
+                logger.exception(
+                    "Publishing canvas %r for workflow %r failed",
+                    source.name,
+                    bundle.slug,
+                )
+                continue
+
+            if result.error:
+                # A view that does not compile or does not mount is a
+                # failure with a message worth relaying — the author needs
+                # the compiler's words, not "install failed".
+                failures[f"canvas:{source.name}"] = RuntimeError(result.error)
+                continue
+            report[source.name] = {
+                "token": result.token,
+                "url": result.url,
+                "status": "updated" if existing else "published",
+            }
+
+        return report, failures
+
+    def _withdraw_canvases(self, slug: str) -> List[str]:
+        """Delete the views this workflow published.
+
+        Through the manager's own delete, which releases the routing token
+        and drops the actions and invocations hanging off it — none of
+        which a prune adapter could do without reimplementing it.
+        """
+        removed: List[str] = []
+        manager = self._get_canvas_manager()
+        for key, row in self._published_canvases(slug).items():
+            token = str(row.get("token") or "")
+            if not token:
+                continue
+            try:
+                manager.delete_view(token)
+                removed.append(key)
+            except Exception:
+                logger.exception(
+                    "Could not delete canvas %r while uninstalling %r",
+                    key,
+                    slug,
+                )
+        return removed
 
     def _trigger_install_task(
         self,
@@ -1159,6 +1313,11 @@ class WorkflowManager(BaseWorkflowManager):
                 surface_names=pruned_surfaces,
                 empty=True,
             )
+            # Views go whatever `keep_data` says: a canvas is the bundle's
+            # own content, not work the workflow produced, and leaving one
+            # behind would leave a live URL rendering against tables that
+            # may no longer be filled.
+            withdrawn = self._withdraw_canvases(slug)
             kept = sorted(set(recorded) - set(pruned_surfaces))
             # The installation row goes only after every surface actually
             # cleared. On failure it stays — it holds the recorded surfaces,
@@ -1167,6 +1326,8 @@ class WorkflowManager(BaseWorkflowManager):
                 self._delete_installation(slug, context=context)
 
         result: Dict[str, Any] = {"slug": slug, "removed": removed}
+        if withdrawn:
+            result["canvases_removed"] = withdrawn
         if kept:
             result["kept"] = kept
         if failures:
