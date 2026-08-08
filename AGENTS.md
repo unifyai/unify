@@ -450,14 +450,19 @@ integration registry) reconcile through the shared engine in
 - Registering a surface for workflow installs while its adapter still
   queries unscoped. The `SurfaceRegistry` refuses these
   (`UnscopedSurfaceError`); routing around it reintroduces mutual prune.
+- Making canvas a synced surface. A view is TypeScript that must be
+  compiled, rendered and reviewed against the kit installed *now*, and its
+  routing token has a lifecycle the engine does not own. Bundles ship
+  canvas **source**; the install publishes through CanvasManager and the
+  uninstall deletes through its own delete.
 
 ## Deviations are declared knobs, not forks
 
 `prune=False` (secrets), `collision="yield"` (secrets),
-`find_adoptable` (data seeds, integration registry, functions/venvs
-legacy rows), `find_released` (tasks: a planted task the user has
-edited), `should_update` (tasks: skip while running), `max_workers`
-(tasks). New deviations need a named knob on the adapter and a line in
+`find_adoptable` (data seeds — deployment only, integration registry,
+functions/venvs legacy rows), `find_released` (tasks: a planted task the
+user has edited), `should_update` (tasks: skip while running),
+`max_workers` (tasks). New deviations need a named knob on the adapter and a line in
 the writeup's table.
 
 ## Handing a row to the user
