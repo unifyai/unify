@@ -474,3 +474,66 @@ def test_a_requirement_publishes_how_it_is_resolved(tmp_path: Path):
             "required_secrets": ["GOOGLE_REFRESH_TOKEN"],
         },
     ]
+
+
+def test_a_missing_tree_never_reads_as_an_empty_shelf(tmp_path: Path, monkeypatch):
+    """The failure that emptied the staging catalogue.
+
+    ``load_catalog`` answers ``[]`` for a root that does not exist, and ``[]``
+    to the seeder means *delete every published workflow*. A mispointed
+    ``UNITY_WORKFLOWS_DIR``, or an image built without the curated tree, would
+    therefore wipe the shelf for everyone — and the wipe is indistinguishable
+    from a deliberate one.
+    """
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import builtins_catalog
+
+    monkeypatch.setattr(
+        SETTINGS,
+        "UNITY_WORKFLOWS_DIR",
+        str(tmp_path / "not-here"),
+        raising=False,
+    )
+    assert builtins_catalog._default_bundles() is None
+
+
+def test_a_malformed_bundle_raises_rather_than_reading_as_no_shelf(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """The other half of the same incident.
+
+    The packaged tree carried a canvas manifest with no ``view.tsx`` beside
+    it — the loader refuses that, correctly. Swallowing the error turned it
+    into "no shelf to reconcile", which the seed reports as "already up to
+    date", so an empty catalogue stayed empty with every run claiming success.
+    """
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import builtins_catalog
+
+    bundle_dir = _write_bundle(tmp_path)
+    view_dir = bundle_dir / "canvas" / "orphan"
+    view_dir.mkdir(parents=True)
+    (view_dir / "view.json").write_text(json.dumps({"title": "Orphan"}) + "\n")
+
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+    with pytest.raises(ValueError, match="no view.tsx"):
+        builtins_catalog._default_bundles()
+
+
+def test_making_room_for_the_catalogue_never_touches_its_rows():
+    """The third way an empty shelf gets published: asking the wrong question.
+
+    A caller that only wants the contexts to exist has one verb for it.
+    Reaching the seeder instead means handing it desired state, and the
+    empty desired state that reads like "nothing to do" is the one input
+    that deletes every row.
+    """
+    import inspect
+
+    from unify.workflow_manager.builtins_catalog import ensure_catalog_storage
+
+    body = inspect.getsource(ensure_catalog_storage)
+    assert "create_context" in body
+    for row_verb in ("delete_logs", "create_logs", "update_logs", "_reconcile_rows"):
+        assert row_verb not in body
