@@ -250,19 +250,42 @@ def collect_data_from_directories(
 def compute_custom_data_hash(
     source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
-    """Compute an aggregate hash of custom data rows across all tables."""
+    """Aggregate fingerprint of the tables a source declares and their rows.
+
+    Covers the schema as well as the rows, because a table may legitimately
+    declare no rows at all — a workflow ships a table for its own job to
+    fill, and the install has to create it. Hashing rows alone made such a
+    source indistinguishable from an empty one, and both from the "never
+    synced" sentinel, so the pass short-circuited and the table was never
+    created.
+    """
     tables = source_tables if source_tables is not None else {}
-    row_hashes: List[str] = []
+    parts: List[str] = []
     for context in sorted(tables.keys()):
         spec = tables[context]
+        parts.append(
+            "table:"
+            + json.dumps(
+                {
+                    "context": context,
+                    "description": spec.get("description", ""),
+                    "fields": spec.get("fields") or {},
+                    "seed_key": spec.get("seed_key", ""),
+                    "unique_keys": spec.get("unique_keys"),
+                    "auto_counting": spec.get("auto_counting"),
+                },
+                sort_keys=True,
+                default=str,
+            ),
+        )
         for row in spec.get("rows", []):
             custom_hash = row.get("custom_hash")
             custom_key = row.get("custom_key")
             if custom_hash and custom_key:
-                row_hashes.append(f"{custom_key}:{custom_hash}")
-    if not row_hashes:
+                parts.append(f"{custom_key}:{custom_hash}")
+    if not parts:
         return ""
-    combined = "|".join(row_hashes)
+    combined = "|".join(parts)
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
