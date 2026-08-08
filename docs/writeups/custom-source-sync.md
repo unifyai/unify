@@ -122,10 +122,27 @@ loop):
 |---|---|---|
 | `prune` | `True` | secrets: `False` (never auto-delete credentials) | <!-- pragma: allowlist secret -->
 | `collision` | `"replace"` (user-added row with the same key/natural id is deleted, source row inserted) | secrets: `"yield"` (a user-owned credential wins over the deploy value) | <!-- pragma: allowlist secret -->
-| `find_adoptable` | none | data seeds (by seed value), integration registry (by slug), functions/venvs (by name — legacy rows without `custom_key`) |
+| `find_adoptable` | none | data seeds (by seed value, **deployment only**), integration registry (by slug), functions/venvs (by name — legacy rows without `custom_key`) |
 | `find_released` | none | tasks: a planted task the user has edited. Clearing `managed_by` removes the row from `live_rows`, so without this probe the key reads as *missing* and the pass plants a second copy beside the edited one. Released rows are marked `custom_released=True` rather than inferred from a null `managed_by`, because a row written before `managed_by` existed also has none — and that one the deployment still owns |
 | `should_update` | always | tasks: skip while an execution is running |
 | `max_workers` | 1 | tasks: parallel updates, serialized inserts |
+
+### Data: reconcile per table *under consideration*
+
+Every other surface reads one context, so an empty source prunes all of a
+source's rows for free. Data rows live in many tables and the table list
+comes from the source — so an empty source names no table at all, which is
+exactly what an uninstall sends. `sync_custom_data` therefore records the
+tables each source last seeded (`custom_data_contexts__<managed_by>` on the
+Data meta row) and reconciles the union of *declared* and *previously
+seeded* tables. A table dropped from a bundle, and every table a workflow
+owned before it was uninstalled, still gets its pass.
+
+The aggregate hash covers the declared schemas as well as the rows, because
+a table may legitimately declare none: a workflow ships the shape its own
+job fills. Hashing rows alone made that source indistinguishable from an
+empty one — and both from the "never synced" sentinel — so the pass
+short-circuited and the table was never created.
 
 ## Scoping: one source per pass
 

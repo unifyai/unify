@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from .bundle import SurfaceRegistry
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ..data_manager.data_manager import DataManager
     from ..function_manager.function_manager import FunctionManager
     from ..guidance_manager.guidance_manager import GuidanceManager
     from ..knowledge_manager.knowledge_manager import KnowledgeManager
@@ -52,6 +53,12 @@ SCOPED_SURFACES: Mapping[str, SurfaceSpec] = {
     # grouping wrappers on the managers above) and orders venvs before
     # functions so venv_name resolution holds.
     "functions": SurfaceSpec("sync_custom", "source_functions", shared=True),
+    # DataManager.sync_custom_data reconciles per table *under
+    # consideration*, taking the tables a source seeded last pass from its
+    # own meta record — so an uninstall's empty source still prunes, which
+    # the single-context surfaces get for free from their manager reading
+    # one context.
+    "data": SurfaceSpec("sync_custom_data", "source_tables"),
 }
 """Surface name -> the manager method a workflow install drives.
 
@@ -60,11 +67,7 @@ Make the adapter change first; this mapping is the consequence, not the
 mechanism.
 """
 
-PENDING_SCOPING: tuple[str, ...] = (
-    "data",
-    "canvas",
-    "venvs",
-)
+PENDING_SCOPING: tuple[str, ...] = ("venvs",)
 """Surfaces workflows will reach once their adapters are scoped, listed so
 the gap is visible rather than merely absent.
 
@@ -77,6 +80,14 @@ blacklist are populated at runtime by a workflow's own functions, never
 pre-seeded from a bundle; secrets and integrations enter a bundle as
 declared requirements, never as content; dashboards are deprecated in
 favour of canvas.
+
+``canvas`` is absent for a different reason and will not appear here. A
+view is real TypeScript that has to be linted, typechecked, bundled,
+rendered and published against the kit installed *now*, and its routing
+token has a lifecycle the reconcile engine has no business owning. A
+bundle ships canvas **source**; the install-time provisioning pass hands
+it to CanvasManager's own authoring pipeline and uninstall deletes
+through the manager's own delete, which already releases the token.
 """
 
 
@@ -87,6 +98,7 @@ def register_default_surfaces(
     knowledge_manager: "KnowledgeManager | None" = None,
     task_scheduler: "TaskScheduler | None" = None,
     function_manager: "FunctionManager | None" = None,
+    data_manager: "DataManager | None" = None,
 ) -> SurfaceRegistry:
     """Wire every managed-scoped manager that was supplied.
 
@@ -99,6 +111,7 @@ def register_default_surfaces(
         "knowledge": knowledge_manager,
         "tasks": task_scheduler,
         "functions": function_manager,
+        "data": data_manager,
     }
     for name, manager in managers.items():
         if manager is None:
