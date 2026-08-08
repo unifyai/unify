@@ -466,18 +466,28 @@ def test_a_native_package_gating_on_optional_secrets_needs_any_one():
     )["connected"]
 
 
-def test_byod_oauth_falls_back_to_the_bundles_own_declaration():
-    """Workspace has no package and no gallery row, so the refresh-token
-    secret the bundle names is the only available signal."""
-    requirement = _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",))
+def test_workspace_is_its_own_route_not_an_app():
+    """Workspace is not in the gallery, is not a package, and is connected in
+    the onboarding and profile flows — so it declares `kind: workspace` and the
+    refresh-token secret those flows store is its signal.
+
+    Deliberately explicit rather than inferred from the slug: a name-matching
+    table was what previously decided that anything starting with GMAIL or
+    GOOGLE wanted a pasted token, including apps the gallery can OAuth."""
+    requirement = _requirement(
+        "workspace",
+        kind="workspace",
+        required_secrets=("GOOGLE_REFRESH_TOKEN",),
+    )
 
     unmet = _resolver().resolve(requirement)
     assert unmet["connected"] is False
-    assert unmet["via"] == "secret"
+    assert unmet["via"] == "workspace"
     assert unmet["missing_secrets"] == ["GOOGLE_REFRESH_TOKEN"]
 
     met = _resolver(keyset={"GOOGLE_REFRESH_TOKEN"}).resolve(requirement)
     assert met["connected"] is True
+    assert met["via"] == "workspace"
 
 
 def test_a_gallery_connection_outranks_a_missing_secret():
@@ -492,13 +502,17 @@ def test_a_gallery_connection_outranks_a_missing_secret():
     assert resolved["via"] == "connection"
 
 
-def test_a_requirement_nothing_can_answer_for_reads_as_met():
-    """No package, no connection, no declared secret: there is nothing to
-    check, and a bundle must not hold its jobs hostage to an uncheckable
-    signal."""
-    resolved = _resolver().resolve(_requirement("web"))
-    assert resolved["connected"] is True
-    assert resolved["via"] == "undeclared"
+def test_a_requirement_nothing_has_answered_for_reads_as_unconnected():
+    """Absence of evidence is "not connected", not "met".
+
+    A named requirement is by definition something that needs connecting, so
+    nothing having answered means unmet and the fix is the connect flow. The
+    older default read as met, which armed jobs against apps nobody had
+    connected. A need with nothing to connect belongs in `capabilities`, not
+    here."""
+    resolved = _resolver().resolve(_requirement("notion"))
+    assert resolved["connected"] is False
+    assert resolved["via"] == "connection"
 
 
 def test_slugs_resolve_case_and_separator_insensitively():
@@ -513,21 +527,20 @@ def test_unmet_requirements_reports_only_the_unconnected(monkeypatch):
 
     manager = _manager(_registry(guidance=RecordingSurface()))
     bundle = _bundle(
-        requirements=(
-            _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",)),
-            _requirement("slack", required_secrets=("SLACK_TOKEN",)),
-        ),
+        requirements=(_requirement("gmail"), _requirement("slack")),
     )
 
+    # Slack is connected through the gallery; Gmail is not. Neither declares a
+    # secret, because a gallery app is connected by connecting it.
     monkeypatch.setattr(
         req_module.RequirementResolver,
         "keyset",
-        lambda self: frozenset({"SLACK_TOKEN"}),
+        lambda self: frozenset(),
     )
     monkeypatch.setattr(
         req_module.RequirementResolver,
         "connected_apps",
-        lambda self: frozenset(),
+        lambda self: frozenset({"slack"}),
     )
     monkeypatch.setattr(
         req_module.RequirementResolver,
@@ -537,7 +550,7 @@ def test_unmet_requirements_reports_only_the_unconnected(monkeypatch):
 
     unmet = manager._unmet_requirements(bundle)
     assert [r["slug"] for r in unmet] == ["gmail"]
-    assert unmet[0]["missing_secrets"] == ["GOOGLE_REFRESH_TOKEN"]
+    assert unmet[0]["via"] == "connection"
 
     report = manager._requirements_report(bundle)
     assert {r["slug"]: r["connected"] for r in report} == {
@@ -592,3 +605,32 @@ def test_arming_uses_the_tasks_surface_armer():
 def test_arming_a_surface_without_an_armer_is_a_no_op():
     manager = _manager(_registry(tasks=RecordingSurface()))
     assert manager._arm_workflow_tasks(_bundle(), destination=None, enabled=True) == []
+
+
+def test_provenance_is_never_part_of_a_task_patch():
+    """Why releasing a task writes provenance on its own.
+
+    A provider-event task's update is routed through a typed classifier
+    that knows only authored and runtime task fields. ``managed_by`` and
+    ``custom_released`` are neither — they are reconcile provenance — so
+    folding them into the same patch raised "Unclassified provider-event
+    task fields" and releasing a trigger-based planted task crashed
+    instead of handing it over.
+
+    Symbolic on purpose: reproducing it live needs a real provider
+    connection, and the invariant that matters is this classification.
+    """
+    from unify.common.custom_sync import CUSTOM_RELEASED_FIELD
+    from unify.task_scheduler.types.task_row_field import (
+        split_provider_event_task_update,
+    )
+
+    for field in ("managed_by", CUSTOM_RELEASED_FIELD):
+        with pytest.raises(ValueError, match="Unclassified"):
+            split_provider_event_task_update({field: None})
+
+    # An ordinary authored edit still classifies, which is what makes the
+    # separate provenance write the only thing that had to move.
+    authored, runtime = split_provider_event_task_update({"description": "x"})
+    assert authored == {"description": "x"}
+    assert runtime == {}

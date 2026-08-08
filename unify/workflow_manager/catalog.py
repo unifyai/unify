@@ -53,6 +53,7 @@ def _parse_requirements(raw: Any, *, slug: str) -> tuple[WorkflowRequirement, ..
             WorkflowRequirement(
                 slug=str(entry["slug"]),
                 name=str(entry.get("name", "")),
+                kind=str(entry.get("kind", "app")),
                 required_secrets=tuple(entry.get("required_secrets") or ()),
             ),
         )

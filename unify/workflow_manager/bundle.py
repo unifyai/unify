@@ -148,6 +148,16 @@ class WorkflowRequirement:
     name: str = ""
     """Display name; falls back to the slug."""
 
+    kind: str = "app"
+    """``"app"`` for anything the integrations layer connects, ``"workspace"``
+    for the user's Workspace.
+
+    Workspace is deliberately its own kind rather than an app with a special
+    slug: it is not in the gallery, it is not a package, and it is connected
+    somewhere else entirely — the onboarding and profile flows own it. Treating
+    it as an app is what led to a name-matching table deciding that anything
+    starting with "GMAIL" or "GOOGLE" wanted a pasted refresh token."""
+
     required_secrets: tuple[str, ...] = ()
     """Secret names whose presence marks this requirement connected, for
     apps no other authority can answer for — a BYOD OAuth provider with

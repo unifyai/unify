@@ -32,7 +32,7 @@ requirements:
   - slug: gmail
     name: Gmail
     required_secrets: [GMAIL_TOKEN]
-  - web
+  - notion
 capabilities: [filesystem]
 params_schema:
   mailbox:
@@ -99,11 +99,13 @@ def test_load_bundle_parses_requirements_in_both_shapes(tmp_path: Path):
     declares secrets, for apps no other authority can answer for."""
     bundle = load_bundle(_write_bundle(tmp_path))
 
-    gmail, web = bundle.requirements
+    gmail, notion = bundle.requirements
     assert gmail.slug == "gmail"
     assert gmail.required_secrets == ("GMAIL_TOKEN",)
-    assert web.slug == "web"
-    assert web.required_secrets == ()
+    assert notion.slug == "notion"
+    assert notion.required_secrets == ()
+    # Absent `kind` means an ordinary app the integrations layer connects.
+    assert (gmail.kind, notion.kind) == ("app", "app")
 
 
 def test_slug_must_match_the_directory_name(tmp_path: Path):

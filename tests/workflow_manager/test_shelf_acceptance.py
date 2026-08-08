@@ -1,0 +1,234 @@
+"""Acceptance: every curated bundle on the shelf, end to end against real
+managers.
+
+Loads the actual bundles from the sibling unify-deploy checkout — the same
+files a deployment ships — and walks the full lifecycle for each one:
+install while disconnected (held), connect (armed), settings read at
+runtime, uninstall leaving nothing behind. Skips when the sibling checkout
+is absent (public CI), so the curated content is exercised wherever both
+repos exist.
+
+Parametrised over the shelf rather than over a named bundle, so authoring a
+workflow is what proves its lifecycle: a new directory is a new case, and a
+bundle that plants nothing, declares an unresolvable requirement, or loses
+its content on uninstall fails here without anyone remembering to add it.
+Expectations are derived from each bundle's own collected surfaces, never
+hard-coded — a hard-coded key list would pass while asserting nothing about
+the bundle actually on disk.
+"""
+
+import os
+from pathlib import Path
+
+import pytest
+import unisdk
+
+from tests.helpers import _handle_project
+from unify.common.context_registry import ContextRegistry
+from unify.function_manager.function_manager import FunctionManager
+from unify.guidance_manager.guidance_manager import GuidanceManager
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.workflow_manager.bundle import WORKFLOW_LIBRARY
+from unify.workflow_manager.catalog import load_bundle, load_catalog
+from unify.workflow_manager.surfaces import register_default_surfaces
+from unify.workflow_manager.workflow_manager import WorkflowManager
+
+
+def _shelf_root() -> Path:
+    configured = (os.environ.get("UNITY_WORKFLOWS_DIR") or "").strip()
+    if configured:
+        return Path(configured)
+    # Resolve the sibling checkout from this repo's location, never from
+    # Path.home(): the test harness points HOME at a scratch dir, so a
+    # home-relative probe skips this test on every machine that uses the
+    # runner — silently, forever.
+    siblings = Path(__file__).resolve().parents[2].parent
+    return siblings / "unify-deploy/unify_deploy/assistant_deployments/workflows"
+
+
+SHELF_ROOT = _shelf_root()
+SHELF_SLUGS = sorted(bundle.slug for bundle in load_catalog(SHELF_ROOT))
+
+pytestmark = pytest.mark.skipif(
+    not SHELF_SLUGS,
+    reason="no workflow bundles on the shelf (unify-deploy checkout missing)",
+)
+
+
+@pytest.fixture
+def live_managers():
+    for cls, contexts in (
+        (GuidanceManager, ("Guidance", "Guidance/Meta")),
+        (KnowledgeManager, ("Knowledge", "Knowledge/Meta")),
+        (TaskScheduler, ("Tasks", "Tasks/Meta")),
+        (
+            FunctionManager,
+            (
+                "Functions/VirtualEnvs",
+                "Functions/Compositional",
+                "Functions/Primitives",
+                "Functions/Meta",
+            ),
+        ),
+        (WorkflowManager, ("Workflows", "Workflows/Meta")),
+    ):
+        for name in contexts:
+            ContextRegistry.forget(cls, name)
+
+    gm = GuidanceManager()
+    km = KnowledgeManager()
+    ts = TaskScheduler()
+    fm = FunctionManager()
+    wm = WorkflowManager()
+    register_default_surfaces(
+        wm.surfaces,
+        guidance_manager=gm,
+        knowledge_manager=km,
+        task_scheduler=ts,
+        function_manager=fm,
+    )
+    yield gm, km, ts, fm, wm
+
+    try:
+        gm.clear()
+    except Exception:
+        pass
+
+
+def _rows(context: str, managed_by: str) -> list[dict]:
+    logs = unisdk.get_logs(
+        context=context,
+        filter=f"managed_by == '{managed_by}'",
+    )
+    return [dict(lg.entries or {}) for lg in logs]
+
+
+def _sample_params(bundle) -> dict:
+    """A plausible value for every param the bundle declares.
+
+    Every param is filled, not just the required ones, so the round-trip
+    through ``get_installation_params`` exercises each declared type rather
+    than whichever subset happened to be mandatory.
+    """
+    values: dict = {}
+    for name, spec in (bundle.params_schema or {}).items():
+        spec = spec or {}
+        kind = str(spec.get("type") or "text")
+        if kind == "number":
+            values[name] = 3
+        elif kind == "boolean":
+            values[name] = True
+        elif kind == "select":
+            options = list(spec.get("options") or [])
+            values[name] = options[0] if options else "acceptance"
+        else:
+            values[name] = f"acceptance value for {name}"
+    return values
+
+
+@_handle_project
+@pytest.mark.parametrize("slug", SHELF_SLUGS)
+@pytest.mark.asyncio
+async def test_bundle_full_lifecycle(slug, live_managers, monkeypatch):
+    from unify.workflow_manager import requirements as req_module
+
+    gm, km, ts, fm, wm = live_managers
+    bundle = load_bundle(SHELF_ROOT / slug)
+    wm.register_bundle(bundle)
+
+    # ── Install before any connection exists: everything plants, the
+    # recurring jobs are held, and the result says exactly why.
+    # Isolate every authority so the walk does not depend on what this
+    # machine happens to have connected.
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "connected_apps",
+        lambda self: frozenset(),
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "native_manifest",
+        lambda self, slug: None,
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "keyset",
+        lambda self: frozenset(),
+    )
+
+    params = _sample_params(bundle)
+    result = wm.install_workflow(slug=slug, params=params)
+
+    assert "failures" not in result
+
+    # Every declared requirement is a gallery app with a connect flow, so
+    # with nothing connected each one reports the route that fixes it.
+    # A bundle that named something unconnectable would land here as a
+    # different `via`, which is the authoring mistake worth catching.
+    assert result["connect_required"]["requirements"] == [
+        {
+            "slug": requirement.slug,
+            "name": requirement.name or requirement.slug,
+            "connected": False,
+            "via": "connection",
+        }
+        for requirement in bundle.requirements
+    ]
+    assert wm.get_workflow(slug=slug)["status"] == "needs_connection"
+
+    task_rows = _rows(ts._ctx, slug)
+    assert len(task_rows) == len(bundle.surfaces.get("tasks") or {})
+    assert task_rows, "a workflow with no job sets nothing up"
+    assert all(
+        row["enabled"] is False for row in task_rows
+    ), "held jobs must actually be disarmed"
+
+    # Content landed on every surface the bundle covers, keyed exactly as
+    # the bundle declares it.
+    assert {row["custom_key"] for row in _rows(gm._ctx, slug)} == set(
+        bundle.surfaces.get("guidance") or {},
+    )
+    assert {row["custom_key"] for row in _rows(km._ctx, slug)} == set(
+        bundle.surfaces.get("knowledge") or {},
+    )
+    # Functions share one identity space across bundles, so they reconcile
+    # under the library source and carry membership instead.
+    function_rows = _rows(fm._compositional_ctx, WORKFLOW_LIBRARY)
+    assert {row["name"] for row in function_rows} == set(
+        bundle.surfaces.get("functions") or {},
+    )
+    assert all(row["workflows"] == [slug] for row in function_rows)
+
+    # ── The connections land: reinstall is the arm-on-connect path, and
+    # omitting params keeps the recorded settings.
+    connected = frozenset(
+        str(requirement.slug).strip().lower().replace("-", "_")
+        for requirement in bundle.requirements
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "connected_apps",
+        lambda self: connected,
+    )
+    result = wm.install_workflow(slug=slug)
+
+    assert "connect_required" not in result
+    assert len(result["tasks_armed"]) == len(task_rows)
+    assert all(row["enabled"] is True for row in _rows(ts._ctx, slug))
+    record = wm.get_workflow(slug=slug)
+    assert record["status"] == "active"
+    assert record["params"] == params
+
+    # The runtime read every planted task's description points at.
+    assert wm.get_installation_params(slug=slug) == params
+
+    # ── Uninstall stops the jobs and leaves no trace on any surface.
+    removed = wm.uninstall_workflow(slug=slug)
+
+    assert "failures" not in removed
+    assert _rows(ts._ctx, slug) == []
+    assert _rows(gm._ctx, slug) == []
+    assert _rows(km._ctx, slug) == []
+    assert _rows(fm._compositional_ctx, WORKFLOW_LIBRARY) == []
+    assert wm.get_workflow(slug=slug)["installed"] is False
