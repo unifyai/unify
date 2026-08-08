@@ -455,9 +455,19 @@ integration registry) reconcile through the shared engine in
 
 `prune=False` (secrets), `collision="yield"` (secrets),
 `find_adoptable` (data seeds, integration registry, functions/venvs
-legacy rows), `should_update` (tasks: skip while running),
-`max_workers` (tasks). New deviations need a named knob on the adapter
-and a line in the writeup's table.
+legacy rows), `find_released` (tasks: a planted task the user has
+edited), `should_update` (tasks: skip while running), `max_workers`
+(tasks). New deviations need a named knob on the adapter and a line in
+the writeup's table.
+
+## Handing a row to the user
+
+A surface may end the loan on one row: clear `managed_by`, keep
+`custom_key`, and set `custom_released=True`. From then on no source
+reconciles it, prune never reaches it, and `find_released` stops the
+next pass planting a duplicate. Releasing is a **positive flag**, never
+inferred from a null `managed_by` — rows written before `managed_by`
+existed also have none, and those the deployment still owns.
 
 This Unity project is for an AI Assistant, which is implemented as a heavily distributed multi-node system. Each node in the system communicates via English language based public APIs. The assistant's "brain" is then implemented a bit like a back office, where each manager deals with different aspects of the assistant's overall emergent intelligence. For the most part (with a few exceptions, such as `CodeActActor` and `ConversationManager`) the public methods of these managers are implemented as asynchronous tool loops, whereby a central LLM handles the English language request by orchestrating lower level tools which read and mutate the manager-specific backend resources (via the unify python client, which wraps the REST API connecting to the DB). These manager methods are dynamic, and expose handles for mid-flight steering, question answering, pausing, resuming and stopping etc. These manager methods are also often **nested**, whereby the public API of one manager is exposed in the tool set of a higher level manager. The async tool loops can also steer their inner in-flight tools, enabling fully nested dynamic steering of async tool loops up to an arbitrary depth. In terms of hierarchy, the `Actor` serves as the central intelligence, orchestrating other managers through code-first plans. Importantly, we never apply "fast paths" or heuristics based on regex or substring detection from user commands. If a method needs to respond correctly to a certain type of user input, this must **always** be addressed by prompting the model and/or improving docstrings of the exposed tools in order to **nudge** the LLM in the right direction.
 

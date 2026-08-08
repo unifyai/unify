@@ -78,6 +78,8 @@ for key, fields in source:                          # per-key isolation
     if key in live:
         if live hash != source hash and adapter.should_update(...):
             adapter.update(key, live_row, fields)
+    elif released := adapter.find_released(key, fields):
+        pass                                         # the user owns it now
     elif adoptable := adapter.find_adoptable(key, fields):
         adapter.adopt(key, adoptable, fields)        # stamp identity in place
     elif collision := adapter.find_collision(key, fields):
@@ -92,7 +94,9 @@ if failures: raise CustomSyncPartialFailure(failures)
 Uniform semantics, inherited by every manager:
 
 - **Source supremacy.** A hash mismatch overwrites live edits to a
-  managed row. Operator changes to managed rows are loans.
+  managed row. Operator changes to managed rows are loans — unless the
+  surface hands the row over (see `find_released` below), which ends the
+  loan permanently.
 - **Per-entry failure isolation.** One broken entry cannot abort the
   rest of the catalog. Failures are collected and re-raised as
   `CustomSyncPartialFailure` *after* the full pass; the aggregate hash
@@ -119,6 +123,7 @@ loop):
 | `prune` | `True` | secrets: `False` (never auto-delete credentials) | <!-- pragma: allowlist secret -->
 | `collision` | `"replace"` (user-added row with the same key/natural id is deleted, source row inserted) | secrets: `"yield"` (a user-owned credential wins over the deploy value) | <!-- pragma: allowlist secret -->
 | `find_adoptable` | none | data seeds (by seed value), integration registry (by slug), functions/venvs (by name — legacy rows without `custom_key`) |
+| `find_released` | none | tasks: a planted task the user has edited. Clearing `managed_by` removes the row from `live_rows`, so without this probe the key reads as *missing* and the pass plants a second copy beside the edited one. Released rows are marked `custom_released=True` rather than inferred from a null `managed_by`, because a row written before `managed_by` existed also has none — and that one the deployment still owns |
 | `should_update` | always | tasks: skip while an execution is running |
 | `max_workers` | 1 | tasks: parallel updates, serialized inserts |
 
