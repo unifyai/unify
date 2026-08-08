@@ -660,5 +660,7 @@ async def test_catalog_seeds_the_builtins_shelf_and_short_circuits(
         assert set(shelf()) == {"other_demo"}
         assert artifacts() == {}
 
-        # The harness re-seeds an empty catalogue for the next session.
-        seed_builtin_workflows(bundles=[])
+        # Put this environment's real shelf back. The catalogue is shared
+        # and public — leaving the demo bundle behind, or leaving nothing
+        # behind, is a change every reader of this backend sees.
+        seed_builtin_workflows()

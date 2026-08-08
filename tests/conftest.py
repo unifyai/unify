@@ -526,17 +526,20 @@ def pytest_sessionstart(session):
     from unify.function_manager.builtins_catalog import seed_builtin_primitives
     from unify.guidance_manager.builtins_catalog import seed_builtin_guidance
     from unify.integrations.builtins_catalog import seed_builtin_integrations
-    from unify.workflow_manager.builtins_catalog import seed_builtin_workflows
+    from unify.workflow_manager.builtins_catalog import ensure_catalog_storage
 
     with _cross_process_column_lock(builtins_project(), "builtins_seed"):
         with builtins_seed_key_override():
             seed_builtin_primitives()
             seed_builtin_guidance()
             seed_builtin_integrations()
-            # Workflows: storage only (bundles=None resolves the sibling
-            # unify-deploy tree when present; tests that need rows seed
-            # explicit bundles themselves).
-            seed_builtin_workflows(bundles=[])
+            # Workflows: storage only. The catalogue is a shared, public
+            # shelf keyed by project name alone, so it is the same rows a
+            # deployment serves — seeding desired state from here publishes
+            # whatever this checkout happens to hold, and an empty desired
+            # state deletes the shelf out from under everyone pointed at
+            # the same backend. Tests that need rows seed their own.
+            ensure_catalog_storage(builtins_project())
 
     # ------------------------------------------------------------------
     #  Configure EventBus publishing (disabled by default in tests)
