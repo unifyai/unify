@@ -121,6 +121,55 @@ class Surface:
 
 
 @dataclass(frozen=True)
+class CanvasSource:
+    """One view a bundle ships, as the author wrote it.
+
+    ``name`` is the directory it came from and, with the slug, its stable
+    identity across reinstalls — the published row carries
+    ``<slug>/<name>`` as its ``custom_key`` so a repeat install revises the
+    view it published last time instead of stacking up a second one.
+    """
+
+    name: str
+    tsx: str
+    title: str
+    description: str = ""
+    bindings: tuple[Dict[str, Any], ...] = ()
+    props: Dict[str, Any] = field(default_factory=dict)
+    actions: tuple[Dict[str, Any], ...] = ()
+    visibility: str = "private"
+
+    @property
+    def custom_key(self) -> str:
+        return self.name
+
+    def content_hash(self) -> str:
+        """Fingerprint of everything a republish would change.
+
+        Compiled output is deliberately excluded: the same source against a
+        newer kit is a different bundle, and that is the kit's business to
+        decide at build time, not a reason to consider the source changed.
+        """
+        import hashlib
+        import json as _json
+
+        payload = _json.dumps(
+            {
+                "tsx": self.tsx,
+                "title": self.title,
+                "description": self.description,
+                "bindings": list(self.bindings),
+                "props": self.props,
+                "actions": list(self.actions),
+                "visibility": self.visibility,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
 class WorkflowRequirement:
     """One integration a workflow needs connected before its jobs may run.
 
@@ -221,6 +270,23 @@ class WorkflowBundle:
     """Assistant capabilities the workflow needs beyond connected apps,
     e.g. ``"computer"`` or ``"filesystem"``. Declared for the catalogue;
     not gated at install."""
+
+    canvas: tuple["CanvasSource", ...] = ()
+    """Views this bundle ships as **source**, deliberately outside
+    :attr:`surfaces`.
+
+    A canvas is not custom-synced and never will be. It is real TypeScript
+    that has to be linted, typechecked, bundled, rendered and reviewed
+    against the canvas kit installed *now*, and its routing token has a
+    lifecycle the reconcile engine has no business owning. Shipping a
+    pre-built bundle instead would pin a host runtime: the host serves
+    versioned runtimes, so a view compiled against one kit and planted into
+    another breaks at *view* time, for the user, with nothing failing at
+    plant time to warn anyone.
+
+    So the install hands this to CanvasManager's own authoring pipeline and
+    uninstall deletes through its own delete, which already releases the
+    token."""
 
     def __post_init__(self) -> None:
         if not self.slug:

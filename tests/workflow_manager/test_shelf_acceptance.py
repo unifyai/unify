@@ -25,6 +25,7 @@ import unisdk
 
 from tests.helpers import _handle_project
 from unify.common.context_registry import ContextRegistry
+from unify.data_manager.data_manager import DataManager
 from unify.function_manager.function_manager import FunctionManager
 from unify.guidance_manager.guidance_manager import GuidanceManager
 from unify.knowledge_manager.knowledge_manager import KnowledgeManager
@@ -71,6 +72,7 @@ def live_managers():
                 "Functions/Meta",
             ),
         ),
+        (DataManager, ("Data", "Data/Meta")),
         (WorkflowManager, ("Workflows", "Workflows/Meta")),
     ):
         for name in contexts:
@@ -80,6 +82,7 @@ def live_managers():
     km = KnowledgeManager()
     ts = TaskScheduler()
     fm = FunctionManager()
+    dm = DataManager()
     wm = WorkflowManager()
     register_default_surfaces(
         wm.surfaces,
@@ -87,8 +90,9 @@ def live_managers():
         knowledge_manager=km,
         task_scheduler=ts,
         function_manager=fm,
+        data_manager=dm,
     )
-    yield gm, km, ts, fm, wm
+    yield gm, km, ts, fm, dm, wm
 
     try:
         gm.clear()
@@ -133,7 +137,7 @@ def _sample_params(bundle) -> dict:
 async def test_bundle_full_lifecycle(slug, live_managers, monkeypatch):
     from unify.workflow_manager import requirements as req_module
 
-    gm, km, ts, fm, wm = live_managers
+    gm, km, ts, fm, dm, wm = live_managers
     bundle = load_bundle(SHELF_ROOT / slug)
     wm.register_bundle(bundle)
 
@@ -160,22 +164,52 @@ async def test_bundle_full_lifecycle(slug, live_managers, monkeypatch):
     params = _sample_params(bundle)
     result = wm.install_workflow(slug=slug, params=params)
 
-    assert "failures" not in result
+    # A canvas is compiled at install, against the kit the deployment has.
+    # The harness redirects HOME, so the node toolchain is not findable
+    # here — the same reason this file resolves the shelf from the repo
+    # rather than from ``Path.home()``. Say that out loud rather than
+    # letting a toolchain-less environment read as a broken bundle; the
+    # compile itself is gated at curation time, in unify-deploy.
+    from unify.canvas_manager.ops.build_ops import toolchain_available
 
-    # Every declared requirement is a gallery app with a connect flow, so
-    # with nothing connected each one reports the route that fixes it.
-    # A bundle that named something unconnectable would land here as a
-    # different `via`, which is the authoring mistake worth catching.
-    assert result["connect_required"]["requirements"] == [
-        {
+    reported = dict(result.get("failures") or {})
+    canvas_only = {
+        name: reason for name, reason in reported.items() if name.startswith("canvas:")
+    }
+    if reported and not toolchain_available():
+        assert set(canvas_only) == set(reported), (
+            "only canvas publishing may fail without a toolchain; "
+            f"got {sorted(reported)}"
+        )
+    else:
+        assert not reported
+
+    # Each unmet requirement reports the route that fixes it, and the route
+    # follows the kind the bundle declared: a Workspace is connected in the
+    # profile's own manager and names the secret those flows store, while an
+    # app is connected in the gallery and names nothing. A bundle that got
+    # this wrong would land here as a different `via` — which is exactly the
+    # authoring mistake worth catching, since the UI offers the wrong fix.
+    def _expected(requirement) -> dict:
+        entry = {
             "slug": requirement.slug,
             "name": requirement.name or requirement.slug,
             "connected": False,
-            "via": "connection",
+            "via": "workspace" if requirement.kind == "workspace" else "connection",
         }
-        for requirement in bundle.requirements
+        if requirement.kind == "workspace":
+            entry["missing_secrets"] = list(requirement.required_secrets)
+        return entry
+
+    assert result["connect_required"]["requirements"] == [
+        _expected(requirement) for requirement in bundle.requirements
     ]
-    assert wm.get_workflow(slug=slug)["status"] == "needs_connection"
+    # `partial` outranks `needs_connection` — a surface that failed is the
+    # more urgent fact — so a bundle whose canvas could not compile here
+    # reports that instead. Both are correct; which one depends on whether
+    # anything actually failed.
+    expected_status = "partial" if reported else "needs_connection"
+    assert wm.get_workflow(slug=slug)["status"] == expected_status
 
     task_rows = _rows(ts._ctx, slug)
     assert len(task_rows) == len(bundle.surfaces.get("tasks") or {})
@@ -200,16 +234,36 @@ async def test_bundle_full_lifecycle(slug, live_managers, monkeypatch):
     )
     assert all(row["workflows"] == [slug] for row in function_rows)
 
+    # Tables the bundle declares exist, and hold nothing: a bundle ships the
+    # shape its own job fills, never the contents.
+    for context in bundle.surfaces.get("data") or {}:
+        assert dm._table_exists(context, None), f"{context} was not created"
+        assert dm.filter(context, filter="custom_hash != None") == []
+
     # ── The connections land: reinstall is the arm-on-connect path, and
     # omitting params keeps the recorded settings.
     connected = frozenset(
         str(requirement.slug).strip().lower().replace("-", "_")
         for requirement in bundle.requirements
+        if requirement.kind != "workspace"
     )
     monkeypatch.setattr(
         req_module.RequirementResolver,
         "connected_apps",
         lambda self: connected,
+    )
+    # A Workspace is not connected by a gallery row: its signal is the
+    # refresh-token secret the profile and onboarding flows store.
+    workspace_secrets = frozenset(
+        secret
+        for requirement in bundle.requirements
+        if requirement.kind == "workspace"
+        for secret in requirement.required_secrets
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "keyset",
+        lambda self: workspace_secrets,
     )
     result = wm.install_workflow(slug=slug)
 
@@ -217,7 +271,7 @@ async def test_bundle_full_lifecycle(slug, live_managers, monkeypatch):
     assert len(result["tasks_armed"]) == len(task_rows)
     assert all(row["enabled"] is True for row in _rows(ts._ctx, slug))
     record = wm.get_workflow(slug=slug)
-    assert record["status"] == "active"
+    assert record["status"] == ("partial" if reported else "active")
     assert record["params"] == params
 
     # The runtime read every planted task's description points at.

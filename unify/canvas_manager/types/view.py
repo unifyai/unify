@@ -117,10 +117,20 @@ class CanvasViewRow(AuthoredRow):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
-    # Deployment-defined canvases: merge key and content hash, matching the
-    # convention the other managers use for source-seeded rows.
+    # Source-defined canvases: merge key, content hash and which source
+    # published it, matching the convention the other managers use for
+    # source-seeded rows.
+    #
+    # Canvas is not custom-synced — a view is compiled, rendered and
+    # reviewed against the installed kit, and its routing token has a
+    # lifecycle the reconcile engine does not own — so these are written by
+    # the publisher rather than stamped by the engine. They carry the same
+    # meaning: ``custom_key`` is identity, ``custom_hash`` says whether a
+    # republish would change anything, ``managed_by`` says who may revise
+    # or delete it.
     custom_key: Optional[str] = None
     custom_hash: Optional[str] = None
+    managed_by: Optional[str] = None
 
 
 class CanvasViewRecord(CanvasViewRow):

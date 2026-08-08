@@ -23,13 +23,14 @@ catalogue.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .bundle import WorkflowBundle, WorkflowRequirement
+from .bundle import CanvasSource, WorkflowBundle, WorkflowRequirement
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def _parse_requirements(raw: Any, *, slug: str) -> tuple[WorkflowRequirement, ..
 def _collect_surfaces(path: Path) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Collect every content directory present, using the deployment
     collectors so hashes and field shapes match the reconcile's."""
+    from ..data_manager.custom_data import collect_custom_data
     from ..function_manager.custom_functions import collect_custom_functions
     from ..guidance_manager.custom_guidance import collect_custom_guidance
     from ..knowledge_manager.custom_knowledge import collect_custom_knowledge
@@ -73,8 +75,116 @@ def _collect_surfaces(path: Path) -> Dict[str, Dict[str, Dict[str, Any]]]:
         "knowledge": collect_custom_knowledge(path=path / "knowledge"),
         "tasks": collect_custom_tasks(path=path / "tasks"),
         "functions": collect_custom_functions(directory=path / "functions"),
+        # Tables a bundle declares, schemas only: a workflow ships the shape
+        # its own job fills, never the contents. Seeded rows in a bundle
+        # would be one deployment's data published to everyone.
+        "data": _bundle_tables(collect_custom_data(path=path / "data"), path=path),
     }
     return {name: source for name, source in collected.items() if source}
+
+
+def _bundle_tables(
+    tables: Dict[str, Dict[str, Any]],
+    *,
+    path: Path,
+) -> Dict[str, Dict[str, Any]]:
+    """Normalise a bundle's declared tables, and refuse seeded rows.
+
+    Two rules, both made structural rather than left to be remembered.
+
+    **Schemas only.** A bundle is published verbatim to the public-read
+    Builtins project and installed identically by everyone, so rows in it
+    are one author's data handed to every installer. The table is the
+    contract; filling it is the workflow's own job at run time.
+
+    **Data-owned contexts.** ``data/Finance/Invoices`` becomes
+    ``Data/Finance/Invoices``. A context outside the Data namespace cannot
+    be installed to a team — the write refuses the destination — and cannot
+    be read by a canvas, whose policy declares ``Data`` and nothing else.
+    Both failures land a long way from the author, so the prefix is applied
+    here instead.
+    """
+    seeded = sorted(context for context, spec in tables.items() if spec.get("rows"))
+    if seeded:
+        raise ValueError(
+            f"{path.name}: data tables {', '.join(seeded)} ship seeded rows. "
+            "A bundle declares table schemas only — the workflow's own job "
+            "fills them. Delete the rows.jsonl.",
+        )
+
+    normalised: Dict[str, Dict[str, Any]] = {}
+    for context, spec in tables.items():
+        owned = context if context.startswith("Data/") else f"Data/{context}"
+        normalised[owned] = {**spec, "context": owned}
+    return normalised
+
+
+CANVAS_SOURCE_FILENAME = "view.tsx"
+CANVAS_MANIFEST_FILENAME = "view.json"
+
+
+def _collect_canvas(path: Path) -> tuple[CanvasSource, ...]:
+    """Load the views a bundle ships, as source.
+
+    Deliberately not a collected "surface": these never reach the reconcile
+    engine. A directory needs both ``view.tsx`` and ``view.json`` — source
+    with no manifest has no title to publish under and no bindings to read,
+    and a manifest with no source has nothing to compile, so either alone
+    is an authoring mistake worth naming rather than skipping.
+    """
+    root = path / "canvas"
+    if not root.is_dir():
+        return ()
+
+    views: List[CanvasSource] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        tsx_path = entry / CANVAS_SOURCE_FILENAME
+        manifest_path = entry / CANVAS_MANIFEST_FILENAME
+        if not tsx_path.is_file() and not manifest_path.is_file():
+            continue
+        if not tsx_path.is_file():
+            raise ValueError(
+                f"{path.name}: canvas {entry.name!r} has no {CANVAS_SOURCE_FILENAME}.",
+            )
+        if not manifest_path.is_file():
+            raise ValueError(
+                f"{path.name}: canvas {entry.name!r} has no "
+                f"{CANVAS_MANIFEST_FILENAME}; a view needs a title to publish "
+                "under and its bindings declared.",
+            )
+        manifest = json.loads(manifest_path.read_text()) or {}
+        title = str(manifest.get("title") or "").strip()
+        if not title:
+            raise ValueError(
+                f"{path.name}: canvas {entry.name!r} declares no title.",
+            )
+        # A pre-built bundle in a bundle pins a host runtime — it compiles
+        # against one kit and is planted into whatever host the deployment
+        # runs, so it breaks at view time with nothing failing at plant
+        # time. Refuse it where it is written rather than at someone's
+        # install.
+        for built in ("bundle.js", "bundle.mjs", "view.js"):
+            if (entry / built).exists():
+                raise ValueError(
+                    f"{path.name}: canvas {entry.name!r} ships a built "
+                    f"{built}. Bundles ship source; the install compiles it "
+                    "against the kit that is actually installed.",
+                )
+        views.append(
+            CanvasSource(
+                name=entry.name,
+                tsx=tsx_path.read_text(),
+                title=title,
+                description=str(manifest.get("description") or ""),
+                bindings=tuple(manifest.get("bindings") or ()),
+                props=dict(manifest.get("props") or {}),
+                actions=tuple(manifest.get("actions") or ()),
+                visibility=str(manifest.get("visibility") or "private"),
+            ),
+        )
+    return tuple(views)
 
 
 def load_bundle(path: Path) -> WorkflowBundle:
@@ -117,6 +227,7 @@ def load_bundle(path: Path) -> WorkflowBundle:
         ),
         install_task=str(manifest.get("install_task", "")),
         capabilities=tuple(manifest.get("capabilities") or ()),
+        canvas=_collect_canvas(path),
     )
 
 
@@ -174,6 +285,7 @@ def bootstrap_workflow_catalog(
         knowledge_manager=ManagerRegistry.get_knowledge_manager(),
         task_scheduler=ManagerRegistry.get_task_scheduler(),
         function_manager=ManagerRegistry.get_function_manager(),
+        data_manager=ManagerRegistry.get_data_manager(),
     )
 
     for entry in sorted(root.iterdir()):
