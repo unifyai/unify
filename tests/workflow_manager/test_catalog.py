@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from unify.workflow_manager.bundle import WorkflowBundle
 from unify.workflow_manager.catalog import (
     MANIFEST_FILENAME,
     load_bundle,
@@ -426,3 +427,50 @@ def test_a_bundle_ships_table_schemas_but_never_rows(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="ship seeded rows"):
         load_bundle(bundle_dir)
+
+
+def test_a_requirement_publishes_how_it_is_resolved(tmp_path: Path):
+    """A reader gets the slug *and* how to answer it.
+
+    The shelf published only the slug and the display name, so a reader had
+    nothing to go on but a gallery lookup — and a workspace is the user's own
+    account, deliberately not a catalogue app. Meeting prep's Google
+    Workspace requirement therefore rendered as "couldn't check this app",
+    about the one requirement whose answer never depended on the gallery.
+    """
+    from unify.workflow_manager.builtins_catalog import catalog_row
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    published = json.loads(
+        catalog_row(
+            WorkflowBundle(
+                slug=bundle.slug,
+                name=bundle.name,
+                requirements=(
+                    WorkflowRequirement(slug="gmail", name="Gmail"),
+                    WorkflowRequirement(
+                        slug="google_workspace",
+                        name="Google Workspace",
+                        kind="workspace",
+                        required_secrets=("GOOGLE_REFRESH_TOKEN",),
+                    ),
+                ),
+            ),
+        )["requirements"],
+    )
+
+    assert published == [
+        {
+            "slug": "gmail",
+            "name": "Gmail",
+            "kind": "app",
+            "required_secrets": [],
+        },
+        {
+            "slug": "google_workspace",
+            "name": "Google Workspace",
+            "kind": "workspace",
+            "required_secrets": ["GOOGLE_REFRESH_TOKEN"],
+        },
+    ]
