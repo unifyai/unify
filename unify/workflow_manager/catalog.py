@@ -397,9 +397,19 @@ def schedule_bootstrap_workflow_catalog() -> None:
     """
     import threading
 
-    from ..settings import SETTINGS
-
-    if not (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip():
+    # Ask the one resolver, not the env var.
+    #
+    # This gate used to read UNITY_WORKFLOWS_DIR directly and return when it
+    # was empty — so a deployment that ships the catalogue inside the image
+    # and sets no env var never scheduled the bootstrap at all. Nothing was
+    # logged, because nothing ran: the shelf was simply never loaded, and
+    # every install reported an empty catalogue.
+    #
+    # It is the third place that resolved the catalogue independently. The
+    # other two now share resolve_catalogue_root(); this one was missed, and
+    # the miss survived precisely because a silent early return leaves no
+    # trace to notice.
+    if resolve_catalogue_root() is None:
         return
 
     try:
