@@ -646,3 +646,72 @@ def test_a_path_from_another_image_never_empties_the_shelf(tmp_path: Path, monke
     )
 
     assert catalog_module.resolve_catalogue_root() == packaged
+
+
+def test_nothing_resolves_the_catalogue_behind_the_resolver(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Three places decided where the shelf was, and disagreed in turn.
+
+    First the seeder and the runtime registry disagreed when
+    UNITY_WORKFLOWS_DIR was unset. Then the scheduler that decides whether
+    the bootstrap runs at all was found reading the env var directly and
+    returning early when it was empty — so a deployment that ships the
+    catalogue inside the image and sets no env var never loaded the shelf,
+    silently, because an early return leaves nothing in the log.
+
+    Each fix moved one caller onto the shared resolver and left the next one
+    to be discovered in production. This asserts the property instead: the
+    module reads that setting in exactly one function.
+    """
+    import inspect
+
+    from unify.workflow_manager import catalog as catalog_module
+
+    readers = [
+        name
+        for name, obj in vars(catalog_module).items()
+        if inspect.isfunction(obj) and obj.__module__ == catalog_module.__name__
+        # The read itself, not the name: the comments explaining this
+        # history mention the setting and must not count as reading it.
+        and "SETTINGS.UNITY_WORKFLOWS_DIR" in inspect.getsource(obj)
+    ]
+    assert readers == ["resolve_catalogue_root"], (
+        f"only resolve_catalogue_root may read the setting; also read by: "
+        f"{sorted(set(readers) - {'resolve_catalogue_root'})}"
+    )
+
+
+def test_the_bootstrap_is_scheduled_when_the_image_ships_the_shelf(
+    tmp_path,
+    monkeypatch,
+):
+    """No env var, catalogue in the image: the shelf must still load."""
+    import sys
+    import types
+
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import catalog as catalog_module
+
+    packaged = tmp_path / "site-packages" / "workflows"
+    packaged.mkdir(parents=True)
+    _write_bundle(packaged)
+
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", "", raising=False)
+    module = types.ModuleType("unify_deploy.assistant_deployments.workflows")
+    module.workflows_root = lambda: packaged  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "unify_deploy", types.ModuleType("unify_deploy"))
+    monkeypatch.setitem(
+        sys.modules,
+        "unify_deploy.assistant_deployments",
+        types.ModuleType("unify_deploy.assistant_deployments"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "unify_deploy.assistant_deployments.workflows",
+        module,
+    )
+
+    # The gate that decides whether the bootstrap runs must not bail here.
+    assert catalog_module.resolve_catalogue_root() == packaged
