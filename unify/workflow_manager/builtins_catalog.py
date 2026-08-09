@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 import unisdk
@@ -312,31 +311,13 @@ def _default_bundles() -> Optional[List[WorkflowBundle]]:
     ensures storage exists and stops, so an environment without the curated
     tree cannot empty a catalogue another environment seeded.
     """
-    from ..settings import SETTINGS
-    from .catalog import load_catalog
-
-    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
-    if configured:
-        root = Path(configured)
-    else:
-        try:
-            from unify_deploy.assistant_deployments.workflows import workflows_root
-
-            root = workflows_root()
-        except ImportError:
-            return None
+    from .catalog import load_catalog, resolve_catalogue_root
 
     # A tree that is not there is "nothing to reconcile", never "the shelf is
     # empty". `load_catalog` answers `[]` for a missing root, and `[]` here
-    # means *delete every published workflow* — so a mispointed
-    # UNITY_WORKFLOWS_DIR, or an image built without the curated tree, would
-    # silently empty the catalogue for everyone.
-    if not root.is_dir():
-        logger.warning(
-            "Workflow catalogue root %s does not exist; leaving the published "
-            "shelf untouched rather than treating it as empty",
-            root,
-        )
+    # means *delete every published workflow*.
+    root = resolve_catalogue_root()
+    if root is None:
         return None
 
     try:

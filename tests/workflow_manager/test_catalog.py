@@ -537,3 +537,36 @@ def test_making_room_for_the_catalogue_never_touches_its_rows():
     assert "create_context" in body
     for row_verb in ("delete_logs", "create_logs", "update_logs", "_reconcile_rows"):
         assert row_verb not in body
+
+
+def test_the_shelf_has_one_resolution_not_two(tmp_path: Path, monkeypatch):
+    """Console showed six workflows; every install said the shelf was empty.
+
+    The seeder fell back to the installed unify_deploy package when
+    UNITY_WORKFLOWS_DIR was unset. The runtime registry did not — it just
+    returned None. So a deployment with the package installed and no env var
+    published six workflows to the catalogue Console renders, while the
+    assistant that has to install them registered none, and every install
+    failed with "Available: nothing — the catalogue is empty" against a
+    catalogue that plainly had six rows in it.
+    """
+    import inspect
+
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import builtins_catalog
+    from unify.workflow_manager.catalog import (
+        bootstrap_workflow_catalog,
+        resolve_catalogue_root,
+    )
+
+    _write_bundle(tmp_path)
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+
+    # Both reach the same tree, because both ask the same question.
+    assert resolve_catalogue_root() == tmp_path
+    assert [b.slug for b in builtins_catalog._default_bundles()] == ["daily_briefing"]
+
+    for func in (bootstrap_workflow_catalog, builtins_catalog._default_bundles):
+        assert "resolve_catalogue_root" in inspect.getsource(
+            func,
+        ), f"{func.__name__} must not resolve the catalogue root itself"
