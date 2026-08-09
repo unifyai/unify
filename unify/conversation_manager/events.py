@@ -66,6 +66,20 @@ class Event:
 
     _registry: ClassVar[dict[str, "Event"]] = {}
     loggable: ClassVar[bool] = True
+    # Whether receiving this event means somebody needs the assistant.
+    #
+    # The inactivity timer is what retires an idle pod, and it used to
+    # advance on *any* message off the bus — including the system's own
+    # chatter. One recurring internal event was enough to keep a pod alive
+    # indefinitely: it never idled out, so it never picked up a new image,
+    # and a deploy could not reach it.
+    #
+    # Deliberately not `loggable`: that flag asks whether an event is worth
+    # writing down, which is a different question. Editing an assistant or
+    # reading the chat is presence even when it is not worth tracing.
+    # Defaults to True so a new event counts until someone proves it should
+    # not — the safe direction is keeping a live pod alive.
+    counts_as_activity: ClassVar[bool] = True
     content_logged: ClassVar[bool] = False
     prominent: ClassVar[bool] = False
     topic: ClassVar[str | None] = None
@@ -1576,6 +1590,8 @@ class InitializationComplete(Event):
     """Published when ConversationManager has fully initialized all managers."""
 
     loggable: ClassVar[bool] = False
+    # The pod telling itself it finished booting.
+    counts_as_activity: ClassVar[bool] = False
 
 
 @dataclass
@@ -1595,6 +1611,9 @@ class AssistantUpdateEvent(_SessionConfigBase):
 @dataclass
 class Ping(Event):
     loggable: ClassVar[bool] = False
+    # A keepalive by name and purpose; it says the process is up, never
+    # that anyone wants anything.
+    counts_as_activity: ClassVar[bool] = False
     kind: str
 
 
@@ -1639,6 +1658,8 @@ class GetChatHistory(_TruncatedReprMixin, Event):
 @dataclass(repr=False)
 class GetBusEventsResponse(_TruncatedReprMixin, Event):
     loggable: ClassVar[bool] = False
+    # A reply to a query this process asked itself.
+    counts_as_activity: ClassVar[bool] = False
     events: list[dict[str, Any]]
 
     def _repr_truncated(self) -> str:

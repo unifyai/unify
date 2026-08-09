@@ -388,6 +388,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.inactivity_timeout = 3600  # 1 hour in seconds
         self.inactivity_check_interval = 30  # seconds
         self.last_activity_time = self.loop.time()
+        self._last_activity_source = "startup"
         self.shutdown_reason: str | None = None
         self.stop = stop
 
@@ -2800,12 +2801,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
                 if not msg:
                     continue
-                self.last_activity_time = self.loop.time()
                 # process events
                 event = Event.from_json(msg["data"])
                 channel = msg.get("channel", "")
                 if isinstance(channel, bytes):
                     channel = channel.decode("utf-8", errors="replace")
+                # Only a message that means somebody needs the assistant
+                # keeps the pod alive. This used to advance on *any* traffic,
+                # so the system's own chatter — invisible, because those
+                # events are not loggable either — held a pod open
+                # indefinitely: it never idled out, so it never picked up a
+                # new image, and deploys could not reach it.
+                if event.__class__.counts_as_activity:
+                    self.last_activity_time = self.loop.time()
+                    self._last_activity_source = (
+                        f"{event.__class__.__name__} on {channel or '-'}"
+                    )
                 self._event_trace_seq += 1
                 event_id = f"evt-{self._event_trace_seq:06d}"
                 event_name = event.__class__.__name__
@@ -2939,7 +2950,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     )
                 self._session_logger.info(
                     "inactivity_check",
-                    f"Idle check: pubsub_idle={pubsub_idle:.1f}s, "
+                    f"Idle check: last_activity={self._last_activity_source}, "
+                    f"pubsub_idle={pubsub_idle:.1f}s, "
                     f"eventbus_idle={eventbus_idle:.1f}s, "
                     f"min_idle={idle_seconds:.1f}s, "
                     f"effective_idle={effective_idle_seconds:.1f}s, "
