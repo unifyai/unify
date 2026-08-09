@@ -263,17 +263,42 @@ def resolve_catalogue_root() -> Optional[Path]:
     """
     from ..settings import SETTINGS
 
-    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
-    if configured:
-        root = Path(configured)
-    else:
+    def _packaged_root() -> Optional[Path]:
         try:
             from unify_deploy.assistant_deployments.workflows import workflows_root
 
-            root = workflows_root()
+            return workflows_root()
         except ImportError:
             return None
 
+    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
+    if configured:
+        root = Path(configured)
+        if root.is_dir():
+            return root
+        # A configured path that is not there is advice from somewhere else,
+        # not fact about this container. The deployment resolves the
+        # catalogue inside the comms image — where the package sits at
+        # /app/unify_deploy — and stamps that absolute path into an
+        # assistant Job whose own image installs it under site-packages. The
+        # env var then names a directory that does not exist here, and
+        # trusting it left the shelf empty while the package sat two
+        # directories away.
+        packaged = _packaged_root()
+        if packaged is not None and packaged.is_dir():
+            logger.warning(
+                "Workflow catalogue root %s does not exist in this image; "
+                "using the installed package at %s instead",
+                root,
+                packaged,
+            )
+            return packaged
+        logger.warning("Workflow catalogue root %s does not exist", root)
+        return None
+
+    root = _packaged_root()
+    if root is None:
+        return None
     if not root.is_dir():
         logger.warning("Workflow catalogue root %s does not exist", root)
         return None
