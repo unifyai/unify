@@ -2941,20 +2941,22 @@ class CommsManager:
                     "app:comms:ping",
                     Ping(kind="keepalive").to_json(),
                 )
-
-                # Wait 30 seconds before next ping (pre-startup keepalive)
-                await asyncio.sleep(30)
-
-                # Check if we've received a startup message (indicated by assistant_id changed)
-                if SESSION_DETAILS.assistant.agent_id is not None:
-                    LOGGER.debug(
-                        f"{ICONS['subscription']} Startup received, stopping ping mechanism",
-                    )
-                    break
-
             except Exception as e:
                 LOGGER.error(f"{ICONS['subscription']} Error in ping mechanism: {e}")
-                await asyncio.sleep(30)  # Continue trying
+
+            # Wait 30 seconds before next ping (pre-startup keepalive)
+            await asyncio.sleep(30)
+
+            # Check if we've received a startup message (indicated by
+            # assistant_id changed). Outside the try on purpose: this used to
+            # sit after the publish inside it, so any exception jumped over
+            # the only exit this loop has and left a pre-startup keepalive
+            # running for the life of the pod.
+            if SESSION_DETAILS.assistant.agent_id is not None:
+                LOGGER.debug(
+                    f"{ICONS['subscription']} Startup received, stopping ping mechanism",
+                )
+                break
 
 
 async def main():
