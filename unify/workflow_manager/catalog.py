@@ -247,6 +247,39 @@ def load_catalog(root: Path) -> List[WorkflowBundle]:
     return bundles
 
 
+def resolve_catalogue_root() -> Optional[Path]:
+    """Where this environment's curated bundles live, or None if nowhere.
+
+    One resolution, used by everything that needs the shelf. It used to be
+    written twice: the seeder fell back to the installed ``unify_deploy``
+    package when ``UNITY_WORKFLOWS_DIR`` was unset, and the runtime registry
+    returned None instead. So a deployment with the package installed and no
+    env var published six workflows to the catalogue Console renders, while
+    the assistant that has to install them registered none — the shelf was
+    visibly full and every install failed with "the catalogue is empty".
+
+    Returns None only when there is genuinely nothing to read, which callers
+    must treat as "no catalogue here", never as "the catalogue is empty".
+    """
+    from ..settings import SETTINGS
+
+    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
+    if configured:
+        root = Path(configured)
+    else:
+        try:
+            from unify_deploy.assistant_deployments.workflows import workflows_root
+
+            root = workflows_root()
+        except ImportError:
+            return None
+
+    if not root.is_dir():
+        logger.warning("Workflow catalogue root %s does not exist", root)
+        return None
+    return root
+
+
 def bootstrap_workflow_catalog(
     root: Optional[Path] = None,
 ) -> "Optional[Any]":
@@ -263,14 +296,11 @@ def bootstrap_workflow_catalog(
     is the upkeep tick, so a version bump shipped in git reaches existing
     installations on the next session start.
     """
-    from ..settings import SETTINGS
-
     if root is None:
-        configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
-        if not configured:
+        root = resolve_catalogue_root()
+        if root is None:
             return None
-        root = Path(configured)
-    if not root.is_dir():
+    elif not root.is_dir():
         logger.warning("Workflow catalogue root %s does not exist", root)
         return None
 
