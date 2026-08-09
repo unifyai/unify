@@ -570,3 +570,33 @@ def test_the_shelf_has_one_resolution_not_two(tmp_path: Path, monkeypatch):
         assert "resolve_catalogue_root" in inspect.getsource(
             func,
         ), f"{func.__name__} must not resolve the catalogue root itself"
+
+
+def test_the_install_path_sees_the_bundles_boot_loaded(tmp_path: Path, monkeypatch):
+    """The shelf is full and every install still said it was empty.
+
+    bootstrap_workflow_catalog constructed its own WorkflowManager, loaded
+    every bundle into it, and returned it — while the install path asks
+    ``ManagerRegistry.get_workflow_manager()``, which lazily built a
+    *different*, bundle-less instance. The registry getter never returns
+    None once asked, so the request handler did not report "no shelf here";
+    it reported "the catalogue is empty" against a catalogue that had just
+    been filled, and the request rows recorded unknown_workflow.
+
+    Loading bundles into an object nobody else holds is the bug, so this
+    asserts on the object the installer actually reaches.
+    """
+    from unify.manager_registry import ManagerRegistry
+    from unify.settings import SETTINGS
+    from unify.workflow_manager.catalog import bootstrap_workflow_catalog
+
+    _write_bundle(tmp_path)
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+
+    booted = bootstrap_workflow_catalog()
+    assert booted is not None
+
+    # What install_workflow resolves, not what bootstrap happened to return.
+    from_registry = ManagerRegistry.get_workflow_manager()
+    assert from_registry is booted
+    assert [b.slug for b in from_registry.available_bundles()] == ["daily_briefing"]
