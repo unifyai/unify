@@ -306,9 +306,17 @@ def bootstrap_workflow_catalog(
 
     from ..manager_registry import ManagerRegistry
     from .surfaces import register_default_surfaces
-    from .workflow_manager import WorkflowManager
 
-    manager = WorkflowManager()
+    # The registry's instance, never a fresh one.
+    #
+    # This used to construct its own WorkflowManager, load every bundle into
+    # it, and return it — while `ManagerRegistry.get_workflow_manager()`
+    # lazily built a *different*, bundle-less one for everybody else. So the
+    # install path asked the registry, got the empty manager, and reported
+    # "the catalogue is empty" against a shelf this function had just
+    # finished filling. Registering onto the shared instance is what makes
+    # the bundles visible to the code that installs them.
+    manager = ManagerRegistry.get_workflow_manager()
     register_default_surfaces(
         manager.surfaces,
         guidance_manager=ManagerRegistry.get_guidance_manager(),
