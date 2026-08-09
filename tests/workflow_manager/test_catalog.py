@@ -600,3 +600,49 @@ def test_the_install_path_sees_the_bundles_boot_loaded(tmp_path: Path, monkeypat
     from_registry = ManagerRegistry.get_workflow_manager()
     assert from_registry is booted
     assert [b.slug for b in from_registry.available_bundles()] == ["daily_briefing"]
+
+
+def test_a_path_from_another_image_never_empties_the_shelf(tmp_path: Path, monkeypatch):
+    """The one that actually broke staging for a day.
+
+    The deployment resolves the catalogue inside the comms image, where the
+    package sits at /app/unify_deploy, and stamps that absolute path into an
+    assistant Job whose own image installs it under site-packages. The
+    assistant then logged "Workflow catalogue root
+    /app/unify_deploy/assistant_deployments/workflows does not exist",
+    registered nothing, and every install reported an empty catalogue —
+    with the package two directories away the whole time.
+
+    A configured path is advice from another process. When it is not there,
+    the container's own installed copy is the fact.
+    """
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import catalog as catalog_module
+
+    packaged = tmp_path / "site-packages" / "workflows"
+    packaged.mkdir(parents=True)
+    _write_bundle(packaged)
+
+    monkeypatch.setattr(
+        SETTINGS,
+        "UNITY_WORKFLOWS_DIR",
+        "/app/unify_deploy/assistant_deployments/workflows",
+        raising=False,
+    )
+
+    import sys
+    import types
+
+    module = types.ModuleType("unify_deploy.assistant_deployments.workflows")
+    module.workflows_root = lambda: packaged  # type: ignore[attr-defined]
+    parent = types.ModuleType("unify_deploy.assistant_deployments")
+    root_mod = types.ModuleType("unify_deploy")
+    monkeypatch.setitem(sys.modules, "unify_deploy", root_mod)
+    monkeypatch.setitem(sys.modules, "unify_deploy.assistant_deployments", parent)
+    monkeypatch.setitem(
+        sys.modules,
+        "unify_deploy.assistant_deployments.workflows",
+        module,
+    )
+
+    assert catalog_module.resolve_catalogue_root() == packaged
