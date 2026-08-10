@@ -104,7 +104,11 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         -------
         A dict with ``workflows`` (a list of entries, each carrying at
         least ``slug``, ``name``, ``description``, and ``installed``) and
-        ``total``.
+        ``total``. An installed entry also carries ``jobs``: the tasks that
+        installation planted, with their ``task_id``, name and whether they
+        are armed. Those ids are how a workflow is run on demand — a
+        workflow has no run of its own, so running one means starting one
+        of its tasks with the ordinary task tools.
         """
         raise NotImplementedError
 
@@ -144,6 +148,10 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         destination:
             ``None`` for personal, or ``team:<id>`` to install for a whole
             team. A team install plants content for every member.
+
+        Installing never runs anything. It plants content and arms the
+        schedule; the first run happens at the job's next occurrence, or
+        when someone explicitly asks for one.
 
         Returns
         -------
@@ -272,7 +280,9 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
 
         Returns
         -------
-        The workflow record, or a not-found result if no such bundle exists.
+        The workflow record, or a not-found result if no such bundle
+        exists. An installed one carries ``jobs``: the tasks it planted,
+        with the ``task_id`` needed to run one on demand.
         """
         raise NotImplementedError
 
