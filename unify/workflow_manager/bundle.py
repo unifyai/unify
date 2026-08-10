@@ -90,6 +90,12 @@ class Surface:
     ``enabled`` and ``destination`` keywords. ``None`` for surfaces whose
     content is inert until read (guidance, knowledge, functions)."""
 
+    lister: Callable[..., Any] | None = None
+    """Reports one source's planted rows on the surfaces where a caller
+    needs their ids — tasks, which are what "run this workflow now"
+    resolves to. Called with ``managed_by`` and ``destination``. ``None``
+    for surfaces whose rows are only ever read where they live."""
+
     def arm(self, *, managed_by: str, enabled: bool, destination: str | None) -> Any:
         if self.armer is None:
             return None
@@ -98,6 +104,11 @@ class Surface:
             enabled=enabled,
             destination=destination,
         )
+
+    def planted(self, *, managed_by: str, destination: str | None) -> Any:
+        if self.lister is None:
+            return None
+        return self.lister(managed_by=managed_by, destination=destination)
 
     def sync(
         self,
@@ -170,6 +181,18 @@ class CanvasSource:
 
 
 @dataclass(frozen=True)
+class RequirementOption:
+    """One app that would satisfy a requirement."""
+
+    slug: str
+    name: str = ""
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.slug
+
+
+@dataclass(frozen=True)
 class WorkflowRequirement:
     """One integration a workflow needs connected before its jobs may run.
 
@@ -207,6 +230,21 @@ class WorkflowRequirement:
     it as an app is what led to a name-matching table deciding that anything
     starting with "GMAIL" or "GOOGLE" wanted a pasted refresh token."""
 
+    alternatives: tuple[RequirementOption, ...] = ()
+    """Other apps that would satisfy this same requirement, any one of
+    them instead of :attr:`slug`.
+
+    A workflow needs a *capability* — somewhere to post, a calendar to
+    read — and the app providing it is the user's choice, not the
+    bundle's. Declaring Slack and stopping there excludes everyone on
+    Discord or Teams from a workflow that would serve them identically.
+
+    Order is the recommendation: :attr:`slug` first, then these. The
+    requirement is met as soon as any one of them is connected, and a
+    reader offers the whole set so the user connects the one they
+    already use. Keep the list short and genuinely interchangeable —
+    alternatives the planted procedures can all actually drive."""
+
     required_secrets: tuple[str, ...] = ()
     """Secret names whose presence marks this requirement connected, for
     apps no other authority can answer for — a BYOD OAuth provider with
@@ -217,6 +255,11 @@ class WorkflowRequirement:
     two places to update when the package changes. Empty with no other
     authority reads as met, so a bundle cannot hold its jobs hostage to a
     signal nothing can check."""
+
+    @property
+    def options(self) -> tuple[RequirementOption, ...]:
+        """Every app that satisfies this requirement, recommended first."""
+        return (RequirementOption(self.slug, self.name), *self.alternatives)
 
 
 @dataclass
@@ -251,20 +294,6 @@ class WorkflowBundle:
     requirements: tuple[WorkflowRequirement, ...] = ()
     """Integrations that must be connected before this workflow's jobs
     are armed. Checked at install and on every reconcile."""
-
-    install_task: str = ""
-    """``custom_key`` of a task in this bundle to run **once**, after content
-    lands on a first install.
-
-    The provisioning one-shot: a mailbox backfill, a CRM import — the long
-    thing a workflow needs done before its recurring job is meaningful. Named
-    rather than inferred so a bundle can ship several tasks and be explicit
-    about which one is setup. Empty means the workflow needs no provisioning.
-
-    Deliberately an ordinary task rather than new machinery: durability,
-    resumability, steering and observability come from TaskScheduler, and the
-    workflow/task boundary stays intact — a workflow still has no runtime, it
-    just asked for a task to be run."""
 
     capabilities: tuple[str, ...] = ()
     """Assistant capabilities the workflow needs beyond connected apps,
@@ -321,6 +350,7 @@ class SurfaceRegistry:
         source_scoped: bool,
         shared: bool = False,
         armer: Callable[..., Any] | None = None,
+        lister: Callable[..., Any] | None = None,
     ) -> None:
         if not source_scoped:
             raise UnscopedSurfaceError(name)
@@ -330,6 +360,7 @@ class SurfaceRegistry:
             source_kwarg=source_kwarg,
             shared=shared,
             armer=armer,
+            lister=lister,
         )
 
     def get(self, name: str) -> Surface:

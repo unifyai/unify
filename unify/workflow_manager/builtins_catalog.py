@@ -176,6 +176,14 @@ def catalog_row(bundle: WorkflowBundle) -> Dict[str, Any]:
                     # "couldn't check this app" about the one requirement
                     # whose answer never depended on the gallery.
                     "kind": requirement.kind,
+                    # Every app that would satisfy it, recommended first.
+                    # A reader that only saw the first one would offer a
+                    # Slack connect to a Discord user for a workflow that
+                    # serves them identically.
+                    "alternatives": [
+                        {"slug": option.slug, "name": option.display_name}
+                        for option in requirement.alternatives
+                    ],
                     "required_secrets": list(requirement.required_secrets),
                 }
                 for requirement in bundle.requirements
