@@ -529,12 +529,44 @@ def _provider_label(provider: str) -> str:
     return _PROVIDER_DISPLAY_NAMES.get(provider, provider)
 
 
+def _vendor_of(model: str) -> Optional[str]:
+    """Extract the vendor that owns the model, independent of the route.
+
+    OpenRouter ids are vendor-prefixed (``anthropic/claude-opus-4.8``), so
+    the vendor survives being routed through an aggregator. Returns ``None``
+    when the model half carries no prefix.
+    """
+    endpoint, _, _ = model.rpartition("@")
+    vendor, sep, _ = (endpoint or model).partition("/")
+    if not sep:
+        return None
+    return vendor.strip().lower() or None
+
+
+def _gated_provider_of(model: str, *, never_paid: bool) -> Optional[str]:
+    """The gated provider this call would reach, or ``None`` if it is allowed.
+
+    Checked against both the route and the vendor, because they can differ
+    and either one is a way to reach the same models: ``claude-opus-5@anthropic``
+    bills Anthropic directly, while ``anthropic/claude-opus-4.8@openrouter``
+    reaches the identical model through an aggregator. Gating only the route
+    would leave the aggregator as an open door to exactly what the gate
+    exists to hold back, so the vendor is enough on its own.
+
+    The vendor is reported in preference to the route, since it names what
+    the user is actually being refused.
+    """
+    if not never_paid:
+        return None
+    for candidate in (_vendor_of(model), _provider_of(model)):
+        if candidate is not None and candidate in PAYMENT_GATED_PROVIDERS:
+            return candidate
+    return None
+
+
 def _payment_gated(model: str, *, never_paid: bool) -> bool:
     """Whether this call is for a paid-only provider on an unpaid account."""
-    if not never_paid:
-        return False
-    provider = _provider_of(model)
-    return provider is not None and provider in PAYMENT_GATED_PROVIDERS
+    return _gated_provider_of(model, never_paid=never_paid) is not None
 
 
 async def check_spending_limits_callback(
@@ -718,12 +750,12 @@ async def check_spending_limits_callback(
     # these providers from the Console either — that is the point, since
     # the Console is where the free grant is meant to be spent and these
     # models are what make spending it worthwhile.
-    if _payment_gated(request.model, never_paid=never_paid):
-        provider = _provider_of(request.model)
+    gated_provider = _gated_provider_of(request.model, never_paid=never_paid)
+    if gated_provider is not None:
         return LimitCheckResponse(
             allowed=False,
             reason=(
-                f"{_provider_label(str(provider))} models unlock once this "
+                f"{_provider_label(gated_provider)} models unlock once this "
                 "account has made its first payment — adding a card alone "
                 "does not enable them. Subscribe in billing to use them, or "
                 "switch this assistant to one of the included models to "

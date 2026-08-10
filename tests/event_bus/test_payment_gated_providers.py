@@ -59,6 +59,49 @@ class TestGatePredicate:
         assert "anthropic" in PAYMENT_GATED_PROVIDERS
 
 
+class TestTheRouteCannotBeUsedToEvadeTheGate:
+    """An aggregator reaches the same models, so it is gated the same way.
+
+    OpenRouter ids keep the vendor prefix, and the curated catalogue's
+    Anthropic entries route natively while the model-search results route
+    through OpenRouter. Gating only the trailing route segment would leave
+    the search path as an open door to exactly the models the gate exists
+    to hold back.
+    """
+
+    def test_anthropic_through_openrouter_is_gated(self):
+        assert (
+            _payment_gated("anthropic/claude-opus-4.8@openrouter", never_paid=True)
+            is True
+        )
+
+    def test_the_native_anthropic_route_is_still_gated(self):
+        assert _payment_gated("claude-fable-5@anthropic", never_paid=True) is True
+
+    def test_a_paid_account_reaches_both_routes(self):
+        for model in (
+            "anthropic/claude-opus-4.8@openrouter",
+            "claude-fable-5@anthropic",
+        ):
+            assert _payment_gated(model, never_paid=False) is False
+
+    def test_other_vendors_on_the_same_aggregator_are_untouched(self):
+        """Gating a route wholesale would take the platform default with it."""
+        assert _payment_gated("openai/gpt-5.6-sol@openrouter", never_paid=True) is False
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_names_the_vendor_not_the_aggregator(self):
+        """ "OpenRouter models require payment" would misdescribe the block."""
+        response = await _run_callback(
+            "anthropic/claude-opus-4.8@openrouter",
+            _NEVER_PAID,
+        )
+
+        assert response.allowed is False
+        assert "Anthropic" in response.reason
+        assert "OpenRouter" not in response.reason
+
+
 def _run_callback(model: str, spend_data: dict):
     """Drive the callback for a personal account with *spend_data*."""
 
