@@ -27,6 +27,7 @@ what happened.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import secrets
@@ -269,6 +270,7 @@ class IngestionManager(BaseIngestionManager):
 
     # ── submitting ────────────────────────────────────────────────────────
 
+    @functools.wraps(BaseIngestionManager.submit, updated=())
     def submit(
         self,
         source: IngestionSource,
@@ -1041,6 +1043,7 @@ class IngestionManager(BaseIngestionManager):
 
     # ── observing ─────────────────────────────────────────────────────────
 
+    @functools.wraps(BaseIngestionManager.get_status, updated=())
     def get_status(self, run_id: str) -> RunStatus:
         row, runs_context = self._find_run(run_id)
         if row is None:
@@ -1181,6 +1184,7 @@ class IngestionManager(BaseIngestionManager):
                     break
         return sorted(events, key=lambda event: event.get("at") or "")
 
+    @functools.wraps(BaseIngestionManager.get_logs, updated=())
     def get_logs(
         self,
         run_id: str,
@@ -1206,6 +1210,7 @@ class IngestionManager(BaseIngestionManager):
             for event in window
         ]
 
+    @functools.wraps(BaseIngestionManager.wait, updated=())
     def wait(self, run_id: str, *, timeout_s: Optional[float] = None) -> RunStatus:
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         # Backs off to a second so a long run does not spend the wait hammering
@@ -1220,6 +1225,7 @@ class IngestionManager(BaseIngestionManager):
             time.sleep(interval)
             interval = min(interval * 1.5, 1.0)
 
+    @functools.wraps(BaseIngestionManager.list_runs, updated=())
     def list_runs(
         self,
         *,
@@ -1257,6 +1263,7 @@ class IngestionManager(BaseIngestionManager):
 
     # ── recovering ────────────────────────────────────────────────────────
 
+    @functools.wraps(BaseIngestionManager.retry, updated=())
     def retry(self, run_id: str, *, only: RetryScope = "dlq") -> RetryResult:
         row, runs_context = self._find_run(run_id)
         if row is None:
@@ -1357,12 +1364,15 @@ class IngestionManager(BaseIngestionManager):
             )
         return url
 
+    @functools.wraps(BaseIngestionManager.cancel, updated=())
     def cancel(self, run_id: str) -> bool:
         return self._transition(run_id, "cancelled", "Cancelled by request.")
 
+    @functools.wraps(BaseIngestionManager.pause, updated=())
     def pause(self, run_id: str) -> bool:
         return self._transition(run_id, "paused", "Paused by request.")
 
+    @functools.wraps(BaseIngestionManager.resume, updated=())
     def resume(self, run_id: str) -> bool:
         row, runs_context = self._find_run(run_id)
         if row is None or row.get("state") != "paused":

@@ -1,25 +1,37 @@
-"""Resolving whether a workflow's declared integrations are connected.
+"""Resolving whether a workflow's declared requirements are satisfied.
 
-A bundle names the apps its jobs need by **provider app slug** — the one
-id space Console's integrations gallery, the integrations primitives and
-these requirements all share. What "connected" means for that app is not
-the bundle's business, because it differs per app and can change without
-the workflow changing:
+A bundle names what it needs and stops there. What "connected" means differs
+per app, can change without the workflow changing, and an app may offer more
+than one route at once — so resolution is here, and it consults each authority
+in a deliberate order.
 
-- **Third-party, provider-backed** (the gallery's Composio/Pipedream
-  catalogue): a connection row exists for the app with status
-  ``connected``.
-- **Native** (an integration package declared in unify-deploy): the
-  package's own manifest names the secrets that make it usable, and the
-  assistant's secret keyset either holds them or does not.
-- **BYOD OAuth** (Workspace, Microsoft 365): the refresh-token secret is
-  the signal, and there is no package to ask, so the bundle names the
-  secret itself.
+**Provider-backed comes first.** That covers third-party gallery apps *and* the
+native integration packages authored in unify-deploy, and either may be OAuth,
+an API key, or both. All of them connect through the integrations layer, so a
+live connection row is the answer, and the absence of one means "press
+Connect" — not "paste a token".
 
-So a requirement carries a slug, and optionally the secrets to look for
-when no other authority can answer. Resolution consults each authority in
-turn and reports which one settled it, so the Console can say *why* an app
-reads as unconnected rather than only that it does.
+**Workspace is separate and distinct.** It is not in the gallery, not a
+package, and it is connected in the onboarding and profile flows rather than
+the integrations gallery. A requirement declares ``kind: workspace`` for it,
+and the refresh-token secret those flows store is its signal.
+
+**Absence of evidence is "not connected".** A named requirement is by
+definition something that needs connecting, so nothing having answered means
+unmet. The older default treated it as met, which armed jobs against apps
+nobody had connected. A need with nothing to connect — browsing, a filesystem —
+is not a requirement at all: it belongs in the bundle's ``capabilities``.
+
+Deliberately no read of the gallery catalogue. Knowing whether a slug is
+*offered* would only distinguish a connectable app from a non-connectable
+capability, which the ``capabilities`` field already does — and a resolver is
+constructed per call, so that read would cost one full catalogue scan per bundle
+per listing. Catching a slug the gallery does not offer is an authoring-time
+check, and it lives in the authoring rule and the CI gate.
+
+Each authority is read at most once per instance and is best-effort: one that
+cannot be reached is silent rather than a denial, because holding a workflow's
+jobs on a transient read failure is worse than arming them a session early.
 """
 
 from __future__ import annotations
@@ -175,18 +187,36 @@ class RequirementResolver:
             "name": requirement.name or requirement.slug,
         }
 
+        # Workspace first, because it is not an integration at all: not in the
+        # gallery, not a package, and connected in the onboarding and profile
+        # flows. Its signal here is the refresh-token secret those flows store.
+        if requirement.kind == "workspace":
+            declared: Sequence[str] = tuple(requirement.required_secrets or ())
+            missing = [name for name in declared if name not in self.keyset()]
+            report.update(
+                {
+                    "connected": not missing,
+                    "via": "workspace",
+                    "missing_secrets": missing,
+                },
+            )
+            return report
+
+        # Then a live provider-backed connection, which covers both third-party
+        # gallery apps and the native packages we author — either may be OAuth,
+        # an API key, or both, and all of them connect the same way.
         if slug in self.connected_apps():
             report.update({"connected": True, "via": "connection"})
             return report
 
-        keyset = self.keyset()
-
-        # The app's own package is the authority on what connecting means,
-        # so a bundle naming a native app need not restate its secrets.
+        # A native package that is genuinely secret-gated rather than
+        # connectable answers for itself: its own manifest names the secrets
+        # that make it usable, so a bundle never restates them.
         manifest = self.native_manifest(slug)
         if manifest is not None:
             required = _json_list(manifest.get("required_secrets_json"))
             optional = _json_list(manifest.get("optional_secrets_json"))
+            keyset = self.keyset()
             missing = [name for name in required if name not in keyset]
             if required:
                 connected = not missing
@@ -206,17 +236,12 @@ class RequirementResolver:
             )
             return report
 
-        # No package and no connection row: the bundle's own declaration
-        # is the only signal left. This is the BYOD OAuth case.
-        declared: Sequence[str] = tuple(requirement.required_secrets or ())
-        missing = [name for name in declared if name not in keyset]
-        report.update(
-            {
-                "connected": not missing,
-                "via": "secret" if declared else "undeclared",
-                "missing_secrets": missing,
-            },
-        )
+        # Nothing has answered, and a named requirement is by definition an app
+        # that needs connecting — so absence of evidence is "not connected", not
+        # "met". The old default read as met, which armed jobs against apps
+        # nobody had connected. A need with nothing to connect is not a
+        # requirement at all; it belongs in the bundle's `capabilities`.
+        report.update({"connected": False, "via": "connection"})
         return report
 
     def report(self, requirements: Iterable[Any]) -> List[Dict[str, Any]]:

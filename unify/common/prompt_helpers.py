@@ -572,8 +572,18 @@ class PromptParts:
         return list(self._parts)
 
     def flatten(self) -> str:
-        """Return the full prompt string by concatenating all parts."""
-        return "".join(p["text"] for p in self._parts)
+        """Return the full prompt string: static parts first, dynamic last.
+
+        Provider prompt caches key on the request prefix, so a dynamic
+        block sitting mid-prompt re-bills every static part behind it each
+        time it changes. Emitting ``static=False`` parts (current time,
+        transient status blocks) after all static parts keeps the stable
+        prefix byte-identical; volatile content only invalidates itself.
+        Relative order within each group is preserved.
+        """
+        static = [p["text"] for p in self._parts if p.get("_static", True)]
+        dynamic = [p["text"] for p in self._parts if not p.get("_static", True)]
+        return "".join(static) + "".join(dynamic)
 
     def __str__(self) -> str:
         return self.flatten()

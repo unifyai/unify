@@ -11,6 +11,7 @@ Docstrings are inherited from BaseDataManager via @functools.wraps.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 from contextlib import contextmanager
 from threading import RLock
@@ -72,9 +73,12 @@ from unify.common.federated_search import (
     reduce_rows,
 )
 from unify.common.custom_sync import (
+    MANAGED_BY_DEPLOYMENT,
     CustomSyncAdapter,
     CustomSyncPartialFailure,
+    managed_rows_filter,
     reconcile_custom_rows,
+    stored_hash_field,
 )
 from unify.common.embed_utils import list_private_fields
 from unify.common.filter_utils import normalize_filter_expr
@@ -148,8 +152,12 @@ class DataManager(BaseDataManager):
         super().__init__()
         self._base_ctx = ContextRegistry.get_context(self, "Data")
         self._meta_ctx = ContextRegistry.get_context(self, DATA_META_TABLE)
-        self._custom_data_synced = False
-        self._custom_data_synced_contexts: set[str] = set()
+        # (meta_context, managed_by) pairs whose custom data sync already
+        # ran this process. Keyed by source, not a single flag: the
+        # deployment and each installed workflow reconcile disjoint row
+        # sets, and one flag would let whichever synced first suppress the
+        # others' passes entirely.
+        self._custom_data_synced_sources: set[tuple[str, str]] = set()
         self._destination_context_lock = RLock()
         self._destination_write_scoped = False
 
@@ -1471,7 +1479,12 @@ class DataManager(BaseDataManager):
         meta_context = self._meta_context_for_destination(destination)
         return meta_context, destination in (None, "personal")
 
-    def _get_stored_custom_data_hash(self) -> str:
+    def _get_stored_custom_data_hash(
+        self,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> str:
+        """Retrieve one source's stored custom data hash."""
+        field = stored_hash_field("custom_data_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -1479,12 +1492,19 @@ class DataManager(BaseDataManager):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("custom_data_hash", "") or ""
+                return logs[0].entries.get(field, "") or ""
         except Exception as exc:
             logger.warning("Failed to read custom data hash: %s", exc)
         return ""
 
-    def _store_custom_data_hash(self, hash_value: str) -> None:
+    def _store_custom_data_hash(
+        self,
+        hash_value: str,
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> None:
+        """Store one source's custom data hash in the Meta context."""
+        field = stored_hash_field("custom_data_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -1495,17 +1515,83 @@ class DataManager(BaseDataManager):
                 unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
-                    entries={"custom_data_hash": hash_value},
+                    entries={field: hash_value},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_data_hash": hash_value}],
+                    entries=[{"meta_id": 1, field: hash_value}],
                     stamp_authoring=True,
                 )
         except Exception as exc:
             logger.warning("Failed to store custom data hash: %s", exc)
+
+    def _get_stored_custom_data_contexts(
+        self,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> List[str]:
+        """Tables this source seeded on its last pass.
+
+        Rows live in many contexts and the context list comes from the
+        source, so an empty source names no tables — which is exactly what
+        an uninstall sends. Without this record its prune would reach
+        nothing and the workflow's rows would outlive it.
+        """
+        field = stored_hash_field("custom_data_contexts", managed_by)
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if not logs:
+                return []
+            raw = logs[0].entries.get(field)
+        except Exception as exc:
+            logger.warning("Failed to read custom data contexts: %s", exc)
+            return []
+        if isinstance(raw, list):
+            return [str(item) for item in raw]
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                return []
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        return []
+
+    def _store_custom_data_contexts(
+        self,
+        contexts: List[str],
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> None:
+        """Record which tables this source now owns rows in."""
+        field = stored_hash_field("custom_data_contexts", managed_by)
+        value = json.dumps(sorted(contexts))
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                unisdk.update_logs(
+                    context=self._meta_ctx,
+                    logs=[logs[0].id],
+                    entries={field: value},
+                    overwrite=True,
+                )
+            else:
+                unity_create_logs(
+                    context=self._meta_ctx,
+                    entries=[{"meta_id": 1, field: value}],
+                    stamp_authoring=True,
+                )
+        except Exception as exc:
+            logger.warning("Failed to store custom data contexts: %s", exc)
 
     def _table_exists(
         self,
@@ -1642,10 +1728,20 @@ class DataManager(BaseDataManager):
         context: str,
         custom_key: str,
         destination: str | None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> None:
+        """Prune one managed row, scoped to the source that owns it.
+
+        Unscoped, a workflow's prune would delete the deployment's row of
+        the same key from the same table — the two sources share the
+        context and only ``managed_by`` tells them apart.
+        """
         self.delete_rows(
             context,
-            filter=f"custom_key == '{custom_key}' and custom_hash != None",
+            filter=(
+                f"custom_key == '{custom_key}' and "
+                f"{managed_rows_filter(managed_by)}"
+            ),
             destination=destination,
         )
 
@@ -1654,8 +1750,16 @@ class DataManager(BaseDataManager):
         *,
         source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
         destination: str | None = None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
-        """Ensure deployment-defined data rows match source definitions."""
+        """Ensure source-defined data rows match their definitions.
+
+        Reconciles only the rows *managed_by* owns; rows written into the
+        same tables by other sources are neither read nor pruned. Table
+        *creation* is deliberately not scoped — a table is shared
+        infrastructure that any source may need to exist, and the first
+        one to need it creates it.
+        """
         try:
             meta_context, is_personal = self._sync_destination_contexts(destination)
         except ToolErrorException as exc:
@@ -1674,22 +1778,17 @@ class DataManager(BaseDataManager):
             expected_hash = compute_custom_data_hash(
                 source_tables=source_tables,
             )
-            current_hash = self._get_stored_custom_data_hash()
-            already_synced = (
-                self._custom_data_synced
-                if is_personal
-                else meta_context in self._custom_data_synced_contexts
-            )
+            current_hash = self._get_stored_custom_data_hash(managed_by)
+            synced_key = (meta_context, managed_by)
 
-            if already_synced and current_hash == expected_hash:
+            if synced_key in self._custom_data_synced_sources and (
+                current_hash == expected_hash
+            ):
                 return False
 
             if current_hash == expected_hash:
                 logger.debug("Custom data hash matches, skipping sync")
-                if is_personal:
-                    self._custom_data_synced = True
-                else:
-                    self._custom_data_synced_contexts.add(meta_context)
+                self._custom_data_synced_sources.add(synced_key)
                 return False
 
             logger.info(
@@ -1700,29 +1799,43 @@ class DataManager(BaseDataManager):
 
             failures: Dict[str, BaseException] = {}
 
-            for context, table_spec in source_tables.items():
+            # Every table this source has to answer for, not just the ones
+            # its current definition mentions. A table it seeded last pass
+            # and has since dropped — and every table it owned before an
+            # uninstall sent an empty source — must still get a pass, or
+            # its rows outlive the source that put them there. This is the
+            # same rule the destination loop follows: reconcile per table
+            # *under consideration*, never per table merely observed.
+            previous = self._get_stored_custom_data_contexts(managed_by)
+            for context in sorted(set(source_tables) | set(previous)):
+                table_spec = source_tables.get(context) or {}
                 rows = table_spec.get("rows", [])
-                if not rows:
-                    continue
+                declared = context in source_tables
                 seed_key = table_spec.get("seed_key")
-                if not seed_key:
+                if declared and not seed_key:
                     logger.warning(
                         "Data table %s has no seed_key, skipping",
                         context,
                     )
                     continue
 
-                if not self._table_exists(context, destination):
-                    unique_keys = table_spec.get("unique_keys")
-                    auto_counting = table_spec.get("auto_counting")
+                exists = self._table_exists(context, destination)
+                if declared and not exists:
+                    # A table with no rows is still created: a bundle may
+                    # ship the schema for its own job to fill, and the
+                    # install is what has to make the table exist.
                     self.create_table(
                         context,
                         description=table_spec.get("description"),
                         fields=table_spec.get("fields"),
-                        unique_keys=unique_keys,
-                        auto_counting=auto_counting,
+                        unique_keys=table_spec.get("unique_keys"),
+                        auto_counting=table_spec.get("auto_counting"),
                         destination=destination,
                     )
+                elif not exists:
+                    # A dropped table nobody recreated: nothing to prune,
+                    # and creating it to prune it would be absurd.
+                    continue
 
                 source_rows = {
                     str(row["custom_key"]): row for row in rows if row.get("custom_key")
@@ -1733,8 +1846,9 @@ class DataManager(BaseDataManager):
                         adapter=_DataRowSyncAdapter(
                             self,
                             context=context,
-                            seed_key=seed_key,
+                            seed_key=seed_key or "",
                             destination=destination,
+                            managed_by=managed_by,
                         ),
                     )
                 except CustomSyncPartialFailure as exc:
@@ -1745,19 +1859,28 @@ class DataManager(BaseDataManager):
             if failures:
                 raise CustomSyncPartialFailure("data", failures)
 
-            self._store_custom_data_hash(expected_hash)
-            if is_personal:
-                self._custom_data_synced = True
-            else:
-                self._custom_data_synced_contexts.add(meta_context)
+            self._store_custom_data_hash(expected_hash, managed_by=managed_by)
+            self._store_custom_data_contexts(
+                sorted(source_tables),
+                managed_by=managed_by,
+            )
+            self._custom_data_synced_sources.add(synced_key)
             return True
 
     def sync_custom(
         self,
         *,
         source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
-        """Sync custom data from pre-collected sources across destinations."""
+        """Sync custom data from pre-collected sources across destinations.
+
+        Groups by the destination each table declares, so it never reaches
+        the engine for a destination the source does not mention. Workflow
+        installs drive ``sync_custom_data`` directly instead: an uninstall
+        passes an empty source, which resolves to zero destinations here
+        and would prune nothing.
+        """
         if source_tables is None:
             source_tables = {}
 
@@ -1772,12 +1895,19 @@ class DataManager(BaseDataManager):
             changed |= self.sync_custom_data(
                 source_tables=tables,
                 destination=destination_arg,
+                managed_by=managed_by,
             )
         return changed
 
 
 class _DataRowSyncAdapter(CustomSyncAdapter):
-    """Storage mechanics for one custom data table's row reconcile."""
+    """Storage mechanics for one custom data table's row reconcile.
+
+    Scoped to one ``managed_by``: the deployment and every installed
+    workflow may seed rows into the same table, and the reconcile loop
+    prunes every managed row whose key left the source. An unscoped read
+    would hand one source its siblings' rows and delete them.
+    """
 
     kind = "data"
 
@@ -1788,11 +1918,13 @@ class _DataRowSyncAdapter(CustomSyncAdapter):
         context: str,
         seed_key: str,
         destination: str | None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> None:
         self._manager = manager
         self._context = context
         self._seed_key = seed_key
         self._destination = destination
+        self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
         resolved = self._manager._resolve_context_for_write(
@@ -1801,7 +1933,7 @@ class _DataRowSyncAdapter(CustomSyncAdapter):
         )
         return filter_impl(
             resolved,
-            filter="custom_hash != None",
+            filter=managed_rows_filter(self.managed_by),
             limit=1000,
         )
 
@@ -1824,7 +1956,9 @@ class _DataRowSyncAdapter(CustomSyncAdapter):
     ) -> None:
         self._manager._update_custom_row(
             context=self._context,
-            row_filter=f"custom_key == {key!r} and custom_hash != None",
+            row_filter=(
+                f"custom_key == {key!r} and " f"{managed_rows_filter(self.managed_by)}"
+            ),
             row_data=fields,
             destination=self._destination,
         )
@@ -1834,6 +1968,7 @@ class _DataRowSyncAdapter(CustomSyncAdapter):
             context=self._context,
             custom_key=key,
             destination=self._destination,
+            managed_by=self.managed_by,
         )
 
     def find_adoptable(
@@ -1841,6 +1976,17 @@ class _DataRowSyncAdapter(CustomSyncAdapter):
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
+        """Claim an unmanaged row already carrying this entry's seed value
+        rather than inserting a second copy of the same fact.
+
+        Deployment-only. The probe matches on the seed column alone, so
+        any other source using it would claim a row the deployment (or a
+        sibling workflow) hand-seeded — restamping it and ping-ponging
+        ownership on every pass. A workflow inserts instead, and its row
+        is distinguishable by ``managed_by`` from the first write.
+        """
+        if self.managed_by != MANAGED_BY_DEPLOYMENT:
+            return None
         seed_value = str(fields.get(self._seed_key, ""))
         return self._manager._find_unmanaged_row_by_seed(
             context=self._context,

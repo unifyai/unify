@@ -47,6 +47,37 @@ _PLATFORM_SECRET_ENV_KEYS: frozenset[str] = frozenset(
     },
 )
 
+# Deployment-wide provider credentials that bill the operator, not the tenant.
+# A pod holds one shared set for every assistant it runs, so user code reading
+# ``OPENROUTER_API_KEY`` gets an uncapped spending instrument usable from
+# anywhere, with none of the resulting spend attributable to the caller.
+#
+# Stripped from subprocess sandboxes only. These are resolved by the provider
+# SDKs from ``os.environ`` at call time, so removing them from the live process
+# environment — as ``scrub_platform_secrets_from_environ`` does for the keys
+# above — would break any inference the runtime happens to be issuing
+# concurrently. Closing the in-process path requires passing the credential
+# explicitly at each call site instead.
+_PROVIDER_BILLING_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "CARTESIA_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "ELEVEN_API_KEY",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MANAGEMENT_API_KEY",
+        "RECALL_API_KEY",
+        "RECALL_RELAY_SECRET",
+        "TAVILY_API_KEY",
+        "TOGETHER_API_KEY",
+        "VERTEXAI_CREDENTIALS",
+    },
+)
+
 
 def provider_token_env_keys() -> frozenset[str]:
     """Return the credential env var names that must be scrubbed from sandboxes."""
@@ -56,6 +87,11 @@ def provider_token_env_keys() -> frozenset[str]:
 def platform_secret_env_keys() -> frozenset[str]:
     """Return the platform/cross-tenant secrets barred from user code."""
     return _PLATFORM_SECRET_ENV_KEYS
+
+
+def provider_billing_env_keys() -> frozenset[str]:
+    """Return the operator-billed provider credentials barred from sandboxes."""
+    return _PROVIDER_BILLING_ENV_KEYS
 
 
 @contextlib.contextmanager
@@ -139,14 +175,17 @@ def build_sandbox_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Return a subprocess env with provider tokens removed and proxy vars added.
 
     Copies the current process environment (or *base*), strips the raw provider
-    credential vars and platform/cross-tenant secrets, and overlays the proxy
-    base URLs + nonce. Used at every sandbox spawn site so no subprocess ever
-    inherits a usable file token or platform superuser key.
+    credential vars, platform/cross-tenant secrets and the operator-billed
+    provider credentials, and overlays the proxy base URLs + nonce. Used at
+    every sandbox spawn site so no subprocess ever inherits a usable file token,
+    a platform superuser key, or a means of spending on the operator's account.
     """
     env = dict(os.environ if base is None else base)
     for key in _PROVIDER_TOKEN_ENV_KEYS:
         env.pop(key, None)
     for key in _PLATFORM_SECRET_ENV_KEYS:
+        env.pop(key, None)
+    for key in _PROVIDER_BILLING_ENV_KEYS:
         env.pop(key, None)
     session = current_session()
     if session is not None:

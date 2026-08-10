@@ -206,6 +206,7 @@ The public API of each state manager is defined by the abstract methods on `Base
 | Web research (lightweight) | `primitives.web.*` |
 | Secrets (metadata only via `ask`) | `primitives.secrets.*` |
 | Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
+| Install/remove a packaged capability | `WorkflowManager_*` (top-level JSON tools). Not TaskScheduler: a workflow is the package you install; the tasks it plants are the work |
 | Ephemeral live action | `Actor.act` (via ConversationManager) |
 | Durable, tracked work | `TaskScheduler.execute` — never `update` to start work |
 
@@ -449,14 +450,29 @@ integration registry) reconcile through the shared engine in
 - Registering a surface for workflow installs while its adapter still
   queries unscoped. The `SurfaceRegistry` refuses these
   (`UnscopedSurfaceError`); routing around it reintroduces mutual prune.
+- Making canvas a synced surface. A view is TypeScript that must be
+  compiled, rendered and reviewed against the kit installed *now*, and its
+  routing token has a lifecycle the engine does not own. Bundles ship
+  canvas **source**; the install publishes through CanvasManager and the
+  uninstall deletes through its own delete.
 
 ## Deviations are declared knobs, not forks
 
 `prune=False` (secrets), `collision="yield"` (secrets),
-`find_adoptable` (data seeds, integration registry, functions/venvs
-legacy rows), `should_update` (tasks: skip while running),
-`max_workers` (tasks). New deviations need a named knob on the adapter
-and a line in the writeup's table.
+`find_adoptable` (data seeds — deployment only, integration registry,
+functions/venvs legacy rows), `find_released` (tasks: a planted task the
+user has edited), `should_update` (tasks: skip while running),
+`max_workers` (tasks). New deviations need a named knob on the adapter and a line in
+the writeup's table.
+
+## Handing a row to the user
+
+A surface may end the loan on one row: clear `managed_by`, keep
+`custom_key`, and set `custom_released=True`. From then on no source
+reconciles it, prune never reaches it, and `find_released` stops the
+next pass planting a duplicate. Releasing is a **positive flag**, never
+inferred from a null `managed_by` — rows written before `managed_by`
+existed also have none, and those the deployment still owns.
 
 This Unity project is for an AI Assistant, which is implemented as a heavily distributed multi-node system. Each node in the system communicates via English language based public APIs. The assistant's "brain" is then implemented a bit like a back office, where each manager deals with different aspects of the assistant's overall emergent intelligence. For the most part (with a few exceptions, such as `CodeActActor` and `ConversationManager`) the public methods of these managers are implemented as asynchronous tool loops, whereby a central LLM handles the English language request by orchestrating lower level tools which read and mutate the manager-specific backend resources (via the unify python client, which wraps the REST API connecting to the DB). These manager methods are dynamic, and expose handles for mid-flight steering, question answering, pausing, resuming and stopping etc. These manager methods are also often **nested**, whereby the public API of one manager is exposed in the tool set of a higher level manager. The async tool loops can also steer their inner in-flight tools, enabling fully nested dynamic steering of async tool loops up to an arbitrary depth. In terms of hierarchy, the `Actor` serves as the central intelligence, orchestrating other managers through code-first plans. Importantly, we never apply "fast paths" or heuristics based on regex or substring detection from user commands. If a method needs to respond correctly to a certain type of user input, this must **always** be addressed by prompting the model and/or improving docstrings of the exposed tools in order to **nudge** the LLM in the right direction.
 
@@ -1066,6 +1082,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - **Steers**: `DataManager.ingest` (row writes), the file parse pipeline, and the hosted pipeline control plane (`/infra/pipeline/*`) for dispatched runs.
 
 ### CanvasManager
+*(Replaces `DashboardManager`, which is deprecated and slated for removal — decision 8 of the workflows design.)*
 - **Role**: Assistant-authored generative React UI. The actor writes real TSX against `@unity/canvas-kit`; it is linted, typechecked, bundled, rendered headlessly and critiqued before publish; Console displays it in a genuinely isolated frame.
 - **Scope**: `create_view`, `update_view`, `refresh_props`, `get_view`, `list_views`, `delete_view`, `preview`, `run_invocation`, `list_invocations` via `primitives.canvas.*`. Rows live in `Canvas/Views` / `Canvas/Actions` / `Canvas/Invocations`; a routing token is registered with the backend on publish.
 - **Data plane**: query bindings (context-backed tables, executed server-side per view) and materialised props (LLM-shaped reads frozen at author/refresh time). Connected-app data must be **stored first** (via `primitives.ingestion.submit`) and bound as an ordinary table.
@@ -1110,6 +1127,16 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Connections**:
   - **Steered by**: `Actor` (via top-level `GuidanceManager_*` JSON tool calls, not primitives).
   - **Steers**: reads functions from the shared "Functions" context to surface linked functions.
+
+### WorkflowManager
+- **Role**: Catalogue of installable **workflows** — hand-curated, versioned packages that set an assistant up for a recurring job in one install (procedures, claims, functions and a recurring task, planted together). Owner of install state and settings, nothing else.
+- **Scope**: `list_workflows`, `get_workflow`, `install_workflow`, `uninstall_workflow`, `get_installation_params` as first-class `WorkflowManager_*` JSON tool calls — **not** primitives. Installing fans out each surface's existing `sync_custom`; there is no second content store and no second reconcile loop. `reconcile_installed` and `execute_requests` are upkeep, deliberately **not** tools (boot/ops, and a single-slug update is `install_workflow` re-run). Tools enter the actor's schema only when a catalogue is configured (`UNITY_WORKFLOWS_DIR`), so deployments without a shelf keep byte-identical tool schemas and LLM caches.
+- **Negative scope**: **has no runtime.** No executions, no steering handle, no run-now, no run history — that all belongs to the tasks it plants (`TaskScheduler`). "Run the workflow now" resolves to triggering its task. It also does not own connections (declared as requirements, resolved against the integrations layer), does not author bundles (git-only, curated in unify-deploy), and never pre-seeds contacts, transcripts or blacklist entries.
+- **Requirements gate arming, never planting**: an install with an unmet requirement still plants everything and returns `connect_required`; the planted tasks stay disarmed until the connection lands, and a repeat install arms them.
+- **Shelf vs installation**: the catalogue listing and each artifact's published copy are platform data in the public-read `Builtins` project (`Workflows/Catalog`, `Workflows/Content`), admin-seeded and hash-guarded. Everything per-assistant — installations, params, planted rows, requested changes (`Workflows/Requests`) — lives in the assistant's own contexts.
+- **Connections**:
+  - **Steered by**: `Actor` (via top-level `WorkflowManager_*` JSON tool calls, not primitives); boot (`bootstrap_workflow_catalog` → `reconcile_installed` + `execute_requests`); `ConversationManager` on a `WorkflowRequestRequested` event.
+  - **Steers**: each surface's `sync_custom` — `GuidanceManager`, `KnowledgeManager`, `TaskScheduler`, `FunctionManager` — plus `TaskScheduler.set_custom_tasks_enabled` to arm or hold what it planted.
 
 ### MemoryManager
 - **Role**: Offline memory maintenance (periodic, non‑interactive).
@@ -2118,10 +2145,11 @@ Cite **user**, **tool**, **date**, and **path** so a human can open the same ses
 
 # OpenAI is reached only through OpenRouter
 
-Every LLM call in every repo routes through **OpenRouter**, using
-`OPENROUTER_API_KEY`. The company's direct OpenAI account is not active — it
-answers `429 billing_not_active` — so any code path that talks to OpenAI
-natively is dead code that fails slowly.
+Every OpenAI LLM call in every repo routes through **OpenRouter**, using
+`OPENROUTER_API_KEY`. UniLLM does not expose a native OpenAI chat provider, and
+the company's own direct OpenAI account is inactive — it answers
+`429 billing_not_active` — so a native route is dead in practice as well as
+unregistered.
 
 ## Canonical endpoint form
 
@@ -2129,38 +2157,25 @@ natively is dead code that fails slowly.
 openai/<model-id>@openrouter      # openai/gpt-5.6-terra@openrouter
 ```
 
-Never `<model-id>@openai`. In UniLLM, `@openai` and `@openrouter` are distinct
-providers (`unillm/endpoints/utils.py`): `@openrouter` resolves through the
-OpenRouter catalog, `@openai` resolves to a native OpenAI endpoint and litellm
-sends it straight to OpenAI with `OPENAI_API_KEY`.
+Never `<model-id>@openai`. `@openrouter` resolves dynamically through the
+OpenRouter catalog; `@openai` is not registered and fails endpoint resolution.
 
-**The alias changed meaning.** `gpt-*@openai` used to be *transported* via
-OpenRouter inside UniLLM. It now means native OpenAI. Model strings written
-before that change did not move — they silently re-pointed at a dead account.
 The Orchestra migration `2026-08-13-00-00_openrouter_model_endpoints.py`
-rewrote stored assistant endpoints for exactly this reason; source code was not
-covered by it.
-
-## Why this fails slowly rather than loudly
-
-OpenAI reports the billing fault as **HTTP 429**, the same status as
-rate-limiting. UniLLM's `_is_retryable` classifies 429 as transient and retries
-`UNILLM_TRANSIENT_RETRY_COUNT` (default 6) times with 1/2/4/8/16/32s backoff —
-63s of sleeping per call, multiplied by litellm's own internal retries, before
-it finally raises. Under any concurrency this is indistinguishable from a hang,
-and scheduled jobs look stuck rather than broken. Do not "fix" such a stall by
-raising a timeout; check the endpoint's provider suffix first.
+rewrites stored legacy assistant endpoints. Source, defaults, examples, and
+tests must use the canonical OpenRouter form directly.
 
 ## Hard rules
 
 - New LLM call sites use `openai/<id>@openrouter`. Non-OpenAI providers
   (Anthropic, Google, …) are unaffected by this rule and keep their own routing.
-- Never read `OPENAI_API_KEY` directly, and never construct `openai.OpenAI()`
-  against it, in application code.
+- Never use `OPENAI_API_KEY` or a native `openai.OpenAI()` client for LLM chat
+  or text generation. Non-chat integrations such as speech-to-text, realtime
+  voice, or embeddings may use that key when the call site documents its
+  distinct purpose — that key is the deployment's own (self-host / BYOK), not
+  the company account above.
 - Env defaults and `.env.example` entries carry the `@openrouter` form, so a
   fresh checkout cannot inherit a dead route.
-- When a provider call stalls for ~a minute and then fails, suspect a native
-  provider suffix before suspecting the network.
+- Treat any surviving `@openai` model string as a bug; UniLLM rejects it.
 
 ## The one legitimate direct-OpenAI path
 
@@ -2314,7 +2329,7 @@ rediscover it from scratch.
 assistant VM/tunnel infra, self-host stack, client overlay, prod CI/CD), `orchestra`
 (backend API + Postgres, hosted), `console` (Next.js UI, hosted), `unisdk` (Python SDK,
 public), `unillm` (LLM layer, public). Dependency `magnitude` is consumed at branch
-`unity-modifications`. All repos: `main` = prod, `staging` = dev; promote `staging`→`main`.
+`main`. All repos: `main` = prod, `staging` = dev; promote `staging`→`main`.
 
 ## GCP projects (4)
 
@@ -2366,7 +2381,7 @@ project IDs `unity-assistant-vms` & `responsive-city-458413-a2`, all service-acc
 - Archive bucket: `droid-assistant-archives` (live); `unity-assistant-archives` is legacy rollback.
 - Data buckets (recordings/logs/artifacts) and ~84% of Pub/Sub topics/subs are still `unity-*`.
 - CI: GitHub org secrets are still `UNITY_ADAPTERS_URL`/`UNITY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
-- Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels, `magnitude@unity-modifications`.
+- Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels.
 
 When something infra-related "doesn't exist" or 404s/401s, suspect a legacy resource-name mismatch
 and confirm the real resource name against the `unify-deploy` README (or `gcloud`/`gh`) rather

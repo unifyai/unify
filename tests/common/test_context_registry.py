@@ -240,6 +240,28 @@ def test_team_owned_non_shared_tables_live_under_assistant_subtree():
     assert get_ctx == "Teams/5/Assistants/42/SearchCache"
 
 
+def test_team_owned_dashboards_meta_homes_with_the_rows_it_fingerprints():
+    # The custom-dashboards sync hash must resolve to the same root as the
+    # Tiles/Layouts rows it fingerprints. When Dashboards/Meta was not
+    # shared-scoped, a team-owned assistant read the hash from one root while
+    # writing rows to another, so a stale hash in the wrong root satisfied the
+    # aggregate check forever and the team root was never (re)planted.
+    _make_team_owned()
+
+    _, meta_root, _ = ContextRegistry.resolve_root(
+        RegistryExampleManager,
+        "Dashboards/Meta",
+        destination=None,
+    )
+    _, tiles_root, _ = ContextRegistry.resolve_root(
+        RegistryExampleManager,
+        "Dashboards/Tiles",
+        destination=None,
+    )
+
+    assert meta_root == tiles_root == "Teams/5"
+
+
 def test_team_owned_read_roots_have_no_personal_root():
     _make_team_owned(owner_team_id=5, member_team_ids=(9, 3))
 

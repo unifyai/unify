@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 import unisdk
@@ -55,7 +54,13 @@ _CATALOG_UNIT = "workflows"
 _CONTENT_UNIT = "workflows_content"
 
 
-def _ensure_catalog_storage(project: str) -> None:
+def ensure_catalog_storage(project: str) -> None:
+    """Create the catalogue contexts, without reading or writing a single row.
+
+    The storage-only half of seeding. A caller that only needs the contexts
+    to exist must reach this rather than the seeder, because the seeder
+    takes desired state and an empty desired state is a wipe.
+    """
     ensure_builtins_project(project)
     unisdk.create_context(
         BUILTINS_WORKFLOWS_CONTEXT,
@@ -164,6 +169,14 @@ def catalog_row(bundle: WorkflowBundle) -> Dict[str, Any]:
                 {
                     "slug": requirement.slug,
                     "name": requirement.name or requirement.slug,
+                    # `kind` and the declared secrets travel with the
+                    # requirement or a reader cannot resolve it. A workspace
+                    # is not in the gallery by design, so a reader that knows
+                    # only the slug looks it up, finds nothing, and reports
+                    # "couldn't check this app" about the one requirement
+                    # whose answer never depended on the gallery.
+                    "kind": requirement.kind,
+                    "required_secrets": list(requirement.required_secrets),
                 }
                 for requirement in bundle.requirements
             ],
@@ -181,9 +194,37 @@ _CONTENT_BODY_FIELD = {
     "functions": "docstring",
 }
 _CONTENT_META_FIELDS = {
-    "knowledge": ("kind", "topics"),
-    "tasks": ("tags",),
-    "functions": ("argspec",),
+    # Whatever the artifact's own page shows, so a reading surface can render
+    # the real view rather than an approximation of it. Everything here is
+    # already in the collected entry; the alternative is a second, thinner
+    # description of each artifact that drifts from the page it imitates.
+    "guidance": ("function_names",),
+    "knowledge": ("kind", "topics", "status", "source_refs"),
+    "tasks": (
+        "repeat",
+        "trigger",
+        "tags",
+        "priority",
+        "schedule",
+        "deadline",
+        "entrypoint_function",
+    ),
+    "functions": (
+        "argspec",
+        "depends_on",
+        "guidance_ids",
+        "precondition",
+        "is_primitive",
+        "verify",
+        "implementation",
+    ),
+}
+
+_CONTENT_META_CONSTANTS = {
+    # Bundles ship functions as `functions/*.py`, and the artifact's page names
+    # the language. Not on the collected entry because the deployment sync
+    # never needed it.
+    "functions": {"language": "python"},
 }
 
 
@@ -199,8 +240,9 @@ def content_rows(bundle: WorkflowBundle) -> List[Dict[str, Any]]:
             meta = {
                 name: fields[name]
                 for name in meta_fields
-                if fields.get(name) not in (None, "", [])
+                if fields.get(name) not in (None, "", [], {})
             }
+            meta.update(_CONTENT_META_CONSTANTS.get(surface, {}))
             row = WorkflowContentEntry(
                 content_key=f"{bundle.slug}/{surface}/{key}",
                 slug=bundle.slug,
@@ -269,18 +311,28 @@ def _default_bundles() -> Optional[List[WorkflowBundle]]:
     ensures storage exists and stops, so an environment without the curated
     tree cannot empty a catalogue another environment seeded.
     """
-    from ..settings import SETTINGS
-    from .catalog import load_catalog
+    from .catalog import load_catalog, resolve_catalogue_root
 
-    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
-    if configured:
-        return load_catalog(Path(configured))
-    try:
-        from unify_deploy.assistant_deployments.workflows import workflows_root
-
-        return load_catalog(workflows_root())
-    except Exception:
+    # A tree that is not there is "nothing to reconcile", never "the shelf is
+    # empty". `load_catalog` answers `[]` for a missing root, and `[]` here
+    # means *delete every published workflow*.
+    root = resolve_catalogue_root()
+    if root is None:
         return None
+
+    try:
+        return load_catalog(root)
+    except Exception:
+        # A malformed bundle must not read as "no shelf". Loud, because the
+        # seed's only other signal is "already up to date" — which is what a
+        # missing canvas source in the packaged tree reported for hours while
+        # the catalogue sat empty.
+        logger.exception(
+            "Workflow catalogue at %s failed to load; the published shelf is "
+            "left as it is and will not be updated until this is fixed",
+            root,
+        )
+        raise
 
 
 def seed_builtin_workflows(
@@ -314,7 +366,7 @@ def seed_builtin_workflows(
 
     if bundles is None:
         if not storage_ready:
-            _ensure_catalog_storage(project)
+            ensure_catalog_storage(project)
         return False
 
     catalog = {bundle.slug: catalog_row(bundle) for bundle in bundles}
@@ -353,7 +405,7 @@ def seed_builtin_workflows(
         logger.debug("Workflow catalogue unchanged; skipping seed")
         return False
 
-    _ensure_catalog_storage(project)
+    ensure_catalog_storage(project)
 
     for unit in sorted(stale_units):
         context, key_field, rows, _ = units[unit]

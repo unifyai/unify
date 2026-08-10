@@ -47,10 +47,7 @@ from unify.conversation_manager.events import (
 from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
 from unify.common._async_tool.utils import get_handle_paused_state
 from unify.conversation_manager.task_actions import (
-    STEERING_OPERATIONS,
     OPERATION_MAP,
-    derive_short_name,
-    build_action_name,
     safe_call_id_suffix,
 )
 from unify.conversation_manager.domains.renderer import (
@@ -2669,100 +2666,215 @@ class ConversationManagerBrainActionTools:
         return tools
 
     def build_action_steering_tools(self) -> dict[str, "Callable[..., Any]"]:
-        """Build dynamic tools for steering in-flight actions.
+        """Fixed-name steering tools that address actions by ``handle_id``.
 
-        Conditionally generates pause/resume tools based on current state:
-        - If action is paused: only generate resume_* (skip pause_*)
-        - If action is running: only generate pause_* (skip resume_*)
-        - If state unknown: only generate pause_* (default to running)
+        The tool set must stay constant across brain runs: tool definitions
+        precede messages in provider prompt-cache keys, so a schema that
+        changes with the in-flight action set re-bills the entire static
+        prompt on every action transition. Targets arrive as ``handle_id``
+        (the ``<action id='N'>`` shown in the ``in_flight_actions`` pane)
+        and are resolved at call time; a stale or unknown id gets a
+        corrective error instead of a vanished tool.
         """
-        tools: dict[str, Callable[..., Any]] = {}
+        cm = self._cm
 
-        for handle_id, handle_data in (self._cm.in_flight_actions or {}).items():
-            query = handle_data.get("query", "")
-            short_name = derive_short_name(query)
-            handle = handle_data.get("handle")
-            handle_actions = handle_data.get("handle_actions", [])
+        def _in_flight(handle_id: Any) -> tuple[Optional[int], Optional[dict]]:
+            try:
+                hid = int(handle_id)
+            except (TypeError, ValueError):
+                return None, None
+            return hid, (cm.in_flight_actions or {}).get(hid)
 
-            # Check pause state to conditionally generate pause/resume tools
-            is_paused = get_handle_paused_state(handle)
+        def _missing(handle_id: Any, operation: str) -> dict[str, Any]:
+            ids = sorted((cm.in_flight_actions or {}).keys())
+            return {
+                "status": "error",
+                "operation": operation,
+                "message": (
+                    f"No in-flight action with handle_id={handle_id!r}. "
+                    f"In flight now: {ids if ids else 'none'} — use the id "
+                    "from the in_flight_actions pane."
+                ),
+            }
 
-            pending_clarifications = [
+        def _delegate(
+            op_name: str,
+            hid: int,
+            handle_data: dict,
+            call_id: str | None = None,
+        ) -> "Callable[..., Any]":
+            op = OPERATION_MAP[op_name]
+            return self._make_steering_tool(
+                hid,
+                handle_data.get("handle"),
+                op.name,
+                op.param_name,
+                op.get_docstring(),
+                handle_data.get("query", ""),
+                call_id,
+            )
+
+        async def interject_action(handle_id: int, message: str) -> dict[str, Any]:
+            """Send guidance into a running action without stopping it.
+
+            Args:
+                handle_id: The action's id from the in_flight_actions pane.
+                message: The guidance or correction to deliver.
+            """
+            hid, handle_data = _in_flight(handle_id)
+            if handle_data is None:
+                return _missing(handle_id, "interject")
+            return await _delegate("interject", hid, handle_data)(message=message)
+
+        async def stop_action(handle_id: int, reason: str = "") -> dict[str, Any]:
+            """Terminate a running action immediately.
+
+            Args:
+                handle_id: The action's id from the in_flight_actions pane.
+                reason: Optional reason recorded with the stop.
+            """
+            hid, handle_data = _in_flight(handle_id)
+            if handle_data is None:
+                return _missing(handle_id, "stop")
+            return await _delegate("stop", hid, handle_data)(reason=reason)
+
+        async def pause_action(handle_id: int) -> dict[str, Any]:
+            """Pause a running action; resume it later with resume_action.
+
+            Args:
+                handle_id: The action's id from the in_flight_actions pane.
+            """
+            hid, handle_data = _in_flight(handle_id)
+            if handle_data is None:
+                return _missing(handle_id, "pause")
+            if get_handle_paused_state(handle_data.get("handle")) is True:
+                return {
+                    "status": "ok",
+                    "operation": "pause",
+                    "message": f"Action {hid} is already paused.",
+                }
+            return await _delegate("pause", hid, handle_data)()
+
+        async def resume_action(handle_id: int) -> dict[str, Any]:
+            """Resume a paused action.
+
+            Args:
+                handle_id: The action's id from the in_flight_actions pane.
+            """
+            hid, handle_data = _in_flight(handle_id)
+            if handle_data is None:
+                return _missing(handle_id, "resume")
+            if get_handle_paused_state(handle_data.get("handle")) is not True:
+                return {
+                    "status": "ok",
+                    "operation": "resume",
+                    "message": f"Action {hid} is not paused.",
+                }
+            return await _delegate("resume", hid, handle_data)()
+
+        async def ask_action(handle_id: int, question: str) -> dict[str, Any]:
+            """Ask a question of a running or completed action.
+
+            Args:
+                handle_id: The action's id from the in_flight_actions or
+                    completed_actions pane.
+                question: What to ask about the action's work or results.
+            """
+            hid, handle_data = _in_flight(handle_id)
+            if handle_data is not None:
+                return await _delegate("ask", hid, handle_data)(question=question)
+            completed = (
+                (cm.completed_actions or {}).get(hid) if hid is not None else None
+            )
+            if completed is not None:
+                ask_op = OPERATION_MAP["ask"]
+                tool_fn = self._make_completed_action_ask_tool(
+                    hid,
+                    completed.get("handle"),
+                    ask_op.param_name,
+                    ask_op.get_docstring(),
+                    completed.get("query", ""),
+                )
+                return await tool_fn(question=question)
+            return _missing(handle_id, "ask")
+
+        async def answer_clarification_action(
+            handle_id: int,
+            answer: str,
+            call_id: str = "",
+        ) -> dict[str, Any]:
+            """Answer a pending clarification a running action has raised.
+
+            Args:
+                handle_id: The action's id from the in_flight_actions pane.
+                answer: The answer to give the action.
+                call_id: The clarification's call id (shown in the pane).
+                    May be omitted when exactly one clarification is pending.
+            """
+            hid, handle_data = _in_flight(handle_id)
+            if handle_data is None:
+                return _missing(handle_id, "answer_clarification")
+            pending = [
                 a
-                for a in handle_actions
+                for a in handle_data.get("handle_actions", [])
                 if a.get("action_name") == "clarification_request"
                 and not a.get("response")
             ]
+            if not pending:
+                return {
+                    "status": "error",
+                    "operation": "answer_clarification",
+                    "message": f"Action {hid} has no pending clarification.",
+                }
+            chosen = None
+            if call_id:
+                for clar in pending:
+                    cid = clar.get("call_id", "")
+                    if cid == call_id or safe_call_id_suffix(cid) == call_id:
+                        chosen = clar
+                        break
+                if chosen is None:
+                    return {
+                        "status": "error",
+                        "operation": "answer_clarification",
+                        "message": (
+                            f"No pending clarification with call_id={call_id!r} "
+                            f"on action {hid}; pending: "
+                            f"{[c.get('call_id', '') for c in pending]}"
+                        ),
+                    }
+            elif len(pending) == 1:
+                chosen = pending[0]
+            else:
+                return {
+                    "status": "error",
+                    "operation": "answer_clarification",
+                    "message": (
+                        f"Action {hid} has {len(pending)} pending "
+                        "clarifications; pass call_id to pick one: "
+                        f"{[c.get('call_id', '') for c in pending]}"
+                    ),
+                }
+            return await _delegate(
+                "answer_clarification",
+                hid,
+                handle_data,
+                chosen.get("call_id", ""),
+            )(answer=answer)
 
-            for op in STEERING_OPERATIONS:
-                # Conditionally skip pause/resume based on current state
-                # is_paused=True: skip pause, only offer resume
-                # is_paused=False or None: skip resume, only offer pause (default to running)
-                if op.name == "pause" and is_paused is True:
-                    continue  # Already paused, don't offer pause
-                if op.name == "resume" and is_paused is not True:
-                    continue  # Not paused (running or unknown), don't offer resume
-
-                if op.requires_clarification:
-                    for clar in pending_clarifications:
-                        call_id = clar.get("call_id", "")
-                        suffix = safe_call_id_suffix(call_id)
-                        tool_name = build_action_name(
-                            op.name,
-                            short_name,
-                            handle_id,
-                            suffix,
-                        )
-                        tool_fn = self._make_steering_tool(
-                            handle_id,
-                            handle,
-                            op.name,
-                            op.param_name,
-                            op.get_docstring(),
-                            query,
-                            call_id,
-                        )
-                        tools[tool_name] = tool_fn
-                else:
-                    tool_name = build_action_name(op.name, short_name, handle_id)
-                    tool_fn = self._make_steering_tool(
-                        handle_id,
-                        handle,
-                        op.name,
-                        op.param_name,
-                        op.get_docstring(),
-                        query,
-                    )
-                    tools[tool_name] = tool_fn
-
-        return tools
+        return {
+            "interject_action": interject_action,
+            "stop_action": stop_action,
+            "pause_action": pause_action,
+            "resume_action": resume_action,
+            "ask_action": ask_action,
+            "answer_clarification_action": answer_clarification_action,
+        }
 
     def build_completed_action_tools(self) -> dict[str, "Callable[..., Any]"]:
-        """Build ask tools for completed actions.
-
-        Completed actions preserve their trajectory and remain available
-        for `ask` queries about their execution and results.
-        """
-        tools: dict[str, Callable[..., Any]] = {}
-
-        for handle_id, handle_data in (self._cm.completed_actions or {}).items():
-            query = handle_data.get("query", "")
-            short_name = derive_short_name(query)
-            handle = handle_data.get("handle")
-
-            # ask tool — query the completed action's trajectory/results
-            ask_op = OPERATION_MAP["ask"]
-            tool_name = build_action_name(ask_op.name, short_name, handle_id)
-            tool_fn = self._make_completed_action_ask_tool(
-                handle_id,
-                handle,
-                ask_op.param_name,
-                ask_op.get_docstring(),
-                query,
-            )
-            tools[tool_name] = tool_fn
-
-        return tools
+        """Completed actions are served by ``ask_action`` (see
+        ``build_action_steering_tools``); no per-action tools remain."""
+        return {}
 
     @staticmethod
     def _extract_tool_param_value(

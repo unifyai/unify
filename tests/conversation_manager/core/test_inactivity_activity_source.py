@@ -1,0 +1,58 @@
+"""What counts as somebody needing the assistant.
+
+An idle pod is retired by the inactivity timer, and that timer used to
+advance on *any* message off the bus — including the system's own chatter.
+One recurring internal event was enough to keep a pod alive indefinitely:
+it never idled out, so it never picked up a newly deployed image, and a
+staging pod served seven hours of requests from a five-hour-old build while
+three deploys went by.
+
+The distinction is presence, not verbosity. `loggable` asks whether an
+event is worth writing down, which is a different question: editing an
+assistant or reading the chat is somebody being there, even when neither is
+worth tracing.
+"""
+
+from unify.conversation_manager.events import (
+    AssistantUpdateEvent,
+    Event,
+    GetBusEventsResponse,
+    GetChatHistory,
+    InitializationComplete,
+    OpenSlowBrainTurn,
+    Ping,
+)
+
+
+def test_only_provably_internal_events_stop_counting_as_presence():
+    # A keepalive says the process is up, never that anyone wants anything.
+    assert Ping.counts_as_activity is False
+    # The pod telling itself it booted, and a reply to its own query.
+    assert InitializationComplete.counts_as_activity is False
+    assert GetBusEventsResponse.counts_as_activity is False
+
+
+def test_a_person_doing_something_still_keeps_the_pod_alive():
+    # These are all `loggable = False`, so gating on that flag would have
+    # treated them as noise — someone editing their assistant config, or
+    # reading the conversation, would have stopped holding the pod open.
+    for event_class in (AssistantUpdateEvent, GetChatHistory, OpenSlowBrainTurn):
+        assert event_class.loggable is False
+        assert (
+            event_class.counts_as_activity is True
+        ), f"{event_class.__name__} is somebody doing something"
+
+
+def test_the_default_is_to_count():
+    """A new event counts until someone proves it should not.
+
+    The safe direction is keeping a live pod alive: wrongly counting costs
+    an idle pod some extra minutes, wrongly discounting drops a session
+    somebody is in the middle of.
+    """
+    assert Event.counts_as_activity is True
+
+    class _NewlyAddedEvent(Event):
+        pass
+
+    assert _NewlyAddedEvent.counts_as_activity is True

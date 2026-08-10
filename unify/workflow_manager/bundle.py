@@ -9,8 +9,6 @@ syncs, not a second reconcile mechanism.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping
 
@@ -123,6 +121,55 @@ class Surface:
 
 
 @dataclass(frozen=True)
+class CanvasSource:
+    """One view a bundle ships, as the author wrote it.
+
+    ``name`` is the directory it came from and, with the slug, its stable
+    identity across reinstalls — the published row carries
+    ``<slug>/<name>`` as its ``custom_key`` so a repeat install revises the
+    view it published last time instead of stacking up a second one.
+    """
+
+    name: str
+    tsx: str
+    title: str
+    description: str = ""
+    bindings: tuple[Dict[str, Any], ...] = ()
+    props: Dict[str, Any] = field(default_factory=dict)
+    actions: tuple[Dict[str, Any], ...] = ()
+    visibility: str = "private"
+
+    @property
+    def custom_key(self) -> str:
+        return self.name
+
+    def content_hash(self) -> str:
+        """Fingerprint of everything a republish would change.
+
+        Compiled output is deliberately excluded: the same source against a
+        newer kit is a different bundle, and that is the kit's business to
+        decide at build time, not a reason to consider the source changed.
+        """
+        import hashlib
+        import json as _json
+
+        payload = _json.dumps(
+            {
+                "tsx": self.tsx,
+                "title": self.title,
+                "description": self.description,
+                "bindings": list(self.bindings),
+                "props": self.props,
+                "actions": list(self.actions),
+                "visibility": self.visibility,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
 class WorkflowRequirement:
     """One integration a workflow needs connected before its jobs may run.
 
@@ -149,6 +196,16 @@ class WorkflowRequirement:
 
     name: str = ""
     """Display name; falls back to the slug."""
+
+    kind: str = "app"
+    """``"app"`` for anything the integrations layer connects, ``"workspace"``
+    for the user's Workspace.
+
+    Workspace is deliberately its own kind rather than an app with a special
+    slug: it is not in the gallery, it is not a package, and it is connected
+    somewhere else entirely — the onboarding and profile flows own it. Treating
+    it as an app is what led to a name-matching table deciding that anything
+    starting with "GMAIL" or "GOOGLE" wanted a pasted refresh token."""
 
     required_secrets: tuple[str, ...] = ()
     """Secret names whose presence marks this requirement connected, for
@@ -195,10 +252,41 @@ class WorkflowBundle:
     """Integrations that must be connected before this workflow's jobs
     are armed. Checked at install and on every reconcile."""
 
+    install_task: str = ""
+    """``custom_key`` of a task in this bundle to run **once**, after content
+    lands on a first install.
+
+    The provisioning one-shot: a mailbox backfill, a CRM import — the long
+    thing a workflow needs done before its recurring job is meaningful. Named
+    rather than inferred so a bundle can ship several tasks and be explicit
+    about which one is setup. Empty means the workflow needs no provisioning.
+
+    Deliberately an ordinary task rather than new machinery: durability,
+    resumability, steering and observability come from TaskScheduler, and the
+    workflow/task boundary stays intact — a workflow still has no runtime, it
+    just asked for a task to be run."""
+
     capabilities: tuple[str, ...] = ()
     """Assistant capabilities the workflow needs beyond connected apps,
     e.g. ``"computer"`` or ``"filesystem"``. Declared for the catalogue;
     not gated at install."""
+
+    canvas: tuple["CanvasSource", ...] = ()
+    """Views this bundle ships as **source**, deliberately outside
+    :attr:`surfaces`.
+
+    A canvas is not custom-synced and never will be. It is real TypeScript
+    that has to be linted, typechecked, bundled, rendered and reviewed
+    against the canvas kit installed *now*, and its routing token has a
+    lifecycle the reconcile engine has no business owning. Shipping a
+    pre-built bundle instead would pin a host runtime: the host serves
+    versioned runtimes, so a view compiled against one kit and planted into
+    another breaks at *view* time, for the user, with nothing failing at
+    plant time to warn anyone.
+
+    So the install hands this to CanvasManager's own authoring pipeline and
+    uninstall deletes through its own delete, which already releases the
+    token."""
 
     def __post_init__(self) -> None:
         if not self.slug:
@@ -208,23 +296,6 @@ class WorkflowBundle:
                 f"{self.slug!r} is a reserved managed_by value; a bundle "
                 "may not claim it.",
             )
-
-    def content_hash(self) -> str:
-        """Fingerprint of everything this bundle would plant.
-
-        Covers the collected sources and the version, so a bundle whose
-        content is unchanged short-circuits its whole fan-out. Params are
-        excluded by construction: they are not part of what gets planted,
-        and folding them in would give two installations of one bundle
-        different hashes for identical rows.
-        """
-
-        payload = json.dumps(
-            {"version": self.version, "surfaces": self.surfaces},
-            sort_keys=True,
-            default=str,
-        )
-        return hashlib.sha256(payload.encode()).hexdigest()
 
     def surface_names(self) -> list[str]:
         return sorted(self.surfaces)
