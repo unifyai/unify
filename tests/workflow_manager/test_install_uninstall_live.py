@@ -267,7 +267,18 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
     assert result["connect_required"]["requirements"][0]["slug"] == "gmail"
     (task_row,) = _rows(ts._ctx, SLUG)
     assert task_row["enabled"] is False
-    assert wm.get_workflow(slug=SLUG)["status"] == "needs_connection"
+    held = wm.get_workflow(slug=SLUG)
+    assert held["status"] == "needs_connection"
+    # The planted job is named on the record, held rather than hidden: this
+    # is what "run it now" resolves to, and a caller has to be able to see
+    # both the id and that starting it would be refused.
+    assert held["jobs"] == [
+        {
+            "task_id": int(task_row["task_id"]),
+            "name": task_row["name"],
+            "enabled": False,
+        },
+    ]
 
     # The connection lands: the repeat install is the arm-on-connect path.
     monkeypatch.setattr(
@@ -281,7 +292,15 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
     assert len(result["tasks_armed"]) == 1
     (task_row,) = _rows(ts._ctx, SLUG)
     assert task_row["enabled"] is True
-    assert wm.get_workflow(slug=SLUG)["status"] == "active"
+    armed = wm.get_workflow(slug=SLUG)
+    assert armed["status"] == "active"
+    assert armed["jobs"] == [
+        {
+            "task_id": int(task_row["task_id"]),
+            "name": task_row["name"],
+            "enabled": True,
+        },
+    ]
 
     wm.uninstall_workflow(slug=SLUG)
     assert _rows(ts._ctx, SLUG) == []
