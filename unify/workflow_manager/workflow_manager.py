@@ -64,6 +64,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _connect_phrase(unmet: List[Dict[str, Any]]) -> str:
+    """Name what to connect, offering a choice where the bundle offers one.
+
+    A requirement with alternatives is met by any one of them, so telling
+    the user to connect the first-named app states a requirement the
+    workflow does not have.
+    """
+    parts: List[str] = []
+    for entry in unmet:
+        options = entry.get("options") or []
+        if len(options) > 1:
+            names = [
+                str(option.get("name") or option.get("slug")) for option in options
+            ]
+            parts.append("one of " + " / ".join(names))
+            continue
+        parts.append(str(entry.get("name") or entry.get("slug")))
+    return " and ".join(parts)
+
+
 class WorkflowManager(BaseWorkflowManager):
     """Catalogue of available workflow bundles and their installations."""
 
@@ -483,6 +503,39 @@ class WorkflowManager(BaseWorkflowManager):
             )
             return []
 
+    def _planted_jobs(
+        self,
+        slug: str,
+        *,
+        destination: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """The task definitions this workflow planted, with their ids.
+
+        Reported, not run: a workflow has no runtime, and running one means
+        starting the ordinary task it planted with the ordinary task tools.
+        Naming those tasks here is what makes that possible without
+        guessing — "run my briefing now" otherwise has to search the whole
+        task list for something whose name looks close enough.
+
+        Asked of the surface that planted them, exactly as arming is, so
+        the context a destination maps to stays the owning manager's to
+        decide. Best-effort: a surface that cannot answer costs the caller
+        the job list, never the workflow record it is attached to.
+        """
+        if "tasks" not in self._surfaces:
+            return []
+        try:
+            return list(
+                self._surfaces.get("tasks").planted(
+                    managed_by=slug,
+                    destination=destination,
+                )
+                or [],
+            )
+        except Exception:
+            logger.debug("Could not read planted tasks for %r", slug, exc_info=True)
+            return []
+
     @staticmethod
     def _derived_status(
         stored_status: Optional[str],
@@ -578,6 +631,14 @@ class WorkflowManager(BaseWorkflowManager):
                         # uninstall — which defaults to personal — refuses.
                         "destination": row.get("destination", "personal"),
                         "installed_at": self._destinations_of(grouped[bundle.slug]),
+                        # The tasks it planted, so "run it now" resolves to a
+                        # task id instead of a search.
+                        "jobs": self._planted_jobs(
+                            bundle.slug,
+                            destination=self._normalized_destination(
+                                row.get("destination"),
+                            ),
+                        ),
                     },
                 )
             entries.append(entry)
@@ -704,22 +765,12 @@ class WorkflowManager(BaseWorkflowManager):
                 "requirements": unmet,
                 "message": (
                     f"Workflow {slug!r} is installed but held: connect "
-                    f"{[r['slug'] for r in unmet]} to arm its jobs. "
+                    f"{_connect_phrase(unmet)} to arm its jobs. "
                     "Nothing fires in the meantime."
                 ),
             }
         else:
             result["tasks_armed"] = armed
-            # Provisioning runs once, on a first install, and only when the
-            # workflow is not held: a backfill against an unconnected app would
-            # fail for exactly the reason its recurring job is disarmed.
-            if existing is None:
-                provisioned = self._trigger_install_task(
-                    bundle,
-                    destination=destination,
-                )
-                if provisioned is not None:
-                    result["provisioning_task_id"] = provisioned
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             logger.warning(
@@ -906,51 +957,6 @@ class WorkflowManager(BaseWorkflowManager):
                     slug,
                 )
         return removed
-
-    def _trigger_install_task(
-        self,
-        bundle: WorkflowBundle,
-        *,
-        destination: Optional[str],
-    ) -> Optional[int]:
-        """Run the bundle's provisioning one-shot. Returns its task id, or None.
-
-        Triggered rather than awaited: ``TaskScheduler.execute`` is async and
-        ``install_workflow`` is not, and the house rule is that work starts via
-        the trigger route, never via an update. Triggering also means the run is
-        an ordinary execution with the ordinary handle, history and steering —
-        the workflow contributes nothing of its own, which is what keeps it
-        runtime-free.
-        """
-        if not bundle.install_task:
-            return None
-
-        root = ContextRegistry.write_root(self, "Tasks", destination=destination)
-        rows = unisdk.get_logs(
-            context=f"{root.strip('/')}/Tasks",
-            filter=(
-                f"managed_by == '{bundle.slug}' and "
-                f"custom_key == '{bundle.install_task}'"
-            ),
-            limit=1,
-        )
-        if not rows:
-            logger.warning(
-                "Workflow %r declares install_task %r but no such planted task "
-                "exists; skipping provisioning",
-                bundle.slug,
-                bundle.install_task,
-            )
-            return None
-
-        task_id = (rows[0].entries or {}).get("task_id")
-        if task_id is None:
-            return None
-
-        from ..task_scheduler.typed_tasks_client import trigger_task
-
-        trigger_task(task_id=int(task_id))
-        return int(task_id)
 
     # ------------------------------------------------------------------ #
     # Requested changes (the mutation contract for reading surfaces)     #
@@ -1380,6 +1386,12 @@ class WorkflowManager(BaseWorkflowManager):
                     "installed_surfaces": json.loads(row.get("surfaces") or "[]"),
                     "destination": row.get("destination", "personal"),
                     "installed_at": self._destinations_of(rows),
+                    "jobs": self._planted_jobs(
+                        slug,
+                        destination=self._normalized_destination(
+                            row.get("destination"),
+                        ),
+                    ),
                 },
             )
             if bundle is None:

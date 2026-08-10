@@ -2024,6 +2024,43 @@ class TaskScheduler(BaseTaskScheduler):
                 )
         return last_result
 
+    def list_custom_tasks(
+        self,
+        *,
+        managed_by: str,
+        destination: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """The task definitions one source planted, with their ids.
+
+        The counterpart to :meth:`set_custom_tasks_enabled`: the installer
+        that plants and arms a source's tasks also has to be able to name
+        them, so a caller can start one on demand. Resolved here rather
+        than by the caller, because the context a destination maps to is
+        this manager's to decide.
+        """
+        tasks_context, _meta_context, _is_personal = self._sync_destination_contexts(
+            destination,
+        )
+        store = self._store_for_task_context(tasks_context)
+        rows = store.get_rows(filter=managed_rows_filter(managed_by), limit=1000)
+        planted: List[Dict[str, Any]] = []
+        for row in rows:
+            entries = dict(row.entries or {})
+            task_id = entries.get("task_id")
+            if task_id is None:
+                continue
+            planted.append(
+                {
+                    "task_id": int(task_id),
+                    "name": entries.get("name", ""),
+                    # False while the source holds them on a missing
+                    # connection: the definition exists and nothing will
+                    # start it, an explicit run included.
+                    "enabled": entries.get("enabled") is not False,
+                },
+            )
+        return sorted(planted, key=lambda task: task["task_id"])
+
     def set_custom_tasks_enabled(
         self,
         *,

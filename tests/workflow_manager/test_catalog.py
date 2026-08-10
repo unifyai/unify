@@ -299,20 +299,6 @@ def test_content_rows_publish_what_the_artifacts_own_page_shows(tmp_path: Path):
     assert guidance_meta == {}
 
 
-def test_manifest_declares_its_provisioning_one_shot(tmp_path: Path):
-    """The long thing a workflow needs done before its recurring job means
-    anything — a mailbox backfill, a CRM import. Named rather than inferred so
-    a bundle can ship several tasks and be explicit about which is setup."""
-    bundle_dir = _write_bundle(tmp_path)
-
-    # Absent means the workflow needs no provisioning, not an error.
-    assert load_bundle(bundle_dir).install_task == ""
-
-    manifest = (bundle_dir / MANIFEST_FILENAME).read_text()
-    (bundle_dir / MANIFEST_FILENAME).write_text(manifest + "install_task: wf/morning\n")
-    assert load_bundle(bundle_dir).install_task == "wf/morning"
-
-
 # --------------------------------------------------------------------- #
 # Canvas + data: what a bundle may ship, and what it may not            #
 # --------------------------------------------------------------------- #
@@ -465,15 +451,85 @@ def test_a_requirement_publishes_how_it_is_resolved(tmp_path: Path):
             "slug": "gmail",
             "name": "Gmail",
             "kind": "app",
+            "alternatives": [],
             "required_secrets": [],
         },
         {
             "slug": "google_workspace",
             "name": "Google Workspace",
             "kind": "workspace",
+            "alternatives": [],
             "required_secrets": ["GOOGLE_REFRESH_TOKEN"],
         },
     ]
+
+
+def test_a_requirement_publishes_every_app_that_would_satisfy_it(tmp_path: Path):
+    """A choice the bundle offers has to survive publication.
+
+    The requirement is met by any one of its apps, so a reader that saw only
+    the first would offer a Slack connect to someone on Discord for a
+    workflow that serves them identically.
+    """
+    from unify.workflow_manager.builtins_catalog import catalog_row
+    from unify.workflow_manager.bundle import RequirementOption, WorkflowRequirement
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    published = json.loads(
+        catalog_row(
+            WorkflowBundle(
+                slug=bundle.slug,
+                name=bundle.name,
+                requirements=(
+                    WorkflowRequirement(
+                        slug="slack",
+                        name="Slack",
+                        alternatives=(
+                            RequirementOption("discord", "Discord"),
+                            # Name omitted on purpose: the slug stands in, so
+                            # a chip is never blank.
+                            RequirementOption("microsoft_teams"),
+                        ),
+                    ),
+                ),
+            ),
+        )["requirements"],
+    )
+
+    assert published[0]["alternatives"] == [
+        {"slug": "discord", "name": "Discord"},
+        {"slug": "microsoft_teams", "name": "microsoft_teams"},
+    ]
+
+
+def test_alternatives_are_read_from_the_manifest(tmp_path: Path):
+    """Declared as slugs or as mappings, in recommendation order."""
+    bundle_dir = _write_bundle(tmp_path)
+    manifest = _MANIFEST.replace(
+        """requirements:
+  - slug: gmail
+    name: Gmail
+    required_secrets: [GMAIL_TOKEN]
+  - notion
+""",
+        """requirements:
+  - slug: slack
+    name: Slack
+    alternatives:
+      - slug: discord
+        name: Discord
+      - microsoft_teams
+""",
+    )
+    (bundle_dir / MANIFEST_FILENAME).write_text(manifest)
+
+    requirement = load_bundle(bundle_dir).requirements[0]
+    assert [option.slug for option in requirement.options] == [
+        "slack",
+        "discord",
+        "microsoft_teams",
+    ]
+    assert requirement.options[2].display_name == "microsoft_teams"
 
 
 def test_a_missing_tree_never_reads_as_an_empty_shelf(tmp_path: Path, monkeypatch):

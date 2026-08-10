@@ -16,6 +16,12 @@ package, and it is connected in the onboarding and profile flows rather than
 the integrations gallery. A requirement declares ``kind: workspace`` for it,
 and the refresh-token secret those flows store is its signal.
 
+**A requirement may name several interchangeable apps.** What a workflow
+needs is a capability — somewhere to post, a calendar to read — and which app
+provides it is the user's choice. Every declared option is resolved and the
+first connected one settles the requirement; the rest travel with the answer
+so a reader can offer the app the user already has.
+
 **Absence of evidence is "not connected".** A named requirement is by
 definition something that needs connecting, so nothing having answered means
 unmet. The older default treated it as met, which armed jobs against apps
@@ -180,11 +186,52 @@ class RequirementResolver:
         caller explain an unmet requirement: a provider-backed app needs
         the gallery's connect flow, a secret-gated one needs a value
         pasted.
+
+        A requirement that offers alternatives is met by any one of them,
+        so each is resolved in recommendation order and the first
+        connected answer wins. ``options`` carries all of them with their
+        own state, which is what lets a reader offer the app the user
+        already has rather than the one the bundle happened to name first.
         """
-        slug = _normalize(requirement.slug)
+        options = getattr(requirement, "options", None) or ()
+        if len(options) > 1:
+            reports = [
+                self._resolve_app(option.slug, option.display_name, requirement)
+                for option in options
+            ]
+            satisfied = next(
+                (entry for entry in reports if entry.get("connected")),
+                None,
+            )
+            answer = dict(satisfied or reports[0])
+            answer["options"] = reports
+            # The requirement keeps the identity the bundle declared even
+            # when a different app satisfied it: that is what a reader
+            # matches its own resolution against, and what an uninstall or
+            # a re-read looks up.
+            answer["slug"] = requirement.slug
+            answer["name"] = requirement.name or requirement.slug
+            if satisfied is not None:
+                answer["satisfied_by"] = satisfied["slug"]
+            return answer
+
+        return self._resolve_app(
+            requirement.slug,
+            requirement.name or requirement.slug,
+            requirement,
+        )
+
+    def _resolve_app(
+        self,
+        app_slug: str,
+        display_name: str,
+        requirement: Any,
+    ) -> Dict[str, Any]:
+        """Resolve one app, consulting each authority in turn."""
+        slug = _normalize(app_slug)
         report: Dict[str, Any] = {
-            "slug": requirement.slug,
-            "name": requirement.name or requirement.slug,
+            "slug": app_slug,
+            "name": display_name,
         }
 
         # Workspace first, because it is not an integration at all: not in the
