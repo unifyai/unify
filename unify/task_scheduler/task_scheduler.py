@@ -2079,7 +2079,11 @@ class TaskScheduler(BaseTaskScheduler):
         rather than raised on: re-arming the rest of a source's tasks must
         not fail because its provisioning task already did its job.
 
-        Returns the ids of the definitions whose flag was written.
+        Returns the ids of the definitions whose flag actually changed. A
+        definition already in the requested state is left unwritten and
+        unreported, so callers reacting to the return value — a connect
+        event arming whatever a missing app held — see real transitions,
+        not every reconcile pass restating the status quo.
         """
         tasks_context, _meta_context, _is_personal = self._sync_destination_contexts(
             destination,
@@ -2091,6 +2095,8 @@ class TaskScheduler(BaseTaskScheduler):
             entries = dict(row.entries or {})
             task_id = entries.get("task_id")
             if task_id is None:
+                continue
+            if (entries.get("enabled") is not False) == enabled:
                 continue
             if enabled:
                 task = self._get_task_or_raise(int(task_id))
