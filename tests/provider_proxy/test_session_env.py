@@ -37,6 +37,31 @@ def test_build_sandbox_env_strips_platform_secrets(monkeypatch):
     assert "SHARED_UNIFY_KEY" not in env
 
 
+def test_build_sandbox_env_strips_provider_billing_credentials(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-billing")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-billing")
+    monkeypatch.setenv("ELEVEN_API_KEY", "eleven-billing")
+    monkeypatch.setattr(sess, "current_session", lambda: None)
+
+    env = build_sandbox_env()
+
+    assert "OPENROUTER_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ELEVEN_API_KEY" not in env
+
+
+def test_provider_billing_keys_stay_in_process_environ(monkeypatch):
+    # The provider SDKs resolve these from os.environ at call time, so the
+    # in-process scrub must leave them alone or concurrent inference breaks.
+    billing_key = "sk-or-v1-billing"  # pragma: allowlist secret
+    monkeypatch.setenv("OPENROUTER_API_KEY", billing_key)
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "super-secret")
+
+    with scrub_platform_secrets_from_environ():
+        assert "ORCHESTRA_ADMIN_KEY" not in os.environ
+        assert os.environ["OPENROUTER_API_KEY"] == billing_key
+
+
 def test_scrub_platform_secrets_from_environ_restores(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "super-secret")
     monkeypatch.setenv("SHARED_UNIFY_KEY", "shared-secret")
