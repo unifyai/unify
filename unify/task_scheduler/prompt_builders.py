@@ -450,6 +450,7 @@ def build_update_prompt(
             "----------------------",
             f"A task with a `trigger` is armed by that trigger, not by a start time. Use `{update_task_fname}(task_id=<id>, trigger=...)` to add/remove triggers. Do not set `start_at` on trigger-based tasks.",
             "`schedule` and `trigger` are mutually exclusive. Use `repeat` with `schedule` for cadence-based tasks; use `trigger` for inbound-event tasks.",
+            f"Explicit `null` clears: `{update_task_fname}(task_id=<id>, start_at=None)` removes the schedule (sweeping `repeat` with it unless replaced in the same call); `deadline=None` / `repeat=None` clear likewise. Convert a scheduled task to a triggered one in ONE call: `{update_task_fname}(task_id=<id>, trigger=..., start_at=None)`.",
             "",
             "Provider-event triggers",
             "-----------------------",
