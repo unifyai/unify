@@ -104,6 +104,25 @@ def test_build_task_run_guidelines_keep_child_actor_focused_on_one_task():
     assert "Instance id:" not in guidelines
 
 
+def test_update_tools_include_catalog_inspection() -> None:
+    """The update loop must be able to execute its own authoring order.
+
+    The prompt instructs: list catalog -> list connections -> describe
+    schema -> resolve resources. Without these read-only tools in the
+    update tool set, trigger feasibility gets decided blind and reported
+    as "no supported trigger" (observed in prod, 2026-08-10).
+    """
+    scheduler = TaskScheduler()
+    tools = scheduler.get_tools("update")
+    for name in (
+        "list_provider_trigger_catalog",
+        "list_provider_trigger_connections",
+        "describe_provider_trigger",
+        "list_provider_trigger_resources",
+    ):
+        assert name in tools, f"update tool set is missing {name}"
+
+
 def test_build_update_prompt_includes_provider_event_guidance() -> None:
     scheduler = TaskScheduler()
     prompt = build_update_prompt(
@@ -113,6 +132,15 @@ def test_build_update_prompt_includes_provider_event_guidance() -> None:
         include_activity=False,
     ).flatten()
     assert "Provider-event triggers" in prompt
+    assert (
+        "List supported third-party events: `list_provider_trigger_catalog()`" in prompt
+    )
+    assert "never decide feasibility from memory" in prompt
+    assert (
+        "List eligible connections: "
+        "`list_provider_trigger_connections(canonical_app_slug='<app>')`" in prompt
+    )
+    assert "Describe trigger config schema: `describe_provider_trigger" in prompt
     assert "task_revision_conflict" in prompt
     assert "pause_provider_trigger" in prompt
     assert "provider_event_context" in prompt
