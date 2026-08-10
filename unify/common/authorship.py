@@ -33,6 +33,7 @@ SHARED_SCOPED_TABLES: frozenset[str] = frozenset(
         "Canvas/Invocations",
         "Dashboards/Tiles",
         "Dashboards/Layouts",
+        "Dashboards/Meta",
         "Transcripts",
         "Exchanges",
         "Images",
