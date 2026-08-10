@@ -722,11 +722,17 @@ class WorkflowManager(BaseWorkflowManager):
             # otherwise. A repeat install after connecting is therefore
             # also the arm-on-connect path.
             unmet = self._unmet_requirements(bundle)
-            armed = self._arm_workflow_tasks(
+            flipped = self._arm_workflow_tasks(
                 bundle,
                 destination=destination,
                 enabled=not unmet,
             )
+            # The armer reports transitions; the planted jobs are the state.
+            # Both matter: the result's held/armed lists must describe every
+            # job (a repeat install flips nothing but the jobs are still
+            # armed), while the connect event that re-ran this install wants
+            # to know whether anything actually changed hands.
+            jobs = self._planted_jobs(bundle.slug, destination=destination)
 
             # Views are published after the surfaces land, because a view
             # binds to tables the data surface just created. A publish that
@@ -760,7 +766,9 @@ class WorkflowManager(BaseWorkflowManager):
         if canvases:
             result["canvases"] = canvases
         if unmet:
-            result["tasks_held"] = armed
+            result["tasks_held"] = [
+                job["task_id"] for job in jobs if not job["enabled"]
+            ]
             result["connect_required"] = {
                 "requirements": unmet,
                 "message": (
@@ -770,7 +778,9 @@ class WorkflowManager(BaseWorkflowManager):
                 ),
             }
         else:
-            result["tasks_armed"] = armed
+            result["tasks_armed"] = [job["task_id"] for job in jobs if job["enabled"]]
+            if flipped:
+                result["tasks_newly_armed"] = flipped
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             logger.warning(

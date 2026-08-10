@@ -120,9 +120,9 @@ async def arm_workflows_for_connected_app(app_slug: str) -> Dict[str, Any]:
 
     report = await asyncio.to_thread(manager.reconcile_installed)
     armed = {
-        slug: result["tasks_armed"]
+        slug: result["tasks_newly_armed"]
         for slug, result in (report.get("reconciled") or {}).items()
-        if result.get("tasks_armed")
+        if result.get("tasks_newly_armed")
     }
     if armed:
         LOGGER.info(

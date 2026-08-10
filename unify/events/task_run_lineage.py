@@ -45,6 +45,10 @@ class TaskRunLineage:
 
     task_id: int
     run_key: str | None = None
+    task_name: str | None = None
+    """Human-readable definition name, carried on payloads so viewers can
+    label the run without parsing or resolving the hierarchy segment. The
+    segment itself stays ids-only — it is machine lineage, not display."""
 
     def as_payload_fields(self) -> dict[str, Any]:
         fields: dict[str, Any] = {
@@ -52,6 +56,8 @@ class TaskRunLineage:
         }
         if self.run_key:
             fields["run_key"] = str(self.run_key)
+        if self.task_name:
+            fields["task_name"] = str(self.task_name)
         return fields
 
 
@@ -96,12 +102,14 @@ def push_task_run_lineage(
     *,
     task_id: int,
     run_key: str | None = None,
+    task_name: str | None = None,
 ) -> _TaskRunLineageTokens:
     """Push task-run context onto lineage ContextVars; return reset tokens."""
 
     lineage = TaskRunLineage(
         task_id=int(task_id),
         run_key=str(run_key) if run_key else None,
+        task_name=str(task_name) if task_name else None,
     )
     segment = format_task_run_lineage_segment(
         task_id=lineage.task_id,
@@ -130,12 +138,14 @@ def task_run_lineage_scope(
     *,
     task_id: int,
     run_key: str | None = None,
+    task_name: str | None = None,
 ) -> Generator[_TaskRunLineageTokens, None, None]:
     """Context manager that pushes then resets execution lineage."""
 
     tokens = push_task_run_lineage(
         task_id=task_id,
         run_key=run_key,
+        task_name=task_name,
     )
     try:
         yield tokens
