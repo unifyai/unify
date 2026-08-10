@@ -193,6 +193,7 @@ The public API of each state manager is defined by the abstract methods on `Base
 | Web research (lightweight) | `primitives.web.*` |
 | Secrets (metadata only via `ask`) | `primitives.secrets.*` |
 | Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
+| Install/remove a packaged capability | `WorkflowManager_*` (top-level JSON tools). Not TaskScheduler: a workflow is the package you install; the tasks it plants are the work |
 | Ephemeral live action | `Actor.act` (via ConversationManager) |
 | Durable, tracked work | `TaskScheduler.execute` — never `update` to start work |
 

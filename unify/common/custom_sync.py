@@ -21,6 +21,9 @@ version:
 - Per-entry failures are isolated: the pass completes, then raises
   :class:`CustomSyncPartialFailure` so the caller skips storing the
   aggregate hash and the next reconcile retries only the failed keys.
+- A surface may hand one row's ownership to the user by clearing
+  ``managed_by`` and keeping ``custom_key``. The pass then reports the key
+  as ``released`` and touches nothing — see :func:`released_rows_filter`.
 """
 
 from __future__ import annotations
@@ -58,6 +61,29 @@ def managed_rows_filter(managed_by: str) -> str:
             f"(managed_by == '{managed_by}' or managed_by == None)"
         )
     return f"custom_hash != None and managed_by == '{managed_by}'"
+
+
+CUSTOM_RELEASED_FIELD = "custom_released"
+"""Marks a planted row whose ownership has passed to the user.
+
+Releasing clears ``managed_by`` so no source reconciles the row, and keeps
+``custom_key`` so it stays traceable to the entry it grew from. The absence
+of provenance alone cannot say *why* it is absent — a row written before
+``managed_by`` existed also has none, and that one the deployment still
+owns. This flag is the positive answer, so releasing is never inferred
+from a null.
+"""
+
+
+def released_rows_filter(key: str) -> str:
+    """Filter selecting a row this source planted that the user now owns.
+
+    A released row is invisible to :func:`managed_rows_filter`, so without
+    this probe the next pass reads its key as missing and plants a second
+    copy beside the user's edited one.
+    """
+
+    return f"custom_key == '{key}' and {CUSTOM_RELEASED_FIELD} == True"
 
 
 def stored_hash_field(base_field: str, managed_by: str) -> str:
@@ -150,6 +176,7 @@ class CustomSyncResult:
     unchanged: int = 0
     skipped: int = 0
     yielded: int = 0
+    released: int = 0
     failures: Dict[str, BaseException] = field(default_factory=dict)
 
     @property
@@ -254,6 +281,25 @@ class CustomSyncAdapter:
         """
         return False
 
+    def find_released(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Return this entry's row if the user has taken ownership of it.
+
+        Surfaces whose rows a user may edit (a planted task) hand ownership
+        over by clearing ``managed_by`` and keeping ``custom_key``. That
+        removes the row from :meth:`live_rows`, so without this probe the
+        key reads as missing and the pass plants a second copy beside the
+        edited one.
+
+        Implement with :func:`released_rows_filter`; leave it unimplemented
+        on a library surface whose rows refuse direct edits, so nothing can
+        drift out from under the source.
+        """
+        return None
+
     def find_adoptable(
         self,
         key: str,
@@ -336,6 +382,14 @@ def _upsert_one(
         return "updated"
 
     with insert_lock:
+        released = adapter.find_released(key, fields)
+        if released is not None:
+            logger.info(
+                "Custom %s %s is owned by the user; leaving it alone",
+                adapter.kind,
+                key,
+            )
+            return "released"
         adoptable = adapter.find_adoptable(key, fields)
         if adoptable is not None:
             logger.info("Adopting unmanaged %s row: %s", adapter.kind, key)
@@ -419,6 +473,7 @@ def reconcile_custom_rows(
             "unchanged",
             "skipped",
             "yielded",
+            "released",
         ):
             setattr(result, outcome, getattr(result, outcome) + 1)
 

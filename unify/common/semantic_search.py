@@ -83,6 +83,39 @@ def ensure_vector_for_source(
     return embed_column_name
 
 
+def vector_for_source_read_path(
+    context: str,
+    source_expr: str,
+    *,
+    project: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the embedding column for a search WITHOUT provisioning.
+
+    Searches are read-only: column/template creation happens once at manager
+    provisioning (startup warm), and row coverage is Orchestra's write-side
+    responsibility (log writes feed the embedding queue). Running
+    ``ensure_vector_column`` per search re-paid provisioning round-trips and
+    synchronous backfills on every call — the dominant search latency.
+
+    Steady state is a single read-only column lookup: once the column exists,
+    Orchestra's write-time enqueue keeps its rows covered, so the per-call
+    probe scans and synchronous backfills are gone. Only a source that has no
+    column yet (an ad-hoc field or expression searched for the first time)
+    pays a one-time ensure to create the template. Foreign public-read
+    projects never provision.
+    """
+    existing = resolve_existing_vector_for_source(
+        context,
+        source_expr,
+        project=project,
+    )
+    if existing is not None:
+        return existing
+    if project is not None:
+        return None
+    return ensure_vector_for_source(context, source_expr)
+
+
 def embed_column_for_source(source_expr: str) -> str:
     """Return the canonical embedding column name for a source expression."""
     if is_plain_identifier(source_expr):
@@ -651,10 +684,17 @@ def fetch_top_k_by_references(
             "`references` must be a mapping (e.g., {'bio': 'text'}) or a JSON string of such a mapping.",
         )
 
-    # Collect (embed_col, ref_text) pairs
+    # Collect (embed_col, ref_text) pairs — read-only column resolution;
+    # terms without a provisioned embedding column are skipped.
     terms: List[Tuple[str, str]] = []
     for source_expr, ref_text in references.items():
-        embed_col = ensure_vector_for_source(context, source_expr, project=project)
+        embed_col = vector_for_source_read_path(
+            context,
+            source_expr,
+            project=project,
+        )
+        if embed_col is None:
+            continue
         terms.append((embed_col, ref_text))
 
     return fetch_top_k_by_terms(

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from unify.workflow_manager.bundle import WorkflowBundle
 from unify.workflow_manager.catalog import (
     MANIFEST_FILENAME,
     load_bundle,
@@ -32,7 +33,7 @@ requirements:
   - slug: gmail
     name: Gmail
     required_secrets: [GMAIL_TOKEN]
-  - web
+  - notion
 capabilities: [filesystem]
 params_schema:
   mailbox:
@@ -99,11 +100,13 @@ def test_load_bundle_parses_requirements_in_both_shapes(tmp_path: Path):
     declares secrets, for apps no other authority can answer for."""
     bundle = load_bundle(_write_bundle(tmp_path))
 
-    gmail, web = bundle.requirements
+    gmail, notion = bundle.requirements
     assert gmail.slug == "gmail"
     assert gmail.required_secrets == ("GMAIL_TOKEN",)
-    assert web.slug == "web"
-    assert web.required_secrets == ()
+    assert notion.slug == "notion"
+    assert notion.required_secrets == ()
+    # Absent `kind` means an ordinary app the integrations layer connects.
+    assert (gmail.kind, notion.kind) == ("app", "app")
 
 
 def test_slug_must_match_the_directory_name(tmp_path: Path):
@@ -273,3 +276,442 @@ def test_content_rows_carry_each_artifact_whole(tmp_path: Path):
     assert morning["name"] == "Morning run"
     assert morning["body"] == "The recurring job."
     assert morning["schedule"] == "Every day"
+
+
+def test_content_rows_publish_what_the_artifacts_own_page_shows(tmp_path: Path):
+    """A preview is meant to *be* the artifact's page, not a thinner retelling
+    of it, so the fields that page renders travel with the row. Anything absent
+    is simply absent — the reader degrades rather than inventing."""
+    import json as _json
+
+    from unify.workflow_manager.builtins_catalog import content_rows
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    rows = {row["content_key"]: row for row in content_rows(bundle)}
+
+    task_meta = _json.loads(rows["daily_briefing/tasks/wf/morning"]["meta"])
+    # The cadence the page shows comes from `repeat`; `schedule` on the row is
+    # the already-phrased prose, and both are needed for different fields.
+    assert task_meta["repeat"] == [{"frequency": "daily"}]
+
+    guidance_meta = _json.loads(rows["daily_briefing/guidance/wf/triage"]["meta"])
+    # Nothing declared on this entry, so nothing is published for it.
+    assert guidance_meta == {}
+
+
+def test_manifest_declares_its_provisioning_one_shot(tmp_path: Path):
+    """The long thing a workflow needs done before its recurring job means
+    anything — a mailbox backfill, a CRM import. Named rather than inferred so
+    a bundle can ship several tasks and be explicit about which is setup."""
+    bundle_dir = _write_bundle(tmp_path)
+
+    # Absent means the workflow needs no provisioning, not an error.
+    assert load_bundle(bundle_dir).install_task == ""
+
+    manifest = (bundle_dir / MANIFEST_FILENAME).read_text()
+    (bundle_dir / MANIFEST_FILENAME).write_text(manifest + "install_task: wf/morning\n")
+    assert load_bundle(bundle_dir).install_task == "wf/morning"
+
+
+# --------------------------------------------------------------------- #
+# Canvas + data: what a bundle may ship, and what it may not            #
+# --------------------------------------------------------------------- #
+def _write_canvas(bundle_dir: Path, name: str, manifest: dict, tsx: str) -> Path:
+    view_dir = bundle_dir / "canvas" / name
+    view_dir.mkdir(parents=True)
+    (view_dir / "view.json").write_text(json.dumps(manifest) + "\n")
+    (view_dir / "view.tsx").write_text(tsx)
+    return view_dir
+
+
+def test_a_bundle_ships_canvas_source_outside_the_surfaces(tmp_path: Path):
+    """A view is not a synced surface and must not become one.
+
+    It is TypeScript that has to be compiled, rendered and reviewed against
+    the kit installed *now*, and its routing token has a lifecycle the
+    reconcile engine does not own — so it loads onto its own field, where
+    the fan-out cannot reach it.
+    """
+    bundle_dir = _write_bundle(tmp_path)
+    _write_canvas(
+        bundle_dir,
+        "monthly_kpis",
+        {
+            "title": "Monthly KPIs",
+            "description": "Revenue and burn, by month.",
+            "bindings": [{"context": "Finance/Invoices"}],
+            "visibility": "private",
+        },
+        "export default function View() { return null; }\n",
+    )
+
+    bundle = load_bundle(bundle_dir)
+
+    assert "canvas" not in bundle.surfaces
+    assert [view.name for view in bundle.canvas] == ["monthly_kpis"]
+    view = bundle.canvas[0]
+    assert view.title == "Monthly KPIs"
+    assert view.bindings == ({"context": "Finance/Invoices"},)
+    assert view.tsx.startswith("export default")
+    # Identity across reinstalls, and a fingerprint that changes with the
+    # source rather than with the compiled output.
+    assert view.custom_key == "monthly_kpis"
+    first = view.content_hash()
+    assert first == load_bundle(bundle_dir).canvas[0].content_hash()
+    (bundle_dir / "canvas" / "monthly_kpis" / "view.tsx").write_text(
+        "export default 1;",
+    )
+    assert load_bundle(bundle_dir).canvas[0].content_hash() != first
+
+
+def test_a_prebuilt_canvas_is_refused(tmp_path: Path):
+    """The reason decision 9 was reversed. A compiled bundle in a git
+    bundle pins a host runtime: it is built against one kit and planted
+    into whatever host the deployment runs, so it breaks at *view* time,
+    for the user, with nothing failing at plant time."""
+    bundle_dir = _write_bundle(tmp_path)
+    view_dir = _write_canvas(
+        bundle_dir,
+        "monthly_kpis",
+        {"title": "Monthly KPIs"},
+        "export default function View() { return null; }\n",
+    )
+    (view_dir / "bundle.js").write_text("/* compiled elsewhere */")
+
+    with pytest.raises(ValueError, match="ships a built"):
+        load_bundle(bundle_dir)
+
+
+def test_a_canvas_needs_both_its_source_and_its_manifest(tmp_path: Path):
+    bundle_dir = _write_bundle(tmp_path)
+    view_dir = bundle_dir / "canvas" / "orphan"
+    view_dir.mkdir(parents=True)
+    (view_dir / "view.tsx").write_text(
+        "export default function View() { return null; }",
+    )
+
+    with pytest.raises(ValueError, match="no view.json"):
+        load_bundle(bundle_dir)
+
+
+def test_a_bundle_ships_table_schemas_but_never_rows(tmp_path: Path):
+    """A bundle is published verbatim and installed identically by
+    everyone, so rows in it are one author's data handed to every
+    installer. The table is the contract; filling it is the workflow's own
+    job at run time."""
+    bundle_dir = _write_bundle(tmp_path)
+    table_dir = bundle_dir / "data" / "Finance" / "Invoices"
+    table_dir.mkdir(parents=True)
+    (table_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "description": "Invoices this workflow reconciles.",
+                "fields": {"reference": "str", "amount": "float"},
+                "seed_key": "reference",
+            },
+        )
+        + "\n",
+    )
+
+    bundle = load_bundle(bundle_dir)
+    # Normalised into the Data namespace: a context outside it cannot be
+    # installed to a team and cannot be read by a canvas.
+    assert "Data/Finance/Invoices" in bundle.surfaces["data"]
+    assert bundle.surfaces["data"]["Data/Finance/Invoices"]["rows"] == []
+    assert bundle.surfaces["data"]["Data/Finance/Invoices"]["context"] == (
+        "Data/Finance/Invoices"
+    )
+
+    (table_dir / "rows.jsonl").write_text(
+        json.dumps({"reference": "INV-1", "amount": 10.0}) + "\n",
+    )
+    with pytest.raises(ValueError, match="ship seeded rows"):
+        load_bundle(bundle_dir)
+
+
+def test_a_requirement_publishes_how_it_is_resolved(tmp_path: Path):
+    """A reader gets the slug *and* how to answer it.
+
+    The shelf published only the slug and the display name, so a reader had
+    nothing to go on but a gallery lookup — and a workspace is the user's own
+    account, deliberately not a catalogue app. Meeting prep's Google
+    Workspace requirement therefore rendered as "couldn't check this app",
+    about the one requirement whose answer never depended on the gallery.
+    """
+    from unify.workflow_manager.builtins_catalog import catalog_row
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    published = json.loads(
+        catalog_row(
+            WorkflowBundle(
+                slug=bundle.slug,
+                name=bundle.name,
+                requirements=(
+                    WorkflowRequirement(slug="gmail", name="Gmail"),
+                    WorkflowRequirement(
+                        slug="google_workspace",
+                        name="Google Workspace",
+                        kind="workspace",
+                        required_secrets=("GOOGLE_REFRESH_TOKEN",),
+                    ),
+                ),
+            ),
+        )["requirements"],
+    )
+
+    assert published == [
+        {
+            "slug": "gmail",
+            "name": "Gmail",
+            "kind": "app",
+            "required_secrets": [],
+        },
+        {
+            "slug": "google_workspace",
+            "name": "Google Workspace",
+            "kind": "workspace",
+            "required_secrets": ["GOOGLE_REFRESH_TOKEN"],
+        },
+    ]
+
+
+def test_a_missing_tree_never_reads_as_an_empty_shelf(tmp_path: Path, monkeypatch):
+    """The failure that emptied the staging catalogue.
+
+    ``load_catalog`` answers ``[]`` for a root that does not exist, and ``[]``
+    to the seeder means *delete every published workflow*. A mispointed
+    ``UNITY_WORKFLOWS_DIR``, or an image built without the curated tree, would
+    therefore wipe the shelf for everyone — and the wipe is indistinguishable
+    from a deliberate one.
+    """
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import builtins_catalog
+
+    monkeypatch.setattr(
+        SETTINGS,
+        "UNITY_WORKFLOWS_DIR",
+        str(tmp_path / "not-here"),
+        raising=False,
+    )
+    assert builtins_catalog._default_bundles() is None
+
+
+def test_a_malformed_bundle_raises_rather_than_reading_as_no_shelf(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """The other half of the same incident.
+
+    The packaged tree carried a canvas manifest with no ``view.tsx`` beside
+    it — the loader refuses that, correctly. Swallowing the error turned it
+    into "no shelf to reconcile", which the seed reports as "already up to
+    date", so an empty catalogue stayed empty with every run claiming success.
+    """
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import builtins_catalog
+
+    bundle_dir = _write_bundle(tmp_path)
+    view_dir = bundle_dir / "canvas" / "orphan"
+    view_dir.mkdir(parents=True)
+    (view_dir / "view.json").write_text(json.dumps({"title": "Orphan"}) + "\n")
+
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+    with pytest.raises(ValueError, match="no view.tsx"):
+        builtins_catalog._default_bundles()
+
+
+def test_making_room_for_the_catalogue_never_touches_its_rows():
+    """The third way an empty shelf gets published: asking the wrong question.
+
+    A caller that only wants the contexts to exist has one verb for it.
+    Reaching the seeder instead means handing it desired state, and the
+    empty desired state that reads like "nothing to do" is the one input
+    that deletes every row.
+    """
+    import inspect
+
+    from unify.workflow_manager.builtins_catalog import ensure_catalog_storage
+
+    body = inspect.getsource(ensure_catalog_storage)
+    assert "create_context" in body
+    for row_verb in ("delete_logs", "create_logs", "update_logs", "_reconcile_rows"):
+        assert row_verb not in body
+
+
+def test_the_shelf_has_one_resolution_not_two(tmp_path: Path, monkeypatch):
+    """Console showed six workflows; every install said the shelf was empty.
+
+    The seeder fell back to the installed unify_deploy package when
+    UNITY_WORKFLOWS_DIR was unset. The runtime registry did not — it just
+    returned None. So a deployment with the package installed and no env var
+    published six workflows to the catalogue Console renders, while the
+    assistant that has to install them registered none, and every install
+    failed with "Available: nothing — the catalogue is empty" against a
+    catalogue that plainly had six rows in it.
+    """
+    import inspect
+
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import builtins_catalog
+    from unify.workflow_manager.catalog import (
+        bootstrap_workflow_catalog,
+        resolve_catalogue_root,
+    )
+
+    _write_bundle(tmp_path)
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+
+    # Both reach the same tree, because both ask the same question.
+    assert resolve_catalogue_root() == tmp_path
+    assert [b.slug for b in builtins_catalog._default_bundles()] == ["daily_briefing"]
+
+    for func in (bootstrap_workflow_catalog, builtins_catalog._default_bundles):
+        assert "resolve_catalogue_root" in inspect.getsource(
+            func,
+        ), f"{func.__name__} must not resolve the catalogue root itself"
+
+
+def test_the_install_path_sees_the_bundles_boot_loaded(tmp_path: Path, monkeypatch):
+    """The shelf is full and every install still said it was empty.
+
+    bootstrap_workflow_catalog constructed its own WorkflowManager, loaded
+    every bundle into it, and returned it — while the install path asks
+    ``ManagerRegistry.get_workflow_manager()``, which lazily built a
+    *different*, bundle-less instance. The registry getter never returns
+    None once asked, so the request handler did not report "no shelf here";
+    it reported "the catalogue is empty" against a catalogue that had just
+    been filled, and the request rows recorded unknown_workflow.
+
+    Loading bundles into an object nobody else holds is the bug, so this
+    asserts on the object the installer actually reaches.
+    """
+    from unify.manager_registry import ManagerRegistry
+    from unify.settings import SETTINGS
+    from unify.workflow_manager.catalog import bootstrap_workflow_catalog
+
+    _write_bundle(tmp_path)
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+
+    booted = bootstrap_workflow_catalog()
+    assert booted is not None
+
+    # What install_workflow resolves, not what bootstrap happened to return.
+    from_registry = ManagerRegistry.get_workflow_manager()
+    assert from_registry is booted
+    assert [b.slug for b in from_registry.available_bundles()] == ["daily_briefing"]
+
+
+def test_a_path_from_another_image_never_empties_the_shelf(tmp_path: Path, monkeypatch):
+    """The one that actually broke staging for a day.
+
+    The deployment resolves the catalogue inside the comms image, where the
+    package sits at /app/unify_deploy, and stamps that absolute path into an
+    assistant Job whose own image installs it under site-packages. The
+    assistant then logged "Workflow catalogue root
+    /app/unify_deploy/assistant_deployments/workflows does not exist",
+    registered nothing, and every install reported an empty catalogue —
+    with the package two directories away the whole time.
+
+    A configured path is advice from another process. When it is not there,
+    the container's own installed copy is the fact.
+    """
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import catalog as catalog_module
+
+    packaged = tmp_path / "site-packages" / "workflows"
+    packaged.mkdir(parents=True)
+    _write_bundle(packaged)
+
+    monkeypatch.setattr(
+        SETTINGS,
+        "UNITY_WORKFLOWS_DIR",
+        "/app/unify_deploy/assistant_deployments/workflows",
+        raising=False,
+    )
+
+    import sys
+    import types
+
+    module = types.ModuleType("unify_deploy.assistant_deployments.workflows")
+    module.workflows_root = lambda: packaged  # type: ignore[attr-defined]
+    parent = types.ModuleType("unify_deploy.assistant_deployments")
+    root_mod = types.ModuleType("unify_deploy")
+    monkeypatch.setitem(sys.modules, "unify_deploy", root_mod)
+    monkeypatch.setitem(sys.modules, "unify_deploy.assistant_deployments", parent)
+    monkeypatch.setitem(
+        sys.modules,
+        "unify_deploy.assistant_deployments.workflows",
+        module,
+    )
+
+    assert catalog_module.resolve_catalogue_root() == packaged
+
+
+def test_nothing_resolves_the_catalogue_behind_the_resolver(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Three places decided where the shelf was, and disagreed in turn.
+
+    First the seeder and the runtime registry disagreed when
+    UNITY_WORKFLOWS_DIR was unset. Then the scheduler that decides whether
+    the bootstrap runs at all was found reading the env var directly and
+    returning early when it was empty — so a deployment that ships the
+    catalogue inside the image and sets no env var never loaded the shelf,
+    silently, because an early return leaves nothing in the log.
+
+    Each fix moved one caller onto the shared resolver and left the next one
+    to be discovered in production. This asserts the property instead: the
+    module reads that setting in exactly one function.
+    """
+    import inspect
+
+    from unify.workflow_manager import catalog as catalog_module
+
+    readers = [
+        name
+        for name, obj in vars(catalog_module).items()
+        if inspect.isfunction(obj) and obj.__module__ == catalog_module.__name__
+        # The read itself, not the name: the comments explaining this
+        # history mention the setting and must not count as reading it.
+        and "SETTINGS.UNITY_WORKFLOWS_DIR" in inspect.getsource(obj)
+    ]
+    assert readers == ["resolve_catalogue_root"], (
+        f"only resolve_catalogue_root may read the setting; also read by: "
+        f"{sorted(set(readers) - {'resolve_catalogue_root'})}"
+    )
+
+
+def test_the_bootstrap_is_scheduled_when_the_image_ships_the_shelf(
+    tmp_path,
+    monkeypatch,
+):
+    """No env var, catalogue in the image: the shelf must still load."""
+    import sys
+    import types
+
+    from unify.settings import SETTINGS
+    from unify.workflow_manager import catalog as catalog_module
+
+    packaged = tmp_path / "site-packages" / "workflows"
+    packaged.mkdir(parents=True)
+    _write_bundle(packaged)
+
+    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", "", raising=False)
+    module = types.ModuleType("unify_deploy.assistant_deployments.workflows")
+    module.workflows_root = lambda: packaged  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "unify_deploy", types.ModuleType("unify_deploy"))
+    monkeypatch.setitem(
+        sys.modules,
+        "unify_deploy.assistant_deployments",
+        types.ModuleType("unify_deploy.assistant_deployments"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "unify_deploy.assistant_deployments.workflows",
+        module,
+    )
+
+    # The gate that decides whether the bootstrap runs must not bail here.
+    assert catalog_module.resolve_catalogue_root() == packaged

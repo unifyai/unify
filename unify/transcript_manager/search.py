@@ -17,14 +17,15 @@ from ..common.federated_search import (
 from ..common.filter_utils import normalize_filter_expr
 from ..common.search_utils import (
     is_plain_identifier,
-    ensure_vector_for_source,
     fetch_top_k_by_terms_with_score,
     fetch_scores_for_ids,
 )
-from ..common.semantic_search import extract_placeholders
+from ..common.semantic_search import (
+    extract_placeholders,
+    vector_for_source_read_path,
+)
 from .types.message import Message
 from ..contact_manager.types.contact import Contact
-from ..common.embed_utils import ensure_vector_column
 from ..session_details import SESSION_DETAILS
 
 # Module-level tuning knobs for ranking/backfill behaviour
@@ -68,11 +69,12 @@ def _classify_terms(
         else:
             is_message_side = any(ph in msg_fields for ph in placeholders)
         if is_message_side:
-            embed_column_name = ensure_vector_for_source(
+            embed_column_name = vector_for_source_read_path(
                 transcript_context,
                 source_expr,
             )
-            msg_embed_columns.append((embed_column_name, ref_text))
+            if embed_column_name is not None:
+                msg_embed_columns.append((embed_column_name, ref_text))
 
     # 2) contact-side terms (sender/receiver role)
     for source_expr, ref_text in references.items():
@@ -108,10 +110,12 @@ def _classify_terms(
                 else:
                     role = "sender"
         if role is not None:
-            embed_column_name = ensure_vector_for_source(
+            embed_column_name = vector_for_source_read_path(
                 contact_context,
                 base_expr,
             )
+            if embed_column_name is None:
+                continue
             if role == "sender":
                 sender_contact_embed_columns.append((embed_column_name, ref_text))
             else:
@@ -321,8 +325,13 @@ def search_messages(
         msg_terms_by_context = {}
         for context, msg_terms, _, _ in terms_by_context:
             if not msg_terms:
-                ensure_vector_column(context, "_content_emb", "content")
-                msg_terms = [("_content_emb", next(iter(references.values())))]
+                # Read-path fallback: reuse the provisioned content column
+                # (first touch creates it; steady state is a pure lookup).
+                content_col = vector_for_source_read_path(context, "content")
+                if content_col is None:
+                    msg_terms_by_context[context] = []
+                    continue
+                msg_terms = [(content_col, next(iter(references.values())))]
             msg_terms_by_context[context] = msg_terms
 
         def fetcher(spec, _references, fetch_limit):

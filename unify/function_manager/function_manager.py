@@ -2793,6 +2793,16 @@ class FunctionManager(BaseFunctionManager):
             compact = {
                 key: value for key, value in row.items() if key != "implementation"
             }
+            if compact.get("is_primitive"):
+                # Primitive docstrings are full manual pages; discovery
+                # results must not re-import what the actor prompt
+                # deliberately leaves out. Summary + params is enough to
+                # call the method.
+                doc = str(compact.get("docstring") or "")
+                if doc:
+                    summary = get_registry()._extract_summary_and_params(doc)
+                    compact["docstring"] = summary or doc[:800]
+                compact.pop("embedding_text", None)
             metadata = function_metadata(compact)
             integration = integration_metadata(compact)
             if integration:

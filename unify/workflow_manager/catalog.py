@@ -23,13 +23,14 @@ catalogue.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .bundle import WorkflowBundle, WorkflowRequirement
+from .bundle import CanvasSource, WorkflowBundle, WorkflowRequirement
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ def _parse_requirements(raw: Any, *, slug: str) -> tuple[WorkflowRequirement, ..
             WorkflowRequirement(
                 slug=str(entry["slug"]),
                 name=str(entry.get("name", "")),
+                kind=str(entry.get("kind", "app")),
                 required_secrets=tuple(entry.get("required_secrets") or ()),
             ),
         )
@@ -62,6 +64,7 @@ def _parse_requirements(raw: Any, *, slug: str) -> tuple[WorkflowRequirement, ..
 def _collect_surfaces(path: Path) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Collect every content directory present, using the deployment
     collectors so hashes and field shapes match the reconcile's."""
+    from ..data_manager.custom_data import collect_custom_data
     from ..function_manager.custom_functions import collect_custom_functions
     from ..guidance_manager.custom_guidance import collect_custom_guidance
     from ..knowledge_manager.custom_knowledge import collect_custom_knowledge
@@ -72,8 +75,116 @@ def _collect_surfaces(path: Path) -> Dict[str, Dict[str, Dict[str, Any]]]:
         "knowledge": collect_custom_knowledge(path=path / "knowledge"),
         "tasks": collect_custom_tasks(path=path / "tasks"),
         "functions": collect_custom_functions(directory=path / "functions"),
+        # Tables a bundle declares, schemas only: a workflow ships the shape
+        # its own job fills, never the contents. Seeded rows in a bundle
+        # would be one deployment's data published to everyone.
+        "data": _bundle_tables(collect_custom_data(path=path / "data"), path=path),
     }
     return {name: source for name, source in collected.items() if source}
+
+
+def _bundle_tables(
+    tables: Dict[str, Dict[str, Any]],
+    *,
+    path: Path,
+) -> Dict[str, Dict[str, Any]]:
+    """Normalise a bundle's declared tables, and refuse seeded rows.
+
+    Two rules, both made structural rather than left to be remembered.
+
+    **Schemas only.** A bundle is published verbatim to the public-read
+    Builtins project and installed identically by everyone, so rows in it
+    are one author's data handed to every installer. The table is the
+    contract; filling it is the workflow's own job at run time.
+
+    **Data-owned contexts.** ``data/Finance/Invoices`` becomes
+    ``Data/Finance/Invoices``. A context outside the Data namespace cannot
+    be installed to a team — the write refuses the destination — and cannot
+    be read by a canvas, whose policy declares ``Data`` and nothing else.
+    Both failures land a long way from the author, so the prefix is applied
+    here instead.
+    """
+    seeded = sorted(context for context, spec in tables.items() if spec.get("rows"))
+    if seeded:
+        raise ValueError(
+            f"{path.name}: data tables {', '.join(seeded)} ship seeded rows. "
+            "A bundle declares table schemas only — the workflow's own job "
+            "fills them. Delete the rows.jsonl.",
+        )
+
+    normalised: Dict[str, Dict[str, Any]] = {}
+    for context, spec in tables.items():
+        owned = context if context.startswith("Data/") else f"Data/{context}"
+        normalised[owned] = {**spec, "context": owned}
+    return normalised
+
+
+CANVAS_SOURCE_FILENAME = "view.tsx"
+CANVAS_MANIFEST_FILENAME = "view.json"
+
+
+def _collect_canvas(path: Path) -> tuple[CanvasSource, ...]:
+    """Load the views a bundle ships, as source.
+
+    Deliberately not a collected "surface": these never reach the reconcile
+    engine. A directory needs both ``view.tsx`` and ``view.json`` — source
+    with no manifest has no title to publish under and no bindings to read,
+    and a manifest with no source has nothing to compile, so either alone
+    is an authoring mistake worth naming rather than skipping.
+    """
+    root = path / "canvas"
+    if not root.is_dir():
+        return ()
+
+    views: List[CanvasSource] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        tsx_path = entry / CANVAS_SOURCE_FILENAME
+        manifest_path = entry / CANVAS_MANIFEST_FILENAME
+        if not tsx_path.is_file() and not manifest_path.is_file():
+            continue
+        if not tsx_path.is_file():
+            raise ValueError(
+                f"{path.name}: canvas {entry.name!r} has no {CANVAS_SOURCE_FILENAME}.",
+            )
+        if not manifest_path.is_file():
+            raise ValueError(
+                f"{path.name}: canvas {entry.name!r} has no "
+                f"{CANVAS_MANIFEST_FILENAME}; a view needs a title to publish "
+                "under and its bindings declared.",
+            )
+        manifest = json.loads(manifest_path.read_text()) or {}
+        title = str(manifest.get("title") or "").strip()
+        if not title:
+            raise ValueError(
+                f"{path.name}: canvas {entry.name!r} declares no title.",
+            )
+        # A pre-built bundle in a bundle pins a host runtime — it compiles
+        # against one kit and is planted into whatever host the deployment
+        # runs, so it breaks at view time with nothing failing at plant
+        # time. Refuse it where it is written rather than at someone's
+        # install.
+        for built in ("bundle.js", "bundle.mjs", "view.js"):
+            if (entry / built).exists():
+                raise ValueError(
+                    f"{path.name}: canvas {entry.name!r} ships a built "
+                    f"{built}. Bundles ship source; the install compiles it "
+                    "against the kit that is actually installed.",
+                )
+        views.append(
+            CanvasSource(
+                name=entry.name,
+                tsx=tsx_path.read_text(),
+                title=title,
+                description=str(manifest.get("description") or ""),
+                bindings=tuple(manifest.get("bindings") or ()),
+                props=dict(manifest.get("props") or {}),
+                actions=tuple(manifest.get("actions") or ()),
+                visibility=str(manifest.get("visibility") or "private"),
+            ),
+        )
+    return tuple(views)
 
 
 def load_bundle(path: Path) -> WorkflowBundle:
@@ -114,7 +225,9 @@ def load_bundle(path: Path) -> WorkflowBundle:
             manifest.get("requirements"),
             slug=slug,
         ),
+        install_task=str(manifest.get("install_task", "")),
         capabilities=tuple(manifest.get("capabilities") or ()),
+        canvas=_collect_canvas(path),
     )
 
 
@@ -134,6 +247,64 @@ def load_catalog(root: Path) -> List[WorkflowBundle]:
     return bundles
 
 
+def resolve_catalogue_root() -> Optional[Path]:
+    """Where this environment's curated bundles live, or None if nowhere.
+
+    One resolution, used by everything that needs the shelf. It used to be
+    written twice: the seeder fell back to the installed ``unify_deploy``
+    package when ``UNITY_WORKFLOWS_DIR`` was unset, and the runtime registry
+    returned None instead. So a deployment with the package installed and no
+    env var published six workflows to the catalogue Console renders, while
+    the assistant that has to install them registered none — the shelf was
+    visibly full and every install failed with "the catalogue is empty".
+
+    Returns None only when there is genuinely nothing to read, which callers
+    must treat as "no catalogue here", never as "the catalogue is empty".
+    """
+    from ..settings import SETTINGS
+
+    def _packaged_root() -> Optional[Path]:
+        try:
+            from unify_deploy.assistant_deployments.workflows import workflows_root
+
+            return workflows_root()
+        except ImportError:
+            return None
+
+    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
+    if configured:
+        root = Path(configured)
+        if root.is_dir():
+            return root
+        # A configured path that is not there is advice from somewhere else,
+        # not fact about this container. The deployment resolves the
+        # catalogue inside the comms image — where the package sits at
+        # /app/unify_deploy — and stamps that absolute path into an
+        # assistant Job whose own image installs it under site-packages. The
+        # env var then names a directory that does not exist here, and
+        # trusting it left the shelf empty while the package sat two
+        # directories away.
+        packaged = _packaged_root()
+        if packaged is not None and packaged.is_dir():
+            logger.warning(
+                "Workflow catalogue root %s does not exist in this image; "
+                "using the installed package at %s instead",
+                root,
+                packaged,
+            )
+            return packaged
+        logger.warning("Workflow catalogue root %s does not exist", root)
+        return None
+
+    root = _packaged_root()
+    if root is None:
+        return None
+    if not root.is_dir():
+        logger.warning("Workflow catalogue root %s does not exist", root)
+        return None
+    return root
+
+
 def bootstrap_workflow_catalog(
     root: Optional[Path] = None,
 ) -> "Optional[Any]":
@@ -150,28 +321,34 @@ def bootstrap_workflow_catalog(
     is the upkeep tick, so a version bump shipped in git reaches existing
     installations on the next session start.
     """
-    from ..settings import SETTINGS
-
     if root is None:
-        configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
-        if not configured:
+        root = resolve_catalogue_root()
+        if root is None:
             return None
-        root = Path(configured)
-    if not root.is_dir():
+    elif not root.is_dir():
         logger.warning("Workflow catalogue root %s does not exist", root)
         return None
 
     from ..manager_registry import ManagerRegistry
     from .surfaces import register_default_surfaces
-    from .workflow_manager import WorkflowManager
 
-    manager = WorkflowManager()
+    # The registry's instance, never a fresh one.
+    #
+    # This used to construct its own WorkflowManager, load every bundle into
+    # it, and return it — while `ManagerRegistry.get_workflow_manager()`
+    # lazily built a *different*, bundle-less one for everybody else. So the
+    # install path asked the registry, got the empty manager, and reported
+    # "the catalogue is empty" against a shelf this function had just
+    # finished filling. Registering onto the shared instance is what makes
+    # the bundles visible to the code that installs them.
+    manager = ManagerRegistry.get_workflow_manager()
     register_default_surfaces(
         manager.surfaces,
         guidance_manager=ManagerRegistry.get_guidance_manager(),
         knowledge_manager=ManagerRegistry.get_knowledge_manager(),
         task_scheduler=ManagerRegistry.get_task_scheduler(),
         function_manager=ManagerRegistry.get_function_manager(),
+        data_manager=ManagerRegistry.get_data_manager(),
     )
 
     for entry in sorted(root.iterdir()):
@@ -194,6 +371,17 @@ def bootstrap_workflow_catalog(
     except Exception:
         logger.exception("Workflow reconcile at boot failed; will retry next boot")
 
+    # The sweep behind the wake dispatch: a request recorded while this
+    # assistant was asleep — or whose dispatch never arrived — is carried
+    # out here. Dispatch is an optimisation for latency; this is what makes
+    # the request contract durable.
+    try:
+        settled = manager.execute_requests().get("settled") or {}
+        if settled:
+            logger.info("Workflow requests settled at boot: %s", settled)
+    except Exception:
+        logger.exception("Workflow request sweep at boot failed; will retry next boot")
+
     return manager
 
 
@@ -209,9 +397,19 @@ def schedule_bootstrap_workflow_catalog() -> None:
     """
     import threading
 
-    from ..settings import SETTINGS
-
-    if not (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip():
+    # Ask the one resolver, not the env var.
+    #
+    # This gate used to read UNITY_WORKFLOWS_DIR directly and return when it
+    # was empty — so a deployment that ships the catalogue inside the image
+    # and sets no env var never scheduled the bootstrap at all. Nothing was
+    # logged, because nothing ran: the shelf was simply never loaded, and
+    # every install reported an empty catalogue.
+    #
+    # It is the third place that resolved the catalogue independently. The
+    # other two now share resolve_catalogue_root(); this one was missed, and
+    # the miss survived precisely because a silent early return leaves no
+    # trace to notice.
+    if resolve_catalogue_root() is None:
         return
 
     try:

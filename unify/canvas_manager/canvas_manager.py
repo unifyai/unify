@@ -14,6 +14,7 @@ viewer fails here instead, with the compiler's own diagnostics.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from datetime import datetime, timezone
@@ -312,6 +313,7 @@ class CanvasManager(BaseCanvasManager):
     # The public methods below inherit their documentation from
     # BaseCanvasManager; see that module for the contract.
 
+    @functools.wraps(BaseCanvasManager.create_view, updated=())
     def create_view(
         self,
         tsx: str,
@@ -324,7 +326,16 @@ class CanvasManager(BaseCanvasManager):
         destination: Optional[str] = None,
         visibility: str = DEFAULT_VISIBILITY,
         review: bool = True,
+        provenance: Optional[Dict[str, str]] = None,
     ) -> CanvasResult:
+        """Compile, review and publish one view.
+
+        *provenance* marks a view published from a source rather than
+        authored in conversation — ``custom_key``, ``custom_hash`` and
+        ``managed_by``. Written in the same insert as the row: stamping it
+        afterwards would leave a crash-window in which the view exists with
+        no owner, and the next install would publish a second copy of it.
+        """
         build, bundle = self._build(tsx)
         if not build.ok:
             return CanvasResult(title=title, build=build, error="Canvas build failed.")
@@ -418,6 +429,7 @@ class CanvasManager(BaseCanvasManager):
             build_json=build.model_dump_json(),
             created_at=now,
             updated_at=now,
+            **(provenance or {}),
         )
 
         dm = self._get_dm()
@@ -440,6 +452,7 @@ class CanvasManager(BaseCanvasManager):
             warning=warning,
         )
 
+    @functools.wraps(BaseCanvasManager.update_view, updated=())
     def update_view(
         self,
         token: str,
@@ -452,7 +465,14 @@ class CanvasManager(BaseCanvasManager):
         actions: Optional[List[CanvasAction]] = None,
         visibility: Optional[str] = None,
         review: bool = True,
+        provenance: Optional[Dict[str, str]] = None,
     ) -> CanvasResult:
+        """Revise a published view.
+
+        *provenance* re-stamps the source fingerprint in the same write as
+        the revision, so a republish that lands is never recorded as
+        up-to-date before the new source actually did.
+        """
         existing, context = self._find_row(VIEWS_TABLE, token)
         if existing is None:
             return CanvasResult(token=token, error=f"Canvas {token!r} not found.")
@@ -557,6 +577,9 @@ class CanvasManager(BaseCanvasManager):
             except ValueError as error:
                 return CanvasResult(token=token, error=str(error))
 
+        if provenance:
+            updates.update(provenance)
+
         self._get_dm().update_rows(context, updates, filter=f"token == '{token}'")
 
         if visibility is not None:
@@ -579,6 +602,7 @@ class CanvasManager(BaseCanvasManager):
             review=review_report,
         )
 
+    @functools.wraps(BaseCanvasManager.refresh_props, updated=())
     def refresh_props(self, token: str, *, props: Dict[str, Any]) -> CanvasResult:
         existing, context = self._find_row(VIEWS_TABLE, token)
         if existing is None:
@@ -623,10 +647,12 @@ class CanvasManager(BaseCanvasManager):
 
     # ── retrieval ─────────────────────────────────────────────────────────
 
+    @functools.wraps(BaseCanvasManager.get_view, updated=())
     def get_view(self, token: str) -> Optional[CanvasViewRecord]:
         row, _ = self._find_row(VIEWS_TABLE, token)
         return CanvasViewRecord.model_validate(row) if row else None
 
+    @functools.wraps(BaseCanvasManager.list_views, updated=())
     def list_views(
         self,
         *,
@@ -651,6 +677,7 @@ class CanvasManager(BaseCanvasManager):
 
         return records[:limit]
 
+    @functools.wraps(BaseCanvasManager.delete_view, updated=())
     def delete_view(self, token: str, *, destination: Optional[str] = None) -> bool:
         row, context = self._find_row(VIEWS_TABLE, token)
         if row is None:
@@ -672,6 +699,7 @@ class CanvasManager(BaseCanvasManager):
 
     # ── inspection ────────────────────────────────────────────────────────
 
+    @functools.wraps(BaseCanvasManager.preview, updated=())
     def preview(self, token: str) -> ReviewReport:
         record = self.get_view(token)
         if record is None:
@@ -692,6 +720,7 @@ class CanvasManager(BaseCanvasManager):
             intent=f"{record.title}. {record.description or ''}".strip(),
         )
 
+    @functools.wraps(BaseCanvasManager.run_invocation, updated=())
     def run_invocation(
         self,
         invocation_id: int,
@@ -945,6 +974,7 @@ class CanvasManager(BaseCanvasManager):
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="canvas-ask") as pool:
             return pool.submit(lambda: asyncio.run(actor.act(prompt))).result()
 
+    @functools.wraps(BaseCanvasManager.list_invocations, updated=())
     def list_invocations(
         self,
         token: str,
@@ -966,20 +996,3 @@ class CanvasManager(BaseCanvasManager):
 
         records.sort(key=lambda record: record.created_at or "", reverse=True)
         return records[:limit]
-
-
-# Attach the base contract's documentation to the concrete methods, so the
-# caller reads one contract regardless of which implementation is active.
-for _name in (
-    "create_view",
-    "update_view",
-    "refresh_props",
-    "get_view",
-    "list_views",
-    "delete_view",
-    "preview",
-    "run_invocation",
-    "list_invocations",
-):
-    _base_method = getattr(BaseCanvasManager, _name)
-    getattr(CanvasManager, _name).__doc__ = _base_method.__doc__

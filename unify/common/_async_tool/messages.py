@@ -273,6 +273,29 @@ async def generate_with_preprocess(
     preprocess_msgs: Optional[Callable[[list[dict]], list[dict]]],
     **gen_kwargs,
 ):
+    # Stamp the in-flight window on the client. ``handle.ask()`` snapshots
+    # ``client.messages``, which dead-ends silently while a request is out; the
+    # stamp lets the inspection transcript say "the loop is waiting on an LLM
+    # response since T" instead. finally-cleared so cancellation (interjection
+    # pre-emption) can never leave a stale stamp behind.
+    import time as _time
+
+    client._llm_inflight_since = _time.time()
+    try:
+        return await _generate_with_preprocess_inner(
+            client,
+            preprocess_msgs,
+            **gen_kwargs,
+        )
+    finally:
+        client._llm_inflight_since = None
+
+
+async def _generate_with_preprocess_inner(
+    client: unillm.AsyncUnify,
+    preprocess_msgs: Optional[Callable[[list[dict]], list[dict]]],
+    **gen_kwargs,
+):
     if preprocess_msgs is None:
         return await maybe_await(client.generate(**gen_kwargs))
 

@@ -66,6 +66,20 @@ class Event:
 
     _registry: ClassVar[dict[str, "Event"]] = {}
     loggable: ClassVar[bool] = True
+    # Whether receiving this event means somebody needs the assistant.
+    #
+    # The inactivity timer is what retires an idle pod, and it used to
+    # advance on *any* message off the bus — including the system's own
+    # chatter. One recurring internal event was enough to keep a pod alive
+    # indefinitely: it never idled out, so it never picked up a new image,
+    # and a deploy could not reach it.
+    #
+    # Deliberately not `loggable`: that flag asks whether an event is worth
+    # writing down, which is a different question. Editing an assistant or
+    # reading the chat is presence even when it is not worth tracing.
+    # Defaults to True so a new event counts until someone proves it should
+    # not — the safe direction is keeping a live pod alive.
+    counts_as_activity: ClassVar[bool] = True
     content_logged: ClassVar[bool] = False
     prominent: ClassVar[bool] = False
     topic: ClassVar[str | None] = None
@@ -1576,6 +1590,8 @@ class InitializationComplete(Event):
     """Published when ConversationManager has fully initialized all managers."""
 
     loggable: ClassVar[bool] = False
+    # The pod telling itself it finished booting.
+    counts_as_activity: ClassVar[bool] = False
 
 
 @dataclass
@@ -1595,6 +1611,9 @@ class AssistantUpdateEvent(_SessionConfigBase):
 @dataclass
 class Ping(Event):
     loggable: ClassVar[bool] = False
+    # A keepalive by name and purpose; it says the process is up, never
+    # that anyone wants anything.
+    counts_as_activity: ClassVar[bool] = False
     kind: str
 
 
@@ -1639,6 +1658,8 @@ class GetChatHistory(_TruncatedReprMixin, Event):
 @dataclass(repr=False)
 class GetBusEventsResponse(_TruncatedReprMixin, Event):
     loggable: ClassVar[bool] = False
+    # A reply to a query this process asked itself.
+    counts_as_activity: ClassVar[bool] = False
     events: list[dict[str, Any]]
 
     def _repr_truncated(self) -> str:
@@ -2067,6 +2088,66 @@ class CanvasInvocationRequested(Event):
                 f"A viewer triggered '{action_name}' from a canvas."
                 if action_name
                 else "A viewer triggered a canvas action."
+            ),
+        )
+
+
+@dataclass
+class WorkflowRequestRequested(Event):
+    """Someone asked, from a reading surface, to change a workflow's install state.
+
+    Console cannot install a workflow itself — planting content needs the
+    custom-sync engine, which is the assistant's — so it records the intent as a
+    ``Workflows/Requests`` row and Orchestra publishes this. The event therefore
+    carries identifiers only: what to do is already on the row, which is what
+    makes the change survive a lost event.
+
+    Delivery is at-least-once and the boot sweep drains the same queue, so a
+    redelivery is expected rather than exceptional. Nothing here guards against
+    double execution: the atomic claim inside ``execute_requests`` does, because
+    a retry from any source needs the same protection.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:workflow_request"
+
+    request_id: str
+    slug: str = ""
+    action: str = ""
+    destination: str = "personal"
+    reason: str = ""
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+        *,
+        reason: str = "",
+    ) -> "WorkflowRequestRequested | None":
+        """Build a workflow request event from a comms Pub/Sub payload."""
+
+        if not isinstance(payload, _Mapping):
+            return None
+        extra = payload.get("extra_event_fields")
+        fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+
+        # The id addresses the row on its own, so it is the only requirement;
+        # slug and action are for the log line and the reason text.
+        request_id = str(fields.get("request_id") or "")
+        if not request_id:
+            return None
+
+        slug = str(fields.get("slug") or "")
+        action = str(fields.get("action") or "")
+        return cls(
+            request_id=request_id,
+            slug=slug,
+            action=action,
+            destination=str(fields.get("destination") or "personal"),
+            reason=reason
+            or (
+                f"{action} was requested for the {slug!r} workflow."
+                if action and slug
+                else "A workflow install-state change was requested."
             ),
         )
 
