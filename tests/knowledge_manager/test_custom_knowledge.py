@@ -169,6 +169,35 @@ def test_sync_custom_knowledge_is_idempotent(
 
 
 @_handle_project
+def test_sync_adopts_provenance_less_row_by_title(
+    knowledge_manager_factory,
+    custom_knowledge_dir,
+):
+    km = knowledge_manager_factory()
+    km.add_knowledge(
+        title="Tesla battery warranty",
+        content="Planted before custom provenance existed.",
+    )
+    legacy = km.filter()
+    assert len(legacy) == 1
+    legacy_id = legacy[0].knowledge_id
+
+    source = {
+        k: v
+        for k, v in collect_custom_knowledge(path=custom_knowledge_dir).items()
+        if (v.get("destination") or "personal") == "personal"
+    }
+    km.sync_custom(source_claims=source)
+
+    rows = [row for row in km.filter() if row.title == "Tesla battery warranty"]
+    assert len(rows) == 1
+    assert rows[0].knowledge_id == legacy_id
+    assert rows[0].custom_key == "warranty-tesla"
+    assert rows[0].custom_hash is not None
+    assert "100k miles" in rows[0].content
+
+
+@_handle_project
 def test_user_knowledge_without_custom_hash_is_preserved(
     knowledge_manager_factory,
     custom_knowledge_dir,
