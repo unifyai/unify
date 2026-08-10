@@ -1793,6 +1793,7 @@ class _StorageCheckHandle(SteerableToolHandle):
         self._task_done_event = asyncio.Event()
         self._completion_event = asyncio.Event()
         self._original_result: Optional[str] = None
+        self._task_failure: Optional[BaseException] = None
         self._storage_handle: Optional["AsyncToolLoopHandle"] = None
         self._phase: str = "task"  # "task" | "storage" | "done"
         self._stopped: bool = False
@@ -1863,6 +1864,10 @@ class _StorageCheckHandle(SteerableToolHandle):
                 raise
             except Exception as exc:
                 task_succeeded = False
+                # Kept so ``result()`` can re-raise. Flattening the failure into
+                # a string here is what let a crashed run reach the scheduler
+                # looking like a normal return, and be recorded as completed.
+                self._task_failure = exc
                 self._original_result = (
                     f"Error: inner task failed: {type(exc).__name__}: {exc}"
                 )
@@ -1907,6 +1912,13 @@ class _StorageCheckHandle(SteerableToolHandle):
                 pass
 
             # ── Phase 2: storage check ────────────────────────────────
+            # A crashed trajectory is not a source of reusable knowledge — the
+            # librarian would derive functions, guidance, and claims from work
+            # that never completed. A deliberate stop still reviews, because the
+            # work up to that point was real.
+            if self._task_failure is not None:
+                return
+
             self._phase = "storage"
 
             _sc_suffix = _token_hex(2)
@@ -2145,11 +2157,18 @@ class _StorageCheckHandle(SteerableToolHandle):
 
     async def result(self) -> str:
         await self._task_done_event.wait()
+        # An explicit stop is an outcome the caller asked for, so it reports as
+        # one even if the actor then raised on its way down.
         if self._stopped and self._stop_reason:
             return (
                 f"Task stopped as requested. Reason: {self._stop_reason}\n"
                 f"Background skill storage is reviewing the completed work."
             )
+        # Re-raise rather than returning the flattened error string: callers
+        # decide success from whether this raises, so swallowing it here makes a
+        # crashed run indistinguishable from one that returned normally.
+        if self._task_failure is not None:
+            raise self._task_failure
         return self._original_result or ""
 
     # ── Events ────────────────────────────────────────────────────────
@@ -3814,7 +3833,16 @@ class CodeActActor(BaseCodeActActor):
 
         if self.function_manager:
 
+            @llm_soft_required(thought="")
             async def execute_function(
+                thought: Annotated[
+                    str,
+                    "A brief, first-person, one-sentence explanation of what "
+                    "this call does and why you are making it right now (e.g. "
+                    '"Reading the five most recent inbox messages so I can '
+                    'summarise them."). Shown to the user as the rationale for '
+                    "this step; always provide it.",
+                ],
                 function_name: str,
                 call_kwargs: Optional[Dict[str, Any]] = None,
                 *,
@@ -3879,12 +3907,17 @@ class CodeActActor(BaseCodeActActor):
 
                 Parameters
                 ----------
+                thought : str
+                    One-sentence, first-person rationale for this call, shown
+                    to the user. Always provide it.
                 function_name : str
                     Exact name of the function or primitive to execute.
                     For primitives, use the dotted path as it appears in the
                     sandbox (e.g. ``"primitives.contacts.ask"``).
                 call_kwargs : dict, optional
-                    Keyword arguments to pass to the function.
+                    Keyword arguments to pass to the function, each value in
+                    the type the target declares — numbers and booleans
+                    unquoted, not stringified.
 
                 Steering while the function runs
                 -------------------------------
@@ -3905,6 +3938,7 @@ class CodeActActor(BaseCodeActActor):
                     error, language, state_mode, session_id, session_name,
                     session_created, duration_ms).
                 """
+                _ = thought  # Thought is logged by the LLM; not used programmatically.
                 call_kwargs = call_kwargs or {}
                 resolved_venv_id: int | None = None
                 function_data: dict[str, Any] | None = None

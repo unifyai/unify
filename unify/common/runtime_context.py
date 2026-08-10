@@ -64,7 +64,21 @@ def bind_runtime_context_root(
     try:
         active_ctx = unisdk.get_active_context() or {}
         if active_ctx.get("read") != full_ctx or active_ctx.get("write") != full_ctx:
-            unisdk.set_context(full_ctx, skip_create=skip_create)
+            # The resolved root is authoritative and absolute; bind it as
+            # such. The previous relative set_context silently JOINED the
+            # root onto whatever context was already active, so a process
+            # that pre-bound a different root (an embedding harness without
+            # TEST mode) got its storage split across two roots and grew a
+            # new "{user}/{agent}" path segment on every rebind.
+            if active_ctx.get("read") or active_ctx.get("write"):
+                LOGGER.warning(
+                    f"{ICONS['managers_worker']} [ManagersWorker] Rebinding "
+                    f"runtime context from {active_ctx!r} to {full_ctx!r}. A "
+                    "pre-bound context is only honored as the session root "
+                    "in test mode (SETTINGS.TEST); otherwise SESSION_DETAILS "
+                    "is authoritative and the previous binding is replaced.",
+                )
+            unisdk.set_context(full_ctx, relative=False, skip_create=skip_create)
             context_set = True
     except Exception as exc:
         if strict:

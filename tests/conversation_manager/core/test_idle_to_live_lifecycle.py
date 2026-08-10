@@ -154,10 +154,11 @@ class TestIdleContainerEventProcessing:
             ping = Ping(kind="keepalive")
             await event_broker.publish("app:comms:ping", ping.to_json())
 
-            # The event loop should process this immediately. We verify by
-            # checking that last_activity_time was updated (Ping processing
-            # updates it via the event loop's msg handler).
-            initial_activity = cm.last_activity_time
+            # The event loop should process this immediately. Every message it
+            # takes off the bus gets a trace sequence number, whatever the
+            # event is; a keepalive deliberately does not touch the activity
+            # clock, so the clock cannot tell us whether the loop is running.
+            initial_seq = cm._event_trace_seq
 
             # Publish another ping after a brief delay
             await asyncio.sleep(0.15)
@@ -169,8 +170,7 @@ class TestIdleContainerEventProcessing:
             # Wait briefly for the event to be processed
             await asyncio.sleep(0.15)
 
-            # last_activity_time should have advanced
-            assert cm.last_activity_time > initial_activity, (
+            assert cm._event_trace_seq > initial_seq, (
                 "Event loop did not process Ping event. "
                 "The event loop is likely blocked on initialization. "
                 "This is the exact bug from commit b3814ca2."

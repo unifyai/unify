@@ -207,6 +207,32 @@ async def test_user_guidance_without_custom_hash_is_preserved(
 
 @_handle_project
 @pytest.mark.asyncio
+async def test_sync_adopts_provenance_less_row_by_title(
+    guidance_manager_factory,
+    custom_guidance_dir,
+):
+    gm = guidance_manager_factory()
+    gm.add_guidance(
+        title="How to triage repairs",
+        content="Planted before custom provenance existed.",
+    )
+    legacy = gm.filter(limit=10)
+    assert len(legacy) == 1
+    legacy_id = legacy[0].guidance_id
+
+    source = collect_custom_guidance(path=custom_guidance_dir)
+    gm.sync_custom_guidance(source_guidance=source)
+
+    rows = [row for row in gm.filter(limit=100) if row.title == "How to triage repairs"]
+    assert len(rows) == 1
+    assert rows[0].guidance_id == legacy_id
+    assert rows[0].custom_key == "ops/triage"
+    assert rows[0].custom_hash is not None
+    assert "urgent repairs" in rows[0].content
+
+
+@_handle_project
+@pytest.mark.asyncio
 async def test_sync_custom_resolves_function_names(
     guidance_manager_factory,
     custom_guidance_dir,

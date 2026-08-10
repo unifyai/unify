@@ -636,8 +636,13 @@ def _annotation_to_schema(ann: Any) -> Dict[str, Any]:
             return inner
         return {"anyOf": sub_schemas}
 
-    # Python's base `object` class: allow any JSON value (empty schema = no constraints)
-    if ann is object:
+    # `object` and `typing.Any`: any JSON value is valid (empty schema = no
+    # constraints). Both must land here rather than on the string fallback below.
+    # A `Dict[str, Any]` parameter otherwise compiles to
+    # `additionalProperties: {"type": "string"}`, which tells the model every
+    # value must be a string — contradicting the callee's real signature and
+    # leaving no valid token to emit for a numeric argument.
+    if ann is object or ann is Any:
         return {}
 
     # Fallback

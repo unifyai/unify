@@ -170,10 +170,19 @@ _WORKFLOW_SHELF = textwrap.dedent("""
 
     **After install, everything is ordinary.** Planted procedures are
     found by the same guidance search as any other; planted tasks are
-    ordinary tasks, run and steered through the usual task tools. There
-    is no workflow-level "run": running means triggering the workflow's
-    own task. Uninstalling removes what the workflow planted and stops
-    its jobs — name them before confirming.
+    ordinary tasks, run and steered through the usual task tools.
+    Uninstalling removes what the workflow planted and stops its jobs —
+    name them before confirming.
+
+    **Running one is always explicit.** Installing plants and arms; it
+    never runs. When the user asks for a workflow's work now — "run my
+    briefing", "do the review sweep" — take the `task_id` from that
+    installation's `jobs` (in `WorkflowManager_get_workflow`, or the
+    installed entries of `WorkflowManager_list_workflows`) and start it
+    with `primitives.tasks.execute`. There is no workflow-level run,
+    because a workflow has no runtime: the task it planted does. A job
+    reporting `enabled: false` is held on a missing connection, and
+    starting it is refused — say which app to connect instead.
 """)
 
 
@@ -256,6 +265,22 @@ _EXECUTION_RULES = textwrap.dedent("""
     execute_function(function_name="primitives.contacts.ask",
                      call_kwargs={"text": "..."})
     ```
+
+    **`call_kwargs` values keep the callee's own types.** It is a plain
+    keyword-argument mapping, not a string map — pass numbers, booleans,
+    lists, and objects unquoted, exactly as the target signature declares
+    them:
+
+    ```
+    execute_function(function_name="primitives.workspace_email.list_messages",
+                     call_kwargs={"max_results": 5})
+
+    execute_function(function_name="primitives.coordinator.list_assistants",
+                     call_kwargs={"agent_id": 42})
+    ```
+
+    Quoting a numeric argument (`{"max_results": "5"}`) is wrong and will
+    fail type validation at the callee.
 
     The `print()`, the `await handle.result()`, and the temporary
     variable do **not** count as "multi-step composition" — they are

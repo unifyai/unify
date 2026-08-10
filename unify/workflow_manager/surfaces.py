@@ -85,9 +85,9 @@ favour of canvas.
 view is real TypeScript that has to be linted, typechecked, bundled,
 rendered and published against the kit installed *now*, and its routing
 token has a lifecycle the reconcile engine has no business owning. A
-bundle ships canvas **source**; the install-time provisioning pass hands
-it to CanvasManager's own authoring pipeline and uninstall deletes
-through the manager's own delete, which already releases the token.
+bundle ships canvas **source**; the install hands it to CanvasManager's
+own authoring pipeline and uninstall deletes through the manager's own
+delete, which already releases the token.
 """
 
 
@@ -125,6 +125,13 @@ def register_default_surfaces(
             if name == "tasks" and task_scheduler is not None
             else None
         )
+        # The same manager also answers which definitions it planted, which
+        # is how an installed workflow names the job to run on demand.
+        lister = (
+            task_scheduler.list_custom_tasks
+            if name == "tasks" and task_scheduler is not None
+            else None
+        )
         registry.register(
             name,
             getattr(manager, spec.method),
@@ -132,5 +139,6 @@ def register_default_surfaces(
             source_scoped=True,
             shared=spec.shared,
             armer=armer,
+            lister=lister,
         )
     return registry
