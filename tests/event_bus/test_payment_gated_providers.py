@@ -95,7 +95,29 @@ class TestGateAtTheSpendBoundary:
         response = await _run_callback("claude-fable-5@anthropic", _NEVER_PAID)
 
         assert response.allowed is False
-        assert "payment method" in response.reason
+        # The refusal has to carry its own remedy: this string is what the
+        # user is shown, and a denial they cannot act on is the failure mode
+        # this gate keeps reproducing.
+        assert "payment" in response.reason.lower()
+        assert "billing" in response.reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_reason_does_not_promise_that_a_card_is_enough(self):
+        """Access turns on payment history, not on a card being attached.
+
+        Earlier copy said "add a payment method", which sends someone to
+        attach a card and hit the identical refusal afterwards.
+        """
+        response = await _run_callback("claude-fable-5@anthropic", _NEVER_PAID)
+
+        assert "add a payment method" not in response.reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_reason_offers_a_way_to_keep_working_now(self):
+        """An included model is reachable immediately; say so."""
+        response = await _run_callback("claude-fable-5@anthropic", _NEVER_PAID)
+
+        assert "included models" in response.reason.lower()
 
     @pytest.mark.asyncio
     async def test_allows_anthropic_once_the_account_has_paid(self):
@@ -121,4 +143,6 @@ class TestGateAtTheSpendBoundary:
     async def test_reason_names_the_provider(self):
         response = await _run_callback("claude-opus-5@anthropic", _NEVER_PAID)
 
-        assert "anthropic" in response.reason
+        # Spelled as a reader writes it, not as the endpoint suffix is
+        # matched — this string is shown to the account holder.
+        assert "Anthropic" in response.reason

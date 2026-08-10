@@ -511,6 +511,24 @@ def _provider_of(model: str) -> Optional[str]:
     return provider.strip().lower() or None
 
 
+#: Display spellings for providers that appear in user-facing refusals. The
+#: endpoint suffix is lowercased for matching, which is not how anyone writes
+#: these names; falling back to the raw slug keeps a newly-gated provider
+#: readable rather than blocking on an entry here.
+_PROVIDER_DISPLAY_NAMES = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+    "vertex-ai": "Vertex AI",
+    "deepseek": "DeepSeek",
+}
+
+
+def _provider_label(provider: str) -> str:
+    """How a provider is spelled when the user reads it."""
+    return _PROVIDER_DISPLAY_NAMES.get(provider, provider)
+
+
 def _payment_gated(model: str, *, never_paid: bool) -> bool:
     """Whether this call is for a paid-only provider on an unpaid account."""
     if not never_paid:
@@ -705,9 +723,11 @@ async def check_spending_limits_callback(
         return LimitCheckResponse(
             allowed=False,
             reason=(
-                f"{provider} models require a payment method on this "
-                "account. Add one to enable them, or switch this assistant "
-                "to one of the included models."
+                f"{_provider_label(str(provider))} models unlock once this "
+                "account has made its first payment — adding a card alone "
+                "does not enable them. Subscribe in billing to use them, or "
+                "switch this assistant to one of the included models to "
+                "carry on now."
             ),
         )
 
