@@ -308,7 +308,24 @@ async def single_shot_tool_decision(
         """Execute a single tool call and return the result."""
         fn_info = call.get("function", {})
         fn_name = fn_info.get("name")
-        fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+        # Arguments that are not valid JSON — usually truncated because
+        # generation degenerated and hit the output-token cap mid-object — are a
+        # recoverable per-call event. Report them in the same error shape used
+        # for a raising tool below rather than aborting the concurrent batch.
+        try:
+            fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+        except ValueError as exc:
+            _ss_logger.warning(
+                "⏱️ [single_shot] malformed arguments for %s: %s",
+                fn_name,
+                exc,
+            )
+            return ToolExecution(
+                name=fn_name,
+                args={},
+                result={"error": f"Malformed tool arguments: {exc}"},
+                thoughts=None,
+            )
         fn_args, tool_thoughts = _split_tool_args(dict(fn_args))
 
         # Get the callable

@@ -1,47 +1,52 @@
-"""Run summaries belong to the run that produced them.
+"""Run outcomes belong to the run that produced them.
 
-A summary describes one execution, so it is stored on that execution's
+An outcome describes one execution, so it is stored on that execution's
 ``Tasks/Executions`` row. Writing it to the definition meant concurrent runs
-of the same task overwrote each other's summary on a row that outlives them
-both, and the last run to finish won.
+of the same task overwrote each other on a row that outlives them both, and
+the last run to finish won.
+
+The row is written exactly once, from the actor's own result. A second,
+after-the-fact summary pass used to overwrite that value with boilerplate,
+which is how a crashed run came to read as a clean ``completed``.
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 
 from unify.task_scheduler.active_task import ActiveTask
 from unify.task_scheduler.machine_state import TaskRunReference
 
-MOCK_SUMMARY = "Mock summary: Task completed important steps."
-
 
 class _Handle:
-    def __init__(self, action_log=None):
-        # `or` would turn an explicitly empty log back into the default and
-        # send the no-log case down the summarizer path.
-        self.action_log = ["did a thing"] if action_log is None else action_log
+    """Minimal actor handle: returns a result, or raises one."""
+
+    def __init__(self, *, result: str | None = "done", raises: Exception | None = None):
+        self._result = result
+        self._raises = raises
 
     async def result(self):
-        return "done"
+        if self._raises is not None:
+            raise self._raises
+        return self._result
 
 
 def _active_task(
     *,
     run_key: str = "run-1",
     reference: TaskRunReference | None = ...,
+    handle: _Handle | None = None,
 ) -> ActiveTask:
-    """An ActiveTask wired for summary generation with no live Orchestra."""
+    """An ActiveTask wired for outcome persistence with no live Orchestra."""
 
     task = object.__new__(ActiveTask)
-    task._actor_handle = _Handle()
+    task._actor_handle = handle if handle is not None else _Handle()
     task._was_stopped = False
     task._scheduler = None
     task._task_id = 10
-    task._summary_scheduled = False
+    task._preserve_definition_status = False
     task._task_run_reference = (
         TaskRunReference(assistant_id="1406", run_key=run_key)
         if reference is ...
@@ -63,60 +68,70 @@ def recorded_updates(monkeypatch):
         "unify.task_scheduler.active_task.update_task_run_record",
         _record,
     )
-    monkeypatch.setattr(
-        ActiveTask,
-        "_generate_summary_from_log",
-        AsyncMock(return_value=MOCK_SUMMARY),
-    )
     return updates
 
 
-def test_summary_lands_on_the_execution_row(recorded_updates):
-    asyncio.run(_active_task()._save_final_summary("completed"))
+def test_outcome_lands_on_the_execution_row(recorded_updates):
+    assert asyncio.run(_active_task().result()) == "done"
 
-    assert recorded_updates == [("run-1", {"result_summary": MOCK_SUMMARY})]
+    assert len(recorded_updates) == 1
+    run_key, patch = recorded_updates[0]
+    assert run_key == "run-1"
+    assert patch["state"] == "completed"
+    assert patch["result_summary"] == "done"
 
 
-def test_summary_is_recorded_for_a_cancelled_run(recorded_updates):
-    asyncio.run(_active_task()._save_final_summary("cancelled"))
+def test_the_row_is_written_once_and_keeps_the_actor_result(recorded_updates):
+    """The regression: a second write used to replace the result with boilerplate."""
 
-    assert recorded_updates
-    assert recorded_updates[0][1]["result_summary"] == MOCK_SUMMARY
+    asyncio.run(_active_task().result())
+
+    assert len(recorded_updates) == 1
+    assert "No detailed log found" not in recorded_updates[0][1]["result_summary"]
+
+
+def test_a_raising_actor_records_failed_with_the_error(recorded_updates):
+    """A crashed run must not read as completed."""
+
+    task = _active_task(handle=_Handle(raises=ValueError("Expecting value: line 1")))
+
+    with pytest.raises(ValueError):
+        asyncio.run(task.result())
+
+    assert len(recorded_updates) == 1
+    patch = recorded_updates[0][1]
+    assert patch["state"] == "failed"
+    assert "Expecting value" in patch["error"]
+    assert "ValueError" in patch["result_summary"]
+
+
+def test_a_run_that_returns_nothing_says_so(recorded_updates):
+    """An empty result must be recorded, not dropped so the field reads stale."""
+
+    asyncio.run(_active_task(handle=_Handle(result="")).result())
+
+    assert len(recorded_updates) == 1
+    assert recorded_updates[0][1]["result_summary"] == "The run returned no result."
 
 
 def test_concurrent_runs_record_to_their_own_executions(recorded_updates):
-    """The race the move fixes: two runs, two summaries, neither clobbered."""
+    """Two runs, two outcomes, neither clobbered."""
 
     async def _both():
         await asyncio.gather(
-            _active_task(run_key="run-a")._save_final_summary("completed"),
-            _active_task(run_key="run-b")._save_final_summary("completed"),
+            _active_task(run_key="run-a").result(),
+            _active_task(run_key="run-b").result(),
         )
 
     asyncio.run(_both())
 
     assert {run_key for run_key, _ in recorded_updates} == {"run-a", "run-b"}
-    assert all(patch["result_summary"] == MOCK_SUMMARY for _, patch in recorded_updates)
+    assert all(patch["result_summary"] == "done" for _, patch in recorded_updates)
 
 
 def test_run_without_an_execution_row_writes_nothing(recorded_updates):
     """Executions are assistant-owned; a session without one has no ledger."""
 
-    asyncio.run(_active_task(reference=None)._save_final_summary("completed"))
+    asyncio.run(_active_task(reference=None).result())
 
     assert recorded_updates == []
-
-
-def test_summary_falls_back_when_no_action_log(monkeypatch):
-    updates: list[dict] = []
-    monkeypatch.setattr(
-        "unify.task_scheduler.active_task.update_task_run_record",
-        lambda reference, patch: updates.append(dict(patch)),
-    )
-
-    task = _active_task()
-    task._actor_handle = _Handle(action_log=[])
-    asyncio.run(task._save_final_summary("failed"))
-
-    assert updates
-    assert "failed" in updates[0]["result_summary"]

@@ -257,6 +257,22 @@ _EXECUTION_RULES = textwrap.dedent("""
                      call_kwargs={"text": "..."})
     ```
 
+    **`call_kwargs` values keep the callee's own types.** It is a plain
+    keyword-argument mapping, not a string map — pass numbers, booleans,
+    lists, and objects unquoted, exactly as the target signature declares
+    them:
+
+    ```
+    execute_function(function_name="primitives.workspace_email.list_messages",
+                     call_kwargs={"max_results": 5})
+
+    execute_function(function_name="primitives.coordinator.list_assistants",
+                     call_kwargs={"agent_id": 42})
+    ```
+
+    Quoting a numeric argument (`{"max_results": "5"}`) is wrong and will
+    fail type validation at the callee.
+
     The `print()`, the `await handle.result()`, and the temporary
     variable do **not** count as "multi-step composition" — they are
     boilerplate. Wrapping a single primitive in `execute_code` strips

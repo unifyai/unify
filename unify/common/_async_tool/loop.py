@@ -2894,10 +2894,53 @@ async def async_tool_loop_inner(
                     name = call["function"]["name"]
                     runtime_state.called_tools.append(name)
 
-                    # Parse arguments - handle both string and dict formats
+                    # Parse arguments - handle both string and dict formats.
+                    #
+                    # A model can emit arguments that are not valid JSON — most
+                    # often truncated, because generation degenerated and ran to
+                    # the output-token cap mid-object. That is a recoverable
+                    # event for this one call, so surface it back to the model
+                    # the same way an unavailable tool is (below) instead of
+                    # letting one bad call abort the whole turn. Repetition is
+                    # what ends the loop, via the refusal tally.
                     _raw_args = call["function"]["arguments"]
                     if isinstance(_raw_args, str):
-                        args = json.loads(_raw_args)
+                        try:
+                            args = json.loads(_raw_args)
+                        except ValueError as exc:
+                            logger.error(
+                                "Malformed tool-call arguments for %s (%d chars): %s",
+                                name,
+                                len(_raw_args),
+                                exc,
+                            )
+                            refusal = (
+                                f"⚠️ Error: the arguments for '{name}' were not "
+                                f"valid JSON ({exc}). They may have been cut off "
+                                "mid-object. Re-issue the call with complete, "
+                                "well-formed JSON arguments, keeping each value "
+                                "in the type the target expects."
+                            )
+                            consecutive_failures.note_refusal(
+                                tool_name=name,
+                                args=_raw_args,
+                                message=refusal,
+                            )
+                            await insert_tool_message_after_assistant(
+                                assistant_meta,
+                                msg,
+                                create_tool_call_message(
+                                    name=name,
+                                    call_id=call["id"],
+                                    content=refusal,
+                                ),
+                                client,
+                                _msg_dispatcher,
+                            )
+                            stop_reason = consecutive_failures.stop_reason()
+                            if stop_reason:
+                                raise RuntimeError(stop_reason)
+                            continue
                     else:
                         args = _raw_args if isinstance(_raw_args, dict) else {}
 
