@@ -2922,6 +2922,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         exc_info=True,
                     )
 
+            # A pod with no assistant has nobody to be idle *from*: its only
+            # traffic is the pre-startup keepalive, which is not presence.
+            # Its lifetime belongs to the pool, which deletes stale-image
+            # members and trims the rest to target, so retiring itself here
+            # would empty the warm pool an hour after it was filled. Drain
+            # still applies above — a draining idle pod exits for a restart.
+            if SESSION_DETAILS.assistant.agent_id is None:
+                continue
+
             if (
                 not has_active_work
                 and pubsub_idle > self.inactivity_timeout
