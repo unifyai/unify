@@ -2329,7 +2329,7 @@ rediscover it from scratch.
 assistant VM/tunnel infra, self-host stack, client overlay, prod CI/CD), `orchestra`
 (backend API + Postgres, hosted), `console` (Next.js UI, hosted), `unisdk` (Python SDK,
 public), `unillm` (LLM layer, public). Dependency `magnitude` is consumed at branch
-`unity-modifications`. All repos: `main` = prod, `staging` = dev; promote `staging`→`main`.
+`main`. All repos: `main` = prod, `staging` = dev; promote `staging`→`main`.
 
 ## GCP projects (4)
 
@@ -2381,7 +2381,7 @@ project IDs `unity-assistant-vms` & `responsive-city-458413-a2`, all service-acc
 - Archive bucket: `droid-assistant-archives` (live); `unity-assistant-archives` is legacy rollback.
 - Data buckets (recordings/logs/artifacts) and ~84% of Pub/Sub topics/subs are still `unity-*`.
 - CI: GitHub org secrets are still `UNITY_ADAPTERS_URL`/`UNITY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
-- Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels, `magnitude@unity-modifications`.
+- Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels.
 
 When something infra-related "doesn't exist" or 404s/401s, suspect a legacy resource-name mismatch
 and confirm the real resource name against the `unify-deploy` README (or `gcloud`/`gh`) rather
