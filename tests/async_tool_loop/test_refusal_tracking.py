@@ -130,3 +130,50 @@ def test_a_success_clears_the_unexpected_failure_run():
     tracker.reset_failures()
     assert tracker.current_failures == 0
     assert tracker.stop_reason() is None
+
+
+# ── malformed arguments are refusals, so repetition still ends the loop ────
+#
+# The loop cannot parse arguments that are not valid JSON, so it hands the call
+# back to the model as a refusal and moves on. That `continue` is only safe
+# because an unchanged retry is counted here — otherwise a model stuck emitting
+# the same truncated payload would spin forever.
+
+# The real shape, shortened: a valid prefix, then whitespace, never closed.
+TRUNCATED_ARGS = (
+    '{"function_name":"primitives.workspace_email.list_messages",'
+    '"call_kwargs":{"max_results":' + "\n  " * 200
+)
+MALFORMED_COMPLAINT = (
+    "⚠️ Error: the arguments for 'execute_function' were not valid JSON "
+    "(Expecting value: line 1 column 89 (char 88))."
+)
+
+
+def test_an_unchanged_truncated_payload_stops_the_loop():
+    tracker = _tracker()
+    stops = [
+        tracker.note_refusal(
+            tool_name="execute_function",
+            args=TRUNCATED_ARGS,
+            message=MALFORMED_COMPLAINT,
+        )
+        for _ in range(_LoopToolFailureTracker.IDENTICAL_CALL_LIMIT)
+    ]
+
+    assert stops[0] is None, "the first truncation is worth retrying"
+    assert stops[-1] is not None, "an unchanged retry must not spin"
+    assert tracker.stop_reason() is not None
+
+
+def test_a_repaired_payload_is_not_penalised():
+    """Emitting complete arguments after a truncation is exactly the recovery."""
+    tracker = _tracker()
+    tracker.note_refusal(
+        tool_name="execute_function",
+        args=TRUNCATED_ARGS,
+        message=MALFORMED_COMPLAINT,
+    )
+
+    assert tracker.stop_reason() is None
+    assert tracker.current_failures == 0

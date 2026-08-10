@@ -10,7 +10,6 @@ one-shot that has now run. It supports read-only ask, steering via interject
 
 import functools
 import asyncio
-import textwrap
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Optional, Dict, TYPE_CHECKING, List, Any
@@ -394,7 +393,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 result_summary=reason or "Task stopped.",
             ),
         )
-        asyncio.create_task(self._save_final_summary("cancelled"))
 
     @functools.wraps(BaseActiveTask.pause, updated=())
     async def pause(self) -> Optional[str]:
@@ -408,69 +406,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
     def done(self) -> bool:
         return self._actor_handle.done()
 
-    async def _generate_summary_from_log(self, action_log: List[str]) -> str:
-        """Generate a concise summary of the execution from the actor's action log."""
-        client = new_llm_client(origin="ActiveTask.generate_summary")
-        prompt = textwrap.dedent(
-            f"""
-            You are an assistant summarizing a complex task's execution log.
-            Your summary will be stored in a database `info` column
-            to provide a quick overview of "what actually happened".
-
-            - Focus on the final outcome (e.g., completed, stopped, error).
-            - Mention any user interjections or clarifications.
-            - Mention any major verification failures and recoveries.
-            - Be concise (1-3 sentences).
-
-            EXECUTION LOG:
-            ---
-            {chr(10).join(action_log)}
-            ---
-
-            Concisely summarize what happened:
-        """,
-        )
-        try:
-            summary = await client.generate(prompt)
-            return summary.strip()
-        except Exception as e:
-            logger.error("Error during summary generation: %s", e)
-            return "Summary generation failed. Final Status: <UNKNOWN>"
-
-    async def _save_final_summary(self, final_status: str):
-        """Generate the run summary and store it on this run's Execution row.
-
-        The summary describes one run, so it belongs to that run. Writing it to
-        the definition meant concurrent runs overwrote each other's summary on
-        a row that outlives them both.
-        """
-        if self._task_run_reference is not None:
-            summary = "No execution log was available to generate a summary."
-            try:
-                if (
-                    hasattr(self._actor_handle, "action_log")
-                    and self._actor_handle.action_log
-                ):
-                    summary = await self._generate_summary_from_log(
-                        self._actor_handle.action_log,
-                    )
-                else:
-                    summary = f"Task finished with status '{final_status}'. No detailed log found."
-
-                summary = summary.replace("<UNKNOWN>", final_status)
-
-                await asyncio.to_thread(
-                    update_task_run_record,
-                    self._task_run_reference,
-                    {"result_summary": _truncate_task_run_text(summary)},
-                )
-
-            except Exception as e:
-                logger.error(
-                    "Error saving final task summary: %s",
-                    e,
-                )
-
     async def _persist_task_run_terminal_state(
         self,
         *,
@@ -482,15 +417,21 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
 
         if self._task_run_reference is None:
             return
+        # A run that produced nothing says so. Passing None here would be
+        # dropped from the patch and leave whatever the row happened to hold,
+        # which reads as a result the run never returned.
+        summary = (
+            _truncate_task_run_text(result_summary)
+            if result_summary
+            else "The run returned no result."
+        )
         await asyncio.to_thread(
             update_task_run_record,
             self._task_run_reference,
             {
                 "state": state,
                 "completed_at": _now_iso(),
-                "result_summary": (
-                    _truncate_task_run_text(result_summary) if result_summary else None
-                ),
+                "result_summary": summary,
                 "error": _truncate_task_run_text(error) if error else None,
             },
         )
@@ -538,23 +479,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         self._scheduler._mark_one_shot_completed(  # type: ignore[attr-defined]
                             self._task_id,
                         )
-
-                        if not getattr(self, "_summary_scheduled", False):
-                            try:
-                                logger.info(
-                                    "--- Scheduling save_final_summary for %s with status: %s ---",
-                                    self._task_id,
-                                    final_status,
-                                )
-                                asyncio.create_task(
-                                    self._save_final_summary(final_status),
-                                )
-                                self._summary_scheduled = True  # type: ignore[attr-defined]
-                            except Exception as summary_e:
-                                logger.error(
-                                    "Error creating summary task: %s",
-                                    summary_e,
-                                )
             except Exception:
                 logger.exception(
                     "Task completion maintenance failed (task_id=%s)",

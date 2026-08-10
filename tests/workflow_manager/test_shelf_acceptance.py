@@ -199,6 +199,20 @@ async def test_bundle_full_lifecycle(slug, live_managers, monkeypatch):
         }
         if requirement.kind == "workspace":
             entry["missing_secrets"] = list(requirement.required_secrets)
+        # A requirement the bundle lets the user satisfy more than one way
+        # reports every option with its own state, because the reader offers
+        # all of them: naming only the first would send someone who uses
+        # Discord to connect Slack.
+        if len(requirement.options) > 1:
+            entry["options"] = [
+                {
+                    "slug": option.slug,
+                    "name": option.display_name,
+                    "connected": False,
+                    "via": "connection",
+                }
+                for option in requirement.options
+            ]
         return entry
 
     assert result["connect_required"]["requirements"] == [

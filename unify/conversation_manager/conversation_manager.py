@@ -2922,6 +2922,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         exc_info=True,
                     )
 
+            # A pod with no assistant has nobody to be idle *from*: its only
+            # traffic is the pre-startup keepalive, which is not presence.
+            # Its lifetime belongs to the pool, which deletes stale-image
+            # members and trims the rest to target, so retiring itself here
+            # would empty the warm pool an hour after it was filled. Drain
+            # still applies above — a draining idle pod exits for a restart.
+            if SESSION_DETAILS.assistant.agent_id is None:
+                continue
+
             if (
                 not has_active_work
                 and pubsub_idle > self.inactivity_timeout
@@ -3105,6 +3114,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.team_summaries = SESSION_DETAILS.team_summaries
         # Export to env vars for subprocess inheritance
         SESSION_DETAILS.export_to_env()
+        # The payload's owner_team_id is a launcher-delivered hint; the
+        # platform record is the identity. Binding here covers every
+        # session-config lane (StartupEvent, AssistantUpdateEvent): an omitted
+        # value self-heals from the record and a disagreement stops the
+        # session, so a payload that forgot the field cannot silently route a
+        # team-owned assistant's shared tables to the personal root.
+        SESSION_DETAILS.bind_derived_ownership()
+        self.owner_team_id = SESSION_DETAILS.owner_team_id
 
     def get_details(self) -> dict:
         return {

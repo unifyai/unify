@@ -21,6 +21,7 @@ from unify.conversation_manager.events import (
     InitializationComplete,
     OpenSlowBrainTurn,
     Ping,
+    StartupEvent,
 )
 
 
@@ -41,6 +42,18 @@ def test_a_person_doing_something_still_keeps_the_pod_alive():
         assert (
             event_class.counts_as_activity is True
         ), f"{event_class.__name__} is somebody doing something"
+
+
+def test_assignment_starts_the_clock_for_a_pod_that_waited():
+    """A pod can wait in the warm pool for hours before it is assigned.
+
+    Nothing it sees while unassigned counts as presence, so its clock is
+    stale by the time somebody arrives. The assignment itself is what
+    restarts it: were `StartupEvent` to stop counting, a pod would take its
+    first message already past the timeout and shut down under the session
+    it had only just been handed.
+    """
+    assert StartupEvent.counts_as_activity is True
 
 
 def test_the_default_is_to_count():

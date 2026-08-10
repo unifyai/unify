@@ -5,6 +5,7 @@ from typing import FrozenSet, List, Dict, Optional, Any, Tuple
 import base64
 import functools
 import inspect
+import json
 import logging
 import threading
 
@@ -1329,6 +1330,35 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
         self._manager._delete_custom_guidance_by_key(key, managed_by=self.managed_by)
+
+    def find_adoptable(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Claim a provenance-less row carrying this entry's title rather
+        than inserting a second copy beside it.
+
+        Rows planted before ``custom_key``/``custom_hash`` existed carry
+        neither, so the managed index and the collision probe (both keyed
+        on ``custom_key``) cannot see them and every reconcile would
+        duplicate the whole seed set. Title is the only identity such a
+        row still shares with its source entry; adoption updates it in
+        place via ``guidance_id`` and the write stamps the provenance.
+
+        Deployment-only: another source adopting by bare title would
+        claim rows it never planted."""
+        if self.managed_by != MANAGED_BY_DEPLOYMENT:
+            return None
+        title = json.dumps(str(fields.get("title", "")))
+        existing = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter=f"title == {title} and custom_hash == None",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return dict(existing[0].entries or {})
 
     def find_collision(
         self,

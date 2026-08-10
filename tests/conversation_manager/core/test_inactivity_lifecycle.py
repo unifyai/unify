@@ -16,7 +16,7 @@ What This File Tests:
 ---------------------
 1. **Inactivity detection**: Does check_inactivity() trigger shutdown after timeout?
 2. **Activity reset**: Does receiving events reset the inactivity timer?
-3. **Ping keep-alive**: Does the ping mechanism keep idle containers alive?
+3. **Unassigned pod lifetime**: Is a pod with no assistant exempt from the timer?
 4. **Cleanup sequence**: Is cleanup called in the correct order on shutdown?
 5. **Job marking**: Is assistant_jobs.mark_job_done() called for live containers?
 6. **Event broker close**: Is the event broker properly closed on shutdown?
@@ -24,7 +24,8 @@ What This File Tests:
 Production Context (from INFRA.md):
 -----------------------------------
 - Inactivity timeout: 1 hour (3600 seconds)
-- Ping interval: 30 seconds
+- Ping interval: 30 seconds, and a ping is not presence — an unassigned pod
+  is kept alive by being exempt from the timer, not by its own keepalive
 - Idle containers use assistant_id=None
 - Live containers have a real assistant_id
 - On shutdown: cleanup() → mark_job_done() → stop.set()
@@ -38,10 +39,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-
-from unify.conversation_manager.events import (
-    Ping,
-)
 
 # =============================================================================
 # Fixtures
@@ -61,6 +58,21 @@ async def event_broker():
     yield broker
     await broker.aclose()
     reset_in_memory_event_broker()
+
+
+@pytest.fixture(autouse=True)
+def assigned_pod():
+    """Default every test here to a pod that has been given an assistant.
+
+    Production sets this on the StartupEvent, via ``SESSION_DETAILS.populate``,
+    and it is what the runtime reads to tell an idle pod from a live one. The
+    idle timer only applies to a live one, so a test that leaves it unset is
+    exercising an unassigned pod whatever it passed to ConversationManager.
+    """
+    from unify.session_details import SESSION_DETAILS
+
+    with patch.object(SESSION_DETAILS.assistant, "agent_id", 42):
+        yield
 
 
 @pytest.fixture
@@ -428,23 +440,27 @@ class TestActiveWorkKeepAlive:
 
 
 # =============================================================================
-# Test: Ping Keep-Alive Mechanism
+# Test: Unassigned Pods Are Not Retired By The Idle Timer
 # =============================================================================
 
 
-class TestPingKeepAlive:
-    """Tests for the ping mechanism that keeps idle containers alive."""
+class TestUnassignedPodLifetime:
+    """A pod waiting for an assistant is not retired for having no traffic.
+
+    The pre-startup keepalive is the only thing on an unassigned pod's bus,
+    and it is not presence — it says the process is up, never that anyone
+    wants anything. What keeps such a pod alive is that the idle timer does
+    not apply to it: its lifetime belongs to the warm pool, which deletes
+    stale-image members and trims the rest to target.
+
+    Without that exemption the whole pool retires itself one timeout after
+    it is filled, and the next inbound cold-starts.
+    """
 
     @pytest.mark.asyncio
-    async def test_ping_event_resets_activity_timer(self, event_broker):
-        """
-        Verify that Ping events reset the inactivity timer.
-
-        Idle containers send pings every 30 seconds to stay alive. Each ping
-        should reset the inactivity timer.
-        """
+    async def test_an_unassigned_pod_does_not_retire_itself(self, event_broker):
         from unify.conversation_manager.conversation_manager import ConversationManager
-        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.session_details import SESSION_DETAILS
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -466,18 +482,74 @@ class TestPingKeepAlive:
             stop=stop_event,
         )
 
-        # Record initial activity time
-        initial_time = cm.last_activity_time
+        cm.inactivity_timeout = 0.05
+        cm.inactivity_check_interval = 0.01
+        # Idle since long before the timeout — a live pod would shut down here.
+        cm.last_activity_time = cm.loop.time() - 100.0
 
-        # Simulate activity update from receiving a ping
-        # We use direct time manipulation instead of sleeping
-        cm.last_activity_time = cm.loop.time() + 0.1
+        with patch.object(SESSION_DETAILS.assistant, "agent_id", None):
+            check_task = asyncio.create_task(cm.check_inactivity())
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop_event.wait(), timeout=0.3)
+            check_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await check_task
 
-        # Handle the ping event
-        ping_event = Ping(kind="keepalive")
-        await EventHandler.handle_event(ping_event, cm)
+        assert not stop_event.is_set(), (
+            "An unassigned pod retired itself on the idle timer; the warm pool "
+            "empties one timeout after it is filled"
+        )
+        assert cm.shutdown_reason is None
 
-        assert cm.last_activity_time > initial_time, "Ping should update activity time"
+    @pytest.mark.asyncio
+    async def test_an_assigned_pod_still_retires_on_the_idle_timer(
+        self,
+        event_broker,
+    ):
+        """The exemption is scoped to pods with no assistant.
+
+        A live session going quiet must still release its pod, or a deploy
+        cannot reach it.
+        """
+        from unify.conversation_manager.conversation_manager import ConversationManager
+        from unify.session_details import SESSION_DETAILS
+
+        stop_event = asyncio.Event()
+        cm = ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=stop_event,
+        )
+
+        cm.inactivity_timeout = 0.05
+        cm.inactivity_check_interval = 0.01
+        cm.last_activity_time = cm.loop.time() - 100.0
+
+        with patch.object(SESSION_DETAILS.assistant, "agent_id", 42):
+            check_task = asyncio.create_task(cm.check_inactivity())
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pytest.fail("An assigned pod did not retire on the idle timer")
+            finally:
+                check_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await check_task
+
+        assert cm.shutdown_reason == "idle_timeout"
 
 
 # =============================================================================

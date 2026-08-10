@@ -75,6 +75,13 @@ class ProductionSettings(BaseSettings):
     # Reasoning effort paired with UNIFY_MODEL when no per-assistant default is
     # set. Empty leaves per-call-site effort levels untouched.
     UNIFY_REASONING_EFFORT: str = "high"
+    # Ceiling on output tokens for one actor turn. Unset, the provider ceiling
+    # applies (128k on current OpenAI models), so a turn that degenerates into
+    # repetition bills and blocks for the full window — observed at eight
+    # minutes. Sized to bound that, not to shape normal turns: reasoning tokens
+    # count toward it, so keep it well above what a long reasoning turn plus a
+    # large code block needs. Set to 0 to restore the provider ceiling.
+    UNIFY_MAX_OUTPUT_TOKENS: int = 32768
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials

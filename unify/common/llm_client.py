@@ -99,11 +99,15 @@ def _build_llm_client(
     default_effort: str | None,
     kwargs: dict[str, Any],
 ) -> "unillm.AsyncUnify | unillm.Unify":
-    config = {
+    config: dict[str, Any] = {
         "reasoning_effort": "high",
         "stateful": stateful,
         "origin": origin,
     }
+    # Bound one turn's output so a degenerate generation cannot run to the
+    # provider ceiling. Callers may still override per client.
+    if SETTINGS.UNIFY_MAX_OUTPUT_TOKENS > 0:
+        config["max_completion_tokens"] = SETTINGS.UNIFY_MAX_OUTPUT_TOKENS
     config.update(kwargs)
     if default_effort is not None:
         config["reasoning_effort"] = default_effort

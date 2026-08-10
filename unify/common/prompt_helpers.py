@@ -117,11 +117,14 @@ _assistant_timezone_cache: tuple[float, str, str | None] | None = None
 
 
 def _contacts_context() -> str:
-    from unify.session_details import SESSION_DETAILS
+    # Resolve through the canonical session root rather than rebuilding
+    # "{user}/{agent}" here: that literal is only the right absolute path
+    # when the process root IS the project root. Under a pre-bound root
+    # (tests, benchmark harnesses) it silently reads a shared project-root
+    # context that belongs to no session.
+    from unify.common.runtime_context import resolve_runtime_context_root
 
-    return (
-        f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}/Contacts"
-    )
+    return f"{resolve_runtime_context_root()}/Contacts"
 
 
 def _lookup_assistant_timezone() -> _AssistantTimezoneLookup:

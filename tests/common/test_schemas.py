@@ -12,6 +12,7 @@ import functools
 import json
 from datetime import date, datetime, time, UTC
 from enum import Enum
+from typing import Any
 
 import pytest
 import unisdk
@@ -254,11 +255,38 @@ def _tool_with_optional_mapping(
             list[Person],
             lambda s: s["type"] == "array" and s["items"]["type"] == "object",
         ),
+        (Any, lambda s: s == {}),
+        (object, lambda s: s == {}),
+        (
+            dict[str, Any],
+            lambda s: s["type"] == "object" and s["additionalProperties"] == {},
+        ),
     ],
 )
 def test_annotation_schema_conversion(t, checker):
     """Every major annotation flavour is converted correctly."""
     assert checker(llmh.annotation_to_schema(t))
+
+
+def test_any_valued_mapping_does_not_constrain_values_to_strings():
+    """``Dict[str, Any]`` must advertise unconstrained values, not strings.
+
+    ``execute_function(call_kwargs: Optional[Dict[str, Any]])`` forwards keyword
+    arguments to an arbitrary callee. Compiling ``Any`` to ``{"type": "string"}``
+    tells the model every value must be a string, so a callee expecting
+    ``max_results: int`` leaves no valid token to emit and the model stalls
+    mid-argument.
+    """
+    from typing import Optional
+
+    schema = llmh.annotation_to_schema(Optional[dict[str, Any]])
+
+    assert schema["type"] == ["object", "null"]
+    assert schema["additionalProperties"] == {}
+
+    # A concretely-typed mapping must keep its value constraint.
+    typed = llmh.annotation_to_schema(dict[str, int])
+    assert typed["additionalProperties"] == {"type": "integer"}
 
 
 # --------------------------------------------------------------------------- #

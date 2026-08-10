@@ -30,7 +30,12 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .bundle import CanvasSource, WorkflowBundle, WorkflowRequirement
+from .bundle import (
+    CanvasSource,
+    RequirementOption,
+    WorkflowBundle,
+    WorkflowRequirement,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +60,37 @@ def _parse_requirements(raw: Any, *, slug: str) -> tuple[WorkflowRequirement, ..
                 slug=str(entry["slug"]),
                 name=str(entry.get("name", "")),
                 kind=str(entry.get("kind", "app")),
+                alternatives=_parse_alternatives(
+                    entry.get("alternatives"),
+                    slug=slug,
+                ),
                 required_secrets=tuple(entry.get("required_secrets") or ()),
             ),
         )
     return tuple(requirements)
+
+
+def _parse_alternatives(raw: Any, *, slug: str) -> tuple[RequirementOption, ...]:
+    """Interchangeable apps for one requirement, in recommendation order."""
+    if not raw:
+        return ()
+    options: List[RequirementOption] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            options.append(RequirementOption(slug=entry))
+            continue
+        if not isinstance(entry, dict) or not entry.get("slug"):
+            raise ValueError(
+                f"Workflow {slug!r}: each alternative is a slug string or a "
+                f"mapping with at least 'slug'; got {entry!r}.",
+            )
+        options.append(
+            RequirementOption(
+                slug=str(entry["slug"]),
+                name=str(entry.get("name", "")),
+            ),
+        )
+    return tuple(options)
 
 
 def _collect_surfaces(path: Path) -> Dict[str, Dict[str, Dict[str, Any]]]:
@@ -225,7 +257,6 @@ def load_bundle(path: Path) -> WorkflowBundle:
             manifest.get("requirements"),
             slug=slug,
         ),
-        install_task=str(manifest.get("install_task", "")),
         capabilities=tuple(manifest.get("capabilities") or ()),
         canvas=_collect_canvas(path),
     )
