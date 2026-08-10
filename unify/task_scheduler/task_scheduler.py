@@ -324,6 +324,27 @@ class TaskScheduler(BaseTaskScheduler):
                     fn=self._retry_provider_trigger,
                     display_label="Retrying provider trigger provisioning",
                 ),
+                # Read-only catalog inspection: the update prompt's authoring
+                # order (list catalog -> list connections -> describe schema ->
+                # resolve resources) must be executable from this loop, not
+                # only from ``ask`` -- otherwise trigger feasibility gets
+                # decided blind and reported as "no supported trigger".
+                ToolSpec(
+                    fn=self._list_provider_trigger_catalog,
+                    display_label="Listing provider trigger catalog",
+                ),
+                ToolSpec(
+                    fn=self._list_provider_trigger_connections,
+                    display_label="Listing provider trigger connections",
+                ),
+                ToolSpec(
+                    fn=self._describe_provider_trigger,
+                    display_label="Describing provider trigger config",
+                ),
+                ToolSpec(
+                    fn=self._list_provider_trigger_resources,
+                    display_label="Listing provider trigger resources",
+                ),
                 ToolSpec(
                     fn=self._export_provider_event_context,
                     display_label="Exporting provider event context",
