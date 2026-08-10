@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -56,7 +58,8 @@ def _secret_record(
             "voice_provider": "",
             "voice_id": "",
             "desktop_mode": "ubuntu",
-            "team_ids": [],
+            "team_ids": [11],
+            "owner_team_id": 11,
             "org_id": None,
             "self_contact_id": 0,
             "boss_contact_id": 1,
@@ -119,6 +122,11 @@ async def test_poll_for_assignment_bootstraps_from_assistant_session():
         assert publish_channel == "app:comms:startup"
         assert "assistant_id" in payload
         assert "binding-42" in payload
+        # Ownership must survive the secret -> StartupEvent hop: a session
+        # that boots without it routes shared tables to the personal root.
+        startup_payload = json.loads(payload)["payload"]
+        assert startup_payload["owner_team_id"] == 11
+        assert startup_payload["team_ids"] == [11]
         mark_ready.assert_called_once_with("unity-2026-03-30-u1234")
 
 

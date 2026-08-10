@@ -165,6 +165,25 @@ def _stub_outbound_comms(request):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _stub_derived_ownership_binding(request):
+    """Keep session-config handling off the platform-record lookup.
+
+    ``set_details`` re-derives team ownership from the platform's assistant
+    record; conversation-manager tests configure identity directly and have
+    no record to serve. Tests that exercise the binding itself opt out via
+    ``@pytest.mark.real_ownership_binding``.
+    """
+    if "real_ownership_binding" in request.keywords:
+        yield
+        return
+
+    from unify.session_details import SESSION_DETAILS
+
+    with patch.object(SESSION_DETAILS, "bind_derived_ownership", lambda: None):
+        yield
+
+
 # =============================================================================
 # Module-level setup: Configure environment for in-process mode
 # =============================================================================

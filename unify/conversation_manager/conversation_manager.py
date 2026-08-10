@@ -3114,6 +3114,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.team_summaries = SESSION_DETAILS.team_summaries
         # Export to env vars for subprocess inheritance
         SESSION_DETAILS.export_to_env()
+        # The payload's owner_team_id is a launcher-delivered hint; the
+        # platform record is the identity. Binding here covers every
+        # session-config lane (StartupEvent, AssistantUpdateEvent): an omitted
+        # value self-heals from the record and a disagreement stops the
+        # session, so a payload that forgot the field cannot silently route a
+        # team-owned assistant's shared tables to the personal root.
+        SESSION_DETAILS.bind_derived_ownership()
+        self.owner_team_id = SESSION_DETAILS.owner_team_id
 
     def get_details(self) -> dict:
         return {
