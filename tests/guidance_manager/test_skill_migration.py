@@ -530,7 +530,13 @@ def test_default_snapshot_matches_default_manifest():
     pins = load_manifest(MANIFEST_PATH)
     snapshot = load_snapshot()
 
-    assert set(snapshot) == {pin.key for pin in pins}
+    # The manifest owns the anthropic/ keys; canvas/ keys are written by the
+    # vocabulary importer and share the snapshot (write_snapshot preserves
+    # entries it does not own).
+    assert {key for key in snapshot if key.startswith("anthropic/")} == {
+        pin.key for pin in pins
+    }
+    assert all(key.startswith(("anthropic/", "canvas/")) for key in snapshot)
     for pin in pins:
         entry = snapshot[pin.key]
         skill_name = pin.key.split("/", 1)[1]

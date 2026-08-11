@@ -216,7 +216,9 @@ async def test_sync_adopts_provenance_less_row_by_title(
         title="How to triage repairs",
         content="Planted before custom provenance existed.",
     )
-    legacy = gm.filter(limit=10)
+    # Reads federate the builtins library; scope to tenant rows so the
+    # planted row is the only match.
+    legacy = gm.filter(filter="is_builtin == False", limit=10)
     assert len(legacy) == 1
     legacy_id = legacy[0].guidance_id
 

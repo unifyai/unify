@@ -393,7 +393,7 @@ class TestPersistentActionRendering:
         result = renderer.render_in_flight_actions(in_flight)
 
         assert "will NOT self-complete" in result
-        assert "stop_*" in result
+        assert "stop_action(handle_id=" in result
 
     def test_response_event_rendered_with_awaiting_input(self, renderer):
         """Response events in history show awaiting_input status."""
@@ -445,11 +445,13 @@ class TestNotificationRouting:
         call_count = 0
 
         async def fake_next_notification():
+            # After the only message, block like an empty queue so the
+            # watcher's post-done drain poll times out and exits.
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 return {"type": "response", "content": "Turn complete"}
-            raise asyncio.CancelledError
+            await asyncio.Event().wait()
 
         handle.next_notification = fake_next_notification
         handle.done = MagicMock(side_effect=[False, True])
@@ -483,11 +485,13 @@ class TestNotificationRouting:
         call_count = 0
 
         async def fake_next_notification():
+            # After the only message, block like an empty queue so the
+            # watcher's post-done drain poll times out and exits.
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 return {"type": "notification", "message": "Working..."}
-            raise asyncio.CancelledError
+            await asyncio.Event().wait()
 
         handle.next_notification = fake_next_notification
         handle.done = MagicMock(side_effect=[False, True])

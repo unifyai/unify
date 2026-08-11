@@ -132,7 +132,7 @@ def test_search_respects_exclude_ids():
 
     # k spans the full federated view (tenant rows + builtins library) so
     # the assertion checks exclusion rather than ranking position.
-    results = gm.search(references={"title": "procedures"}, k=30)
+    results = gm.search(references={"title": "procedures"}, k=100)
     returned_ids = {r.guidance_id for r in results}
     assert ids["Beta"] not in returned_ids
     assert ids["Alpha"] in returned_ids

@@ -197,14 +197,10 @@ class TestSteeringRespectsOptOut:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
 
-            interject_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("interject_"):
-                    interject_tool = tool
-                    break
-
-            assert interject_tool is not None
-            await interject_tool(message="do more stuff")
+            await steering_tools["interject_action"](
+                handle_id=0,
+                message="do more stuff",
+            )
 
             assert len(captured_cont) == 1
             assert captured_cont[0] is None
@@ -280,14 +276,10 @@ class TestSteeringRespectsOptOut:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
 
-            interject_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("interject_"):
-                    interject_tool = tool
-                    break
-
-            assert interject_tool is not None
-            await interject_tool(message="also check calendar")
+            await steering_tools["interject_action"](
+                handle_id=0,
+                message="also check calendar",
+            )
 
             assert len(captured_cont) == 1
             assert captured_cont[0] is not None
@@ -335,14 +327,10 @@ class TestSteeringRespectsOptOut:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
 
-            ask_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("ask_"):
-                    ask_tool = tool
-                    break
-
-            assert ask_tool is not None
-            await ask_tool(question="what's the status?")
+            await steering_tools["ask_action"](
+                handle_id=0,
+                question="what's the status?",
+            )
 
             pending = set(cm._pending_steering_tasks)
             if pending:
@@ -392,14 +380,10 @@ class TestSteeringRespectsOptOut:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
 
-            ask_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("ask_"):
-                    ask_tool = tool
-                    break
-
-            assert ask_tool is not None
-            await ask_tool(question="what's the status?")
+            await steering_tools["ask_action"](
+                handle_id=0,
+                question="what's the status?",
+            )
 
             pending = set(cm._pending_steering_tasks)
             if pending:

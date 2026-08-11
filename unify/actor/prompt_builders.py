@@ -183,6 +183,11 @@ _WORKFLOW_SHELF = textwrap.dedent("""
     because a workflow has no runtime: the task it planted does. A job
     reporting `enabled: false` is held on a missing connection, and
     starting it is refused — say which app to connect instead.
+
+    **Settings travel with the run.** A planted task's run request carries
+    the workflow's recorded installation settings, already resolved. The
+    settings tool exists for reading and discussing configuration with the
+    user, not for runs to fetch their own.
 """)
 
 

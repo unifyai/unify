@@ -26,7 +26,7 @@ async def test_rest_offline_task_trigger_dispatches_without_actor():
         source_task_log_id=9002,
         revision="rev-offline",
         task_name="Poll stargazers",
-        task_description="Poll GitHub stargazers.",
+        task_summary="Poll GitHub stargazers.",
         entrypoint=27,
     )
     event = TaskTriggerRequested(
@@ -183,7 +183,7 @@ def test_offline_explicit_dispatch_posts_task_execution_payload(monkeypatch):
         source_task_log_id=9002,
         revision="rev-offline",
         task_name="Poll stargazers",
-        task_description="Poll GitHub stargazers.",
+        task_summary="Poll GitHub stargazers.",
         entrypoint=27,
     )
 
@@ -206,7 +206,6 @@ def test_offline_explicit_dispatch_posts_task_execution_payload(monkeypatch):
         "source_ref": "req-offline",
         "source_medium": "api",
         "task_name": "Poll stargazers",
-        "task_description": "Poll GitHub stargazers.",
         "entrypoint": 27,
         "requires_filesystem": False,
         "requires_computer": False,

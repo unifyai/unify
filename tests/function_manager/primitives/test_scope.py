@@ -142,6 +142,8 @@ def test_valid_manager_aliases_contains_expected():
         "comms",
         "contacts",
         "dashboards",
+        "canvas",
+        "ingestion",
         "tasks",
         "transcripts",
         "secrets",
