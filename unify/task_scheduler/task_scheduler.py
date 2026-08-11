@@ -1241,6 +1241,13 @@ class TaskScheduler(BaseTaskScheduler):
                 state=ExecutionState.running.value,
             )
 
+        workflow_slug, installation_settings = self._workflow_run_settings(task)
+        task_request = build_task_execution_request(
+            task,
+            installation_settings=installation_settings,
+            workflow_slug=workflow_slug,
+        )
+
         # The successor is projected by Orchestra when this run is marked
         # running: recurrence is a ledger invariant, not something each
         # dispatcher must remember to do.
@@ -1257,7 +1264,7 @@ class TaskScheduler(BaseTaskScheduler):
         try:
             handle = await ActiveTask.create(
                 fallback_actor,
-                task_description=build_task_execution_request(task),
+                task_description=task_request,
                 _parent_chat_context=_parent_chat_context,
                 _clarification_up_q=_clarification_up_q,
                 _clarification_down_q=_clarification_down_q,
@@ -1278,7 +1285,7 @@ class TaskScheduler(BaseTaskScheduler):
                             "task_execution_context",
                             {},
                         ),
-                        "task_request": build_task_execution_request(task),
+                        "task_request": task_request,
                     }
                     if entrypoint_kwargs is not None
                     else None
@@ -1394,11 +1401,18 @@ class TaskScheduler(BaseTaskScheduler):
                 "captured_task_revision"
             ] = captured_task_revision
 
-        task_request = (
-            build_provider_event_task_request(definition, provider_event_context)
-            if definition.entrypoint is None
-            else build_task_execution_request(definition)
-        )
+        if definition.entrypoint is None:
+            task_request = build_provider_event_task_request(
+                definition,
+                provider_event_context,
+            )
+        else:
+            slug, settings = self._workflow_run_settings(definition)
+            task_request = build_task_execution_request(
+                definition,
+                installation_settings=settings,
+                workflow_slug=slug,
+            )
         return await ActiveTask.create(
             fallback_actor,
             task_description=task_request,
@@ -2105,6 +2119,45 @@ class TaskScheduler(BaseTaskScheduler):
             self._set_tasks_enabled(task_ids=int(task_id), enabled=enabled)
             touched.append(int(task_id))
         return touched
+
+    def _workflow_run_settings(
+        self,
+        task: Task,
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """The installed settings of the workflow that planted *task*, if any.
+
+        Resolved once at run start and carried on the run request, so the
+        run's configuration is a deterministic input rather than something
+        the actor has to discover mid-run. Best-effort by design: a task
+        whose settings cannot be read still runs, with the request saying
+        nothing about settings rather than something wrong about them.
+        """
+        if not task.custom_hash:
+            return None, None
+        try:
+            managed_by, released = self._task_reconcile_owner(int(task.task_id))
+            if released or not managed_by or managed_by == MANAGED_BY_DEPLOYMENT:
+                return None, None
+            from unify.manager_registry import ManagerRegistry
+
+            manager = ManagerRegistry.get_workflow_manager()
+            if manager is None:
+                return None, None
+            settings = manager.get_installation_params(
+                slug=managed_by,
+                destination=task.destination,
+            )
+        except Exception:
+            logger.warning(
+                "Could not resolve installation settings for task %s; the "
+                "run proceeds without them",
+                task.task_id,
+                exc_info=True,
+            )
+            return None, None
+        if not isinstance(settings, dict):
+            return None, None
+        return managed_by, settings
 
     def _task_reconcile_owner(self, task_id: int) -> tuple[Optional[str], bool]:
         """Who reconciles this row, and whether the user already owns it.

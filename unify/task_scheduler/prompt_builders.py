@@ -22,8 +22,20 @@ from ..common.prompt_helpers import (
 )
 
 
-def build_task_execution_request(task: Task) -> str:
-    """Build the actor-facing request for one task instance."""
+def build_task_execution_request(
+    task: Task,
+    *,
+    installation_settings: Dict[str, Any] | None = None,
+    workflow_slug: str | None = None,
+) -> str:
+    """Build the actor-facing request for one task instance.
+
+    ``installation_settings`` are the recorded settings of the workflow that
+    planted this task, resolved by the caller at run start. Carrying them on
+    the request makes the run deterministic about its own configuration:
+    the actor honours what is written here instead of having to discover
+    and call a settings tool mid-run.
+    """
 
     lines = [
         "Execute this TaskScheduler task as a contained task run.",
@@ -34,6 +46,17 @@ def build_task_execution_request(task: Task) -> str:
         "Task description:",
         task.description or task.name,
     ]
+    if installation_settings is not None:
+        source = f" of workflow {workflow_slug!r}" if workflow_slug else ""
+        lines.extend(
+            [
+                "",
+                f"Installation settings{source} (already resolved for this "
+                "run — honour them as given; empty values mean the default "
+                "described in the task):",
+                json.dumps(installation_settings, sort_keys=True),
+            ],
+        )
     if task.response_policy:
         lines.extend(["", "Task response policy:", task.response_policy])
     if task.schedule is not None:
@@ -73,7 +96,10 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "You are executing exactly one TaskScheduler task. Treat the task "
         "name, description, schedule, trigger, repeat, and response policy "
         "as the authoritative statement of the task's INTENT and required "
-        "outcome for this run. Details the description records about "
+        "outcome for this run. If the request carries an 'Installation "
+        "settings' section, those are this run's resolved configuration: "
+        "honour them as given and never re-fetch, guess, or search for "
+        "settings elsewhere. Details the description records about "
         "external interfaces (endpoint shapes, field names, response "
         "formats) describe the environment as it looked when the task was "
         "created; such interfaces evolve, and the live environment is "
