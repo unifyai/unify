@@ -173,6 +173,39 @@ def test_dashboard_not_in_data_routing_guidance():
     assert "primitives.dashboards.*` vs `primitives.data.*" not in context
 
 
+def test_dashboard_prompt_stands_alone_without_canvas():
+    """Without canvas in scope, dashboards is the authoring surface.
+
+    The supersession framing routes all new visual work to
+    ``primitives.canvas``, so it may only render when canvas is actually
+    callable. A prompt that bans authoring on the one visual tool in scope
+    makes the actor refuse work its tools fully support.
+    """
+    from unify.function_manager.primitives import get_registry
+    from unify.function_manager.primitives.scope import PrimitiveScope
+
+    registry = get_registry()
+    solo = registry.prompt_context(
+        PrimitiveScope(scoped_managers=frozenset({"dashboards"})),
+    )
+    assert "primitives.canvas" not in solo
+    assert "superseded" not in solo.lower()
+    assert "Visualizations & Dashboards" in solo
+
+
+def test_dashboard_prompt_superseded_when_canvas_in_scope():
+    """With canvas in scope, the supersession framing steers authoring there."""
+    from unify.function_manager.primitives import get_registry
+    from unify.function_manager.primitives.scope import PrimitiveScope
+
+    registry = get_registry()
+    both = registry.prompt_context(
+        PrimitiveScope(scoped_managers=frozenset({"dashboards", "canvas"})),
+    )
+    assert "Legacy HTML Tiles (superseded by Canvas)" in both
+    assert "SUPERSEDED BY primitives.canvas" in both
+
+
 def test_dashboard_example_generators_registered():
     """Dashboard example generators should be registered in _EXAMPLE_GENERATORS."""
     from unify.function_manager.primitives.registry import _EXAMPLE_GENERATORS
