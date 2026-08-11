@@ -31,7 +31,13 @@ import pytest
 import requests
 import unisdk
 from pytest_metadata.plugin import metadata_key
-from unisdk.utils import http as unisdk_http
+
+# Imported as a symbol (not via module attribute access at call time) so a
+# unisdk checkout that predates it fails collection with an ImportError here,
+# rather than an AttributeError inside per-test setup's broad exception
+# handlers — which would silently skip set_context and collapse every test
+# into one shared context root.
+from unisdk.utils.http import default_timeout as unisdk_default_timeout
 
 from datetime import datetime, timezone
 
@@ -158,6 +164,18 @@ def _reset_singleton_registries() -> None:
         pass
 
 
+def _assert_test_context_active(ctx: str) -> None:
+    # set_context activates the local context vars before any remote
+    # round-trip, so after setup they must hold the per-test root no matter
+    # what the network did. If they don't, every subsequent test would share
+    # one context root and cross-contaminate — fail the session here instead.
+    active = unisdk.get_active_context()
+    assert active.get("read") == ctx and active.get("write") == ctx, (
+        f"Per-test Unify context activation failed: expected {ctx!r}, "
+        f"active is {active!r}. Test isolation would be lost."
+    )
+
+
 def _set_unify_context_for_test(item: pytest.Item) -> None:
     """Set a unique per-test Unify context early (before fixtures)."""
     ctx = _derive_test_context(item)
@@ -169,6 +187,7 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
         # process. Tests that need Orchestra fail or skip on their own.
         unisdk.set_context(ctx, relative=False, skip_create=True)
         _reset_singleton_registries()
+        _assert_test_context_active(ctx)
         return
 
     # Clean slate unless contexts are pre-created during collection.
@@ -177,18 +196,19 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
         skip_ctx_create = ctx in PRECREATED_CONTEXTS
     else:
         try:
-            with unisdk_http.default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
+            with unisdk_default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
                 unisdk.delete_context(ctx)
         except _SETUP_NETWORK_ERRORS as exc:
             _trip_orchestra_setup_breaker(exc)
             unisdk.set_context(ctx, relative=False, skip_create=True)
             _reset_singleton_registries()
+            _assert_test_context_active(ctx)
             return
         except Exception:
             pass
 
     try:
-        with unisdk_http.default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
+        with unisdk_default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
             unisdk.set_context(ctx, relative=False, skip_create=skip_ctx_create)
     except _SETUP_NETWORK_ERRORS as exc:
         # set_context activates the local context vars before its remote
@@ -198,6 +218,7 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
         pass  # Project may not exist yet; tests that need it will fail on their own
 
     _reset_singleton_registries()
+    _assert_test_context_active(ctx)
 
 
 def _uses_unify_context(item: pytest.Item) -> bool:
@@ -216,7 +237,7 @@ def _unset_unify_context_for_test(item: pytest.Item) -> None:
             and _orchestra_usable_for_setup()
         ):
             try:
-                with unisdk_http.default_timeout(
+                with unisdk_default_timeout(
                     SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT,
                 ):
                     unisdk.delete_context(ctx)
