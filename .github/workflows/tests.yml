@@ -1211,12 +1211,16 @@ jobs:
     - name: Cache orchestra poetry dependencies
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pypoetry
+        path: |
+          ~/.cache/pypoetry
+          ${{ github.workspace }}/orchestra/.venv
         key: poetry-orchestra-${{ runner.os }}-${{ steps.orchestra-sha.outputs.sha }}
         restore-keys: |
           poetry-orchestra-${{ runner.os }}-
 
     - name: Install orchestra dependencies
+      env:
+        POETRY_VIRTUALENVS_IN_PROJECT: "true"
       run: |
         # Install orchestra dependencies so parallel_run.sh can start it
         # (parallel_run.sh handles the full orchestra lifecycle)

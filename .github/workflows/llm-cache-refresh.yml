@@ -311,6 +311,8 @@ jobs:
       run: uv run playwright install --with-deps
 
     - name: Install orchestra dependencies
+      env:
+        POETRY_VIRTUALENVS_IN_PROJECT: "true"
       run: |
         cd "$ORCHESTRA_REPO_PATH"
         poetry install --no-interaction
