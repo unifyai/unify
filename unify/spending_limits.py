@@ -529,18 +529,32 @@ def _provider_label(provider: str) -> str:
     return _PROVIDER_DISPLAY_NAMES.get(provider, provider)
 
 
+#: Leading segments that name an aggregator rather than the vendor that owns
+#: the model. These appear first in the accounting form of an id, so the vendor
+#: is the segment that follows them.
+_AGGREGATOR_ROUTE_PREFIXES = frozenset({"openrouter"})
+
+
 def _vendor_of(model: str) -> Optional[str]:
     """Extract the vendor that owns the model, independent of the route.
 
-    OpenRouter ids are vendor-prefixed (``anthropic/claude-opus-4.8``), so
-    the vendor survives being routed through an aggregator. Returns ``None``
-    when the model half carries no prefix.
+    A model id arrives here in either of two shapes describing the same call:
+    the endpoint form ``anthropic/claude-opus-4.8@openrouter``, and the
+    accounting form ``openrouter/anthropic/claude-opus-4.8`` that leads with
+    the route instead. Both must resolve to the same vendor — taking the first
+    segment blindly reports the aggregator, which would let every vendor gated
+    here through simply by naming the model the other way round.
+
+    Returns ``None`` when the model half carries no prefix at all.
     """
     endpoint, _, _ = model.rpartition("@")
-    vendor, sep, _ = (endpoint or model).partition("/")
+    vendor, sep, rest = (endpoint or model).strip().partition("/")
     if not sep:
         return None
-    return vendor.strip().lower() or None
+    vendor = vendor.strip().lower()
+    if vendor in _AGGREGATOR_ROUTE_PREFIXES and "/" in rest:
+        vendor = rest.partition("/")[0].strip().lower()
+    return vendor or None
 
 
 def _gated_provider_of(model: str, *, never_paid: bool) -> Optional[str]:

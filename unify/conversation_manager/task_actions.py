@@ -3,15 +3,13 @@ Centralized utilities for action steering operations in ConversationManager.
 
 This module provides a single source of truth for:
 - Steering operations derived from SteerableToolHandle
-- Action name generation and parsing
-- Short name derivation from action queries
+- Short name derivation from action queries (pane labels)
+- Rendered steering-tool invocations for the state panes
 
-Dynamic action names use a structured format with __ as the delimiter:
-    {operation}_{short_name}__{handle_id}
-    {operation}_{short_name}__{handle_id}__{call_id_suffix}  (for answer_clarification)
-
-The __ delimiter clearly separates semantic description from numeric identifiers,
-making parsing unambiguous even when components contain digits.
+Steering itself happens through six fixed, handle_id-addressed brain tools
+(``ConversationManagerBrainActionTools.build_action_steering_tools``); the
+``in_flight_actions`` and ``completed_actions`` panes render ready-to-use
+invocations such as ``interject_action(handle_id=3, ...)`` built here.
 """
 
 from __future__ import annotations
@@ -19,12 +17,11 @@ from __future__ import annotations
 import inspect
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from ..common.async_tool_loop import SteerableToolHandle
 
-# Structural delimiter separating semantic parts from identifiers.
-# Using __ because neither derive_short_name nor safe_call_id_suffix can produce it.
+# Derived labels and call-id suffixes never contain a double underscore, so
+# they stay visually unambiguous next to snake_case identifiers.
 _DELIM = "__"
 
 
@@ -76,20 +73,11 @@ OPERATION_MAP: dict[str, SteeringOperation] = {
 }
 
 
-def get_steering_operation(name: str) -> Optional[SteeringOperation]:
-    """Get a steering operation by name."""
-    return OPERATION_MAP.get(name)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Short name derivation
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Maximum character length for short_name to guarantee tool names stay under
-# OpenAI's 64-character limit. Calculated as:
-#   64 (max) - 21 (answer_clarification_) - 2 (__) - 5 (handle_id up to 99999)
-#            - 2 (__) - 8 (call_id_suffix) = 26 chars
-# Using 25 for safety margin.
+# Maximum character length for short_name, keeping pane labels compact.
 _MAX_SHORT_NAME_CHARS = 25
 
 # Characters to strip entirely (no word boundary created).
@@ -101,20 +89,20 @@ _STRIP_CHARS_PATTERN = re.compile(r"['\u2018\u2019\"\u201c\u201d`!?]")
 
 
 def derive_short_name(query: str, max_words: int = 4) -> str:
-    """Derive a short, descriptive name from an action query for use in action names.
+    """Derive a short, descriptive label from an action query for the state panes.
 
     Takes the first few words, lowercased, joined by underscores. Punctuation is
     handled in two ways:
     - Apostrophes, quotes, and sentence terminators are stripped (no word boundary)
     - Other punctuation (slashes, hyphens, etc.) becomes word separators
 
-    Ensures no __ (reserved as structural delimiter) and enforces a character
-    limit to guarantee generated tool names never exceed OpenAI's 64-char limit.
+    Ensures no __ appears in the label and enforces a character limit to keep
+    pane labels compact.
 
     Examples:
         "List all contacts" -> "list_all_contacts"
         "What's the weather?" -> "whats_the_weather"
-        "Search transcripts/messages/emails" -> "search_transcripts_messages_emails"
+        "Get docs/files/data" -> "get_docs_files_data"
     """
     # First, strip apostrophes/quotes/terminators (they don't create word boundaries)
     query = _STRIP_CHARS_PATTERN.sub("", query)
@@ -134,42 +122,11 @@ def derive_short_name(query: str, max_words: int = 4) -> str:
     return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Action name generation and parsing
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def build_action_name(
-    operation: str,
-    short_name: str,
-    handle_id: int,
-    call_id_suffix: Optional[str] = None,
-) -> str:
-    """Build a dynamic action name from its components.
-
-    Uses __ as delimiter to separate semantic description from identifiers:
-        {operation}_{short_name}__{handle_id}
-        {operation}_{short_name}__{handle_id}__{call_id_suffix}
-
-    Args:
-        operation: The steering operation (e.g., "ask", "stop")
-        short_name: The short name derived from the action query
-        handle_id: The action handle ID
-        call_id_suffix: Optional suffix for clarification call IDs
-
-    Returns:
-        Action name like "ask_list_contacts__0" or "answer_clarification_action__0__abc123"
-    """
-    base = f"{operation}_{short_name}{_DELIM}{handle_id}"
-    if call_id_suffix:
-        return f"{base}{_DELIM}{call_id_suffix}"
-    return base
-
-
 def safe_call_id_suffix(call_id: str) -> str:
-    """Convert a call_id to a safe suffix for use in action names.
+    """Abbreviate a clarification call_id to its last-8-character suffix.
 
-    Ensures no __ (reserved as structural delimiter).
+    ``answer_clarification_action`` accepts the suffix as shorthand for the
+    full call id. Never contains __ .
     """
     if not call_id:
         return "0"
@@ -178,74 +135,6 @@ def safe_call_id_suffix(call_id: str) -> str:
     while _DELIM in result:
         result = result.replace(_DELIM, "_")
     return result
-
-
-@dataclass
-class ParsedActionName:
-    """Result of parsing a dynamic action name."""
-
-    operation: str
-    handle_id: int
-    call_id_suffix: Optional[str] = None
-
-    @property
-    def steering_operation(self) -> Optional[SteeringOperation]:
-        """Get the corresponding SteeringOperation."""
-        return get_steering_operation(self.operation)
-
-
-def parse_action_name(action_name: str) -> ParsedActionName:
-    """Parse a dynamic action name to extract its components.
-
-    Parses the format: {operation}_{short_name}__{handle_id}[__{call_id_suffix}]
-
-    The __ delimiter makes parsing unambiguous regardless of digits in components.
-
-    Examples:
-        "ask_list_contacts__0" -> ParsedActionName("ask", 0, None)
-        "stop_search_web__1" -> ParsedActionName("stop", 1, None)
-        "answer_clarification_task__0__abc123" -> ParsedActionName("answer_clarification", 0, "abc123")
-    """
-    # Split by structural delimiter
-    parts = action_name.split(_DELIM)
-
-    if len(parts) < 2:
-        # No delimiter found - not a valid dynamic action
-        # Extract operation for error reporting
-        for op in OPERATION_MAP:
-            if action_name.startswith(f"{op}_"):
-                return ParsedActionName(op, 0, None)
-        first_word = action_name.split("_")[0] if "_" in action_name else action_name
-        return ParsedActionName(first_word, 0, None)
-
-    # First part is "{operation}_{short_name}", extract operation
-    first_part = parts[0]
-    operation = None
-    for op in OPERATION_MAP:
-        if first_part == op or first_part.startswith(f"{op}_"):
-            operation = op
-            break
-
-    if operation is None:
-        return ParsedActionName("", 0, None)
-
-    # Parse handle_id from parts[1]
-    try:
-        handle_id = int(parts[1])
-    except (ValueError, IndexError):
-        handle_id = 0
-
-    # For answer_clarification, parts[2] is the call_id_suffix
-    call_id_suffix = None
-    if operation == "answer_clarification" and len(parts) >= 3:
-        call_id_suffix = parts[2]
-
-    return ParsedActionName(operation, handle_id, call_id_suffix)
-
-
-def is_dynamic_action(action_name: str) -> bool:
-    """Check if an action name is a dynamic steering action."""
-    return any(action_name.startswith(f"{op.name}_") for op in STEERING_OPERATIONS)
 
 
 def iter_steering_tools_for_action(

@@ -1157,12 +1157,17 @@ class TestUnifyMeetHandling:
                     "email_address": "boss@test.com",
                 },
             ]
+            participants = [
+                {"kind": "human", "contact_id": 1, "display_name": "Boss User"},
+            ]
             message = create_pubsub_message(
                 "unify_meet",
                 {
                     "livekit_agent_name": "TestAgent",
                     "livekit_room": "room_123",
                     "contacts": contacts,
+                    "call_session_id": "sess-123",
+                    "participants": participants,
                     "opening_config": {
                         "mode": "simulated",
                         "simulated_utterance": "Hi, I'm T-W1N.",
@@ -1181,6 +1186,9 @@ class TestUnifyMeetHandling:
             event = Event.from_json(msg["data"])
             assert isinstance(event, UnifyMeetReceived)
             assert event.room_name == "room_123"
+            assert event.call_session_id == "sess-123"
+            assert event.participants == participants
+            assert event.contact["contact_id"] == 1
             assert event.opening_config == {
                 "mode": "simulated",
                 "simulated_utterance": "Hi, I'm T-W1N.",
@@ -1244,6 +1252,14 @@ class TestUnifyMeetHandling:
                     "livekit_agent_name": "TestAgent",
                     "livekit_room": "room_123",
                     "contacts": contacts,
+                    "call_session_id": "sess-123",
+                    "participants": [
+                        {
+                            "kind": "human",
+                            "contact_id": 1,
+                            "display_name": "Boss User",
+                        },
+                    ],
                 },
             )
 

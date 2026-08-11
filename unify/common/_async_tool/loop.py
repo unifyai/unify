@@ -644,6 +644,17 @@ async def async_tool_loop_inner(
     runtime_state = runtime_state or ToolLoopRuntimeState()
 
     # ── runtime guards ────────────────────────────────────────────────────
+    # A run with no step ceiling ends only when the model chooses to stop, so
+    # one that never converges keeps calling tools — and billing — forever.
+    # Fall back to the configured ceiling when a caller expresses no opinion,
+    # which bounds every entry point at once; an explicit ``max_steps`` still
+    # wins for callers that legitimately need more.
+    if max_steps is None:
+        from unify.settings import SETTINGS as _SETTINGS
+
+        configured_max_steps = _SETTINGS.UNIFY_MAX_TOOL_LOOP_STEPS
+        max_steps = configured_max_steps if configured_max_steps > 0 else None
+
     # rolling timeout ----------------------------------------------------
     timer: TimeoutTimer = TimeoutTimer(
         timeout=timeout,

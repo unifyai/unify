@@ -204,6 +204,7 @@ async def test_execute_function_uses_stored_venv_when_caller_omits_it():
             execute_function = execute_function.fn
 
         result = await execute_function(
+            thought="Running the stored report to check its venv wiring.",
             function_name="stored_report",
             call_kwargs={},
         )
@@ -256,6 +257,7 @@ async def test_execute_function_dispatches_provider_backed_primitive_directly():
             execute_function = execute_function.fn
 
         result = await execute_function(
+            thought="Fetching unread emails through the provider-backed primitive.",
             function_name="primitives.integrations.gmail.fetch_emails",
             call_kwargs={"query": "is:unread"},
         )
@@ -338,6 +340,7 @@ async def test_execute_function_surfaces_provider_confirmation_as_pending_approv
             execute_function = execute_function.fn
 
         result = await execute_function(
+            thought="Fetching unread emails to surface the pending approval.",
             function_name="primitives.integrations.gmail.fetch_emails",
             call_kwargs={"query": "is:unread"},
             _notification_up_q=notification_q,
@@ -387,6 +390,7 @@ async def test_execute_function_returns_bare_handle_for_primitive(
     """execute_function should return a bare SteerableToolHandle when
     the primitive produces no side output (stdout/stderr/error)."""
     result = await execute_function_tool(
+        thought="Asking the contacts primitive who my contacts are.",
         function_name="primitives.contacts.ask",
         call_kwargs={"text": "Who are my contacts?"},
     )
@@ -442,6 +446,7 @@ async def ask_with_log(text: str):
             fn = fn.fn
 
         result = await fn(
+            thought="Running the composed contacts query to capture its stdout.",
             function_name="ask_with_log",
             call_kwargs={"text": "Who are my contacts?"},
         )
