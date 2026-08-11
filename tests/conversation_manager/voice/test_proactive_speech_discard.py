@@ -207,6 +207,7 @@ async def _boot_entrypoint(monkeypatch):
         user=SimpleNamespace(id="owner-1"),
         unify_key="",
         is_coordinator=False,
+        is_multiplayer=False,
         org_id=None,
     )
 
