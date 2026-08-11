@@ -453,6 +453,20 @@ def _rebuild_commit_hashes(ctx_prefix: str) -> None:
             pass
 
 
+def _rollback_to_committed() -> None:
+    """Restore every scenario context to its stored commit."""
+
+    def rollback_context(ctx_name: str) -> None:
+        unisdk.rollback_context(
+            name=ctx_name,
+            commit_hash=SCENARIO_COMMIT_HASHES[ctx_name],
+        )
+
+    ctx_names = list(SCENARIO_COMMIT_HASHES.keys())
+    if ctx_names:
+        unisdk.map(rollback_context, ctx_names, mode="asyncio")
+
+
 def _setup_tm_scenario(
     request: pytest.FixtureRequest,
 ) -> Tuple[TranscriptManager, Dict[str, int]]:
@@ -501,11 +515,22 @@ def _setup_tm_scenario(
             ids = rebuild_id_mapping(cm, _CONTACTS)
             _ID_BY_NAME.update(ids)
             _rebuild_commit_hashes(ctx)
-            # Check if embeddings exist, create if missing (for older scenarios)
-            if _ensure_embeddings_exist(transcript_ctx):
-                # Embeddings were created, need to recommit
-                print(f"Recommitting {ctx} with new embeddings...")
-                _commit_contexts_for_rollback(ctx)
+            # Serialize with the scenario's tests and restore the committed
+            # state before recommitting: tests roll back at START, so a
+            # finished test's rows stay live until the next test's rollback.
+            # An unguarded recommit here snapshots that residue into the
+            # rollback target, and every later test then faithfully restores
+            # the leaked rows — row counts (and any prompt built from them)
+            # become dependent on process interleaving. Lock order is
+            # scenario lock -> test lock, matching the per-test fixture
+            # which takes only the test lock.
+            with mutation_test_lock("tm_read"):
+                _rollback_to_committed()
+                # Check if embeddings exist, create if missing
+                if _ensure_embeddings_exist(transcript_ctx):
+                    # Embeddings were created, need to recommit
+                    print(f"Recommitting {ctx} with new embeddings...")
+                    _commit_contexts_for_rollback(ctx)
         else:
             # Scenario not seeded - seed it
             print("Seeding transcript manager scenario...")
