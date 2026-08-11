@@ -324,6 +324,27 @@ class TaskScheduler(BaseTaskScheduler):
                     fn=self._retry_provider_trigger,
                     display_label="Retrying provider trigger provisioning",
                 ),
+                # Read-only catalog inspection: the update prompt's authoring
+                # order (list catalog -> list connections -> describe schema ->
+                # resolve resources) must be executable from this loop, not
+                # only from ``ask`` -- otherwise trigger feasibility gets
+                # decided blind and reported as "no supported trigger".
+                ToolSpec(
+                    fn=self._list_provider_trigger_catalog,
+                    display_label="Listing provider trigger catalog",
+                ),
+                ToolSpec(
+                    fn=self._list_provider_trigger_connections,
+                    display_label="Listing provider trigger connections",
+                ),
+                ToolSpec(
+                    fn=self._describe_provider_trigger,
+                    display_label="Describing provider trigger config",
+                ),
+                ToolSpec(
+                    fn=self._list_provider_trigger_resources,
+                    display_label="Listing provider trigger resources",
+                ),
                 ToolSpec(
                     fn=self._export_provider_event_context,
                     display_label="Exporting provider event context",
@@ -2125,9 +2146,9 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         name: Optional[str] = None,
         description: Optional[str] = None,
-        start_at: Optional[Union[str, datetime]] = None,
-        deadline: Optional[Union[str, datetime]] = None,
-        repeat: Optional[List[Union[RepeatPattern, Dict[str, Any]]]] = None,
+        start_at: Any = _UNSET,
+        deadline: Any = _UNSET,
+        repeat: Any = _UNSET,
         priority: Optional[Union[Priority, str]] = None,
         trigger: Any = _UNSET,
         entrypoint: Any = _UNSET,
@@ -2144,6 +2165,13 @@ class TaskScheduler(BaseTaskScheduler):
         schedule, deadline, repeat, priority, trigger, entrypoint, offline
         flag, enabled flag).  Only the fields that are explicitly provided are
         changed; omitted fields keep their current values.
+
+        ``start_at``, ``deadline``, ``repeat`` and ``trigger`` distinguish
+        *omitted* from *explicitly null*: passing ``None`` clears the field.
+        ``start_at=None`` removes the schedule (and sweeps ``repeat`` with it
+        unless a new ``repeat`` is set in the same call — a cadence has
+        nothing to anchor to without a schedule). Converting a scheduled task
+        to a triggered one is a single call: ``trigger=..., start_at=None``.
         """
 
         if not _root_applied:
@@ -2181,6 +2209,10 @@ class TaskScheduler(BaseTaskScheduler):
         requires_filesystem_provided = requires_filesystem is not _UNSET
         requires_computer_provided = requires_computer is not _UNSET
         enabled_provided = enabled is not _UNSET
+        start_at_provided = start_at is not _UNSET
+        deadline_provided = deadline is not _UNSET
+        repeat_provided = repeat is not _UNSET
+        schedule_cleared = start_at_provided and start_at is None
         task = self._resolve_task_for_mutation(task_id)
 
         # A managed task (custom_hash set) gets its authored fields from a
@@ -2204,9 +2236,9 @@ class TaskScheduler(BaseTaskScheduler):
                 for field, provided in (
                     ("name", name is not None),
                     ("description", description is not None),
-                    ("start_at", start_at is not None),
-                    ("deadline", deadline is not None),
-                    ("repeat", repeat is not None),
+                    ("start_at", start_at_provided),
+                    ("deadline", deadline_provided),
+                    ("repeat", repeat_provided),
                     ("priority", priority is not None),
                     ("trigger", trigger_provided),
                     ("entrypoint", entrypoint is not _UNSET),
@@ -2235,9 +2267,9 @@ class TaskScheduler(BaseTaskScheduler):
         if (
             name is None
             and description is None
-            and start_at is None
-            and deadline is None
-            and repeat is None
+            and not start_at_provided
+            and not deadline_provided
+            and not repeat_provided
             and priority is None
             and not trigger_provided
             and entrypoint is _UNSET
@@ -2248,9 +2280,15 @@ class TaskScheduler(BaseTaskScheduler):
         ):
             raise ValueError("At least one field must be provided for an update.")
 
-        if trigger_provided and trigger is not None and task.schedule is not None:
+        if (
+            trigger_provided
+            and trigger is not None
+            and task.schedule is not None
+            and not schedule_cleared
+        ):
             raise ValueError(
-                "Cannot add a trigger while a schedule exists. Remove schedule first.",
+                "Cannot add a trigger while a schedule exists. Clear it in the "
+                "same call (start_at=None) or remove the schedule first.",
             )
 
         if isinstance(start_at, datetime):
@@ -2259,7 +2297,7 @@ class TaskScheduler(BaseTaskScheduler):
             deadline = deadline.isoformat()
 
         schedule_payload: Optional[Dict[str, Any]] = None
-        if start_at is not None:
+        if start_at_provided and start_at is not None:
             if task.trigger is not None and not (trigger_provided and trigger is None):
                 raise ValueError(
                     "Cannot add or update start_at while the task is trigger-based.",
@@ -2276,13 +2314,17 @@ class TaskScheduler(BaseTaskScheduler):
         else:
             prospective_trigger = trigger
 
-        prospective_schedule: ScheduleLike = (
-            schedule_payload if schedule_payload is not None else task.schedule
-        )
+        prospective_schedule: ScheduleLike
+        if schedule_cleared:
+            prospective_schedule = None
+        elif schedule_payload is not None:
+            prospective_schedule = schedule_payload
+        else:
+            prospective_schedule = task.schedule
         if prospective_schedule is not None and prospective_trigger is not None:
             raise ValueError("A task cannot have both a schedule and a trigger.")
 
-        if schedule_payload is not None or trigger_provided:
+        if start_at_provided or trigger_provided:
             self._validate_scheduled_invariants(
                 schedule=prospective_schedule,
                 trigger=prospective_trigger,
@@ -2294,23 +2336,26 @@ class TaskScheduler(BaseTaskScheduler):
             entries["name"] = name
         if description is not None:
             entries["description"] = description
-        if deadline is not None:
-            entries["deadline"] = deadline
-        if repeat is not None:
-            normalized_repeat = normalize_repeat_patterns(
-                [
-                    RepeatPattern(**item) if isinstance(item, dict) else item
-                    for item in repeat
-                ],
-            )
-            entries["repeat"] = [
-                (
-                    item.model_dump(mode="json")
-                    if isinstance(item, RepeatPattern)
-                    else item
+        if deadline_provided:
+            entries["deadline"] = deadline  # explicit None clears the deadline
+        if repeat_provided:
+            if repeat is None:
+                entries["repeat"] = None
+            else:
+                normalized_repeat = normalize_repeat_patterns(
+                    [
+                        RepeatPattern(**item) if isinstance(item, dict) else item
+                        for item in repeat
+                    ],
                 )
-                for item in normalized_repeat or []
-            ]
+                entries["repeat"] = [
+                    (
+                        item.model_dump(mode="json")
+                        if isinstance(item, RepeatPattern)
+                        else item
+                    )
+                    for item in normalized_repeat or []
+                ]
         if priority is not None:
             if isinstance(priority, Priority):
                 entries["priority"] = priority
@@ -2328,6 +2373,13 @@ class TaskScheduler(BaseTaskScheduler):
                 entries["trigger"] = prospective_trigger
         if schedule_payload is not None:
             entries["schedule"] = schedule_payload
+        elif schedule_cleared:
+            entries["schedule"] = None
+            # A repeat pattern has nothing to anchor to without a schedule;
+            # clearing the schedule sweeps the cadence too unless the caller
+            # replaced it explicitly in the same call.
+            if task.repeat is not None and not repeat_provided:
+                entries["repeat"] = None
         if entrypoint is not _UNSET:
             if entrypoint is None:
                 entries["entrypoint"] = None

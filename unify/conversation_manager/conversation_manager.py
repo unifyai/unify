@@ -60,6 +60,7 @@ from unify.conversation_manager.cm_types.screenshot import (
 from unify.actor.base import BaseActor
 from unify.conversation_manager.domains.proactive_speech import ProactiveSpeech
 from unify.conversation_manager.medium_scripts.common import FastBrainLogger
+from unillm.limit_hooks import SpendingLimitExceededError
 from unify.spending_limits import (
     GATE_BLOCK_ACCOUNT_SUSPENDED,
     GATE_BLOCK_CREDITS_DEPLETED,
@@ -98,6 +99,17 @@ SLOW_BRAIN_FAILURE_RESPONSE = (
     "so we can look into it."
 )
 SLOW_BRAIN_FAILURE_EMAIL_SUBJECT = "Temporary problem responding"
+# A spending gate refuses a turn for a stated reason — no credits, a paid-only
+# provider, a suspended account. The reason is written for the account holder
+# and names the remedy, so it is delivered verbatim rather than folded into the
+# transient-failure copy above: telling someone to try again in a moment is
+# actively wrong when nothing about a retry can change the answer.
+SPENDING_GATE_EMAIL_SUBJECT = "Action needed to continue"
+# The spoken form drops the written remedy: a caller cannot click a billing
+# link mid-sentence, and reading a URL aloud is worse than pointing at it.
+SPENDING_GATE_SPOKEN_PREFIX = (
+    "I can't run that right now for a billing reason on this account. "
+)
 # Self-scheduled wait(delay) polling backoff. Timer wakes are full-priced
 # slow-brain turns; a model that busy-polls a long-running act ("check
 # again in 10 seconds", repeatedly) burns tokens with zero information
@@ -1676,6 +1688,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return await self._run_llm(trace_meta=trace_meta)
         except asyncio.CancelledError:
             raise
+        except SpendingLimitExceededError as exc:
+            # A refusal with a stated cause and remedy. The pre-turn billing
+            # gate catches the account-wide cases, but it fails open and is
+            # blind to per-call causes such as a paid-only provider, so the
+            # spend boundary stays the only place every refusal is known.
+            with contextlib.suppress(Exception):
+                await self._surface_spending_gate_refusal(exc)
+            raise
         except Exception as exc:
             if self.mode.is_voice and self._is_transient_llm_error(exc):
                 with contextlib.suppress(Exception):
@@ -1708,6 +1728,80 @@ class ConversationManager(metaclass=SingletonABCMeta):
             reply_context,
             content=SLOW_BRAIN_FAILURE_RESPONSE,
             email_subject=SLOW_BRAIN_FAILURE_EMAIL_SUBJECT,
+        )
+
+    async def _surface_spending_gate_refusal(
+        self,
+        exc: SpendingLimitExceededError,
+    ) -> None:
+        """Deliver a spending-gate refusal to the user, in its own words.
+
+        The reason string is authored for the account holder and names the
+        remedy ("add a payment method", "switch to one of the included
+        models"), so every surface repeats it rather than paraphrasing.
+        Reusing the transient-failure copy here would tell someone to retry
+        an operation whose outcome is fixed until they act on the account.
+
+        Shares the billing-gate throttle with the pre-turn check so a blocked
+        account that keeps sending gets one explanation, not one per message.
+        """
+        reason = str(exc).strip()
+        if not reason:
+            return
+
+        # Console classifies on this type, so a refusal renders as its own
+        # message instead of the generic "attempting to recover" copy.
+        with contextlib.suppress(Exception):
+            publish_system_error(reason, error_type="billing_blocked")
+
+        if self.mode.is_voice:
+            with contextlib.suppress(Exception):
+                await self._speak_spending_gate_refusal(reason)
+            return
+
+        reply_context = self._last_inbound_reply_context
+        if not reply_context:
+            return
+        if self._credit_gate_reply_is_throttled(reply_context):
+            self._session_logger.info(
+                "billing_gate",
+                "Skipped repeated spending-gate refusal reply",
+            )
+            return
+        await self._send_system_reply(
+            reply_context,
+            content=reason,
+            email_subject=SPENDING_GATE_EMAIL_SUBJECT,
+        )
+
+    async def _speak_spending_gate_refusal(self, reason: str) -> None:
+        """Have the fast brain state a spending refusal aloud.
+
+        Speaks directly rather than notifying, for the same reason a provider
+        outage does: the fast brain's own model call runs through the gate
+        that just refused, so asking it to compose the apology would hit the
+        same wall.
+        """
+        contact = self.get_active_contact()
+        event = FastBrainNotification(
+            contact=contact or {},
+            message=(
+                f"The spending gate refused this turn: {reason} "
+                "The user has been told; do not claim you are still working."
+            ),
+            spoken_message=f"{SPENDING_GATE_SPOKEN_PREFIX}{reason}",
+            should_speak=True,
+            source="spending_gate_refusal",
+        )
+        self._session_logger.info(
+            "billing_gate",
+            f"Speaking spending-gate refusal: {reason}",
+        )
+        event_json = event.to_json()
+        await self.event_broker.publish("app:call:notification", event_json)
+        await self.event_broker.publish(
+            "app:comms:assistant_notification",
+            event_json,
         )
 
     def record_last_inbound_reply(self, reply_context: dict[str, Any]) -> None:

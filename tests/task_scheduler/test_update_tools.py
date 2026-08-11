@@ -155,3 +155,78 @@ def test_update_task_priority():
 
     task_list = ts._filter_tasks()
     assert task_list[0].priority == Priority.high
+
+
+@_handle_project
+def test_update_task_clears_schedule_with_explicit_none():
+    """None means clear, omission means keep (the _UNSET sentinel contract).
+
+    Previously the schedule fields used plain ``=None`` defaults, so a
+    clear request was indistinguishable from "no change" and silently
+    no-opped (observed in prod 2026-08-10: 'the task API retained the
+    stored schedule metadata when asked to clear it').
+    """
+    ts = TaskScheduler()
+
+    start = datetime.now(timezone.utc) + timedelta(days=1)
+    rule = RepeatPattern(frequency=Frequency.DAILY, interval=1)
+    ts._create_task(
+        name="Daily sync briefing",
+        description="Send the briefing after the sync.",
+        schedule=Schedule(start_at=start),
+        repeat=[rule],
+    )
+
+    # Unrelated update: omitted schedule fields stay untouched.
+    ts._update_task(task_id=0, name="Daily sync briefing (v2)")
+    row = ts._filter_tasks()[0]
+    assert row.schedule is not None
+    assert row.repeat
+
+    # Explicit clear: schedule goes, and the anchored cadence goes with it.
+    ts._update_task(task_id=0, start_at=None)
+    row = ts._filter_tasks()[0]
+    assert row.schedule is None
+    assert not row.repeat
+
+
+@_handle_project
+def test_update_task_clears_deadline_with_explicit_none():
+    ts = TaskScheduler()
+
+    deadline = datetime.now(timezone.utc) + timedelta(days=30)
+    ts._create_task(
+        name="File quarterly taxes",
+        description="Prepare documents for accounting.",
+        deadline=deadline,
+    )
+    assert ts._filter_tasks()[0].deadline == deadline
+
+    ts._update_task(task_id=0, deadline=None)
+    assert ts._filter_tasks()[0].deadline is None
+
+
+@_handle_project
+def test_update_task_converts_schedule_to_trigger_in_one_call():
+    """The schedule/trigger exclusivity is resolvable in a single mutation."""
+    from unify.task_scheduler.types.trigger import CommunicationTrigger
+
+    ts = TaskScheduler()
+
+    start = datetime.now(timezone.utc) + timedelta(days=1)
+    ts._create_task(
+        name="Escalation follow-up",
+        description="Follow up when the customer replies.",
+        schedule=Schedule(start_at=start),
+    )
+
+    trigger = CommunicationTrigger(medium="sms_message")
+    ts._update_task(
+        task_id=0,
+        trigger=trigger.model_dump(mode="json"),
+        start_at=None,
+    )
+    row = ts._filter_tasks()[0]
+    assert row.schedule is None
+    assert row.trigger is not None
+    assert row.trigger.kind == "communication"
