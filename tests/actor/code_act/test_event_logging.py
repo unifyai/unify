@@ -249,6 +249,7 @@ async def test_execute_function_boundary_publishes_events_and_cleans_lineage():
     try:
         async with capture_events("ManagerMethod") as events:
             out = await execute_function(
+                thought="Greeting Alice to exercise the event boundary.",
                 function_name="greet",
                 call_kwargs={"name": "Alice"},
             )
@@ -290,6 +291,7 @@ async def test_execute_function_boundary_marks_error_and_cleans_lineage():
     try:
         async with capture_events("ManagerMethod") as events:
             out = await execute_function(
+                thought="Running the failing function to observe error handling.",
                 function_name="fail_fn",
                 call_kwargs=None,
             )
@@ -348,7 +350,11 @@ async def test_execute_function_propagates_lineage_to_nested_manager():
     execute_function = actor.get_tools("act")["execute_function"]
     token = TOOL_LOOP_LINEAGE.set(["CodeActActor.act"])
     try:
-        out = await execute_function(function_name="my_func", call_kwargs=None)
+        out = await execute_function(
+            thought="Capturing the sandbox lineage.",
+            function_name="my_func",
+            call_kwargs=None,
+        )
         assert _get(out, "error") is None, f"Unexpected error: {_get(out, 'error')}"
         # The lineage captured inside the sandbox should include execute_function.
         captured = _get(out, "result")
@@ -595,6 +601,7 @@ async def test_execute_function_environments_accessible_in_sandbox():
     token = TOOL_LOOP_LINEAGE.set(["CodeActActor.act"])
     try:
         out = await execute_function(
+            thought="Greeting through the nested manager to trace lineage.",
             function_name="greet",
             call_kwargs=None,
         )
