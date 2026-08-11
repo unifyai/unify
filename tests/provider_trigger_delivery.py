@@ -16,7 +16,7 @@ import requests
 
 _ORCHESTRA_ROOT = Path(
     os.getenv(
-        "ORCHESTRA_REPO_ROOT",
+        "ORCHESTRA_REPO_PATH",
         str(Path(__file__).resolve().parents[2] / "orchestra"),
     ),
 )
@@ -281,7 +281,7 @@ def load_pipedream_github_issue_fixture(**overrides: Any) -> dict[str, Any]:
     if not _PIPEDREAM_FIXTURE_PATH.is_file():
         raise RuntimeError(
             f"Orchestra Pipedream fixture missing at {_PIPEDREAM_FIXTURE_PATH}; "
-            "set ORCHESTRA_REPO_ROOT to a checkout that includes orchestra/tests/fixtures/",
+            "set ORCHESTRA_REPO_PATH to a checkout that includes orchestra/tests/fixtures/",
         )
     payload = json.loads(_PIPEDREAM_FIXTURE_PATH.read_text(encoding="utf-8"))
     if "action" in overrides and overrides["action"] is not None:
@@ -405,7 +405,7 @@ def load_composio_github_issue_fixture(**overrides: Any) -> dict[str, Any]:
     if not _FIXTURE_PATH.is_file():
         raise RuntimeError(
             f"Orchestra Composio fixture missing at {_FIXTURE_PATH}; "
-            "set ORCHESTRA_REPO_ROOT to a checkout that includes orchestra/tests/fixtures/",
+            "set ORCHESTRA_REPO_PATH to a checkout that includes orchestra/tests/fixtures/",
         )
     payload = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
     metadata = dict(payload.get("metadata") or {})
