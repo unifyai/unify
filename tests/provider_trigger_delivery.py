@@ -355,12 +355,29 @@ def _orchestra_worker_env() -> dict[str, str]:
     return env
 
 
+def _orchestra_python_bin() -> Path:
+    """Interpreter of Orchestra's virtualenv.
+
+    Dev checkouts keep a repo-local ``.venv``; poetry-managed installs (CI)
+    store the virtualenv elsewhere, so fall back to asking poetry for it.
+    """
+
+    venv_python = _ORCHESTRA_ROOT / ".venv/bin/python"
+    if venv_python.exists():
+        return venv_python
+    return Path(
+        subprocess.check_output(
+            ["poetry", "env", "info", "--executable"],
+            cwd=_ORCHESTRA_ROOT,
+            text=True,
+        ).strip(),
+    )
+
+
 def resolve_orchestra_signing_secret(secret_ref: str) -> str:
     """Resolve one Orchestra signing-secret reference to raw material."""
 
-    python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
-    if not python_bin.exists():
-        raise RuntimeError(f"Orchestra venv not found at {python_bin}")
+    python_bin = _orchestra_python_bin()
     output = subprocess.check_output(
         [
             str(python_bin),
@@ -470,9 +487,7 @@ def run_orchestra_trigger_worker_cycle(
 ) -> None:
     """Advance Orchestra trigger reconciliation/dispatch using the local worker."""
 
-    python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
-    if not python_bin.exists():
-        raise RuntimeError(f"Orchestra venv not found at {python_bin}")
+    python_bin = _orchestra_python_bin()
     env = _orchestra_worker_env()
     if use_live_provider_credentials:
         for key in (
