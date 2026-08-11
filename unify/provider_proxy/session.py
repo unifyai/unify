@@ -94,18 +94,35 @@ def provider_billing_env_keys() -> frozenset[str]:
     return _PROVIDER_BILLING_ENV_KEYS
 
 
+#: Billing credentials the runtime no longer needs in the environment, because
+#: UniLLM now sends them with each request from settings captured at import.
+#: Nothing resolves these from ``os.environ`` mid-call, so they can be withheld
+#: from user code without stranding inference that is already in flight.
+#:
+#: The rest of :data:`_PROVIDER_BILLING_ENV_KEYS` stays put: those SDKs still
+#: read the environment at call time, and removing them here would break a
+#: transcription or voice call that happened to overlap with user code. They
+#: remain stripped from subprocess sandboxes, where no such overlap exists.
+_IN_PROCESS_SCRUBBABLE_PROVIDER_KEYS: frozenset[str] = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+    },
+)
+
+
 @contextlib.contextmanager
 def scrub_platform_secrets_from_environ() -> Iterator[None]:
     """Temporarily remove platform secrets from ``os.environ``.
 
     Used to wrap in-process ``execute_code`` so user Python cannot read
-    ``os.environ["ORCHESTRA_ADMIN_KEY"]`` directly. Subprocess sandboxes get
-    the same guarantee for free via :func:`build_sandbox_env` (which never seeds
-    these keys into the child env). Values are restored on exit so the parent
-    process is unaffected.
+    ``os.environ["ORCHESTRA_ADMIN_KEY"]`` — or the LLM billing credentials —
+    directly. Subprocess sandboxes get the same guarantee for free via
+    :func:`build_sandbox_env` (which never seeds these keys into the child
+    env). Values are restored on exit so the parent process is unaffected.
     """
     saved: dict[str, str] = {}
-    for key in _PLATFORM_SECRET_ENV_KEYS:
+    for key in _PLATFORM_SECRET_ENV_KEYS | _IN_PROCESS_SCRUBBABLE_PROVIDER_KEYS:
         if key in os.environ:
             saved[key] = os.environ.pop(key)
     try:
