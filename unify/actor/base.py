@@ -118,16 +118,22 @@ class BaseActor(ABC):
         self.knowledge_manager = (
             knowledge_manager or ManagerRegistry.get_knowledge_manager()
         )
-        # The workflow catalogue is the feature gate: with no
-        # UNITY_WORKFLOWS_DIR configured there is nothing to install, no
-        # WorkflowManager_* tools enter the schema, and deployments
-        # without the shelf keep their existing tool set (and LLM caches)
-        # byte-identical.
-        from unify.settings import SETTINGS
+        # The workflow catalogue is the feature gate: with no catalogue
+        # resolvable there is nothing to install, no WorkflowManager_* tools
+        # enter the schema, and deployments without the shelf keep their
+        # existing tool set (and LLM caches) byte-identical.
+        #
+        # Ask the one resolver, not the env var. The hosted deployment ships
+        # the catalogue inside the image and sets no UNITY_WORKFLOWS_DIR, so
+        # gating on the raw setting handed every deployed actor an empty
+        # workflow tool set while installs (which use the resolver) worked:
+        # planted tasks told the actor to read its settings with a tool it
+        # did not have, and every run degraded to catalogue archaeology.
+        from unify.workflow_manager.catalog import resolve_catalogue_root
 
         if workflow_manager is not None:
             self.workflow_manager = workflow_manager
-        elif (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip():
+        elif resolve_catalogue_root() is not None:
             self.workflow_manager = ManagerRegistry.get_workflow_manager()
         else:
             self.workflow_manager = None

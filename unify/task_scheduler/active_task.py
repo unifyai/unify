@@ -250,7 +250,15 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         try:
             try:
                 lineage_scope = (
-                    task_run_lineage_scope(task_id=int(task_id), run_key=run_key)
+                    task_run_lineage_scope(
+                        task_id=int(task_id),
+                        run_key=run_key,
+                        task_name=(
+                            task_run_provenance.task_name
+                            if task_run_provenance is not None
+                            else None
+                        ),
+                    )
                     if task_id is not None
                     else nullcontext()
                 )

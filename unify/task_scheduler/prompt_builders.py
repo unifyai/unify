@@ -22,8 +22,25 @@ from ..common.prompt_helpers import (
 )
 
 
-def build_task_execution_request(task: Task) -> str:
-    """Build the actor-facing request for one task instance."""
+def build_task_execution_request(
+    task: Task,
+    *,
+    installation_settings: Dict[str, Any] | None = None,
+    workflow_slug: str | None = None,
+) -> str:
+    """Build the actor-facing request for one task instance.
+
+    ``installation_settings`` are the recorded settings of the workflow that
+    planted this task, resolved by the caller at run start. Carrying them on
+    the request makes the run deterministic about its own configuration:
+    the actor honours what is written here instead of having to discover
+    and call a settings tool mid-run.
+
+    The instruction lives in this section rather than in the general run
+    guidelines so that a task with no settings produces a byte-identical
+    request — every non-workflow task run keeps its prompt, and its cache,
+    untouched.
+    """
 
     lines = [
         "Execute this TaskScheduler task as a contained task run.",
@@ -34,6 +51,17 @@ def build_task_execution_request(task: Task) -> str:
         "Task description:",
         task.description or task.name,
     ]
+    if installation_settings is not None:
+        source = f" of workflow {workflow_slug!r}" if workflow_slug else ""
+        lines.extend(
+            [
+                "",
+                f"Installation settings{source} (already resolved for this "
+                "run — honour them as given and do not look them up again; "
+                "empty values mean the default described in the task):",
+                json.dumps(installation_settings, sort_keys=True),
+            ],
+        )
     if task.response_policy:
         lines.extend(["", "Task response policy:", task.response_policy])
     if task.schedule is not None:
