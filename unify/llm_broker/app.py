@@ -75,6 +75,29 @@ def _caller_key(request: Request) -> Optional[str]:
     return request.headers.get("x-api-key") or None
 
 
+def _assistant_id(request: Request, body: dict) -> Optional[int]:
+    """Which assistant to attribute this call to.
+
+    Read from a header the runtime sets, because the body is provider-shaped
+    and forwarded verbatim -- an id left in it would reach a provider that
+    rejects unknown fields. Without this the call still runs and is still
+    charged, but lands on the account with no assistant, which loses
+    per-assistant reporting and silently stops the per-assistant spending
+    caps from applying, since those are enforced against this id.
+
+    The body form is still accepted for direct callers that have no runtime
+    setting the header.
+    """
+    raw = request.headers.get("x-unify-assistant-id") or body.pop("assistant_id", None)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        LOGGER.warning("LLM broker: unusable assistant id %r; not attributing", raw)
+        return None
+
+
 def _refusal(status_code: int, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail})
 
@@ -262,7 +285,7 @@ def build_router(broker: Broker) -> APIRouter:
         model = str(body.get("model") or "").strip()
         if not model:
             return _refusal(400, "`model` is required.")
-        assistant_id = body.pop("assistant_id", None)
+        assistant_id = _assistant_id(request, body)
 
         refusal = await broker.authorize(
             caller_key=caller_key,
@@ -308,7 +331,7 @@ def build_router(broker: Broker) -> APIRouter:
         model = str(body.get("model") or "").strip()
         if not model:
             return _refusal(400, "`model` is required.")
-        assistant_id = body.pop("assistant_id", None)
+        assistant_id = _assistant_id(request, body)
 
         refusal = await broker.authorize(
             caller_key=caller_key,

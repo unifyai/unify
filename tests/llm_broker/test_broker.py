@@ -12,9 +12,10 @@ import json
 
 import httpx
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
-from unify.llm_broker.app import build_app
+from unify.llm_broker.app import _assistant_id, build_app
 from unify.llm_broker.settings import BrokerSettings
 from unify.llm_broker.usage import usage_from_stream_tail
 
@@ -244,3 +245,52 @@ class TestUsageExtraction:
 
     def test_a_stream_with_no_usage_reports_nothing(self):
         assert usage_from_stream_tail('data: {"choices":[]}\n\n') is None
+
+
+class TestAssistantAttribution:
+    """A brokered call must still land on the assistant that made it.
+
+    The direct path took this from the billing context when it deducted
+    client-side. Gateway-routed calls skip that deduction, so the id has to
+    travel explicitly -- otherwise spend lands on the account with no
+    assistant, which loses per-assistant reporting and quietly stops the
+    per-assistant spending caps applying, since those are enforced on it.
+    """
+
+    def _request(self, headers=None):
+        scope = {
+            "type": "http",
+            "headers": [
+                (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
+            ],
+        }
+        return Request(scope)
+
+    def test_the_header_the_runtime_sets_is_used(self):
+        got = _assistant_id(
+            self._request({"X-Unify-Assistant-Id": "7366"}),
+            {},
+        )
+        assert got == 7366
+
+    def test_a_body_field_still_works_for_direct_callers(self):
+        """Callers without a runtime setting headers are not left unattributed."""
+        body = {"assistant_id": 42}
+        assert _assistant_id(self._request(), body) == 42
+        assert "assistant_id" not in body, "must not reach the provider"
+
+    def test_the_header_wins_over_a_body_field(self):
+        assert (
+            _assistant_id(
+                self._request({"X-Unify-Assistant-Id": "7366"}),
+                {"assistant_id": 1},
+            )
+            == 7366
+        )
+
+    def test_an_unusable_id_attributes_nothing_rather_than_failing(self):
+        """A malformed id should not cost the caller the whole call."""
+        assert _assistant_id(self._request({"X-Unify-Assistant-Id": "x"}), {}) is None
+
+    def test_no_id_anywhere_is_simply_unattributed(self):
+        assert _assistant_id(self._request(), {}) is None
