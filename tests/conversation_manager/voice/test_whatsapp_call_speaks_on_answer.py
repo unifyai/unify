@@ -198,6 +198,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence, extra_metadata=None):
         user=SimpleNamespace(id=None),
         assistant=SimpleNamespace(
             has_managed_desktop=False,
+            managed_desktop_entitled=False,
             about="Assistant bio",
             is_coordinator=False,
             agent_id=None,

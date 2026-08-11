@@ -320,3 +320,32 @@ class TestAssistantManagedDesktop:
             desktop_url="https://example.com",
         )
         assert assistant.has_managed_desktop is False
+
+    def test_entitlement_does_not_require_a_bound_desktop_url(self):
+        """Requesting a desktop must not depend on already having one.
+
+        A deferred voice activation has no desktop_url yet, so gating the
+        promotion on ``has_managed_desktop`` never fired and the session never
+        got a desktop.
+        """
+        assistant = AssistantDetails(
+            desktop_mode="ubuntu",
+            managed_desktop_status="active",
+            desktop_url=None,
+        )
+        assert assistant.managed_desktop_entitled is True
+        assert assistant.has_managed_desktop is False
+
+    def test_entitlement_requires_the_addon_to_be_active(self):
+        assistant = AssistantDetails(
+            desktop_mode="ubuntu",
+            managed_desktop_status=None,
+        )
+        assert assistant.managed_desktop_entitled is False
+
+    def test_entitlement_requires_a_managed_desktop_mode(self):
+        assistant = AssistantDetails(
+            desktop_mode="none",
+            managed_desktop_status="active",
+        )
+        assert assistant.managed_desktop_entitled is False

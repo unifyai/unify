@@ -3917,7 +3917,11 @@ async def entrypoint(ctx: agents.JobContext):
     def _schedule_deferred_desktop_binding() -> None:
         if not _voice_call_channel_defers_desktop_binding(channel):
             return
-        if not SESSION_DETAILS.assistant.has_managed_desktop:
+        # Entitlement, not ``has_managed_desktop``: the whole point of this call
+        # is that the activation deferred VM binding, so no desktop_url exists
+        # yet. Gating on one meant the promotion never fired and a deferred
+        # voice session never got a desktop at all.
+        if not SESSION_DETAILS.assistant.managed_desktop_entitled:
             return
         agent_id = SESSION_DETAILS.assistant.agent_id
         if agent_id is None:
