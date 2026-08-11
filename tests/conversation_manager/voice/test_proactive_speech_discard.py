@@ -195,6 +195,7 @@ async def _boot_entrypoint(monkeypatch):
         ),
         assistant=SimpleNamespace(
             has_managed_desktop=False,
+            managed_desktop_entitled=False,
             about="Assistant bio",
             name="Ava",
             first_name="Ava",
