@@ -456,10 +456,16 @@ class BaseDashboardManager(BaseStateManager):
             same place the tile lives, including shared team dashboards.
             Do not restate the row's ``destination`` as ``data_scope`` when
             they are the same team -- leave ``data_scope="dashboard"`` so
-            the tile inherits its destination root. Use ``"team:<id>"``
-            only when the tile's audience and data source intentionally
-            differ, for example a private watch tile that reads Patch-1
-            operations data.
+            the tile inherits its destination root. An unqualified data
+            reference names a table, not a team: when the user says "from
+            the WorkOrders data" without naming another team as its home,
+            resolve that table inside the destination's own root and keep
+            ``data_scope="dashboard"`` -- a team dashboard's metrics,
+            including aggregates that span other teams' activity, read
+            from that team's own data root. Use ``"team:<id>"`` only when
+            the user explicitly names a different team as the data's
+            home, for example a private watch tile that reads the Patch-1
+            team's operations data.
 
         Returns
         -------
@@ -873,8 +879,9 @@ class BaseDashboardManager(BaseStateManager):
             resolved binding paths rather than an unresolved binding recipe.
             Use ``"dashboard"`` when the tile and data source belong to the
             same dashboard root (do not restate that root as
-            ``"team:<id>"``); use ``"team:<id>"`` for intentional
-            cross-root bindings.
+            ``"team:<id>"``); an unqualified data reference resolves inside
+            the tile's own destination root. Use ``"team:<id>"`` only for
+            intentional cross-root bindings the user explicitly asked for.
 
         Returns
         -------
