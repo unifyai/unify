@@ -75,6 +75,23 @@ def orchestra_api_base() -> str:
     return raw
 
 
+def raise_for_status_with_detail(response: requests.Response) -> None:
+    """``raise_for_status`` that keeps the server's error body.
+
+    Orchestra explains refusals in the JSON ``detail`` field;
+    ``raise_for_status`` alone reports only the status code and URL, which
+    turns a self-describing failure into archaeology.
+    """
+
+    if response.status_code < 400:
+        return
+    raise requests.HTTPError(
+        f"{response.status_code} for {response.request.method} {response.url}: "
+        f"{response.text[:500]}",
+        response=response,
+    )
+
+
 def orchestra_api_key() -> str:
     return os.getenv("UNIFY_KEY", "local-test-api-key")
 
@@ -116,7 +133,7 @@ def ensure_provider_trigger_catalog_seeded(
                 headers=headers,
                 timeout=120,
             )
-            response.raise_for_status()
+            raise_for_status_with_detail(response)
 
 
 def ensure_pipedream_provider_trigger_catalog_seeded() -> None:
@@ -141,7 +158,7 @@ def _topology_unavailable_reason(assistant_id: int) -> str | None:
         headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
         timeout=30,
     )
-    response.raise_for_status()
+    raise_for_status_with_detail(response)
     info = response.json().get("info") or {}
     if info.get("available"):
         return None
@@ -196,7 +213,7 @@ def ensure_provider_trigger_test_prerequisites() -> None:
         headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
         timeout=30,
     )
-    catalog.raise_for_status()
+    raise_for_status_with_detail(catalog)
     bootstrap = catalog.json().get("bootstrap_states") or []
     seeded = [
         row
@@ -561,7 +578,7 @@ def fetch_orchestra_task_by_name_fragment(
         headers=headers,
         timeout=30,
     )
-    response.raise_for_status()
+    raise_for_status_with_detail(response)
     tasks = response.json()["info"]["tasks"]
     needle = name_fragment.lower()
     matches = [task for task in tasks if needle in str(task.get("name") or "").lower()]
@@ -598,7 +615,7 @@ def create_github_composio_connection(
         },
         timeout=30,
     )
-    start.raise_for_status()
+    raise_for_status_with_detail(start)
     connection = start.json()["connection"]
     connection_id = connection["connection_id"]
     complete = requests.post(
@@ -612,7 +629,7 @@ def create_github_composio_connection(
         },
         timeout=30,
     )
-    complete.raise_for_status()
+    raise_for_status_with_detail(complete)
     return complete.json()
 
 
@@ -636,7 +653,7 @@ def create_github_pipedream_connection(*, assistant_id: int) -> dict[str, Any]:
         },
         timeout=30,
     )
-    start.raise_for_status()
+    raise_for_status_with_detail(start)
     connection = start.json()["connection"]
     connection_id = connection["connection_id"]
     complete = requests.post(
@@ -650,5 +667,5 @@ def create_github_pipedream_connection(*, assistant_id: int) -> dict[str, Any]:
         },
         timeout=30,
     )
-    complete.raise_for_status()
+    raise_for_status_with_detail(complete)
     return complete.json()
