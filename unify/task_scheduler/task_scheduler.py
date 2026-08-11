@@ -1596,7 +1596,10 @@ class TaskScheduler(BaseTaskScheduler):
         Defaults to the full open-state set (scheduled/triggerable/running).
         """
 
-        task = self._get_task_or_raise(task_id)
+        # Typed provider-event definitions have no Tasks log mirror, so the
+        # store-only lookup cannot resolve them; use the same typed fallback
+        # as authored mutations.
+        task = self._resolve_task_for_mutation(task_id)
         kwargs: Dict[str, Any] = {
             "task_id": int(task_id),
             "destination": task.destination,
