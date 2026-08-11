@@ -87,6 +87,9 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
     - done() -> bool
     """
 
+    # Cadence of fabricated progress notifications while the action runs.
+    _PROGRESS_INTERVAL_S = 1.0
+
     # Per-run file sink for simulated LLM I/O logs (request/response)
     _SIM_ACT_LLM_IO_DIR: "str | None" = None
 
@@ -585,12 +588,26 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
         return {}
 
     async def next_notification(self) -> dict:
-        # If notifications are disabled, block until the action completes
-        # Use polling instead of asyncio.to_thread() to allow clean cancellation
+        """Yield paced progress updates; block when there is nothing to say.
+
+        Callers (``actor_watch_notifications``) wrap this in
+        ``asyncio.wait_for`` and rely on ``TimeoutError`` as their loop exit,
+        matching the queue-get semantics of the real
+        ``SteerableToolLoopHandle``. A branch that returns without awaiting
+        can never be timed out — ``wait_for`` awaits the coroutine inline —
+        and back-to-back synchronous returns starve the event loop outright,
+        freezing every other task in the process.
+        """
         if not self._emit_notifications:
-            while not self._done_event.is_set():
-                await asyncio.sleep(0.1)
-            return {}
+            await asyncio.Event().wait()
+            return {}  # unreachable; satisfies return type
+
+        # Pace fabricated progress while work runs; once the action is done
+        # there is no further progress, so block until the watcher cancels
+        # us — that silence is what lets its drain timeout fire.
+        await asyncio.sleep(self._PROGRESS_INTERVAL_S)
+        if self._done_event.is_set():
+            await asyncio.Event().wait()
 
         # Report progress without consuming steps (observing isn't work)
         # Compose a small progress message consistent with the configured mode

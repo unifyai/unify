@@ -403,6 +403,11 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     export ORCHESTRA_SEED_USER=1
     export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-unity-test-user-001}"
     export ORCHESTRA_TEST_EMAIL="${ORCHESTRA_TEST_EMAIL:-unity-test@debug.local}"
+    # Local orchestra defaults its admin bearer to "local-admin-key"
+    # (scripts/local.sh); the test process needs the same value so reserved
+    # Builtins-project seeding can swap it in (builtins_seed_key_override).
+    # CI sets this explicitly; default it here for local runs.
+    export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-local-admin-key}"
 
     # Set up OTEL log directory for cross-repo trace correlation (logs/all/).
     # Note: ORCHESTRA_LOG_DIR (per-request JSON traces to logs/orchestra/) is
@@ -933,6 +938,19 @@ run_cmd() {
   # - UNIFY_TESTS_DELETE_PROJ_ON_START/EXIT: explicitly unset in shared project mode
   #   to prevent race conditions (multiple sessions deleting the same project).
   env_exports='export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 UNILLM_CACHE_STATS=true'
+  # Re-assert the runner's auth/routing env inside the session command. tmux
+  # launches each command through the user's default shell, and zsh sources
+  # ~/.zshenv even for plain `zsh -c`, so a dotfile exporting one of these
+  # (e.g. a personal hosted UNIFY_KEY) silently clobbers the inherited value
+  # and every session 401s against the local Orchestra this runner just
+  # seeded. The runner's values are the source of truth; restate them after
+  # shell init has run.
+  local _reassert_var
+  for _reassert_var in UNIFY_KEY ORCHESTRA_URL ORCHESTRA_ADMIN_KEY; do
+    if [[ -n "${!_reassert_var:-}" ]]; then
+      env_exports="$env_exports $(printf '%s=%q' "$_reassert_var" "${!_reassert_var}")"
+    fi
+  done
   if is_random_projects_mode; then
     # Random projects mode: each session gets its own isolated project.
     # Per-session deletion is safe here since projects don't overlap.

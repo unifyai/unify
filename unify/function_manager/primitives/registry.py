@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class PromptText:
+    """The overview fields rendered for one manager in the actor prompt."""
+
+    domain: str
+    description: str
+    use_when: str
+    examples: str
+    special_note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ManagerSpec:
     """
     Configuration for a single manager in the tool surface.
@@ -59,6 +70,30 @@ class ManagerSpec:
     use_when: str = ""
     examples: str = ""
     special_note: str | None = None
+    # A manager that replaces this one for new work. The primary prompt fields
+    # above may steer authoring toward that replacement, so they only render
+    # while the replacement is exposed in the same scope; when it is absent,
+    # ``standalone`` renders instead. A prompt must never route to a tool the
+    # session cannot call — an actor told "author over there" with no "there"
+    # in scope refuses work its visible tools fully support.
+    superseded_by: str | None = None
+    standalone: PromptText | None = None
+
+    def prompt_text(self, exposed_aliases: frozenset[str]) -> PromptText:
+        """The overview text to render given which managers are exposed."""
+        if (
+            self.superseded_by is not None
+            and self.superseded_by not in exposed_aliases
+            and self.standalone is not None
+        ):
+            return self.standalone
+        return PromptText(
+            domain=self.domain,
+            description=self.description,
+            use_when=self.use_when,
+            examples=self.examples,
+            special_note=self.special_note,
+        )
 
 
 # =============================================================================
@@ -258,6 +293,53 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "side effects and ``result_mode='show_result'`` when Console "
             "should present the return value. Do not put Python side-effect "
             "click handlers in tile HTML -- Console owns action chrome."
+        ),
+        superseded_by="canvas",
+        standalone=PromptText(
+            domain="Visualizations & Dashboards",
+            description=(
+                "Create HTML visualization tiles (charts, plots, KPI cards, "
+                "tables) and compose them into dashboard grid layouts"
+            ),
+            use_when=(
+                "Generate any visualization, chart, plot, dashboard, KPI card, "
+                "or interactive HTML output for the user to view"
+            ),
+            examples=(
+                "'Plot repairs by category', 'Show me a bar chart of revenue', "
+                "'Create a dashboard with KPIs and charts', "
+                "'Generate an interactive table of orders'"
+            ),
+            special_note=(
+                "The actor has full creative freedom over tile HTML -- any "
+                "HTML/CSS/JS that renders in a browser works. PREFER live "
+                "tiles: declare data_bindings (FilterBinding, ReduceBinding, "
+                "JoinBinding, JoinReduceBinding) as the single source of truth "
+                "and provide an on_data JS callback that receives fetched data "
+                "keyed by alias. Console auto-generates bridge calls from the "
+                "serialized bindings -- the actor never writes bridge API "
+                "calls. Each binding is auto-validated via the corresponding "
+                "DataManager method before the tile is stored. Compose tiles "
+                "into dashboards with create_dashboard(). ``destination`` "
+                "chooses which dashboard pool stores the tile; ``data_scope`` "
+                "chooses the live-data root. Keep ``data_scope='dashboard'`` "
+                "when data should inherit that pool (including shared team "
+                "dashboards); set ``data_scope='team:<id>'`` only when a tile "
+                "must read a different team's data than where it lives. If the "
+                "user names a team board that is not listed yet under that "
+                "destination, create the dashboard and tile there rather than "
+                "asking for an existing token. Live data tiles are essential "
+                "for production: large datasets, joins, aggregation, and "
+                "frequently updated data. Only bake data into HTML for very "
+                "small static snapshots. For authenticated Console buttons "
+                "that run Python, declare ``actions=[TileAction(...)]`` on "
+                "create_tile/update_tile (author via ``implementation`` or "
+                "wire ``function_id``/``function_name``). Use "
+                "``result_mode='fire_and_forget'`` for side effects and "
+                "``result_mode='show_result'`` when Console should present "
+                "the return value. Do not put Python side-effect click "
+                "handlers in tile HTML -- Console owns action chrome."
+            ),
         ),
     ),
     ManagerSpec(
@@ -1322,16 +1404,19 @@ class ToolSurfaceRegistry:
             "Choose the right manager for your task:\n",
         )
 
+        exposed_aliases = primitive_scope.scoped_managers
+
         # ── Section 1: Brief manager overview (routing-focused) ──
         for spec in specs:
-            lines.append(f"\n**{spec.domain}** → `primitives.{spec.manager_alias}`")
-            lines.append(f"- {spec.description}")
-            if spec.use_when:
-                lines.append(f"- **Use when**: {spec.use_when}")
-            if spec.examples:
-                lines.append(f"- **Examples**: {spec.examples}")
-            if spec.special_note:
-                lines.append(f"- **Note**: {spec.special_note}")
+            text = spec.prompt_text(exposed_aliases)
+            lines.append(f"\n**{text.domain}** → `primitives.{spec.manager_alias}`")
+            lines.append(f"- {text.description}")
+            if text.use_when:
+                lines.append(f"- **Use when**: {text.use_when}")
+            if text.examples:
+                lines.append(f"- **Examples**: {text.examples}")
+            if text.special_note:
+                lines.append(f"- **Note**: {text.special_note}")
 
         # ── Section 2: Manager selection priorities ──
         if len(specs) > 1:
@@ -1359,7 +1444,6 @@ class ToolSurfaceRegistry:
             )
 
         # ── Section 3: Routing guidance for commonly confused pairs ──
-        exposed_aliases = primitive_scope.scoped_managers
         for guidance in _ROUTING_GUIDANCE:
             if guidance["managers"].issubset(exposed_aliases):
                 lines.append(f"\n**CRITICAL: {guidance['title']} Routing**:")

@@ -7957,7 +7957,9 @@ if __name__ == "__main__":
         # Use the scoped primitive_scope from this FunctionManager
         for spec in self._registry.manager_specs(self._primitive_scope):
             manager_name = spec.manager_alias
-            description = spec.description
+            description = spec.prompt_text(
+                self._primitive_scope.scoped_managers,
+            ).description
 
             # Get primitive rows which contain signature and docstring
             single_scope = PrimitiveScope(scoped_managers=frozenset({manager_name}))
