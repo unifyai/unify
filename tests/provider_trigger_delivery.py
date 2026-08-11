@@ -329,6 +329,9 @@ def deliver_signed_pipedream_webhook(
 
 def _orchestra_worker_env() -> dict[str, str]:
     env = os.environ.copy()
+    # An inherited VIRTUAL_ENV (the unify test venv) would make poetry run
+    # Orchestra's worker inside the wrong environment.
+    env.pop("VIRTUAL_ENV", None)
     for key in (
         "COMPOSIO_API_KEY",
         "PIPEDREAM_CLIENT_ID",
@@ -355,32 +358,29 @@ def _orchestra_worker_env() -> dict[str, str]:
     return env
 
 
-def _orchestra_python_bin() -> Path:
-    """Interpreter of Orchestra's virtualenv.
+def _orchestra_python_command() -> list[str]:
+    """Command prefix that runs Python inside Orchestra's virtualenv.
 
     Dev checkouts keep a repo-local ``.venv``; poetry-managed installs (CI)
-    store the virtualenv elsewhere, so fall back to asking poetry for it.
+    store the virtualenv in poetry's cache, so route through ``poetry run``
+    there — the same fallback orchestra's ``scripts/local.sh`` uses. The
+    subprocess env must not carry this process's ``VIRTUAL_ENV`` (see
+    ``_orchestra_worker_env``), or poetry adopts the unify test venv instead
+    of Orchestra's own environment.
     """
 
     venv_python = _ORCHESTRA_ROOT / ".venv/bin/python"
     if venv_python.exists():
-        return venv_python
-    return Path(
-        subprocess.check_output(
-            ["poetry", "env", "info", "--executable"],
-            cwd=_ORCHESTRA_ROOT,
-            text=True,
-        ).strip(),
-    )
+        return [str(venv_python)]
+    return ["poetry", "run", "python"]
 
 
 def resolve_orchestra_signing_secret(secret_ref: str) -> str:
     """Resolve one Orchestra signing-secret reference to raw material."""
 
-    python_bin = _orchestra_python_bin()
     output = subprocess.check_output(
         [
-            str(python_bin),
+            *_orchestra_python_command(),
             "-c",
             (
                 "from orchestra.provider_triggers.signing_secret_refs import "
@@ -487,7 +487,6 @@ def run_orchestra_trigger_worker_cycle(
 ) -> None:
     """Advance Orchestra trigger reconciliation/dispatch using the local worker."""
 
-    python_bin = _orchestra_python_bin()
     env = _orchestra_worker_env()
     if use_live_provider_credentials:
         for key in (
@@ -502,7 +501,7 @@ def run_orchestra_trigger_worker_cycle(
     Path(env["TRIGGER_EVENT_PRIVATE_ROOT"]).mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
-            str(python_bin),
+            *_orchestra_python_command(),
             "-m",
             "orchestra.workers.provider_trigger_worker",
             "--once",
