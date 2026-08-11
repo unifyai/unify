@@ -273,14 +273,18 @@ def test_state_manager_env_get_prompt_context_respects_scope():
     env = StateManagerEnvironment(Primitives(primitive_scope=scope))
     context = env.get_prompt_context()
 
-    # Should include scoped managers in the method reference sections
-    assert "#### `primitives.files`" in context
-    assert "#### `primitives.contacts`" in context
+    # Scoped managers appear in the routing overview
+    assert "→ `primitives.files`" in context
+    assert "→ `primitives.contacts`" in context
 
-    # Should NOT include unscoped managers in method reference sections
-    # (general rules/examples may reference them generically)
+    # Only core methods (each manager's `ask`) are documented inline;
+    # contacts has one, files excludes its `ask` from the primitive surface
+    assert "#### `primitives.contacts`" in context
+    assert "#### `primitives.files`" not in context
+
+    # Unscoped managers appear neither in routing nor method reference
+    assert "→ `primitives.tasks`" not in context
     assert "#### `primitives.tasks`" not in context
-    assert "#### `primitives.knowledge`" not in context
 
 
 # ────────────────────────────────────────────────────────────────────────────
