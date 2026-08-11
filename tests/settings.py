@@ -71,6 +71,11 @@ class TestingSettings(ProductionSettings):
     UNIFY_TESTS_DELETE_PROJ_ON_EXIT: bool = False
     UNITY_CACHE_STATS: bool = False
     UNIFY_PRETEST_CONTEXT_CREATE: bool = False
+    # Per-request timeout (seconds) for the Orchestra metadata calls made in
+    # per-test setup/teardown (context delete/create). These calls normally
+    # complete in well under a second; the bound exists so a stalled network
+    # degrades to local-only context setup instead of hanging the session.
+    UNIFY_TEST_SETUP_HTTP_TIMEOUT: float = 10.0
     UNIFY_TEST_TAGS: str = ""  # Comma-separated list of tags for duration logging
     UNIFY_SKIP_SESSION_SETUP: bool = False  # Skip project/context creation (pre-done)
     UNITY_TEST_PROJECT_NAME: str = "UnityTests"
