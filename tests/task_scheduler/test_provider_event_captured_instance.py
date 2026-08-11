@@ -37,9 +37,9 @@ def _seed_provider_event_definition(
     enabled: bool = True,
     provider_event_binding_id: str | None = "binding-1",
 ) -> int:
-    next_task_id = int(scheduler._store.get_metric_max(key="task_id") or 0) + 1
+    # task_id is auto-counted server-side; computing it client-side races
+    # against parallel test sessions sharing the Tasks context.
     payload = {
-        "task_id": next_task_id,
         "name": "GitHub issue triage",
         "description": "Triage new GitHub issues.",
         "trigger": _provider_event_trigger(),
@@ -50,8 +50,8 @@ def _seed_provider_event_definition(
     if provider_event_binding_id is not None:
         payload["provider_event_binding_id"] = provider_event_binding_id
     with scheduler._use_task_destination(None):
-        scheduler._store.log(entries=payload, new=True)
-    return next_task_id
+        log = scheduler._store.log(entries=payload, new=True)
+    return int(log.entries["task_id"])
 
 
 def _request(*, task_id: int, operation_id: str) -> ProviderEventDispatchRequest:

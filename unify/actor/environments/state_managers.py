@@ -251,7 +251,11 @@ the handle.
     def _build_filtered_method_docs(self) -> str:
         """Build method-level documentation for only the allowed methods."""
         assert self._allowed_methods is not None
-        return build_filtered_method_docs(self._allowed_methods, self.namespace)
+        return build_filtered_method_docs(
+            self._allowed_methods,
+            self.namespace,
+            exposed_aliases=self._primitive_scope.scoped_managers,
+        )
 
     async def capture_state(self) -> Dict[str, Any]:
         """State manager state is primarily evidenced via return values."""
