@@ -754,10 +754,10 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 # Worktree dependency symlinks (for local editable packages)
 # ---------------------------------------------------------------------------
-# pyproject.toml references ../unify and ../unillm as editable local packages.
-# In the main repo at ~/unity, these resolve to ~/unify and ~/unillm.
-# In a worktree at ~/.cursor/worktrees/unity/xyz, they resolve to
-# ~/.cursor/worktrees/unity/unify which doesn't exist by default.
+# pyproject.toml references ../unisdk and ../unillm as editable local packages.
+# In the main repo at ~/unify, these resolve to ~/unisdk and ~/unillm.
+# In a worktree at ~/unify/.claude/worktrees/xyz, they resolve to
+# ~/unify/.claude/worktrees/unisdk which doesn't exist by default.
 #
 # This function creates symlinks at the worktree parent level so that
 # `uv sync` works correctly in any worktree without manual setup.
@@ -782,7 +782,7 @@ ensure_worktree_dependency_symlinks() {
   worktree_parent=$(dirname "$REPO_ROOT")
 
   # For each local dependency, ensure a symlink exists at the worktree parent level
-  local deps=("unify" "unillm")
+  local deps=("unify" "unillm" "unisdk")
   for dep in "${deps[@]}"; do
     local target="$main_repo/../$dep"  # e.g., ~/unify (sibling of main repo)
     local link="$worktree_parent/$dep"  # e.g., ~/.cursor/worktrees/unity/unify
