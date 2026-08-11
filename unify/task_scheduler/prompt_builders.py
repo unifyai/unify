@@ -35,6 +35,11 @@ def build_task_execution_request(
     the request makes the run deterministic about its own configuration:
     the actor honours what is written here instead of having to discover
     and call a settings tool mid-run.
+
+    The instruction lives in this section rather than in the general run
+    guidelines so that a task with no settings produces a byte-identical
+    request — every non-workflow task run keeps its prompt, and its cache,
+    untouched.
     """
 
     lines = [
@@ -52,8 +57,8 @@ def build_task_execution_request(
             [
                 "",
                 f"Installation settings{source} (already resolved for this "
-                "run — honour them as given; empty values mean the default "
-                "described in the task):",
+                "run — honour them as given and do not look them up again; "
+                "empty values mean the default described in the task):",
                 json.dumps(installation_settings, sort_keys=True),
             ],
         )
@@ -96,10 +101,7 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "You are executing exactly one TaskScheduler task. Treat the task "
         "name, description, schedule, trigger, repeat, and response policy "
         "as the authoritative statement of the task's INTENT and required "
-        "outcome for this run. If the request carries an 'Installation "
-        "settings' section, those are this run's resolved configuration: "
-        "honour them as given and never re-fetch, guess, or search for "
-        "settings elsewhere. Details the description records about "
+        "outcome for this run. Details the description records about "
         "external interfaces (endpoint shapes, field names, response "
         "formats) describe the environment as it looked when the task was "
         "created; such interfaces evolve, and the live environment is "
