@@ -316,13 +316,23 @@ class AssistantDetails:
         return f"{self.first_name} {self.surname}".strip()
 
     @property
-    def has_managed_desktop(self) -> bool:
-        """True when managed Computer Use is entitled and a VM URL is assigned."""
+    def managed_desktop_entitled(self) -> bool:
+        """True when the managed Computer Use add-on is enabled and paid for.
+
+        Independent of whether a VM is currently bound, so it is the correct
+        gate for *requesting* a desktop. Asking ``has_managed_desktop`` there is
+        circular: it requires ``desktop_url``, which only arrives once the
+        desktop the caller wants to request is already ready.
+        """
         return (
             self.desktop_mode in ("ubuntu", "windows")
             and self.managed_desktop_status == "active"
-            and bool(self.desktop_url)
         )
+
+    @property
+    def has_managed_desktop(self) -> bool:
+        """True when managed Computer Use is entitled and a VM URL is assigned."""
+        return self.managed_desktop_entitled and bool(self.desktop_url)
 
     def user_desktop_for(self, user_id: str | None) -> UserDesktopLink | None:
         """Return the desktop the given user has linked to this assistant."""
