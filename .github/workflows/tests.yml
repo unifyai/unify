@@ -740,8 +740,12 @@ jobs:
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"   # Handled by setup job at workflow level
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"    # Keep project after tests
       # Normal CI must fail closed on cache misses. Real LLM cache refreshes
-      # are isolated in the protected LLM Cache Refresh workflow.
+      # are isolated in the protected LLM Cache Refresh workflow. Canonical
+      # keying lets recordings survive mundane prompt churn (block reordering,
+      # docstring rewording, volatile substrings); byte-identical re-recording
+      # is an explicit refresh-workflow decision, not a CI requirement.
       UNILLM_CACHE: "read-only"
+      UNILLM_CACHE_KEYING: "canonical"
       # Local orchestra path (cloned into workspace, not sibling directory)
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       # Coordinator local-stack tests need unify-deploy/selfhost/stack.sh when

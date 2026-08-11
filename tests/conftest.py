@@ -594,7 +594,7 @@ def pytest_sessionfinish(session, exitstatus):
         if session_id:
             stats_file = f"/tmp/parallel_run_cache_{session_id}.txt"
             with open(stats_file, "w") as f:
-                f.write(f"{stats.hits}|{stats.misses}\n")
+                f.write(f"{stats.hits}|{stats.canonical_hits}|{stats.misses}\n")
     except Exception:
         pass  # Don't fail the test run if cache stats writing fails
 
@@ -663,7 +663,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
         stats = unillm.get_cache_stats()
         terminalreporter.section(
-            f"Unify cache report | Hits ({stats.get_percentage_of_cache_hits():.2f}%): {stats.hits} | Misses ({stats.get_percentage_of_cache_misses():.2f}%): {stats.misses} | Reads: {stats.reads} | Writes: {stats.writes}",
+            f"Unify cache report | Hits ({stats.get_percentage_of_cache_hits():.2f}%): {stats.hits} ({stats.canonical_hits} canonical) | Misses ({stats.get_percentage_of_cache_misses():.2f}%): {stats.misses} | Reads: {stats.reads} | Writes: {stats.writes}",
         )
 
     total = sum(cost for _, cost in _session_costs)
@@ -913,7 +913,7 @@ def pytest_html_results_summary(prefix, summary, postfix):
         prefix.extend(
             [
                 f"<h4>Unify Cache Stats Report:</h4>",
-                f"<p>Hits ({stats.get_percentage_of_cache_hits():.2f}%): {stats.hits} | Misses ({stats.get_percentage_of_cache_misses():.2f}%): {stats.misses}</p>",
+                f"<p>Hits ({stats.get_percentage_of_cache_hits():.2f}%): {stats.hits} ({stats.canonical_hits} canonical) | Misses ({stats.get_percentage_of_cache_misses():.2f}%): {stats.misses}</p>",
                 f"<p>Reads: {stats.reads} | Writes: {stats.writes}</p>",
             ],
         )
