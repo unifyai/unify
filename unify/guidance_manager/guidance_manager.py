@@ -1220,6 +1220,23 @@ class GuidanceManager(BaseGuidanceManager):
             source_guidance = source_guidance or {}
             synced_key = (guidance_context, managed_by)
 
+            # A caller that pre-built the name map (the deployment
+            # reconcile) stays authoritative, including an empty map. A
+            # caller that didn't — a workflow install fanning out through
+            # the surface registry — gets names resolved against the
+            # functions actually readable right now, so a guidance row's
+            # ``function_names`` links survive regardless of who drove the
+            # sync. Without this, workflow guidance planted with every
+            # link silently dropped.
+            if function_name_to_id is None and any(
+                (row or {}).get("function_names") for row in source_guidance.values()
+            ):
+                function_name_to_id = {
+                    name: fid
+                    for fid, name in self._available_functions_by_id().items()
+                    if name
+                }
+
             return run_custom_sync(
                 adapter=_GuidanceSyncAdapter(
                     self,

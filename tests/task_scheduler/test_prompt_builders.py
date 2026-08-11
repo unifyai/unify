@@ -184,3 +184,32 @@ def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
     )
     assert "null means the catalog has no native lifecycle gate" in prompt
     assert "provisioning, and health checks" in prompt
+
+
+def test_build_task_execution_request_carries_installation_settings():
+    """A workflow-planted run receives its settings on the request itself.
+
+    The settings are resolved by the scheduler at run start, so the run
+    never has to discover or call a settings tool — an instruction that,
+    read by a code-writing actor, became a NameError in a plan.
+    """
+
+    task = Task(
+        task_id=9,
+        name="Daily briefing",
+        description="Compose and deliver the morning briefing.",
+        priority=Priority.normal,
+        repeat=[RepeatPattern(frequency=Frequency.WEEKLY)],
+    )
+
+    request = build_task_execution_request(
+        task,
+        installation_settings={"focus": "renewals"},
+        workflow_slug="daily_briefing",
+    )
+
+    assert "Installation settings of workflow 'daily_briefing'" in request
+    assert '{"focus": "renewals"}' in request
+
+    bare = build_task_execution_request(task)
+    assert "Installation settings" not in bare
