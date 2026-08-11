@@ -89,6 +89,39 @@ class TestTheRouteCannotBeUsedToEvadeTheGate:
         """Gating a route wholesale would take the platform default with it."""
         assert _payment_gated("openai/gpt-5.6-sol@openrouter", never_paid=True) is False
 
+    def test_the_accounting_form_of_the_same_call_is_gated(self):
+        """The route-first spelling must gate exactly like the endpoint form.
+
+        A call is described two ways: ``anthropic/claude-opus-4.8@openrouter``
+        names the route last, and ``openrouter/anthropic/claude-opus-4.8``
+        names it first. They are the same call, so reading the leading segment
+        as the vendor would report the aggregator and admit every gated vendor
+        under its other spelling.
+        """
+        for model in (
+            "openrouter/anthropic/claude-opus-4.8",
+            "openrouter/anthropic/claude-fable-5",
+        ):
+            assert _payment_gated(model, never_paid=True) is True
+
+    def test_the_accounting_form_still_admits_other_vendors(self):
+        assert _payment_gated("openrouter/openai/gpt-5.6-sol", never_paid=True) is False
+
+    @pytest.mark.asyncio
+    async def test_the_gate_holds_on_the_field_the_runtime_populates(self):
+        """The runtime fills ``model`` with the accounting form, not the endpoint.
+
+        Exercising only the endpoint spelling would leave the gate certified
+        against a shape production never sends.
+        """
+        response = await _run_callback(
+            "openrouter/anthropic/claude-fable-5",
+            _NEVER_PAID,
+        )
+
+        assert response.allowed is False
+        assert "Anthropic" in response.reason
+
     @pytest.mark.asyncio
     async def test_the_refusal_names_the_vendor_not_the_aggregator(self):
         """ "OpenRouter models require payment" would misdescribe the block."""
