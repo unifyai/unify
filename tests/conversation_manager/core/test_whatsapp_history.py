@@ -47,7 +47,7 @@ async def test_log_message_uses_template_history_for_whatsapp_sent(monkeypatch):
     logged_messages: list[dict] = []
 
     transcript_manager = SimpleNamespace(
-        log_first_message_in_new_exchange=lambda message, destination=None: (
+        log_first_message_in_new_exchange=lambda message, exchange_initial_metadata=None, destination=None: (
             logged_messages.append(message) or (123, 456)
         ),
     )
@@ -72,6 +72,8 @@ async def test_log_message_uses_template_history_for_whatsapp_sent(monkeypatch):
         _local_to_global_message_ids={},
         _local_to_global_message_ids_by_destination={},
         _local_message_destinations={},
+        # WhatsApp DMs group into one exchange per contact via this cache.
+        _conversation_exchange_ids={},
     )
     monkeypatch.setattr(managers_utils, "ensure_runtime_context", lambda: "test/ctx")
     monkeypatch.setattr(
