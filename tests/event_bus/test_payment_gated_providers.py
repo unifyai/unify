@@ -59,6 +59,49 @@ class TestGatePredicate:
         assert "anthropic" in PAYMENT_GATED_PROVIDERS
 
 
+class TestTheRouteCannotBeUsedToEvadeTheGate:
+    """An aggregator reaches the same models, so it is gated the same way.
+
+    OpenRouter ids keep the vendor prefix, and the curated catalogue's
+    Anthropic entries route natively while the model-search results route
+    through OpenRouter. Gating only the trailing route segment would leave
+    the search path as an open door to exactly the models the gate exists
+    to hold back.
+    """
+
+    def test_anthropic_through_openrouter_is_gated(self):
+        assert (
+            _payment_gated("anthropic/claude-opus-4.8@openrouter", never_paid=True)
+            is True
+        )
+
+    def test_the_native_anthropic_route_is_still_gated(self):
+        assert _payment_gated("claude-fable-5@anthropic", never_paid=True) is True
+
+    def test_a_paid_account_reaches_both_routes(self):
+        for model in (
+            "anthropic/claude-opus-4.8@openrouter",
+            "claude-fable-5@anthropic",
+        ):
+            assert _payment_gated(model, never_paid=False) is False
+
+    def test_other_vendors_on_the_same_aggregator_are_untouched(self):
+        """Gating a route wholesale would take the platform default with it."""
+        assert _payment_gated("openai/gpt-5.6-sol@openrouter", never_paid=True) is False
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_names_the_vendor_not_the_aggregator(self):
+        """ "OpenRouter models require payment" would misdescribe the block."""
+        response = await _run_callback(
+            "anthropic/claude-opus-4.8@openrouter",
+            _NEVER_PAID,
+        )
+
+        assert response.allowed is False
+        assert "Anthropic" in response.reason
+        assert "OpenRouter" not in response.reason
+
+
 def _run_callback(model: str, spend_data: dict):
     """Drive the callback for a personal account with *spend_data*."""
 
@@ -95,7 +138,29 @@ class TestGateAtTheSpendBoundary:
         response = await _run_callback("claude-fable-5@anthropic", _NEVER_PAID)
 
         assert response.allowed is False
-        assert "payment method" in response.reason
+        # The refusal has to carry its own remedy: this string is what the
+        # user is shown, and a denial they cannot act on is the failure mode
+        # this gate keeps reproducing.
+        assert "payment" in response.reason.lower()
+        assert "billing" in response.reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_reason_does_not_promise_that_a_card_is_enough(self):
+        """Access turns on payment history, not on a card being attached.
+
+        Earlier copy said "add a payment method", which sends someone to
+        attach a card and hit the identical refusal afterwards.
+        """
+        response = await _run_callback("claude-fable-5@anthropic", _NEVER_PAID)
+
+        assert "add a payment method" not in response.reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_reason_offers_a_way_to_keep_working_now(self):
+        """An included model is reachable immediately; say so."""
+        response = await _run_callback("claude-fable-5@anthropic", _NEVER_PAID)
+
+        assert "included models" in response.reason.lower()
 
     @pytest.mark.asyncio
     async def test_allows_anthropic_once_the_account_has_paid(self):
@@ -121,4 +186,6 @@ class TestGateAtTheSpendBoundary:
     async def test_reason_names_the_provider(self):
         response = await _run_callback("claude-opus-5@anthropic", _NEVER_PAID)
 
-        assert "anthropic" in response.reason
+        # Spelled as a reader writes it, not as the endpoint suffix is
+        # matched — this string is shown to the account holder.
+        assert "Anthropic" in response.reason

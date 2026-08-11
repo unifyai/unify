@@ -340,6 +340,7 @@ def build_update_prompt(
     catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
     connections_fname = tool_name(tools, "list_provider_trigger_connections")
     trigger_fname = tool_name(tools, "describe_provider_trigger")
+    resources_fname = tool_name(tools, "list_provider_trigger_resources")
     health_fname = tool_name(tools, "get_provider_trigger_health")
     context_fname = tool_name(tools, "get_provider_event_context")
 
@@ -449,12 +450,35 @@ def build_update_prompt(
             "----------------------",
             f"A task with a `trigger` is armed by that trigger, not by a start time. Use `{update_task_fname}(task_id=<id>, trigger=...)` to add/remove triggers. Do not set `start_at` on trigger-based tasks.",
             "`schedule` and `trigger` are mutually exclusive. Use `repeat` with `schedule` for cadence-based tasks; use `trigger` for inbound-event tasks.",
+            f"Explicit `null` clears: `{update_task_fname}(task_id=<id>, start_at=None)` removes the schedule (sweeping `repeat` with it unless replaced in the same call); `deadline=None` / `repeat=None` clear likewise. Convert a scheduled task to a triggered one in ONE call: `{update_task_fname}(task_id=<id>, trigger=..., start_at=None)`.",
             "",
             "Provider-event triggers",
             "-----------------------",
             "Use provider-event triggers for third-party SaaS events configured in the trigger catalog.",
             "Authoring order: list catalog → list eligible connections → describe schema → "
             "resolve required resources → create with trigger_config filled → enable.",
+            (
+                f"List supported third-party events: `{catalog_fname}()`. "
+                "Always inspect the catalog before concluding an event trigger "
+                "is unavailable; never decide feasibility from memory."
+                if catalog_fname
+                else ""
+            ),
+            (
+                f"List eligible connections: `{connections_fname}(canonical_app_slug='<app>')`."
+                if connections_fname
+                else ""
+            ),
+            (
+                f"Describe trigger config schema: `{trigger_fname}(provider_trigger_slug='<slug>', backend_id='<backend>')`."
+                if trigger_fname
+                else ""
+            ),
+            (
+                f"Resolve required resources: `{resources_fname}(target_resource_family='<family from describe>', query='<optional name>')`."
+                if resources_fname
+                else ""
+            ),
             "Stop before create/enable only when the catalog row explicitly has `live_ready=false`, "
             "`provisionable=false`, or `delivery_only=true` (for example Chat batch rows). "
             "`null` means there is no native lifecycle gate for that field, not that the trigger is unavailable; "

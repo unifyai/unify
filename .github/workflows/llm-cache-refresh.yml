@@ -21,6 +21,14 @@ on:
         options:
         - write-misses
         - uncached-eval
+      keying:
+        description: "canonical spends only on real drift; exact re-records byte-identical misses"
+        required: false
+        type: choice
+        default: canonical
+        options:
+        - canonical
+        - exact
       timeout_minutes:
         description: "Per-matrix-job session timeout"
         required: false
@@ -207,6 +215,7 @@ jobs:
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
       UNILLM_CACHE: ${{ inputs.cache_mode == 'uncached-eval' && 'false' || 'true' }}
+      UNILLM_CACHE_KEYING: ${{ inputs.keying }}
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       UNIFY_DEPLOY_REPO_PATH: ${{ github.workspace }}/unify-deploy
       LOCAL_STACK_NO_AUTO: "1"

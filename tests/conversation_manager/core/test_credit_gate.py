@@ -4,12 +4,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from unify.conversation_manager.cm_types import Medium
+from unillm.limit_hooks import LimitCheckResponse, SpendingLimitExceededError
+
 from unify.conversation_manager.conversation_manager import (
     ACCOUNT_SUSPENDED_EMAIL_SUBJECT,
     ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE,
     CREDIT_GATE_REPLY_THROTTLE_SECONDS,
     DEPLETED_CREDITS_EMAIL_SUBJECT,
     DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+    SPENDING_GATE_EMAIL_SUBJECT,
     ConversationManager,
 )
 from unify.spending_limits import (
@@ -291,3 +294,131 @@ class TestTheRefusalCarriesActionableAdvice:
 
     def test_the_two_refusals_are_distinguishable_in_a_mailbox(self):
         assert ACCOUNT_SUSPENDED_EMAIL_SUBJECT != DEPLETED_CREDITS_EMAIL_SUBJECT
+
+
+def _cm_for_refusal(*, is_voice: bool, reply_context: dict | None):
+    """A ConversationManager wired only for the spending-refusal path."""
+    cm = object.__new__(ConversationManager)
+    cm.mode = SimpleNamespace(is_voice=is_voice)
+    cm._last_inbound_reply_context = reply_context
+    cm._credit_gate_reply_sent_at = {}
+    cm._session_logger = MagicMock()
+    cm.loop = SimpleNamespace(time=MagicMock(return_value=1000.0))
+    cm._send_system_reply = AsyncMock(return_value=True)
+    cm.get_active_contact = MagicMock(return_value={})
+    cm.event_broker = SimpleNamespace(publish=AsyncMock())
+    return cm
+
+
+def _refusal(reason: str) -> SpendingLimitExceededError:
+    return SpendingLimitExceededError(LimitCheckResponse(allowed=False, reason=reason))
+
+
+class TestSpendingRefusalReachesTheUser:
+    """The spend boundary states a cause; the user must receive that cause.
+
+    A refusal is permanent until the account changes, so the failure copy
+    for a flaky provider — which asks the user to try again shortly — is
+    the one thing these paths must never fall back to.
+    """
+
+    @pytest.mark.asyncio
+    async def test_text_surface_repeats_the_reason_verbatim(self):
+        reason = (
+            "Anthropic models unlock once this account has made its first "
+            "payment. Subscribe in billing to use them."
+        )
+        cm = _cm_for_refusal(
+            is_voice=False,
+            reply_context={"medium": Medium.UNIFY_MESSAGE.value, "contact_id": 1},
+        )
+
+        with patch(
+            "unify.conversation_manager.conversation_manager.publish_system_error",
+        ):
+            await ConversationManager._surface_spending_gate_refusal(
+                cm,
+                _refusal(reason),
+            )
+
+        cm._send_system_reply.assert_awaited_once()
+        assert cm._send_system_reply.await_args.kwargs["content"] == reason
+        assert (
+            cm._send_system_reply.await_args.kwargs["email_subject"]
+            == SPENDING_GATE_EMAIL_SUBJECT
+        )
+
+    @pytest.mark.asyncio
+    async def test_console_is_told_this_is_billing_not_a_crash(self):
+        """Console renders on the error type; 'unknown' becomes 'try refreshing'."""
+        cm = _cm_for_refusal(is_voice=False, reply_context=None)
+
+        with patch(
+            "unify.conversation_manager.conversation_manager.publish_system_error",
+        ) as publish:
+            await ConversationManager._surface_spending_gate_refusal(
+                cm,
+                _refusal("Insufficient credits: balance is $0.00."),
+            )
+
+        publish.assert_called_once()
+        assert publish.call_args.args[0] == "Insufficient credits: balance is $0.00."
+        assert publish.call_args.kwargs["error_type"] == "billing_blocked"
+
+    @pytest.mark.asyncio
+    async def test_a_call_hears_the_reason_spoken(self):
+        reason = "Anthropic models unlock once this account has paid."
+        cm = _cm_for_refusal(is_voice=True, reply_context=None)
+
+        with patch(
+            "unify.conversation_manager.conversation_manager.publish_system_error",
+        ):
+            await ConversationManager._surface_spending_gate_refusal(
+                cm,
+                _refusal(reason),
+            )
+
+        assert cm.event_broker.publish.await_count == 2
+        spoken = cm.event_broker.publish.await_args_list[0].args[1]
+        assert reason in spoken
+        # A caller must not be sent to a text reply they cannot read.
+        cm._send_system_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_account_is_not_told_twice_per_message(self):
+        reply_context = {"medium": Medium.UNIFY_MESSAGE.value, "contact_id": 1}
+        cm = _cm_for_refusal(is_voice=False, reply_context=reply_context)
+        error = _refusal("Insufficient credits: balance is $0.00.")
+
+        with patch(
+            "unify.conversation_manager.conversation_manager.publish_system_error",
+        ):
+            await ConversationManager._surface_spending_gate_refusal(cm, error)
+            await ConversationManager._surface_spending_gate_refusal(cm, error)
+
+        assert cm._send_system_reply.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_still_propagates_for_the_failure_log(self):
+        cm = _cm_for_refusal(is_voice=False, reply_context=None)
+        cm._run_llm = AsyncMock(side_effect=_refusal("Account is suspended."))
+
+        with patch(
+            "unify.conversation_manager.conversation_manager.publish_system_error",
+        ):
+            with pytest.raises(SpendingLimitExceededError):
+                await ConversationManager._run_llm_with_failure_notification(cm)
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_never_borrows_the_try_again_copy(self):
+        cm = _cm_for_refusal(is_voice=False, reply_context=None)
+        cm._run_llm = AsyncMock(side_effect=_refusal("Account is suspended."))
+        cm._send_slow_brain_failure_reply = AsyncMock()
+
+        with patch(
+            "unify.conversation_manager.conversation_manager.publish_system_error",
+        ):
+            with pytest.raises(SpendingLimitExceededError):
+                await ConversationManager._run_llm_with_failure_notification(cm)
+
+        cm._send_slow_brain_failure_reply.assert_not_awaited()
