@@ -10,7 +10,6 @@
 # host assets are the same bytes the canvas origin serves, so what the assistant
 # reviews is what a viewer sees.
 FROM node:22-slim AS canvas
-ARG GITHUB_TOKEN
 ARG BRANCH=main
 ARG CANVAS_BRANDING_SHA=unknown
 
@@ -21,18 +20,33 @@ COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
 
 # CANVAS_BRANDING_SHA busts this layer when branding moves; without it a stale
 # kit would be baked in indefinitely. Branch logic mirrors the dependency clones
-# below: main→main, everything else→staging. The second insteadOf covers the
-# packages/iso submodule, whose .gitmodules URL is SSH-form; without it the
-# submodule init cannot authenticate and the kit build loses @unity/iso.
-RUN echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
-    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
-    git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:" && \
+# below: main→main, everything else→staging.
+#
+# branding and its packages/iso submodule are the only private repositories this
+# image needs, and each is reached with its own read-only deploy key. Both keys
+# are offered on one ssh invocation, so github.com resolves whichever is
+# authorised for the repository being fetched and no host aliasing is required.
+# The keys arrive as mounted secrets rather than build arguments: an argument is
+# recorded verbatim in the metadata of every layer that follows it, and a global
+# git config would persist the credential in the image itself. The rewrite maps
+# the HTTPS form the toolchain script clones to the SSH form the keys serve, and
+# is applied per command so nothing is written to ~/.gitconfig.
+RUN --mount=type=secret,id=branding_deploy_key \
+    --mount=type=secret,id=iso_deploy_key \
+    echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
+    install -m 600 /run/secrets/branding_deploy_key /tmp/k_branding && \
+    install -m 600 /run/secrets/iso_deploy_key /tmp/k_iso && \
+    export GIT_SSH_COMMAND="ssh -i /tmp/k_branding -i /tmp/k_iso -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" && \
+    git config --global url."git@github.com:".insteadOf "https://github.com/" && \
     chmod +x /tmp/install-canvas-toolchain.sh && \
     /tmp/install-canvas-toolchain.sh \
         --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
         --toolchain /opt/canvas-toolchain \
-        --host /opt/canvas-host && \
-    git config --global --unset-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+        --host /opt/canvas-host; \
+    status=$?; \
+    git config --global --unset-all url."git@github.com:".insteadOf; \
+    rm -f /tmp/k_branding /tmp/k_iso; \
+    exit $status
 
 
 # Use Python 3.12 slim image as base
@@ -40,7 +54,6 @@ FROM python:3.12-slim
 
 # Accept build arguments
 ARG UNIFY_KEY
-ARG GITHUB_TOKEN
 ARG BRANCH=main
 
 # Set working directory
@@ -70,8 +83,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
 
-# Configure git to use GITHUB_TOKEN for private repo authentication
-RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+# The dependency repositories cloned below are public, so no credential is
+# configured here. Do not reintroduce one: only the canvas stage reaches a
+# private repository, and it uses a repo-scoped deploy key mounted for the
+# single command that needs it.
 
 # Install PyTorch CPU-only first (smaller and faster for containers)
 RUN uv pip install --system --no-cache torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
@@ -99,9 +114,6 @@ RUN rm -f package-lock.json && npm install --ignore-scripts
 RUN cd packages/magnitude-extract && npx tsup
 RUN cd packages/magnitude-core && npx baml-cli generate && npx pkgroll
 WORKDIR /app
-
-# Remove git credentials after all git operations (security best practice)
-RUN git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
 # Copy source and install unify with all dependencies
 COPY . /app
