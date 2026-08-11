@@ -403,6 +403,11 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     export ORCHESTRA_SEED_USER=1
     export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-unity-test-user-001}"
     export ORCHESTRA_TEST_EMAIL="${ORCHESTRA_TEST_EMAIL:-unity-test@debug.local}"
+    # Local orchestra defaults its admin bearer to "local-admin-key"
+    # (scripts/local.sh); the test process needs the same value so reserved
+    # Builtins-project seeding can swap it in (builtins_seed_key_override).
+    # CI sets this explicitly; default it here for local runs.
+    export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-local-admin-key}"
 
     # Set up OTEL log directory for cross-repo trace correlation (logs/all/).
     # Note: ORCHESTRA_LOG_DIR (per-request JSON traces to logs/orchestra/) is
