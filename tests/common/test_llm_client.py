@@ -79,6 +79,7 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
             reasoning_effort="high",
             stateful=False,
             origin="ConversationManager",
+            max_completion_tokens=SETTINGS.UNIFY_MAX_OUTPUT_TOKENS,
         )
 
 
@@ -92,6 +93,7 @@ def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
             reasoning_effort="low",
             stateful=False,
             origin="ConversationManager",
+            max_completion_tokens=SETTINGS.UNIFY_MAX_OUTPUT_TOKENS,
         )
 
 
@@ -106,6 +108,7 @@ def test_new_llm_client_uses_assistant_default_model_and_effort() -> None:
             reasoning_effort="low",
             stateful=False,
             origin=None,
+            max_completion_tokens=SETTINGS.UNIFY_MAX_OUTPUT_TOKENS,
         )
 
 
@@ -120,6 +123,7 @@ def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
             reasoning_effort="high",
             stateful=False,
             origin=None,
+            max_completion_tokens=SETTINGS.UNIFY_MAX_OUTPUT_TOKENS,
         )
 
 
@@ -134,4 +138,5 @@ def test_new_llm_client_explicit_model_bypasses_assistant_default() -> None:
             reasoning_effort="high",
             stateful=False,
             origin=None,
+            max_completion_tokens=SETTINGS.UNIFY_MAX_OUTPUT_TOKENS,
         )
