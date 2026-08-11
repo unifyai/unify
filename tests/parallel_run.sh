@@ -93,17 +93,18 @@ report_completed_sessions() {
         _mark_reported "$sid"
         # Record duration, cache stats, and cost for sorted output
         if [[ -n "${START_TIMES_FILE:-}" && -f "$START_TIMES_FILE" ]]; then
-          local start_time end_time duration hits misses cost
+          local start_time end_time duration hits canonical misses cost
           start_time=$(grep "^$sid " "$START_TIMES_FILE" 2>/dev/null | cut -d' ' -f2)
           if [[ -n "$start_time" ]]; then
             end_time=$(date +%s)
             duration=$((end_time - start_time))
             # Read cache stats from temp file (written by inner script)
             hits=0
+            canonical=0
             misses=0
             local stats_file="/tmp/parallel_run_cache_${sid}.txt"
             if [[ -f "$stats_file" ]]; then
-              IFS='|' read -r hits misses < "$stats_file" 2>/dev/null || true
+              IFS='|' read -r hits canonical misses < "$stats_file" 2>/dev/null || true
               rm -f "$stats_file"
             fi
             # Read LLM provider cost from temp file (written by inner script)
@@ -124,7 +125,7 @@ report_completed_sessions() {
                 status="skip"
               fi
             fi
-            echo "$duration|$status|$hits|$misses|$cost|$base" >> "$RESULTS_FILE"
+            echo "$duration|$status|$hits|$canonical|$misses|$cost|$base" >> "$RESULTS_FILE"
           fi
         fi
         ;;
@@ -134,17 +135,18 @@ report_completed_sessions() {
         _mark_reported "$sid"
         # Record duration, cache stats, and cost for sorted output
         if [[ -n "${START_TIMES_FILE:-}" && -f "$START_TIMES_FILE" ]]; then
-          local start_time end_time duration hits misses cost
+          local start_time end_time duration hits canonical misses cost
           start_time=$(grep "^$sid " "$START_TIMES_FILE" 2>/dev/null | cut -d' ' -f2)
           if [[ -n "$start_time" ]]; then
             end_time=$(date +%s)
             duration=$((end_time - start_time))
             # Read cache stats from temp file (written by inner script)
             hits=0
+            canonical=0
             misses=0
             local stats_file="/tmp/parallel_run_cache_${sid}.txt"
             if [[ -f "$stats_file" ]]; then
-              IFS='|' read -r hits misses < "$stats_file" 2>/dev/null || true
+              IFS='|' read -r hits canonical misses < "$stats_file" 2>/dev/null || true
               rm -f "$stats_file"
             fi
             # Read LLM provider cost from temp file
@@ -154,7 +156,7 @@ report_completed_sessions() {
               cost=$(cat "$cost_file" 2>/dev/null | tr -d '[:space:]')
               rm -f "$cost_file"
             fi
-            echo "$duration|fail|$hits|$misses|$cost|$base" >> "$RESULTS_FILE"
+            echo "$duration|fail|$hits|$canonical|$misses|$cost|$base" >> "$RESULTS_FILE"
           fi
         fi
         ;;
@@ -1665,13 +1667,13 @@ format_cache_rate() {
 > "$DURATION_SUMMARY_FILE"
 
 # Print passed tests sorted by duration (fastest first, slowest last)
-# Format: duration|status|hits|misses|cost|name
+# Format: duration|status|hits|canonical|misses|cost|name
 if (( pass_count > 0 )); then
   echo ""
   print_duration_line "✅ PASSED ($pass_count tests):"
   print_duration_line "$(printf "  %6s  %6s  %10s  %s" "time" "cache" "cost" "test")"
   print_duration_line "$(printf "  %6s  %6s  %10s  %s" "----" "-----" "----" "----")"
-  { grep '|pass|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits misses cost name; do
+  { grep '|pass|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits canonical misses cost name; do
     cache_rate=$(format_cache_rate "$hits" "$misses")
     formatted_cost=$(printf '$%.6f' "$cost")
     print_duration_line "$(printf "  %5ds  %6s  %10s  %s" "$dur" "$cache_rate" "$formatted_cost" "$name")"
@@ -1685,7 +1687,7 @@ if (( skip_count > 0 )); then
   print_duration_line "⏭️  SKIPPED ($skip_count tests — no coverage from these):"
   print_duration_line "$(printf "  %6s  %6s  %10s  %s" "time" "cache" "cost" "test")"
   print_duration_line "$(printf "  %6s  %6s  %10s  %s" "----" "-----" "----" "----")"
-  { grep '|skip|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits misses cost name; do
+  { grep '|skip|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits canonical misses cost name; do
     cache_rate=$(format_cache_rate "$hits" "$misses")
     formatted_cost=$(printf '$%.6f' "$cost")
     print_duration_line "$(printf "  %5ds  %6s  %10s  %s" "$dur" "$cache_rate" "$formatted_cost" "$name")"
@@ -1698,7 +1700,7 @@ if (( fail_count > 0 )); then
   print_duration_line "❌ FAILED ($fail_count tests):"
   print_duration_line "$(printf "  %6s  %6s  %10s  %s" "time" "cache" "cost" "test")"
   print_duration_line "$(printf "  %6s  %6s  %10s  %s" "----" "-----" "----" "----")"
-  { grep '|fail|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits misses cost name; do
+  { grep '|fail|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits canonical misses cost name; do
     cache_rate=$(format_cache_rate "$hits" "$misses")
     formatted_cost=$(printf '$%.6f' "$cost")
     print_duration_line "$(printf "  %5ds  %6s  %10s  %s" "$dur" "$cache_rate" "$formatted_cost" "$name")"
@@ -1708,11 +1710,13 @@ fi
 # Calculate and print aggregated totals
 total_duration=0
 total_hits=0
+total_canonical=0
 total_misses=0
 total_cost="0"
-while IFS='|' read -r dur status hits misses cost name; do
+while IFS='|' read -r dur status hits canonical misses cost name; do
   total_duration=$((total_duration + dur))
   total_hits=$((total_hits + hits))
+  total_canonical=$((total_canonical + canonical))
   total_misses=$((total_misses + misses))
   total_cost=$(awk "BEGIN {printf \"%.6g\", $total_cost + $cost}")
 done < "$RESULTS_FILE"
@@ -1734,7 +1738,9 @@ if (( total_tests > 0 )); then
   total_cache_rate=$(format_cache_rate "$total_hits" "$total_misses")
   total_calls=$((total_hits + total_misses))
   print_duration_line "  Serial duration: $duration_str"
-  print_duration_line "  LLM cache: $total_cache_rate ($total_hits hits, $total_misses misses, $total_calls total)"
+  # Canonical hits are recordings accepted through canonical keying rather
+  # than byte-identical raw keys — the share of prompt drift being absorbed.
+  print_duration_line "  LLM cache: $total_cache_rate ($total_hits hits [$total_canonical canonical], $total_misses misses, $total_calls total)"
   print_duration_line "  LLM cost: \$$total_cost"
 fi
 
