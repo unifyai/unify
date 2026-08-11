@@ -229,30 +229,30 @@ def ensure_provider_trigger_test_prerequisites() -> None:
         )
 
 
-def _orchestra_db_container() -> str:
-    return os.getenv("ORCHESTRA_DB_CONTAINER", "orchestra-local-db")
+def ensure_integration_backend_enabled(backend_id: str) -> None:
+    """Enable an integration backend the server boot may have disabled.
+
+    Orchestra's self-host bootstrap aligns each backend's status with the
+    configured provider credentials on every start, so a keyless local or CI
+    Orchestra boots with composio and pipedream disabled. Status is the
+    visibility gate for connect/start even on the stub (LocalEcho) execution
+    path, so suites that create stub-backed connections must enable the
+    backend they use first.
+    """
+
+    response = requests.patch(
+        f"{orchestra_api_base()}/v0/admin/integrations/backends/{backend_id}",
+        headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
+        json={"status": "enabled"},
+        timeout=30,
+    )
+    raise_for_status_with_detail(response)
 
 
 def ensure_pipedream_integration_backend_enabled() -> None:
     """Enable the Pipedream integration backend row for local actor E2E runs."""
 
-    subprocess.check_output(
-        [
-            "docker",
-            "exec",
-            _orchestra_db_container(),
-            "psql",
-            "-U",
-            "orchestra",
-            "-d",
-            "orchestra",
-            "-c",
-            "UPDATE integration_backends "
-            "SET status = 'enabled' "
-            "WHERE backend_id = 'pipedream';",
-        ],
-        text=True,
-    )
+    ensure_integration_backend_enabled("pipedream")
 
 
 def sign_composio_payload(
@@ -598,6 +598,7 @@ def create_github_composio_connection(
 ) -> dict[str, Any]:
     """Start and complete one assistant-scoped Composio GitHub connection."""
 
+    ensure_integration_backend_enabled("composio")
     api_key = orchestra_api_key()
     base = orchestra_api_base()
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -636,6 +637,7 @@ def create_github_composio_connection(
 def create_github_pipedream_connection(*, assistant_id: int) -> dict[str, Any]:
     """Start and complete one assistant-scoped Pipedream GitHub connection."""
 
+    ensure_integration_backend_enabled("pipedream")
     api_key = orchestra_api_key()
     base = orchestra_api_base()
     headers = {"Authorization": f"Bearer {api_key}"}
