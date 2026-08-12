@@ -78,8 +78,7 @@ venv source, so bundles cannot ship venv definitions yet.
 Deliberately absent rather than pending: contacts, transcripts and
 blacklist are populated at runtime by a workflow's own functions, never
 pre-seeded from a bundle; secrets and integrations enter a bundle as
-declared requirements, never as content; dashboards are deprecated in
-favour of canvas.
+declared requirements, never as content.
 
 ``canvas`` is absent for a different reason and will not appear here. A
 view is real TypeScript that has to be linted, typechecked, bundled,

@@ -1059,7 +1059,7 @@ def _build_filesystem_context() -> str:
 _SYSTEM_SOURCES_ROOT = "/opt/system-sources"
 _SYSTEM_SOURCE_DESCRIPTIONS = {
     "orchestra": "Backend API + Postgres: users, projects, contexts, logging, assistants, billing.",
-    "console": "Next.js web Console: dashboards, assistant management, onboarding UI.",
+    "console": "Next.js web Console: canvases, assistant management, onboarding UI.",
     "unify-deploy": "Hosted comms (phone/SMS/email/WhatsApp), adapters, deployment infra, self-host stack.",
     "docs": "User-facing documentation source (the pages served at docs.unify.ai).",
 }

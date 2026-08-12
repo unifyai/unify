@@ -77,7 +77,6 @@ CoordinatorDelegateIntent = Literal[
     "add_guidance",
     "add_knowledge",
     "create_function",
-    "create_dashboard",
     "data_setup",
 ]
 _DELEGATE_INTENT_SURFACES: dict[str, CoordinatorActivitySurface] = {
@@ -88,7 +87,6 @@ _DELEGATE_INTENT_SURFACES: dict[str, CoordinatorActivitySurface] = {
     # (typed KnowledgeManager ledger), parallel to guidance/functions/tasks.
     "add_knowledge": "memory",
     "create_function": "functions",
-    "create_dashboard": "dashboards",
     "data_setup": "data",
 }
 

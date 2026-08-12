@@ -45,7 +45,6 @@ class TestBuildOfflineRunnerEnv:
     def test_required_env_vars_present(self):
         env = self._make_env()
         required = {
-            "UNITY_OFFLINE_TASK_MODE",
             "UNITY_OFFLINE_RUN_KEY",
             "UNITY_OFFLINE_TASK_ID",
             "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
@@ -73,10 +72,6 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env(requires_filesystem=True, requires_computer=True)
         assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
         assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
-
-    def test_mode_is_actor(self):
-        env = self._make_env()
-        assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
 
     def test_eventbus_not_forced_off(self):
         """Offline runners inherit EventBus settings from the full pod env."""
@@ -401,7 +396,6 @@ def _original_communication_env_builder(
         return req.scheduled_for.astimezone(timezone.utc).isoformat()
 
     return {
-        "UNITY_OFFLINE_TASK_MODE": "actor",
         "UNITY_OFFLINE_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": str(request.task_id),
