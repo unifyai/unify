@@ -36,22 +36,24 @@ def choose_tier(
     count or density. So the answer cannot be a threshold; it has to be a
     boundary, and the boundary is the process.
 
-    **Rows and tables dispatch above a measured ceiling.** Here a count is
-    available exactly and cheaply before anything runs, so the decision rests on
-    a measurement rather than a guess. Under the ceiling, queue round-trip and
-    cold start cost more than the work; over it, ingestion is sustained I/O that
-    scales out on the fleet and would otherwise compete with the assistant for
-    its own process.
+    **Rows and tables run in process, whatever their size.** The fleet's unit
+    of work is a staged *file*: dispatching publishes one parse message per
+    uploaded source, so a rows or table request -- which stages no file --
+    would publish zero jobs and sit ``queued`` forever, unrecoverable by
+    anything short of reading the manifest. Until the fleet grows a rows job
+    type, in process is the only tier that can actually execute this work, and
+    it executes it correctly: the inline engine checkpoints, verifies against
+    the declared count, and resumes, so size costs the assistant latency and
+    contention rather than correctness. ``MAX_INLINE_ROWS`` remains the
+    documented ceiling a rows job type will restore the boundary at.
 
     ``row_count`` is the exact count: ``len(rows)`` for rows in hand, or one
-    server-side aggregate for a stored table. Passing ``None`` for a table source
-    means it has not been counted yet, and an uncounted table dispatches -- an
-    unknown size is not evidence of a small one.
+    server-side aggregate for a stored table.
 
     Both tiers write the same artifacts and the same checkpoints, so choosing
     dispatch for work that would have been quick costs latency, and nothing else:
     the run is still resumable, still recoverable, and still asked about the same
-    way. That asymmetry is why the ceiling can sit low without risk.
+    way.
     """
     config = settings or IngestionSettings()
     fleet = bool(config.PIPELINE_URL) if has_fleet is None else has_fleet
@@ -62,15 +64,10 @@ def choose_tier(
     if not fleet:
         return "inline"
 
-    source = request.source
-
-    if source.kind in {"files", "folder"}:
+    if request.source.kind in {"files", "folder"}:
         return "dispatched"
 
-    counted = len(source.rows) if source.kind == "rows" else row_count
-    if counted is None:
-        return "dispatched"
-    return "inline" if counted <= config.MAX_INLINE_ROWS else "dispatched"
+    return "inline"
 
 
 def next_step(
