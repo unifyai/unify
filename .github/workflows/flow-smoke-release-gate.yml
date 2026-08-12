@@ -166,10 +166,9 @@ jobs:
           libasound2t64 libatspi2.0-0 libgtk-3-0 libnspr4 libwayland-client0 \
           libxcomposite1 libxdamage1 libxrandr2 xvfb
 
-    - name: Install uv and poetry
+    - name: Install uv
       run: |
         pip install uv
-        pip install poetry
 
     # Download cache only, never .venv — see the note in tests.yml. Both
     # workflows write this key, so they have to agree on what it holds.
@@ -245,20 +244,18 @@ jobs:
       if: steps.playwright-cache.outputs.cache-hit != 'true'
       run: uv run playwright install --with-deps
 
-    - name: Cache orchestra poetry dependencies
+    - name: Cache orchestra virtualenv
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pypoetry
-        key: poetry-orchestra-${{ runner.os }}-${{ steps.orchestra-sha.outputs.sha }}
+        path: ${{ github.workspace }}/orchestra/.venv
+        key: uv-orchestra-${{ runner.os }}-${{ steps.orchestra-sha.outputs.sha }}
         restore-keys: |
-          poetry-orchestra-${{ runner.os }}-
+          uv-orchestra-${{ runner.os }}-
 
     - name: Install orchestra dependencies
-      env:
-        POETRY_VIRTUALENVS_IN_PROJECT: "true"
       run: |
         cd "$ORCHESTRA_REPO_PATH"
-        poetry install --no-interaction
+        uv sync --frozen
 
     - name: Run flow smoke
       id: run-tests
