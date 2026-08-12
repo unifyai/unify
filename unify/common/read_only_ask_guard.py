@@ -223,7 +223,7 @@ class ReadOnlyAskGuardHandle(AsyncToolLoopHandle):
                         pass
         try:
             # Use public stop API; downstream loop will cancel promptly
-            self.stop(reason="mutation intent detected in ask()")
+            await self.stop(reason="mutation intent detected in ask()")
         except Exception:
             pass
 

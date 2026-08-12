@@ -1500,6 +1500,7 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         call_manager=SimpleNamespace(
             is_ready_for_outbound_call=False,
             hang_up_gate_reason=None,
+            other_call_participant_names=[],
         ),
         assistant_job_title=(
             "Coordinator" if scenario.is_coordinator else "Customer Success"
@@ -1521,6 +1522,10 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         coordinator_onboarding_active=False,
         coordinator_onboarding_render=None,
         onboarding_clicked_trigger_steps=[],
+        # Console is not open in these scenarios, so the runtime publishes no
+        # orientation text or action catalogue.
+        console_guidance=lambda detail="brief": "",
+        console_action_catalogue=lambda: "",
     )
 
 

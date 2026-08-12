@@ -359,7 +359,7 @@ async def test_e2e_rpc_invalid_filter_expression_error(
     function_manager_factory,
     cleanup_venvs,
 ):
-    """RPC should propagate errors from manager methods back to venv."""
+    """RPC should round-trip a rejected filter as a structured error payload."""
     fm = function_manager_factory()
 
     # Function that calls filter_contacts with an invalid filter expression
@@ -382,8 +382,11 @@ def call_bad_filter() -> dict:
         primitives=primitives,
     )
 
-    # Should have an error about the filter
-    assert result["error"] is not None
+    # A rejected filter is a tool-level error payload, not an RPC failure:
+    # filter_contacts returns the ToolError dict and the call succeeds.
+    assert result["error"] is None, f"Unexpected error: {result['error']}"
+    assert result["result"]["error_kind"] == "invalid_filter"
+    assert "this is not valid python" in result["result"]["message"]
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -112,10 +112,9 @@ def test_code_act_prompt_includes_diverse_examples_sessions_computer_primitives_
     assert "act" in prompt
     assert "observe" in prompt
 
-    # State-manager guidance + examples (primitives)
+    # State-manager guidance (primitives)
     assert "### State Manager Rules" in prompt
-    assert "### Implementation Examples" in prompt
-    assert "return the handle as the last expression" in prompt
+    assert "returning the handle as the last expression" in prompt
     assert "immediate in-code composition" in prompt
     assert "neutral or uncertain" in prompt.lower()
     assert "default to returning the handle" in prompt.lower()
@@ -172,7 +171,9 @@ def test_code_act_prompt_teaches_refresh_token_oauth_helper():
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_includes_comms_namespace_and_docstrings():
+def test_code_act_prompt_routes_comms_and_defers_method_docs_to_search():
+    """The comms manager surfaces through the routing overview and the
+    catalogue discovery note; per-method docs are not inlined."""
     from unify.actor.environments.state_managers import StateManagerEnvironment
     from unify.function_manager.primitives import PrimitiveScope, Primitives
 
@@ -185,17 +186,17 @@ def test_code_act_prompt_includes_comms_namespace_and_docstrings():
         tools=dict(actor.get_tools("act")),
     )
 
+    # Routing overview names the manager and teaches when to reach for it.
     assert "primitives.comms" in prompt
-    assert ".send_whatsapp" in prompt
-    assert ".send_discord_message" in prompt
-    assert ".send_discord_channel_message" in prompt
-    assert ".send_teams_message" in prompt
-    assert ".create_teams_channel" in prompt
-    assert "assistant-owned WhatsApp message" in prompt
-    assert "assistant-owned Discord direct message" in prompt
-    assert "Discord guild channel" in prompt
-    assert "assistant-owned Microsoft Teams message" in prompt
-    assert "Create a new channel inside an existing Microsoft Teams team" in prompt
+    assert "Assistant-Owned Communication" in prompt
+    assert "proactively contact people" in prompt
+    assert "Text Alice that the meeting moved" in prompt
+
+    # Non-core methods are discovered through the catalogue, not inlined.
+    assert "### Method Reference (core)" in prompt
+    assert "FunctionManager_search_functions" in prompt
+    assert ".send_whatsapp" not in prompt
+    assert ".send_teams_message" not in prompt
 
 
 @pytest.mark.timeout(30)

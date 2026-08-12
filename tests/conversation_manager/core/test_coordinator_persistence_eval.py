@@ -215,15 +215,29 @@ def _managed_test_organization() -> Iterator[LiveOrganization]:
         pytest.skip(f"Coordinator persistence eval needs a valid user key: {exc}")
     org_name = f"Coordinator Eval {uuid.uuid4().hex[:12]}"
 
-    response = http.post(
-        f"{base_url}/organizations",
-        headers=_headers(user_key),
-        json={
-            "name": org_name,
-            "timezone": owner.get("timezone") or "UTC",
-        },
-        timeout=30,
-    )
+    # Orchestra allows one owned organization per (non-staff) user, so evals
+    # sharing a user key serialize on the slot: wait for a sibling's teardown
+    # to delete its organization before creating ours.
+    deadline = time.monotonic() + 900
+    while True:
+        response = http.post(
+            f"{base_url}/organizations",
+            headers=_headers(user_key),
+            json={
+                "name": org_name,
+                "timezone": owner.get("timezone") or "UTC",
+            },
+            raise_for_status=False,
+            timeout=30,
+        )
+        if (
+            response.status_code == 403
+            and "at most one organization" in response.text
+            and time.monotonic() < deadline
+        ):
+            time.sleep(5)
+            continue
+        break
     assert response.status_code == 201, response.text
     organization = response.json()
     organization_id = int(organization["id"])

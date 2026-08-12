@@ -79,6 +79,8 @@ def _make_cm():
         call_manager=SimpleNamespace(
             is_ready_for_outbound_call=False,
             hang_up_gate_reason=None,
+            # Empty off-call: no room where a turn may belong to someone else.
+            other_call_participant_names=[],
         ),
         # No Console presence in these sessions, so no orientation block.
         console_guidance=lambda detail="brief": "",
@@ -159,6 +161,7 @@ class TestBrainSpecStateMessage:
             call_manager=SimpleNamespace(
                 is_ready_for_outbound_call=False,
                 hang_up_gate_reason=None,
+                other_call_participant_names=[],
             ),
             console_guidance=lambda detail="brief": "",
             console_action_catalogue=lambda: "",

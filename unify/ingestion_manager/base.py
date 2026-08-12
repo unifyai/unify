@@ -155,6 +155,11 @@ class BaseIngestionManager(ABC):
         rule from the other fields.
 
         Safe to poll. Check ``is_terminal`` to know when polling can stop.
+
+        Parameters
+        ----------
+        run_id : str
+            The handle returned by ``submit``, or listed by ``list_runs``.
         """
 
     @abstractmethod
@@ -175,6 +180,19 @@ class BaseIngestionManager(ABC):
         where the last read stopped, so a full history is a loop rather than a
         larger ``limit`` — raising the limit past what the backend serves would
         silently return a prefix and read as the whole story.
+
+        Parameters
+        ----------
+        run_id : str
+            The run whose history to read.
+        stage : str | None
+            Restrict to one stage's entries once a status has identified where
+            the failure was.
+        limit : int
+            Maximum entries returned by one read.
+        offset : int
+            Where to continue from; page through a long history in a loop
+            rather than raising ``limit``.
         """
 
     @abstractmethod
@@ -193,6 +211,14 @@ class BaseIngestionManager(ABC):
         Returns the final status on completion, or the current one if the timeout
         passes first. A timeout is not a failure: the run continues, and the same
         ``run_id`` still tracks it.
+
+        Parameters
+        ----------
+        run_id : str
+            The run to wait on.
+        timeout_s : float | None
+            Stop waiting after this many seconds; ``None`` waits until the run
+            reaches a terminal state.
         """
 
     @abstractmethod
@@ -208,6 +234,15 @@ class BaseIngestionManager(ABC):
         Filter by ``state`` to find what needs attention, or by ``context`` to see
         what has been written to a particular place — which is how to tell whether
         a table is stale, and what last wrote to it.
+
+        Parameters
+        ----------
+        state : RunState | None
+            Only runs currently in this state.
+        context : str | None
+            Only runs that wrote to this context path.
+        limit : int
+            Maximum summaries returned, newest first.
         """
 
     # ── recovering ────────────────────────────────────────────────────────
@@ -234,6 +269,15 @@ class BaseIngestionManager(ABC):
 
         A result of zero requeued items is an answer, not a failure: there was
         nothing in that scope to retry.
+
+        Parameters
+        ----------
+        run_id : str
+            The finished run to re-attempt.
+        only : {"dlq", "stale", "all"}
+            The scope to re-attempt: parked items only (the safe default),
+            items whose worker stopped reporting, or everything including
+            work that already succeeded.
         """
 
     @abstractmethod
@@ -243,6 +287,11 @@ class BaseIngestionManager(ABC):
         Work already completed stays; nothing is rolled back. A cancelled run
         cannot be resumed — use ``pause`` to stop something that should continue
         later. Returns whether the run was in a state that could be cancelled.
+
+        Parameters
+        ----------
+        run_id : str
+            The run to stop.
         """
 
     @abstractmethod
@@ -251,6 +300,11 @@ class BaseIngestionManager(ABC):
 
         For relieving pressure — a rate limit being approached, a noisy neighbour —
         without losing progress. Resume when the reason has passed.
+
+        Parameters
+        ----------
+        run_id : str
+            The run to pause.
         """
 
     @abstractmethod
@@ -259,4 +313,9 @@ class BaseIngestionManager(ABC):
 
         Only a paused run can be resumed. To re-attempt a failed one, use
         ``retry``.
+
+        Parameters
+        ----------
+        run_id : str
+            The paused run to continue.
         """

@@ -505,6 +505,14 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
             "action_class": "read",
             "confirmation_required": False,
             "schema_available": True,
+            "available_connections": [
+                {
+                    "connection_id": "conn-1",
+                    "external_account_label": "Sales Hub",
+                    "status": "connected",
+                },
+            ],
+            "account_count": 1,
         },
     ]
     assert await primitives.get_tool_schema(

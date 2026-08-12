@@ -365,21 +365,13 @@ class TestSteeringContextPropagation:
         cm._current_snapshot_state = current_snapshot_state
 
         try:
-            # Build steering tools and find the interject tool
+            # Build the fixed-name steering tools and interject by handle_id
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
-
-            # Find the interject tool (name starts with "interject_")
-            interject_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("interject_"):
-                    interject_tool = tool
-                    break
-
-            assert interject_tool is not None, "Should have an interject tool"
+            interject_tool = steering_tools["interject_action"]
 
             # Call the interject tool
-            await interject_tool(message="additional instruction")
+            await interject_tool(handle_id=0, message="additional instruction")
 
             # Verify context was captured
             assert len(captured_context) == 1, "interject should have been called once"
@@ -474,13 +466,10 @@ class TestSteeringContextPropagation:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
 
-            interject_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("interject_"):
-                    interject_tool = tool
-                    break
-
-            await interject_tool(message="additional instruction")
+            await steering_tools["interject_action"](
+                handle_id=0,
+                message="additional instruction",
+            )
 
             assert len(captured_context) == 1
             # When nothing changed, context should be None (empty diff)
@@ -535,13 +524,10 @@ class TestSteeringContextPropagation:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
 
-            interject_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("interject_"):
-                    interject_tool = tool
-                    break
-
-            await interject_tool(message="additional instruction")
+            await steering_tools["interject_action"](
+                handle_id=0,
+                message="additional instruction",
+            )
 
             assert len(captured_context) == 1
             context = captured_context[0]
@@ -610,18 +596,10 @@ class TestSteeringContextPropagation:
         try:
             brain_tools = ConversationManagerBrainActionTools(cm)
             steering_tools = brain_tools.build_action_steering_tools()
-
-            # Find the ask tool
-            ask_tool = None
-            for name, tool in steering_tools.items():
-                if name.startswith("ask_"):
-                    ask_tool = tool
-                    break
-
-            assert ask_tool is not None, "Should have an ask tool"
+            ask_tool = steering_tools["ask_action"]
 
             # Call the ask tool (spawns a background steering task)
-            await ask_tool(question="what's the status?")
+            await ask_tool(handle_id=0, question="what's the status?")
 
             # Await the background task so the mock ask() has executed
             pending = set(cm._pending_steering_tasks)

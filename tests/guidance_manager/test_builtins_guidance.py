@@ -124,7 +124,7 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
     builtins_test_project,
 ):
     snapshot = load_snapshot()
-    assert len(snapshot) == 14
+    assert len(snapshot) == 58
     entries = default_guidance_entries()
     assert len(entries) == len(snapshot) + len(PLATFORM_GUIDANCE_ENTRIES)
     # Platform entries are code-versioned, never part of the snapshot, and

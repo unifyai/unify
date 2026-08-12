@@ -16,7 +16,7 @@ import requests
 
 _ORCHESTRA_ROOT = Path(
     os.getenv(
-        "ORCHESTRA_REPO_ROOT",
+        "ORCHESTRA_REPO_PATH",
         str(Path(__file__).resolve().parents[2] / "orchestra"),
     ),
 )
@@ -75,6 +75,23 @@ def orchestra_api_base() -> str:
     return raw
 
 
+def raise_for_status_with_detail(response: requests.Response) -> None:
+    """``raise_for_status`` that keeps the server's error body.
+
+    Orchestra explains refusals in the JSON ``detail`` field;
+    ``raise_for_status`` alone reports only the status code and URL, which
+    turns a self-describing failure into archaeology.
+    """
+
+    if response.status_code < 400:
+        return
+    raise requests.HTTPError(
+        f"{response.status_code} for {response.request.method} {response.url}: "
+        f"{response.text[:500]}",
+        response=response,
+    )
+
+
 def orchestra_api_key() -> str:
     return os.getenv("UNIFY_KEY", "local-test-api-key")
 
@@ -116,7 +133,7 @@ def ensure_provider_trigger_catalog_seeded(
                 headers=headers,
                 timeout=120,
             )
-            response.raise_for_status()
+            raise_for_status_with_detail(response)
 
 
 def ensure_pipedream_provider_trigger_catalog_seeded() -> None:
@@ -141,7 +158,7 @@ def _topology_unavailable_reason(assistant_id: int) -> str | None:
         headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
         timeout=30,
     )
-    response.raise_for_status()
+    raise_for_status_with_detail(response)
     info = response.json().get("info") or {}
     if info.get("available"):
         return None
@@ -196,7 +213,7 @@ def ensure_provider_trigger_test_prerequisites() -> None:
         headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
         timeout=30,
     )
-    catalog.raise_for_status()
+    raise_for_status_with_detail(catalog)
     bootstrap = catalog.json().get("bootstrap_states") or []
     seeded = [
         row
@@ -212,30 +229,30 @@ def ensure_provider_trigger_test_prerequisites() -> None:
         )
 
 
-def _orchestra_db_container() -> str:
-    return os.getenv("ORCHESTRA_DB_CONTAINER", "orchestra-local-db")
+def ensure_integration_backend_enabled(backend_id: str) -> None:
+    """Enable an integration backend the server boot may have disabled.
+
+    Orchestra's self-host bootstrap aligns each backend's status with the
+    configured provider credentials on every start, so a keyless local or CI
+    Orchestra boots with composio and pipedream disabled. Status is the
+    visibility gate for connect/start even on the stub (LocalEcho) execution
+    path, so suites that create stub-backed connections must enable the
+    backend they use first.
+    """
+
+    response = requests.patch(
+        f"{orchestra_api_base()}/v0/admin/integrations/backends/{backend_id}",
+        headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
+        json={"status": "enabled"},
+        timeout=30,
+    )
+    raise_for_status_with_detail(response)
 
 
 def ensure_pipedream_integration_backend_enabled() -> None:
     """Enable the Pipedream integration backend row for local actor E2E runs."""
 
-    subprocess.check_output(
-        [
-            "docker",
-            "exec",
-            _orchestra_db_container(),
-            "psql",
-            "-U",
-            "orchestra",
-            "-d",
-            "orchestra",
-            "-c",
-            "UPDATE integration_backends "
-            "SET status = 'enabled' "
-            "WHERE backend_id = 'pipedream';",
-        ],
-        text=True,
-    )
+    ensure_integration_backend_enabled("pipedream")
 
 
 def sign_composio_payload(
@@ -281,7 +298,7 @@ def load_pipedream_github_issue_fixture(**overrides: Any) -> dict[str, Any]:
     if not _PIPEDREAM_FIXTURE_PATH.is_file():
         raise RuntimeError(
             f"Orchestra Pipedream fixture missing at {_PIPEDREAM_FIXTURE_PATH}; "
-            "set ORCHESTRA_REPO_ROOT to a checkout that includes orchestra/tests/fixtures/",
+            "set ORCHESTRA_REPO_PATH to a checkout that includes orchestra/tests/fixtures/",
         )
     payload = json.loads(_PIPEDREAM_FIXTURE_PATH.read_text(encoding="utf-8"))
     if "action" in overrides and overrides["action"] is not None:
@@ -338,15 +355,30 @@ def _orchestra_worker_env() -> dict[str, str]:
     return env
 
 
-def resolve_orchestra_signing_secret(secret_ref: str) -> str:
-    """Resolve one Orchestra signing-secret reference to raw material."""
+def _orchestra_python_bin() -> Path:
+    """Interpreter of Orchestra's repo-local virtualenv.
+
+    ``<orchestra>/.venv`` is the one invariant location: ``uv sync`` creates
+    it on dev machines and in CI alike. Resolving through the package manager
+    at test time instead is a trap — it can adopt an activated foreign
+    virtualenv, and inside CI's tmux test sessions it fails outright.
+    """
 
     python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
     if not python_bin.exists():
-        raise RuntimeError(f"Orchestra venv not found at {python_bin}")
+        raise RuntimeError(
+            f"Orchestra venv not found at {python_bin}; run uv sync in "
+            "the orchestra checkout.",
+        )
+    return python_bin
+
+
+def resolve_orchestra_signing_secret(secret_ref: str) -> str:
+    """Resolve one Orchestra signing-secret reference to raw material."""
+
     output = subprocess.check_output(
         [
-            str(python_bin),
+            str(_orchestra_python_bin()),
             "-c",
             (
                 "from orchestra.provider_triggers.signing_secret_refs import "
@@ -405,7 +437,7 @@ def load_composio_github_issue_fixture(**overrides: Any) -> dict[str, Any]:
     if not _FIXTURE_PATH.is_file():
         raise RuntimeError(
             f"Orchestra Composio fixture missing at {_FIXTURE_PATH}; "
-            "set ORCHESTRA_REPO_ROOT to a checkout that includes orchestra/tests/fixtures/",
+            "set ORCHESTRA_REPO_PATH to a checkout that includes orchestra/tests/fixtures/",
         )
     payload = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
     metadata = dict(payload.get("metadata") or {})
@@ -453,9 +485,6 @@ def run_orchestra_trigger_worker_cycle(
 ) -> None:
     """Advance Orchestra trigger reconciliation/dispatch using the local worker."""
 
-    python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
-    if not python_bin.exists():
-        raise RuntimeError(f"Orchestra venv not found at {python_bin}")
     env = _orchestra_worker_env()
     if use_live_provider_credentials:
         for key in (
@@ -470,7 +499,7 @@ def run_orchestra_trigger_worker_cycle(
     Path(env["TRIGGER_EVENT_PRIVATE_ROOT"]).mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
-            str(python_bin),
+            str(_orchestra_python_bin()),
             "-m",
             "orchestra.workers.provider_trigger_worker",
             "--once",
@@ -561,7 +590,7 @@ def fetch_orchestra_task_by_name_fragment(
         headers=headers,
         timeout=30,
     )
-    response.raise_for_status()
+    raise_for_status_with_detail(response)
     tasks = response.json()["info"]["tasks"]
     needle = name_fragment.lower()
     matches = [task for task in tasks if needle in str(task.get("name") or "").lower()]
@@ -581,6 +610,7 @@ def create_github_composio_connection(
 ) -> dict[str, Any]:
     """Start and complete one assistant-scoped Composio GitHub connection."""
 
+    ensure_integration_backend_enabled("composio")
     api_key = orchestra_api_key()
     base = orchestra_api_base()
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -598,7 +628,7 @@ def create_github_composio_connection(
         },
         timeout=30,
     )
-    start.raise_for_status()
+    raise_for_status_with_detail(start)
     connection = start.json()["connection"]
     connection_id = connection["connection_id"]
     complete = requests.post(
@@ -612,13 +642,14 @@ def create_github_composio_connection(
         },
         timeout=30,
     )
-    complete.raise_for_status()
+    raise_for_status_with_detail(complete)
     return complete.json()
 
 
 def create_github_pipedream_connection(*, assistant_id: int) -> dict[str, Any]:
     """Start and complete one assistant-scoped Pipedream GitHub connection."""
 
+    ensure_integration_backend_enabled("pipedream")
     api_key = orchestra_api_key()
     base = orchestra_api_base()
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -636,7 +667,7 @@ def create_github_pipedream_connection(*, assistant_id: int) -> dict[str, Any]:
         },
         timeout=30,
     )
-    start.raise_for_status()
+    raise_for_status_with_detail(start)
     connection = start.json()["connection"]
     connection_id = connection["connection_id"]
     complete = requests.post(
@@ -650,5 +681,5 @@ def create_github_pipedream_connection(*, assistant_id: int) -> dict[str, Any]:
         },
         timeout=30,
     )
-    complete.raise_for_status()
+    raise_for_status_with_detail(complete)
     return complete.json()

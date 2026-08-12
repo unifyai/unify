@@ -82,6 +82,14 @@ class ProductionSettings(BaseSettings):
     # large code block needs. Set to 0 to restore the provider ceiling.
     UNIFY_MAX_OUTPUT_TOKENS: int = 32768
 
+    # Ceiling on tool-calling iterations for one agent run. Unset, a run ends
+    # only when the model decides to stop, so a loop that never converges
+    # bills indefinitely. Sized to bound that rather than to shape normal
+    # runs: a long agentic task uses far fewer steps than this, and a caller
+    # that genuinely needs more can pass ``max_steps`` explicitly. Set to 0 to
+    # restore unbounded iteration.
+    UNIFY_MAX_TOOL_LOOP_STEPS: int = 300
+
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials
     # ─────────────────────────────────────────────────────────────────────────

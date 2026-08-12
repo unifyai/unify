@@ -1,17 +1,19 @@
 """Symbolic tests for browser-meet channel routing in `LivekitCallManager`.
 
 These tests stub out every external dependency of ``_start_meet`` (LiveKit
-room creation, agent-service HTTP join, the IPC socket server, and the call
-subprocess) and verify only the channel-dispatch logic:
+room creation, the meeting backend behind the ``meet_provider`` seam, the IPC
+socket server, and the call subprocess) and verify only the channel-dispatch
+logic:
 
-- The agent-service POST URL is derived from ``_MEET_PATHS[channel]["path"]``
-  (``googlemeet`` for Google Meet, ``teamsmeet`` for Microsoft Teams).
-- The LiveKit room name is derived from ``_MEET_PATHS[channel]["room"]``
-  via ``make_room_name`` (``unity_<id>_gmeet`` vs ``unity_<id>_teams``).
+- The LiveKit room name is derived from ``_MEET_ROOM_SUFFIX[channel]`` via
+  ``make_room_name`` (``unity_<id>_gmeet`` vs ``unity_<id>_teams``).
+- The backend join is asked for exactly the requested channel, meeting URL,
+  display name, and room name.
 - The active-channel state (``_call_channel``, ``has_active_google_meet``,
   ``has_active_teams_meet``) is set correctly and exclusively per channel.
-- The session id returned by agent-service is captured into
-  ``_meet_session_id`` and the joining flag is cleared on success.
+- The backend session id is captured into ``_meet_session_id`` and the
+  joining flag is cleared on success; a failed join reports its reason and
+  runs cleanup.
 
 No LLM or LiveKit calls are involved.
 """
@@ -23,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from unify.conversation_manager.domains import call_manager as call_manager_module
+from unify.conversation_manager.domains.browser_meeting import MeetJoinResult
 from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
@@ -54,20 +57,18 @@ def _patch_meet_dependencies(
     monkeypatch,
     cm: LivekitCallManager,
     *,
-    join_status: int = 200,
-    session_id: str = "session-xyz",
+    join_result: MeetJoinResult | None = None,
 ):
     """Patch all external dependencies of ``_start_meet``.
 
     Returns a dict of capture buckets:
       * ``room_creates``: list of ``CreateRoomRequest`` payloads handed to LiveKit.
-      * ``http_posts``: list of ``(url, json_body, headers)`` tuples for the
-        agent-service POST.
+      * ``provider``: the fake meeting backend behind the ``meet_provider``
+        seam (``preflight`` passes; ``join`` returns ``join_result``).
       * ``subprocess_calls``: list of ``(room_name, channel, contact, boss,
-        outbound, extra_env)`` tuples for the legacy subprocess path.
+        outbound, extra_env)`` tuples for the fallback subprocess path.
     """
     room_creates: list = []
-    http_posts: list = []
     subprocess_calls: list = []
 
     fake_lk = MagicMock()
@@ -83,23 +84,14 @@ def _patch_meet_dependencies(
 
     monkeypatch.setattr(call_manager_module, "LiveKitAPI", _lk_factory)
 
-    fake_resp = MagicMock()
-    fake_resp.status = join_status
-    fake_resp.json = AsyncMock(return_value={"sessionId": session_id})
-
-    async def _fake_post(url, *, json=None, headers=None, timeout=None):
-        http_posts.append((url, json, headers))
-        return fake_resp
-
-    fake_session = MagicMock()
-    fake_session.post = _fake_post
-    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
-    fake_session.__aexit__ = AsyncMock(return_value=False)
-
-    def _session_factory(*_args, **_kwargs):
-        return fake_session
-
-    monkeypatch.setattr(call_manager_module.aiohttp, "ClientSession", _session_factory)
+    provider = MagicMock()
+    provider.preflight = AsyncMock(return_value=None)
+    provider.join = AsyncMock(
+        return_value=join_result or MeetJoinResult(ok=True, session_id="session-xyz"),
+    )
+    provider.leave = AsyncMock()
+    provider.state = AsyncMock(return_value=None)
+    cm._meet_provider = provider
 
     async def _noop_ensure_socket():
         return None
@@ -126,28 +118,28 @@ def _patch_meet_dependencies(
 
     return {
         "room_creates": room_creates,
-        "http_posts": http_posts,
+        "provider": provider,
         "subprocess_calls": subprocess_calls,
     }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("channel", "expected_path", "expected_room_suffix"),
+    ("channel", "expected_room_suffix"),
     [
-        ("google_meet", "googlemeet", "gmeet"),
-        ("teams_meet", "teamsmeet", "teams"),
+        ("google_meet", "gmeet"),
+        ("teams_meet", "teams"),
     ],
 )
 async def test_start_meet_routes_per_channel(
     monkeypatch,
     channel: str,
-    expected_path: str,
     expected_room_suffix: str,
 ):
-    """`_start_meet(channel, ...)` must use the channel-specific URL path
-    and LiveKit room suffix from `_MEET_PATHS`, capture the returned
-    sessionId, and flip only the matching `has_active_*` property."""
+    """`_start_meet(channel, ...)` must use the channel-specific LiveKit room
+    suffix from `_MEET_ROOM_SUFFIX`, ask the meeting backend to join that
+    channel, capture the returned session id, and flip only the matching
+    `has_active_*` property."""
     cm = _build_call_manager()
     captured = _patch_meet_dependencies(monkeypatch, cm)
 
@@ -157,6 +149,7 @@ async def test_start_meet_routes_per_channel(
     assert cm._call_channel == channel
     assert cm._meet_session_id == "session-xyz"
     assert cm._meet_joining is False
+    assert cm._meet_lobby_waiting is False
     assert cm._disconnect_contact == _CONTACT
 
     expected_room_name = make_room_name(_ASSISTANT_ID, expected_room_suffix)
@@ -168,10 +161,13 @@ async def test_start_meet_routes_per_channel(
     assert create_req.empty_timeout >= 3600
     assert create_req.departure_timeout >= 3600
 
-    assert len(captured["http_posts"]) == 1
-    url, body, _headers = captured["http_posts"][0]
-    assert url == f"http://localhost:3000/{expected_path}/join"
-    assert body == {"meetUrl": _MEET_URL, "displayName": "Assistant"}
+    provider = captured["provider"]
+    provider.join.assert_awaited_once_with(
+        channel=channel,
+        meeting_url=_MEET_URL,
+        display_name="Assistant",
+        room_name=expected_room_name,
+    )
 
     assert len(captured["subprocess_calls"]) == 1
     sp_room, sp_channel, sp_contact, sp_boss, sp_outbound, sp_extra = captured[
@@ -193,6 +189,11 @@ async def test_start_meet_routes_per_channel(
         assert cm.has_active_google_meet is True
         assert cm.has_active_teams_meet is False
     assert cm.has_active_meet() is True
+
+    # The backend state watcher is started on success; cancel it so the fake
+    # provider is never polled after the test ends.
+    assert cm._meet_state_task is not None
+    cm._meet_state_task.cancel()
 
 
 @pytest.mark.asyncio
@@ -232,11 +233,16 @@ async def test_start_teams_meet_wrapper_delegates_to_start_meet(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_meet_join_failure_clears_state(monkeypatch):
-    """When agent-service returns a non-200 status, ``_start_meet`` must
-    clear the joining flag, leave no captured session id, and run cleanup
-    so the per-channel ``has_active_*`` property goes back to False."""
+    """When the meeting backend reports a failed join, ``_start_meet`` must
+    surface the failure reason, clear the joining flag, leave no captured
+    session id, and run cleanup so the per-channel ``has_active_*`` property
+    goes back to False."""
     cm = _build_call_manager()
-    captured = _patch_meet_dependencies(monkeypatch, cm, join_status=500)
+    captured = _patch_meet_dependencies(
+        monkeypatch,
+        cm,
+        join_result=MeetJoinResult(ok=False, failure_reason="bot was denied entry"),
+    )
 
     cleanup_calls: list = []
 
@@ -250,9 +256,11 @@ async def test_start_meet_join_failure_clears_state(monkeypatch):
     assert ok is False
     assert cm._meet_session_id is None
     assert cm._meet_joining is False
+    assert cm._meet_lobby_waiting is False
+    assert cm.meet_join_failure_reason == "bot was denied entry"
     assert cleanup_calls == ["teams_meet"]
-    assert len(captured["http_posts"]) == 1
-    assert captured["http_posts"][0][0].endswith("/teamsmeet/join")
+    provider = captured["provider"]
+    assert provider.join.await_args.kwargs["channel"] == "teams_meet"
 
 
 # ---------------------------------------------------------------------------

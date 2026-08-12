@@ -970,10 +970,9 @@ jobs:
           libasound2t64 libatspi2.0-0 libgtk-3-0 libnspr4 libwayland-client0 \
           libxcomposite1 libxdamage1 libxrandr2 xvfb
 
-    - name: Install uv and poetry
+    - name: Install uv
       run: |
         pip install uv
-        pip install poetry
 
     # Cache uv dependencies to avoid re-downloading on every run.
     # Only the download cache is stored, never .venv: uv rebuilds the
@@ -1207,21 +1206,21 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: .github/scripts/hydrate_llm_cache.sh
 
-    # Cache orchestra's poetry dependencies keyed on orchestra's commit SHA
-    - name: Cache orchestra poetry dependencies
+    # Cache orchestra's virtualenv keyed on orchestra's commit SHA
+    - name: Cache orchestra virtualenv
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pypoetry
-        key: poetry-orchestra-${{ runner.os }}-${{ steps.orchestra-sha.outputs.sha }}
+        path: ${{ github.workspace }}/orchestra/.venv
+        key: uv-orchestra-${{ runner.os }}-${{ steps.orchestra-sha.outputs.sha }}
         restore-keys: |
-          poetry-orchestra-${{ runner.os }}-
+          uv-orchestra-${{ runner.os }}-
 
     - name: Install orchestra dependencies
       run: |
         # Install orchestra dependencies so parallel_run.sh can start it
         # (parallel_run.sh handles the full orchestra lifecycle)
         cd "$ORCHESTRA_REPO_PATH"
-        poetry install --no-interaction
+        uv sync --frozen
 
     - name: Run tests
       id: run-tests

@@ -44,6 +44,7 @@ def _manager_with_worker() -> tuple[LivekitCallManager, dict]:
         outbound,
         *,
         extra_metadata=None,
+        fallback_env=None,
     ):
         captured["extra_metadata"] = extra_metadata
         captured["outbound"] = outbound

@@ -17,13 +17,16 @@ steps:
   args:
   - '-c'
   - |
-    UNIFY_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
-    UNILLM_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
-    BRANDING_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/branding.git refs/heads/staging | cut -f1)
+    UNIFY_SHA=$$(git ls-remote https://github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
+    UNILLM_SHA=$$(git ls-remote https://github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
+    umask 077
+    printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.branding_key
+    BRANDING_SHA=$$(GIT_SSH_COMMAND="ssh -i /workspace/.branding_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git ls-remote git@github.com:unifyai/branding.git refs/heads/staging | cut -f1)
+    rm -f /workspace/.branding_key
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt
     echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
-  secretEnv: ['GITHUB_TOKEN']
+  secretEnv: ['BRANDING_DEPLOY_KEY']
   waitFor: ['-']
 
   # Build Docker image with BuildKit inline cache.
@@ -37,18 +40,23 @@ steps:
   - |
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
     BRANDING_SHA=$$(cat /workspace/canvas_branding_sha.txt)
+    umask 077
+    trap 'rm -f /workspace/.branding_deploy_key /workspace/.iso_deploy_key' EXIT
+    printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.branding_deploy_key
+    printf '%s' "$$ISO_DEPLOY_KEY" > /workspace/.iso_deploy_key
     DOCKER_BUILDKIT=1 docker build \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
+      --secret id=branding_deploy_key,src=/workspace/.branding_deploy_key \
+      --secret id=iso_deploy_key,src=/workspace/.iso_deploy_key \
       --build-arg BRANCH=staging \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
       --build-arg CANVAS_BRANDING_SHA=$$BRANDING_SHA \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest .
-  secretEnv: ['ORCHESTRA_API_KEY', 'GITHUB_TOKEN']
+  secretEnv: ['ORCHESTRA_API_KEY', 'BRANDING_DEPLOY_KEY', 'ISO_DEPLOY_KEY']
   waitFor: ['pull-cache', 'resolve-dep-shas']
 
   # Push Docker Image (SHA and latest tags in parallel)
@@ -70,12 +78,12 @@ steps:
   - '-c'
   - |
     DOCKER_BUILDKIT=1 docker build \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
+      --secret id=branding_deploy_key,src=/workspace/.branding_deploy_key \
+      --secret id=iso_deploy_key,src=/workspace/.iso_deploy_key \
       --build-arg BRANCH=staging \
       -f deploy/scripts/job-watcher/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['-']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -128,8 +136,10 @@ availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_API_KEY/versions/latest
     env: 'ORCHESTRA_API_KEY'
-  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
-    env: 'GITHUB_TOKEN'
+  - versionName: projects/${PROJECT_ID}/secrets/BRANDING_DEPLOY_KEY/versions/latest
+    env: 'BRANDING_DEPLOY_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/ISO_ANIMATION_DEPLOY_KEY/versions/latest
+    env: 'ISO_DEPLOY_KEY'
 
 # Timeout
 timeout: '1800s'  # 30 minutes

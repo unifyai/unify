@@ -13,16 +13,10 @@ from datetime import timedelta
 import pytest
 
 from unify.conversation_manager.task_actions import (
-    OPERATION_MAP,
     STEERING_OPERATIONS,
-    ParsedActionName,
-    build_action_name,
     derive_short_name,
-    get_steering_operation,
-    is_dynamic_action,
     iter_steering_tools_for_action,
     iter_steering_tools_for_completed_action,
-    parse_action_name,
     safe_call_id_suffix,
 )
 from unify.conversation_manager.domains.notifications import (
@@ -95,17 +89,15 @@ class TestDeriveShortName:
 
     def test_slashes_become_word_separators(self):
         """Slashes and other punctuation become word separators, not removed."""
-        # This was the bug that caused tool names to exceed 64 chars:
-        # "transcripts/messages/emails" became "transcriptsmessagesemails" (one word)
-        # Now it becomes "transcripts messages emails" (three words)
-        # Use a shorter example to avoid hitting the 25-char truncation limit
+        # Each slash-separated segment is a separate word: without this,
+        # "docs/files/data" would collapse into one long unreadable word.
+        # A short example keeps the result under the 25-char truncation limit.
         result = derive_short_name("Get docs/files/data")
         assert result == "get_docs_files_data"
-        # Each slash-separated segment is now a separate word
 
     def test_character_limit_enforced(self):
         """Short name is truncated to stay under character limit."""
-        # 25 chars max for short_name to guarantee tool names < 64 chars
+        # 25 chars max keeps pane labels compact
         long_query = "superlongwordthatexceedstwentyfivecharacters easily"
         result = derive_short_name(long_query)
         assert len(result) <= 25
@@ -158,128 +150,6 @@ class TestSafeCallIdSuffix:
         """Double underscores are collapsed."""
         result = safe_call_id_suffix("test--id")
         assert "__" not in result
-
-
-class TestBuildActionName:
-    """Tests for build_action_name function."""
-
-    def test_basic_action_name(self):
-        """Builds basic action name with __ delimiter."""
-        result = build_action_name("ask", "list_contacts", 0)
-        assert result == "ask_list_contacts__0"
-
-    def test_with_call_id_suffix(self):
-        """Includes call_id_suffix with __ delimiter."""
-        result = build_action_name("answer_clarification", "task", 0, "abc123")
-        assert result == "answer_clarification_task__0__abc123"
-
-    def test_different_handle_ids(self):
-        """Different handle IDs produce different names."""
-        result1 = build_action_name("stop", "search", 0)
-        result2 = build_action_name("stop", "search", 1)
-        assert result1 != result2
-        assert "__0" in result1
-        assert "__1" in result2
-
-    def test_all_operations(self):
-        """All steering operations produce valid names."""
-        for op in STEERING_OPERATIONS:
-            result = build_action_name(op.name, "test_task", 5)
-            assert result.startswith(f"{op.name}_")
-            assert "__5" in result
-
-
-class TestParseActionName:
-    """Tests for parse_action_name function."""
-
-    def test_basic_parsing(self):
-        """Parses basic action name correctly."""
-        result = parse_action_name("ask_list_contacts__0")
-        assert result.operation == "ask"
-        assert result.handle_id == 0
-        assert result.call_id_suffix is None
-
-    def test_parse_with_call_id(self):
-        """Parses action name with call_id_suffix."""
-        result = parse_action_name("answer_clarification_task__0__abc123")
-        assert result.operation == "answer_clarification"
-        assert result.handle_id == 0
-        assert result.call_id_suffix == "abc123"
-
-    def test_parse_with_numeric_call_id(self):
-        """Correctly parses when call_id_suffix contains digits."""
-        # This is the key test - the bug we fixed
-        result = parse_action_name(
-            "answer_clarification_list_all_contacts__0__tion_123",
-        )
-        assert result.operation == "answer_clarification"
-        assert result.handle_id == 0
-        assert result.call_id_suffix == "tion_123"
-
-    def test_different_operations(self):
-        """Parses different operation types."""
-        test_cases = [
-            ("stop_search_web__1", "stop", 1),
-            ("interject_do_task__2", "interject", 2),
-            ("pause_long_task__0", "pause", 0),
-            ("resume_paused_task__3", "resume", 3),
-        ]
-        for action_name, expected_op, expected_id in test_cases:
-            result = parse_action_name(action_name)
-            assert result.operation == expected_op
-            assert result.handle_id == expected_id
-
-    def test_invalid_action_name(self):
-        """Handles invalid action names gracefully."""
-        result = parse_action_name("not_a_valid_action")
-        assert result.handle_id == 0
-
-    def test_no_delimiter(self):
-        """Handles action names without __ delimiter."""
-        result = parse_action_name("ask_something_0")
-        # Should still extract operation
-        assert result.operation == "ask"
-
-    def test_roundtrip(self):
-        """build_action_name and parse_action_name are inverses."""
-        for op in STEERING_OPERATIONS:
-            if op.requires_clarification:
-                original = build_action_name(op.name, "test_task", 7, "suffix")
-            else:
-                original = build_action_name(op.name, "test_task", 7)
-            parsed = parse_action_name(original)
-            assert parsed.operation == op.name
-            assert parsed.handle_id == 7
-
-
-class TestIsDynamicAction:
-    """Tests for is_dynamic_action function."""
-
-    def test_dynamic_actions(self):
-        """Recognizes dynamic task actions."""
-        dynamic_names = [
-            "ask_something__0",
-            "stop_task__1",
-            "interject_other__2",
-            "pause_this__0",
-            "resume_that__1",
-            "answer_clarification_query__0__suffix",
-        ]
-        for name in dynamic_names:
-            assert is_dynamic_action(name), f"{name} should be dynamic"
-
-    def test_static_actions(self):
-        """Rejects static/built-in actions."""
-        static_names = [
-            "send_sms",
-            "send_email",
-            "make_call",
-            "start_task",
-            "wait",
-            "unknown_action",
-        ]
-        for name in static_names:
-            assert not is_dynamic_action(name), f"{name} should not be dynamic"
 
 
 class TestIterSteeringToolsForAction:
@@ -385,22 +255,6 @@ class TestIterSteeringToolsForCompletedAction:
             assert len(description) > 0, f"{name} should have a description"
 
 
-class TestGetSteeringOperation:
-    """Tests for get_steering_operation function."""
-
-    def test_valid_operations(self):
-        """Returns SteeringOperation for valid names."""
-        for op in STEERING_OPERATIONS:
-            result = get_steering_operation(op.name)
-            assert result is not None
-            assert result.name == op.name
-
-    def test_invalid_operation(self):
-        """Returns None for invalid names."""
-        assert get_steering_operation("invalid") is None
-        assert get_steering_operation("") is None
-
-
 class TestSteeringOperationDocstring:
     """Tests for SteeringOperation.get_docstring method."""
 
@@ -411,21 +265,6 @@ class TestSteeringOperationDocstring:
             # but the method should not raise
             docstring = op.get_docstring()
             assert isinstance(docstring, str)
-
-
-class TestParsedActionNameProperties:
-    """Tests for ParsedActionName dataclass."""
-
-    def test_steering_operation_property(self):
-        """steering_operation property returns correct operation."""
-        parsed = ParsedActionName("ask", 0, None)
-        assert parsed.steering_operation is not None
-        assert parsed.steering_operation.name == "ask"
-
-    def test_steering_operation_invalid(self):
-        """steering_operation returns None for invalid operation."""
-        parsed = ParsedActionName("invalid", 0, None)
-        assert parsed.steering_operation is None
 
 
 # =============================================================================
@@ -1088,145 +927,15 @@ class TestContactIndex:
 
 
 # =============================================================================
-# Tool name length guarantee tests
+# Steering-invocation rendering tests
 # =============================================================================
 
 
-class TestToolNameLengthGuarantee:
-    """Stress tests ensuring tool names NEVER exceed OpenAI's 64-char limit.
+class TestSteeringInvocationRendering:
+    """The panes render ready-to-use invocations of the fixed steering tools."""
 
-    These tests verify the fix for the bug where LLM-generated descriptions
-    with slashes (e.g., "transcripts/messages/emails") caused tool names to
-    exceed 64 characters and fail OpenAI API validation.
-    """
-
-    # OpenAI's maximum tool name length
-    MAX_TOOL_NAME_LENGTH = 64
-
-    def _assert_all_tool_names_valid(self, query: str, handle_id: int = 0):
-        """Helper: assert all generated tool names are ≤ 64 chars."""
-        # Include a pending clarification to test answer_clarification_ tools
-        pending = [{"call_id": "test-clarification-id-12345678"}]
-        actions = iter_steering_tools_for_action(
-            handle_id=handle_id,
-            query=query,
-            pending_clarifications=pending,
-        )
-        for tool_name, _ in actions:
-            assert len(tool_name) <= self.MAX_TOOL_NAME_LENGTH, (
-                f"Tool name exceeds {self.MAX_TOOL_NAME_LENGTH} chars:\n"
-                f"  Name: {tool_name}\n"
-                f"  Length: {len(tool_name)}\n"
-                f"  Query: {query}"
-            )
-
-    def test_slash_separated_description_bug(self):
-        """Regression test for the exact bug from CI failure.
-
-        The LLM generated:
-        "Search Default User's transcripts/messages/emails/meeting notes..."
-
-        This caused "transcripts/messages/emails/meeting" to become ONE word
-        "transcriptsmessagesemailsmeeting" (31 chars), creating tool names
-        like "interject_search_default_users_transcriptsmessagesemailsmeeting__0"
-        which was 66 chars - exceeding the 64-char limit.
-        """
-        query = (
-            "Search Default User's transcripts/messages/emails/meeting notes "
-            "for mentions of quarterly budget review"
-        )
-        self._assert_all_tool_names_valid(query)
-
-    def test_pathological_long_words(self):
-        """Words longer than the entire character limit."""
-        query = "supercalifragilisticexpialidocious antidisestablishmentarianism"
-        self._assert_all_tool_names_valid(query)
-
-    def test_many_slashes(self):
-        """Many slash-separated segments."""
-        query = "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z"
-        self._assert_all_tool_names_valid(query)
-
-    def test_mixed_punctuation(self):
-        """Various punctuation types that could concatenate words."""
-        query = "files.txt,data.csv;report.pdf|summary.doc"
-        self._assert_all_tool_names_valid(query)
-
-    def test_very_long_query(self):
-        """Extremely long query string."""
-        query = " ".join(["word"] * 1000)
-        self._assert_all_tool_names_valid(query)
-
-    def test_unicode_characters(self):
-        """Unicode characters in query."""
-        query = "Rechercher les données über München 東京 москва"
-        self._assert_all_tool_names_valid(query)
-
-    def test_high_handle_id(self):
-        """Large handle IDs don't break the limit."""
-        query = "Search for something"
-        # Test with 5-digit handle ID (the max we designed for)
-        self._assert_all_tool_names_valid(query, handle_id=99999)
-
-    def test_all_steering_operations(self):
-        """Every steering operation stays under limit with worst-case input."""
-        worst_case_query = (
-            "transcripts/messages/emails/documents/notes/files/records/data"
-        )
-        pending = [{"call_id": "clarification-uuid-12345678901234567890"}]
-        actions = iter_steering_tools_for_action(
-            handle_id=99999,  # 5-digit handle
-            query=worst_case_query,
-            pending_clarifications=pending,
-        )
-
-        for tool_name, _ in actions:
-            assert (
-                len(tool_name) <= self.MAX_TOOL_NAME_LENGTH
-            ), f"Tool '{tool_name}' is {len(tool_name)} chars (max {self.MAX_TOOL_NAME_LENGTH})"
-
-    def test_boundary_condition_exactly_25_chars(self):
-        """Short name that would be exactly 25 chars without truncation."""
-        # Craft a query that produces exactly 25 chars
-        query = "abcdefghij klmnopqrst uvwxy"  # 3 words, joined = "abcdefghij_klmnopqrst_uvwxy" = 27 chars
-        short_name = derive_short_name(query)
-        assert len(short_name) <= 25
-        self._assert_all_tool_names_valid(query)
-
-
-# =============================================================================
-# Integration-style tests for action name format
-# =============================================================================
-
-
-class TestActionNameFormatIntegration:
-    """Integration tests ensuring action names work end-to-end."""
-
-    def test_build_parse_roundtrip_all_operations(self):
-        """All operations roundtrip correctly through build and parse."""
-        test_queries = [
-            "List all contacts",
-            "Search for documents",
-            "Send an email to John",
-            "What's the weather in NYC?",
-        ]
-
-        for query in test_queries:
-            short_name = derive_short_name(query)
-            for op in STEERING_OPERATIONS:
-                if op.requires_clarification:
-                    suffix = safe_call_id_suffix("test-call-id-123")
-                    action_name = build_action_name(op.name, short_name, 42, suffix)
-                else:
-                    action_name = build_action_name(op.name, short_name, 42)
-
-                parsed = parse_action_name(action_name)
-                assert parsed.operation == op.name
-                assert parsed.handle_id == 42
-                assert is_dynamic_action(action_name)
-
-    def test_action_names_in_iter_match_parser(self):
-        """Actions from iter_steering_tools_for_action parse correctly."""
+    def test_invocations_carry_handle_id(self):
+        """Every rendered invocation addresses the fixed tool by handle_id."""
         pending = [{"call_id": "clarification-uuid-12345"}]
         actions = iter_steering_tools_for_action(
             handle_id=3,
@@ -1234,23 +943,32 @@ class TestActionNameFormatIntegration:
             pending_clarifications=pending,
         )
 
+        assert actions
         for action_name, _ in actions:
-            parsed = parse_action_name(action_name)
-            assert parsed.handle_id == 3
-            assert parsed.operation in OPERATION_MAP
+            assert "_action(handle_id=3" in action_name
 
-    def test_numeric_suffix_does_not_confuse_parser(self):
-        """Call ID suffixes with numbers don't confuse the parser."""
-        # This tests the specific bug that was fixed
-        test_cases = [
-            ("answer_clarification_task__0__123", 0, "123"),
-            ("answer_clarification_task__5__abc_789", 5, "abc_789"),
-            ("answer_clarification_list_contacts__10__suffix_999", 10, "suffix_999"),
+    def test_clarification_invocation_carries_full_call_id(self):
+        """The answer_clarification invocation embeds the clarification's
+        call id, which no longer travels inside a tool name."""
+        pending = [{"call_id": "clarification-uuid-12345"}]
+        actions = iter_steering_tools_for_action(
+            handle_id=3,
+            query="Do something important",
+            pending_clarifications=pending,
+        )
+
+        clarification_invocations = [
+            name for name, _ in actions if name.startswith("answer_clarification")
         ]
-        for action_name, expected_handle, expected_suffix in test_cases:
-            parsed = parse_action_name(action_name)
-            assert parsed.handle_id == expected_handle, f"Failed for {action_name}"
-            assert parsed.call_id_suffix == expected_suffix, f"Failed for {action_name}"
+        assert clarification_invocations == [
+            "answer_clarification_action(handle_id=3, "
+            "call_id='clarification-uuid-12345', ...)",
+        ]
+
+    def test_completed_invocation_is_ask_action(self):
+        """A completed action renders one ask_action invocation."""
+        actions = iter_steering_tools_for_completed_action(0, "Find contacts")
+        assert [name for name, _ in actions] == ["ask_action(handle_id=0, ...)"]
 
 
 # =============================================================================

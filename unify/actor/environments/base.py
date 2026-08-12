@@ -58,12 +58,19 @@ def resolve_directly_callable(
 def build_filtered_method_docs(
     allowed_methods: frozenset[str],
     namespace: str = "primitives",
+    exposed_aliases: frozenset[str] | None = None,
 ) -> str:
     """Build method-level documentation for only the specified fully-qualified methods.
 
     Reusable across all environment types (state managers, computer, actor).
     Uses the ``ToolSurfaceRegistry`` to introspect method signatures and
     docstrings for each allowed method.
+
+    ``exposed_aliases`` names every manager reachable in the session, which can
+    exceed the aliases present in ``allowed_methods`` when per-method filtering
+    has only promoted part of the surface. A superseded manager keeps its
+    supersession framing whenever its replacement is reachable at all; when the
+    caller omits the set, the aliases in ``allowed_methods`` stand in for it.
     """
     from unify.function_manager.primitives.registry import get_registry
 
@@ -80,6 +87,9 @@ def build_filtered_method_docs(
     if not allowed_aliases:
         return ""
 
+    if exposed_aliases is None:
+        exposed_aliases = frozenset(allowed_aliases)
+
     lines = ["### Method Reference\n"]
     for alias in sorted(allowed_aliases):
         spec = registry.get_manager_spec(alias)
@@ -89,7 +99,8 @@ def build_filtered_method_docs(
 
         lines.append(f"\n#### `{namespace}.{alias}`")
         if spec:
-            lines.append(f"*{spec.domain}* — {spec.description}")
+            text = spec.prompt_text(exposed_aliases)
+            lines.append(f"*{text.domain}* — {text.description}")
 
         for method_name in sorted(allowed_aliases[alias]):
             sig_str = registry._format_method_signature(mgr_cls, method_name)

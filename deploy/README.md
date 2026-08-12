@@ -15,12 +15,21 @@ Build the image locally:
 
 ```bash
 docker build -f deploy/Dockerfile \
-  --build-arg GITHUB_TOKEN=your-token \
+  --secret id=branding_deploy_key,src=/path/to/branding_key \
+  --secret id=iso_deploy_key,src=/path/to/iso_key \
   --build-arg UNIFY_KEY=your-key \
   -t unity .
 ```
 
-The Dockerfile clones `unify` and `unillm` from GitHub at build time (they're not bundled in the image context). A `GITHUB_TOKEN` with repo read access is required.
+The Dockerfile clones its dependencies from GitHub at build time (they're not
+bundled in the image context). `unisdk`, `unillm` and `magnitude` are public and
+need no credential. The canvas stage additionally clones `branding` and its
+`packages/iso` submodule, which are private; each is read with its own
+repo-scoped read-only deploy key, supplied as a mounted secret.
+
+Pass the keys as `--secret`, never as `--build-arg`: a build argument is
+recorded verbatim in the metadata of every layer that follows it and is readable
+by anyone who can pull the image.
 
 ## Cloud Build
 

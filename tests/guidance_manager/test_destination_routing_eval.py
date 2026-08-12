@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 from tests.destination_routing_helpers import (
@@ -25,7 +23,10 @@ async def test_private_preference_stays_in_personal_guidance(llm_config):
     scenario = RoutingScenario("guidance_personal")
     scenario.setup()
     manager = GuidanceManager()
-    sentinel = f"PRIVATE-CADENCE-{uuid.uuid4().hex[:10]}"
+    # The sentinel is embedded in the user message, so it must be identical on
+    # every run for LLM-cache replay to hit. Leftover-row safety comes from the
+    # scenario's pre-test team-root cleanup and its per-run personal root.
+    sentinel = "PRIVATE-CADENCE-5321"
 
     try:
         messages = await run_direct_routing_loop(
@@ -61,7 +62,8 @@ async def test_team_guidance_routes_to_the_matching_shared_team(llm_config):
     scenario = RoutingScenario("guidance_shared")
     scenario.setup()
     manager = GuidanceManager()
-    sentinel = f"FIELD-SOP-{uuid.uuid4().hex[:10]}"
+    # Fixed for LLM-cache replay; see the sibling personal-guidance test.
+    sentinel = "FIELD-SOP-8874"
 
     try:
         messages = await run_direct_routing_loop(

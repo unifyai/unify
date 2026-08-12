@@ -32,7 +32,6 @@ def _make_offline_trigger_snapshot(
         wake="triggered",
         delivery="offline",
         task_name="Reply to Alice",
-        task_description="Send a templated reply to Alice when she emails.",
         trigger_medium=trigger_medium,
         revision="rev-xyz",
     )
