@@ -28,6 +28,7 @@ from unify.llm_broker.usage import (
     usage_from_body,
     usage_from_stream_tail,
 )
+from unify.llm_broker.voice import build_voice_router
 
 LOGGER = logging.getLogger(__name__)
 
@@ -380,6 +381,7 @@ def build_app(settings: Optional[BrokerSettings] = None) -> FastAPI:
     app = FastAPI(title="Unify LLM broker", docs_url=None, redoc_url=None)
     app.state.broker = broker
     app.include_router(build_router(broker))
+    app.include_router(build_voice_router(resolved.voice_providers))
 
     @app.on_event("shutdown")
     async def _close() -> None:
