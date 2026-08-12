@@ -1304,6 +1304,12 @@ class FastBrainNotification(Event):
     # which it should happen. Markers have already been stripped from
     # ``message``; these are what they resolved to.
     console_steps: list = field(default_factory=list)
+    # Meet-surface flags this notification reports, as ``{attribute: bool}``
+    # using the conversation manager's own attribute names. The fast brain
+    # applies these directly: ``message`` is prose written for an LLM and is
+    # rewritten freely, so inferring state from its wording silently breaks the
+    # moment the copy changes.
+    meet_surface_state: dict = field(default_factory=dict)
 
 
 @dataclass
