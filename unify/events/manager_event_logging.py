@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 import functools
+import logging
 from uuid import uuid4
 import json
 from secrets import token_hex
@@ -21,6 +22,8 @@ from contextvars import ContextVar
 # (see register_auto_pin / _setup_explicit_call_callbacks), but the field
 # was never actually populated until now.
 _EVENT_SOURCE: ContextVar[str | None] = ContextVar("_EVENT_SOURCE", default=None)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -135,6 +138,39 @@ async def publish_manager_method_event(  # noqa: D401 – imperative name
     )
 
 
+async def _publish_lifecycle_event(
+    call_id: str,
+    manager_name: str,
+    method_name: str,
+    *,
+    phase: str,
+    **extra: Any,
+) -> None:
+    """Publish a ManagerMethod lifecycle event, degrading to a warning on failure.
+
+    Lifecycle events are observability: a broken or uninitialised EVENT_BUS
+    must never fail the manager method whose lifecycle is being recorded —
+    neither by turning a successful result into a publish error nor by
+    replacing the method's own exception with one.
+    """
+    try:
+        await publish_manager_method_event(
+            call_id,
+            manager_name,
+            method_name,
+            phase=phase,
+            **extra,
+        )
+    except Exception:
+        _LOGGER.warning(
+            "Failed to publish %s ManagerMethod event for %s.%s — proceeding",
+            phase,
+            manager_name,
+            method_name,
+            exc_info=True,
+        )
+
+
 # Ensure values logged to EventBus use stable, schema-friendly text types.
 def _coerce_text_value(value: Any) -> str:
     """Return a *string* suitable for logging.
@@ -247,7 +283,7 @@ def wrap_handle_with_logging(
         except Exception as exc:
             import traceback as _tb
 
-            await publish_manager_method_event(
+            await _publish_lifecycle_event(
                 call_id,
                 manager_name,
                 method_name,
@@ -260,7 +296,7 @@ def wrap_handle_with_logging(
                 hierarchy=_hierarchy,
             )
             raise
-        await publish_manager_method_event(
+        await _publish_lifecycle_event(
             call_id,
             manager_name,
             method_name,
@@ -355,27 +391,16 @@ def log_manager_call(
 
             suffix_token = _PENDING_LOOP_SUFFIX.set(suffix)
             try:
-                try:
-                    await publish_manager_method_event(
-                        call_id,
-                        manager_name,
-                        method_name,
-                        phase="incoming",
-                        display_label=resolved_label,
-                        hierarchy=hierarchy,
-                        **{payload_key: payload_value},
-                        **extra_fields,
-                    )
-                except Exception:
-                    import logging as _logging
-
-                    _logging.getLogger(__name__).warning(
-                        "Failed to publish incoming ManagerMethod event "
-                        "for %s.%s — proceeding with method execution",
-                        manager_name,
-                        method_name,
-                        exc_info=True,
-                    )
+                await _publish_lifecycle_event(
+                    call_id,
+                    manager_name,
+                    method_name,
+                    phase="incoming",
+                    display_label=resolved_label,
+                    hierarchy=hierarchy,
+                    **{payload_key: payload_value},
+                    **extra_fields,
+                )
 
                 # Inject call_id only when the wrapped method declares it
                 if _accepts_call_id:
@@ -460,7 +485,7 @@ def log_manager_result(
             ]
 
             # ── 1. Publish incoming BEFORE modifying the lineage ──────────
-            await publish_manager_method_event(
+            await _publish_lifecycle_event(
                 call_id,
                 manager_name,
                 method_name,
@@ -477,7 +502,7 @@ def log_manager_result(
                 result = await func(self, *args, **kwargs)
 
                 # ── 3. Publish outgoing with the SAME hierarchy ───────────
-                await publish_manager_method_event(
+                await _publish_lifecycle_event(
                     call_id,
                     manager_name,
                     method_name,
@@ -491,7 +516,7 @@ def log_manager_result(
             except Exception as exc:
                 import traceback as _tb
 
-                await publish_manager_method_event(
+                await _publish_lifecycle_event(
                     call_id,
                     manager_name,
                     method_name,
