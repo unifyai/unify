@@ -81,6 +81,9 @@ def test_contact_reduce_param_shapes():
 @pytest.mark.requires_real_unify
 @_handle_project
 def test_contact_reduce_reads_personal_and_accessible_space_roots():
+    # Random team id is safe here: this test only drives programmatic manager
+    # methods, so the id never enters an LLM prompt and cannot break cache
+    # replay, while randomness isolates concurrent runs without cleanup.
     team_id = int(time.time_ns() % 1_000_000_000)
     SESSION_DETAILS.team_ids = [team_id]
 
