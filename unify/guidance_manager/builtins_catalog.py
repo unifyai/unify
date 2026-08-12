@@ -122,10 +122,63 @@ Confidentiality (non-negotiable)
   capability.
 """
 
+_SHARING_LINKS_CONTENT = """\
+How to read a OneDrive/SharePoint sharing link the user pastes — including
+links shared from OUTSIDE their organization ("anyone with the link" and
+cross-tenant shares).
+
+Resolve the link through the Microsoft Graph shares API via the workspace
+proxy. Never fetch the sharing URL itself, parse its HTML, or extract
+page-embedded access grants — that route is fragile, leaks credential-like
+material, and bypasses the user's file-access controls.
+
+Procedure (inside `execute_code`, with the connected Microsoft workspace):
+
+1. Encode the sharing URL into a share token:
+   `share = "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")`
+2. Resolve the item:
+   `GET {MICROSOFT_GRAPH_BASE}/shares/{share}/driveItem`
+   with `Authorization: Bearer {get_oauth_access_token("microsoft")}`.
+   The response is a normal driveItem: `name`, `folder`/`file`, `id`, and
+   `parentReference.driveId`.
+3. Walk it like any other item:
+   - children: `.../shares/{share}/driveItem/children`
+   - a nested path: `.../shares/{share}/driveItem:/sub/folder:/children`
+   - file bytes: `.../shares/{share}/driveItem:/sub/file.csv:/content`
+   Or, after step 2, address it directly as
+   `.../drives/{parentReference.driveId}/items/{id}` and descend from there.
+
+What makes this non-obvious:
+
+- The proxy sends `Prefer: redeemSharingLinkIfNecessary` on shares requests,
+  which is the API equivalent of the user opening the link in a browser —
+  without it, an anyone-with-the-link or cross-tenant share resolves to
+  nothing even though the link "works" in a browser. On older runtimes that
+  do not inject the header, set it yourself on every `/shares` request.
+- Links shared with "anyone with the link" NEVER appear in `sharedWithMe`
+  or the user's OneDrive UI until opened. Their absence from listings says
+  nothing about access — resolve the link itself.
+- If `/shares/{share}/driveItem` fails on an older runtime (403 on
+  `/content`, or an unfollowable 308), fall back to the two-step form: read
+  `/shares/{share}/driveItem` for `parentReference.driveId` + `id`, then use
+  `/drives/{driveId}/items/{itemId}/...` for everything else.
+- Google sharing links carry the file id in the URL; use
+  `{GOOGLE_DRIVE_BASE}/files/{id}?supportsAllDrives=true` — no share-token
+  step exists or is needed.
+
+To then STORE what the share holds (spreadsheets into queryable tables,
+documents into collections), download the files and hand them to
+`primitives.ingestion.submit` — do not re-implement storage.
+"""
+
 PLATFORM_GUIDANCE_ENTRIES: Dict[str, Dict[str, str]] = {
     "platform/system-map": {
         "title": "[platform] Answering questions about the Unify platform itself",
         "content": _PLATFORM_MAP_CONTENT,
+    },
+    "platform/workspace-sharing-links": {
+        "title": "[platform] Reading OneDrive/SharePoint sharing links via the workspace",
+        "content": _SHARING_LINKS_CONTENT,
     },
 }
 
