@@ -17,6 +17,7 @@ import net from 'net';
 import { randomUUID } from 'crypto';
 import { ChildProcess, spawn, execSync } from 'child_process';
 import { registerExec, signalExec } from './execControl';
+import { isExecDisabled } from './execGuard';
 import multer from 'multer';
 import { jsonSchemaToZod } from './jsonSchemaToZod';
 import { getLlmConfig, resolveAgentServiceModel } from './llmConfig';
@@ -336,6 +337,19 @@ async function auth(req: Request, res: Response, next: Function) {
     return res.status(401).json({ error: 'unauthorized', message: 'API key verification failed' });
   }
 
+  next();
+}
+
+// The pod sets AGENT_SERVICE_DISABLE_EXEC to refuse `/exec` here without
+// affecting the remote desktop surfaces, which leave it unset. See execGuard.
+const EXEC_DISABLED = isExecDisabled(process.env.AGENT_SERVICE_DISABLE_EXEC);
+
+function requireExecEnabled(req: Request, res: Response, next: Function) {
+  if (EXEC_DISABLED) {
+    return res
+      .status(403)
+      .json({ error: 'exec_disabled', message: 'Command execution is disabled on this deployment.' });
+  }
   next();
 }
 
@@ -2656,7 +2670,7 @@ app.post('/resume', isAgentReady, async (req: Request, res: Response) => {
 // --- /exec endpoint: Execute shell commands (use /files first to upload files) ---
 const EXEC_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
-app.post('/exec', auth, async (req: Request, res: Response) => {
+app.post('/exec', requireExecEnabled, auth, async (req: Request, res: Response) => {
   const { command, cwd, timeout, shell_mode, exec_id } = req.body;
   // A caller that wants to steer the run supplies its own id, so it can
   // address /exec/signal at it while this request is still blocking.
@@ -2705,7 +2719,7 @@ app.post('/exec', auth, async (req: Request, res: Response) => {
   }
 });
 
-app.post('/exec/signal', auth, async (req: Request, res: Response) => {
+app.post('/exec/signal', requireExecEnabled, auth, async (req: Request, res: Response) => {
   const { exec_id, action } = req.body;
 
   if (typeof exec_id !== 'string' || !EXEC_ID_PATTERN.test(exec_id)) {
