@@ -1,5 +1,6 @@
 from tavily import TavilyClient
 import functools
+import os
 from typing import List, Dict, Any, Optional, Type
 from pydantic import BaseModel
 import asyncio
@@ -15,6 +16,7 @@ from unify.common.llm_helpers import methods_to_tool_dict
 from unify.common.tool_spec import ToolSpec
 from unify.events.manager_event_logging import log_manager_call
 from unify.events.event_bus import EVENT_BUS, Event
+from unify.common.broker import broker_origin
 from unify.web_searcher import prompt_builders
 from .base import BaseWebSearcher
 
@@ -29,7 +31,19 @@ class WebSearcher(BaseWebSearcher):
 
     def __init__(self):
         super().__init__()
-        self.tavily_client = TavilyClient(api_key=SETTINGS.web.TAVILY_API_KEY or None)
+        # With a broker sidecar the pod holds no Tavily key: point the client at
+        # the sidecar over loopback with the pod's UNIFY_KEY as the nonce, and it
+        # swaps in the real key. Self-host / local dev keeps the env key.
+        broker = broker_origin()
+        if broker:
+            self.tavily_client = TavilyClient(
+                api_key=os.environ["UNIFY_KEY"],
+                api_base_url=f"{broker}/proxy/tavily",
+            )
+        else:
+            self.tavily_client = TavilyClient(
+                api_key=SETTINGS.web.TAVILY_API_KEY or None,
+            )
 
         # Build the tools mapping once; copy when used
         ask_tools: Dict[str, Any] = methods_to_tool_dict(

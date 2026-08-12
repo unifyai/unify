@@ -1517,7 +1517,6 @@ def _create_async_wrapper(manager: Any, manager_alias: str) -> _AsyncPrimitiveWr
 _ALIAS_TO_GETTER: dict[str, str] = {
     "comms": "",
     "contacts": "get_contact_manager",
-    "dashboards": "get_dashboard_manager",
     "canvas": "get_canvas_manager",
     "ingestion": "get_ingestion_manager",
     "data": "get_data_manager",
@@ -1535,7 +1534,7 @@ _ALIAS_TO_GETTER: dict[str, str] = {
 
 # Managers that need async wrapping (sync implementations)
 _SYNC_MANAGERS: frozenset[str] = frozenset(
-    {"canvas", "dashboards", "data", "files", "ingestion", "coordinator"},
+    {"canvas", "data", "files", "ingestion", "coordinator"},
 )
 
 
@@ -1653,11 +1652,6 @@ class Primitives:
     def contacts(self) -> "ContactManager":
         """Contact management primitives (ask, update)."""
         return self._get_manager("contacts")
-
-    @property
-    def dashboards(self) -> "_AsyncPrimitiveWrapper":
-        """Dashboard primitives (create_tile, create_dashboard, etc.)."""
-        return self._get_manager("dashboards")
 
     @property
     def data(self) -> "_AsyncPrimitiveWrapper":

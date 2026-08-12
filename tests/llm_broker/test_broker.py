@@ -145,6 +145,43 @@ class TestTheCallerNeverSeesTheProviderKey:
         assert sent["anthropic-version"] == "2023-06-01"
 
 
+class TestAccountingModelSpelling:
+    """Orchestra meters ``<id>@<provider>``; each provider sees its own bare id.
+
+    The metering gate recognises an OpenRouter call by its ``@openrouter``
+    marker. Authorizing with the provider-shaped id made every model outside
+    the curated catalogue unmeterable -- refused on each call -- while curated
+    ones passed only by colliding with the catalogue's suffix-stripped
+    entries.
+    """
+
+    def test_openrouter_is_authorized_and_settled_with_its_marker(self):
+        recorder = _Recorder()
+        _client(recorder).post(
+            "/llm/chat/completions",
+            headers=_AUTH,
+            json={"model": "openai/gpt-5.4-mini", "messages": []},
+        )
+
+        wire = "openai/gpt-5.4-mini@openrouter"
+        assert recorder.authorize_calls[0]["model"] == wire
+        assert recorder.settle_calls[0]["model"] == wire
+        assert recorder.provider_calls[0]["body"]["model"] == "openai/gpt-5.4-mini"
+
+    def test_anthropic_is_authorized_and_settled_with_its_marker(self):
+        recorder = _Recorder(provider_body={"usage": {"input_tokens": 10}})
+        _client(recorder).post(
+            "/llm/anthropic/v1/messages",
+            headers=_AUTH,
+            json={"model": "claude-opus-5", "messages": []},
+        )
+
+        wire = "claude-opus-5@anthropic"
+        assert recorder.authorize_calls[0]["model"] == wire
+        assert recorder.settle_calls[0]["model"] == wire
+        assert recorder.provider_calls[0]["body"]["model"] == "claude-opus-5"
+
+
 class TestUsageIsReportedNotPriced:
     def test_the_provider_s_usage_is_relayed_verbatim(self):
         """Orchestra prices it; a broker that priced could declare anything."""
@@ -158,7 +195,7 @@ class TestUsageIsReportedNotPriced:
         assert len(recorder.settle_calls) == 1
         settled = recorder.settle_calls[0]
         assert settled["usage"] == {"cost": 0.00042}
-        assert settled["model"] == "openai/gpt-5.6-sol"
+        assert settled["model"] == "openai/gpt-5.6-sol@openrouter"
         assert "charged" not in settled
 
     def test_cost_accounting_is_requested_on_the_way_out(self):

@@ -76,6 +76,7 @@ from .ops import (
 from ..common.federated_search import (
     CONTEXT_FIELD,
     FederatedSearchContext,
+    SortSpec,
     federated_count,
     federated_filter,
     federated_ranked_search,
@@ -848,9 +849,13 @@ class ContactManager(BaseContactManager):
             for context in self._read_contact_contexts()
         ]
         try:
+            # Sort server-side by contact_id so the documented creation-order
+            # contract holds regardless of backend storage order, which varies
+            # between sessions for identically-seeded data.
             annotated_rows = federated_filter(
                 contexts,
                 filter=normalize_filter_expr(filter),
+                sorting=(SortSpec(field="contact_id"),),
                 offset=offset,
                 limit=eff_limit,
             )

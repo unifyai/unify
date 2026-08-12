@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-import time
 import unisdk
 from typing import Dict, Any
 from unisdk.utils.http import RequestError
@@ -63,7 +62,23 @@ def _contacts_with_email(context: str, email: str) -> list:
         return []
 
 
+# Fixed per-test team ids (61M band, distinct from the 20M/40M bands in
+# tests/destination_routing_helpers.py and the 50M band in
+# test_move_to_blacklist_destination.py). The id is embedded verbatim in the
+# system prompt's accessible-teams block, so it must be identical on every
+# run for LLM-cache replay to hit; a wall-clock-derived id can never replay.
+_EXPLICIT_TEAM_ROUTING_TEAM_ID = 61_000_101
+_PRIVATE_ROUTING_TEAM_ID = 61_000_102
+_AMBIGUOUS_ROUTING_TEAM_ID = 61_000_103
+
+
 def _configure_contact_routing_space(team_id: int) -> None:
+    # Fixed team ids persist across runs on a shared backend: drop any rows a
+    # crashed earlier run left behind before the test starts counting them.
+    try:
+        unisdk.delete_context(f"Teams/{team_id}/Contacts")
+    except Exception:
+        pass
     SESSION_DETAILS.team_ids = [team_id]
     SESSION_DETAILS.team_summaries = [
         TeamSummary(
@@ -93,7 +108,7 @@ def _reset_contact_routing_space(team_id: int) -> None:
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_explicit_team_contact_to_shared_team():
-    team_id = int(time.time_ns() % 1_000_000_000)
+    team_id = _EXPLICIT_TEAM_ROUTING_TEAM_ID
     _configure_contact_routing_space(team_id)
     email = f"nora.shared.{team_id}@example.com"
 
@@ -119,7 +134,7 @@ async def test_update_routes_explicit_team_contact_to_shared_team():
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_private_contact_to_personal_memory():
-    team_id = int(time.time_ns() % 1_000_000_000)
+    team_id = _PRIVATE_ROUTING_TEAM_ID
     _configure_contact_routing_space(team_id)
     email = f"pia.private.{team_id}@example.com"
 
@@ -144,7 +159,7 @@ async def test_update_routes_private_contact_to_personal_memory():
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_defaults_ambiguous_contact_to_personal_memory():
-    team_id = int(time.time_ns() % 1_000_000_000)
+    team_id = _AMBIGUOUS_ROUTING_TEAM_ID
     _configure_contact_routing_space(team_id)
     email = f"owen.neighbor.{team_id}@example.com"
 
@@ -450,7 +465,11 @@ async def test_stop(
     handle = await cm.update(
         "Create a very detailed contact for Professor Charles Xavier, email prox@xmen.com, phone 123-PROF-X, with notes about his telepathic abilities and founder of the X-Men.",
     )
-    await asyncio.sleep(0.1)
+    # Anchor the stop on the first assistant turn (a read-only lookup under
+    # the discovery-first policy) rather than wall-clock time: a stop that
+    # races the first LLM call cancels it mid-flight, which records nothing
+    # and therefore can never replay from cache.
+    await _wait_for_next_assistant_response_event(handle._client)
     await handle.stop()
     await handle.result()
     assert handle.done()

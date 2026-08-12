@@ -355,15 +355,30 @@ def _orchestra_worker_env() -> dict[str, str]:
     return env
 
 
-def resolve_orchestra_signing_secret(secret_ref: str) -> str:
-    """Resolve one Orchestra signing-secret reference to raw material."""
+def _orchestra_python_bin() -> Path:
+    """Interpreter of Orchestra's repo-local virtualenv.
+
+    ``<orchestra>/.venv`` is the one invariant location: ``uv sync`` creates
+    it on dev machines and in CI alike. Resolving through the package manager
+    at test time instead is a trap — it can adopt an activated foreign
+    virtualenv, and inside CI's tmux test sessions it fails outright.
+    """
 
     python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
     if not python_bin.exists():
-        raise RuntimeError(f"Orchestra venv not found at {python_bin}")
+        raise RuntimeError(
+            f"Orchestra venv not found at {python_bin}; run uv sync in "
+            "the orchestra checkout.",
+        )
+    return python_bin
+
+
+def resolve_orchestra_signing_secret(secret_ref: str) -> str:
+    """Resolve one Orchestra signing-secret reference to raw material."""
+
     output = subprocess.check_output(
         [
-            str(python_bin),
+            str(_orchestra_python_bin()),
             "-c",
             (
                 "from orchestra.provider_triggers.signing_secret_refs import "
@@ -470,9 +485,6 @@ def run_orchestra_trigger_worker_cycle(
 ) -> None:
     """Advance Orchestra trigger reconciliation/dispatch using the local worker."""
 
-    python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
-    if not python_bin.exists():
-        raise RuntimeError(f"Orchestra venv not found at {python_bin}")
     env = _orchestra_worker_env()
     if use_live_provider_credentials:
         for key in (
@@ -487,7 +499,7 @@ def run_orchestra_trigger_worker_cycle(
     Path(env["TRIGGER_EVENT_PRIVATE_ROOT"]).mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
-            str(python_bin),
+            str(_orchestra_python_bin()),
             "-m",
             "orchestra.workers.provider_trigger_worker",
             "--once",

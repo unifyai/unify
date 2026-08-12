@@ -459,7 +459,7 @@ class _RecordingTools:
         """Assign asynchronous work to one colleague.
 
         Use this for colleague-owned follow-up work (for example tasks,
-        guidance, knowledge, functions, or dashboards). Do not use it for shared
+        guidance, knowledge, functions, or canvases). Do not use it for shared
         workspace sources of truth.
 
         Args:
@@ -887,11 +887,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         title="Manufacturing Console orientation",
         business_context=(
             "A manufacturing operations lead is screen-sharing the Console and wants "
-            "to understand what belongs in Secrets, Memory, Tasks, and Dashboards "
+            "to understand what belongs in Secrets, Memory, Tasks, and Canvas "
             "before doing setup."
         ),
         screen_context=(
-            "A colleague is selected. The right pane shows Chat, Actions, Dashboards, "
+            "A colleague is selected. The right pane shows Chat, Actions, Canvas, "
             "Integrations, Tasks, and Memory. The user has not asked to create anything."
         ),
         turns=(
@@ -920,8 +920,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "The response should orient the user without performing setup. It should "
             "map supplier/API credentials to the Integrations tab (secrets table / "
             "app connects) for the selected assistant, manuals and SOPs to Memory "
-            "(Knowledge or Guidance), recurring checklists to Tasks, and reports to "
-            "Dashboards when needed. It should connect NetSuite/Fiix setup to "
+            "(Knowledge or Guidance), recurring checklists to Tasks, and reports or "
+            "live views to Canvas when needed. It should connect NetSuite/Fiix setup to "
             "future colleague ownership and avoid inventing unsupported UI."
         ),
     ),

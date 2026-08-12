@@ -32,6 +32,7 @@ apt-get install -y --no-install-recommends \
     pkg-config \
     python3-dev \
     git \
+    openssh-client \
     curl \
     sudo \
     tzdata

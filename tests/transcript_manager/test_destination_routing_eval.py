@@ -16,6 +16,11 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 def _team_ids() -> tuple[int, int]:
+    # Random team ids are safe even in these ask() evals: TranscriptManager
+    # prompts embed no accessible-teams block, its read tools fan out across
+    # roots without a destination argument, and authorship attribution carries
+    # assistant ids only — so the team id never enters LLM input and cannot
+    # break cache replay. Randomness isolates concurrent runs without cleanup.
     base = int(time.time_ns() % 1_000_000_000)
     return base, base + 1
 

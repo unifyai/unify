@@ -2,7 +2,7 @@
 
 Every state manager that syncs deployment sources (tasks, functions,
 venvs, guidance, knowledge, contacts, secrets, blacklist, data seeds,
-dashboards, integration registry) reconciles through this module. The
+integration registry) reconciles through this module. The
 contract lives in ``docs/writeups/custom-source-sync.md``; the short
 version:
 

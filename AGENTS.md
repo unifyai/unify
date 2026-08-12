@@ -397,7 +397,7 @@ message and **not** evidence that scanning is off.
 # Custom Source Sync: one engine, one identity contract
 
 All git-tracked source definitions (tasks, functions, venvs, guidance,
-knowledge, contacts, secrets, blacklist, data seeds, dashboards,
+knowledge, contacts, secrets, blacklist, data seeds,
 integration registry) reconcile through the shared engine in
 `unify/common/custom_sync.py`. Full contract:
 [`docs/writeups/custom-source-sync.md`](../../docs/writeups/custom-source-sync.md).
@@ -1082,7 +1082,6 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - **Steers**: `DataManager.ingest` (row writes), the file parse pipeline, and the hosted pipeline control plane (`/infra/pipeline/*`) for dispatched runs.
 
 ### CanvasManager
-*(Replaces `DashboardManager`, which is deprecated and slated for removal — decision 8 of the workflows design.)*
 - **Role**: Assistant-authored generative React UI. The actor writes real TSX against `@unity/canvas-kit`; it is linted, typechecked, bundled, rendered headlessly and critiqued before publish; Console displays it in a genuinely isolated frame.
 - **Scope**: `create_view`, `update_view`, `refresh_props`, `get_view`, `list_views`, `delete_view`, `preview`, `run_invocation`, `list_invocations` via `primitives.canvas.*`. Rows live in `Canvas/Views` / `Canvas/Actions` / `Canvas/Invocations`; a routing token is registered with the backend on publish.
 - **Data plane**: query bindings (context-backed tables, executed server-side per view) and materialised props (LLM-shaped reads frozen at author/refresh time). Connected-app data must be **stored first** (via `primitives.ingestion.submit`) and bound as an ordinary table.
@@ -1807,20 +1806,17 @@ The formatters are ordinary, locked dependencies — not a version hardcoded in
 the pre-commit hook or in CI YAML.
 
 - Each repo declares its formatters in a dedicated **`lint` dependency
-  group**, pinned and committed to the lockfile (`uv.lock` / `poetry.lock`).
-  The `dev` group includes `lint` so a normal sync gives developers everything.
-  - uv repos: `[dependency-groups]` → `lint = ["black==X", "isort>=…",
-    "autoflake>=…"]`, and `dev = [ …, {include-group = "lint"} ]`.
-  - poetry repos: `[tool.poetry.group.lint.dependencies]` (or `dev` where
-    that is the established home).
-- **Both** the pre-commit hook and CI run that **same locked** tool via the
-  package manager — never a separate pin:
-  - pre-commit hook: `entry: uv run black` / `poetry run black`,
-    `language: system` (no `additional_dependencies`).
-  - CI (uv): `uv sync --only-group lint --no-install-project` then
+  group**, pinned and committed to `uv.lock`. Every first-party Python repo
+  is uv-managed with a repo-local `.venv` — there are no poetry repos.
+  The `dev` group includes `lint` so a normal sync gives developers everything:
+  `[dependency-groups]` → `lint = ["black==X", "isort>=…", "autoflake>=…"]`,
+  and `dev = [ …, {include-group = "lint"} ]`.
+- **Both** the pre-commit hook and CI run that **same locked** tool via uv —
+  never a separate pin:
+  - pre-commit hook: `entry: uv run black`, `language: system`
+    (no `additional_dependencies`).
+  - CI: `uv sync --only-group lint --no-install-project --frozen` then
     `uv run --no-sync black --check .` on **Python 3.12**.
-  - CI (poetry): `poetry install --only lint --no-root` then
-    `poetry run black --check .` on **Python 3.12**.
 - Pin Black's language target in every Python repo so local Mac Pythons and
   CI 3.12 cannot disagree (Black 26+ defaults toward newer targets):
 
@@ -1878,7 +1874,7 @@ Always format through the repo's pinned tooling, which uses that repo's
 locked version:
 
 ```bash
-pre-commit run black --all-files          # or: uv run black .  /  poetry run black .
+pre-commit run black --all-files          # or: uv run black .
 ```
 
 ## Release gates
@@ -2393,7 +2389,7 @@ Orchestra (`api.unify.ai/v0` prod, `api.staging.internal.saas.unify.ai/v0` stagi
 
 ## The two dependencies
 
-- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, dashboards, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
+- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, canvas tokens, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
 - **`auth_admin_key`** — matches the Bearer against the server's `ORCHESTRA_ADMIN_KEY` (`secrets.compare_digest`), a Cloud Scheduler OIDC token, or an `AdminUser`'s key. Only the **`/admin/*`** routers (registered with `ADMIN_AUTH`) use it. It **gates operations; it does not grant a data scope.**
 
 ### Consequences (do not relearn these the hard way)

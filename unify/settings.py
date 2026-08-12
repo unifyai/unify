@@ -18,7 +18,6 @@ from unify.blacklist_manager.settings import BlacklistSettings
 from unify.contact_manager.settings import ContactSettings
 from unify.conversation_manager.settings import ConversationSettings
 from unify.canvas_manager.settings import CanvasSettings
-from unify.dashboard_manager.settings import DashboardSettings
 from unify.data_manager.settings import DataSettings
 from unify.file_manager.settings import FileSettings
 from unify.function_manager.settings import FunctionSettings
@@ -119,8 +118,8 @@ class ProductionSettings(BaseSettings):
     # Infrastructure URLs
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_URL: str = "https://api.unify.ai/v0"
-    # Console origin used to build user-facing links (canvas and dashboard
-    # views). Per-environment deployments override this or every shared link
+    # Console origin used to build user-facing links (canvas views).
+    # Per-environment deployments override this or every shared link
     # points at production Console regardless of where the row lives.
     CONSOLE_URL: str = "https://console.unify.ai"
     UNITY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
@@ -272,7 +271,6 @@ class ProductionSettings(BaseSettings):
     contact: ContactSettings = Field(default_factory=ContactSettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
     canvas: CanvasSettings = Field(default_factory=CanvasSettings)
-    dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     data: DataSettings = Field(default_factory=DataSettings)
     file: FileSettings = Field(default_factory=FileSettings)
     function: FunctionSettings = Field(default_factory=FunctionSettings)
