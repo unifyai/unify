@@ -354,7 +354,10 @@ async def test_ask_stop(
     handle = await cm.ask(
         "Find all contacts and list their full details, this might take a while.",
     )
-    await asyncio.sleep(0.05)  # Let it start
+    # Anchor the stop on the first assistant turn rather than wall-clock
+    # time: a stop that races the first LLM call cancels it mid-flight,
+    # which records nothing and therefore can never replay from cache.
+    await _wait_for_next_assistant_response_event(handle._client)
     await handle.stop()
     await handle.result()
     assert handle.done()
