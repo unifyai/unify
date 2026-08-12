@@ -99,7 +99,11 @@ def _run_dispatch(tmp_path, *, signed: bool, collection: bool = False):
         return _Response({"dispatch_id": "run1", "jobs": 1, "job_ids": ["run1-0000"]})
 
     def fake_put(url, data=None, headers=None, timeout=None, params=None):
-        calls.append({"verb": "PUT", "url": url, "bytes": len(data or b"")})
+        streamed = hasattr(data, "read")
+        body = data.read() if streamed else (data or b"")
+        calls.append(
+            {"verb": "PUT", "url": url, "bytes": len(body), "streamed": streamed},
+        )
         return _Response({})
 
     request = _request(collection=collection)
@@ -164,6 +168,16 @@ class TestUploadRouting:
         _, calls = _run_dispatch(tmp_path, signed=True)
         sizes = [call["bytes"] for call in calls if call["verb"] == "PUT"]
         assert len(b"%PDF-1.4 test") in sizes
+
+    def test_source_uploads_stream_from_disk(self, tmp_path):
+        # The dispatch tier exists to keep a large file's bytes out of the
+        # assistant's process; reading the file whole just to upload it would
+        # spend the very memory the boundary protects. The staged request is
+        # small and may travel as bytes; the sources must not.
+        _, calls = _run_dispatch(tmp_path, signed=True)
+        uploads = [call for call in calls if call["verb"] == "PUT"]
+        source_uploads = [call for call in uploads if call["bytes"] > 0]
+        assert any(call["streamed"] for call in source_uploads)
 
 
 class TestPublishPayload:
