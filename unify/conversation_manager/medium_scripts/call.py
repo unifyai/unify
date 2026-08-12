@@ -2476,6 +2476,41 @@ async def entrypoint(ctx: agents.JobContext):
 
     _screenshot_http_session = _aiohttp.ClientSession()
 
+    def _publish_assistant_screenshare_state() -> None:
+        """Tell every Console client in the room whether to mount the desktop.
+
+        The assistant's desktop is not a published video track -- each
+        participant mounts the VM's own liveview -- so the room has to be told
+        about it out of band, and every participant needs the same answer.
+        Keyed by assistant: a room call can carry several, each presenting its
+        own desktop.
+
+        Only a Unify Meet has Console participants listening. A browser meet
+        reaches its audience through the bot's own screenshare instead.
+
+        Defined here, alongside the flag it reports, rather than beside the
+        other room publishers further down: the participant-join and
+        notification callbacks both reach it, and they can fire during
+        ``session.start`` -- before a definition placed after that await would
+        have been bound.
+        """
+        if channel != "unify_meet":
+            return
+        state = {
+            "type": "assistant_screenshare",
+            "assistantId": str(SESSION_DETAILS.assistant.agent_id or ""),
+            "active": assistant_screen_share_active,
+        }
+
+        async def _send() -> None:
+            await ctx.room.local_participant.publish_data(
+                json.dumps(state).encode(),
+                topic="agent_status",
+                reliable=True,
+            )
+
+        asyncio.create_task(_send())
+
     def _clear_visual_context(source: str | None = None) -> None:
         """Remove visual context from chat contexts and clear screenshot history."""
         nonlocal _visual_ctx_msg_id
@@ -3193,6 +3228,11 @@ async def entrypoint(ctx: agents.JobContext):
         identity = getattr(participant, "identity", "") or ""
         if channel == "unify_meet":
             _merge_unify_meet_roster_from_identity(identity)
+            # A client that joins mid-share starts with nothing mounted, so the
+            # state has to be restated for it. Only when active: "not sharing"
+            # is what a fresh client already assumes.
+            if assistant_screen_share_active:
+                _publish_assistant_screenshare_state()
         if joined_gate_required and not outbound:
             _mark_user_joined("participant_connected")
 
@@ -3685,7 +3725,7 @@ async def entrypoint(ctx: agents.JobContext):
     def on_notification(data: dict) -> None:
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
-        nonlocal _pending_console_steps
+        nonlocal _pending_console_steps, user_remote_control_active
         if data.get("event_name") == "AssistantTurnInjected":
             payload = data.get("payload") or {}
             apply_assistant_turn_injection(str(payload.get("content") or ""))
@@ -3703,19 +3743,20 @@ async def entrypoint(ctx: agents.JobContext):
                 _agent_service_url,
                 payload,
             )
-            low = message.lower()
-            if "screen sharing is now on" in low:
-                assistant_screen_share_active = True
-            elif "screen sharing is now off" in low:
-                assistant_screen_share_active = False
-                _clear_visual_context(source="assistant")
-            elif "stopped sharing" in low:
-                source = "user" if "user" in low else "assistant"
-                _clear_visual_context(source=source)
-            elif "took remote control" in low:
-                user_remote_control_active = True
-            elif "released remote control" in low:
-                user_remote_control_active = False
+            surfaces = payload.get("meet_surface_state") or {}
+            if "assistant_screen_share_active" in surfaces:
+                assistant_screen_share_active = bool(
+                    surfaces["assistant_screen_share_active"],
+                )
+                if not assistant_screen_share_active:
+                    _clear_visual_context(source="assistant")
+                _publish_assistant_screenshare_state()
+            if surfaces.get("user_screen_share_active") is False:
+                _clear_visual_context(source="user")
+            if "user_remote_control_active" in surfaces:
+                user_remote_control_active = bool(
+                    surfaces["user_remote_control_active"],
+                )
 
                 async def _update_cache_after_remote_control():
                     entry = await capture_assistant_screenshot(
@@ -3728,7 +3769,7 @@ async def entrypoint(ctx: agents.JobContext):
                     if entry and assistant_screen_share_active:
                         _handle_screenshot(entry)
 
-                if assistant_screen_share_active:
+                if not user_remote_control_active and assistant_screen_share_active:
                     asyncio.create_task(_update_cache_after_remote_control())
         spoken_message = payload.get("spoken_message", "")
         should_speak = payload.get("should_speak", False)

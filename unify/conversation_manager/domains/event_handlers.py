@@ -1167,6 +1167,7 @@ async def _(
             message=guidance_text,
             source="meet_interaction",
             agent_service_url=_resolve_agent_service_url(),
+            meet_surface_state={"assistant_screen_share_active": True},
         )
         await cm.call_manager._socket_server.queue_for_clients(
             "app:call:notification",
@@ -4336,6 +4337,7 @@ async def _(
                 message=fast_brain_text,
                 source="meet_interaction",
                 agent_service_url=_resolve_agent_service_url(),
+                meet_surface_state={attr: value},
             )
             await cm.event_broker.publish(
                 "app:call:notification",
