@@ -43,6 +43,10 @@ def seeded_dm(simulated_dm):
 @pytest.fixture
 def dashboard_manager_teams():
     """Assign unique shared-team memberships for dashboard routing tests."""
+    # Random team ids are safe here: dashboard routing tests only drive
+    # programmatic CRUD methods, so the ids never enter an LLM prompt and
+    # cannot break cache replay, while randomness isolates concurrent runs
+    # without cleanup.
     base_id = time.time_ns() % 1_000_000_000
     team_ids = (base_id, base_id + 1)
     original_team_ids = list(SESSION_DETAILS.team_ids)

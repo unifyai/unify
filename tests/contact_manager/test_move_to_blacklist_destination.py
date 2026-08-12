@@ -14,6 +14,10 @@ from unify.session_details import SESSION_DETAILS
 
 
 def _configure_space() -> int:
+    # Random team id is safe here: this test only drives programmatic manager
+    # methods, so the id (and the team_summaries below) never enters an LLM
+    # prompt and cannot break cache replay, while randomness isolates
+    # concurrent runs without cleanup.
     team_id = 50_000_000 + uuid.uuid4().int % 1_000_000_000
     SESSION_DETAILS.team_ids = [team_id]
     SESSION_DETAILS.team_summaries = [

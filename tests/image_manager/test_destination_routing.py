@@ -14,6 +14,10 @@ from unify.session_details import SESSION_DETAILS
 
 
 def _team_id() -> int:
+    # Random team id is safe here: these tests only drive programmatic
+    # ImageManager methods (semantic search embeds server-side, not through
+    # the LLM cache), so the id never enters an LLM prompt and cannot break
+    # cache replay, while randomness isolates concurrent runs without cleanup.
     return int(time.time_ns() % 1_000_000_000)
 
 

@@ -219,6 +219,9 @@ def test_get_info_cache_fallback():
 
 @_handle_project
 def test_get_info_cache_fallback_reads_accessible_space_roots():
+    # Random team id is safe here: this test only drives programmatic manager
+    # methods, so the id never enters an LLM prompt and cannot break cache
+    # replay, while randomness isolates concurrent runs without cleanup.
     team_id = int(time.time_ns() % 1_000_000_000)
     SESSION_DETAILS.team_ids = [team_id]
 

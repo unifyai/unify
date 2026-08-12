@@ -60,6 +60,11 @@ ROUTING_TOOL_METHODS = (
 def manager_routing_context(request):
     """Provide an isolated personal root plus one isolated shared team."""
 
+    # The random team id is deliberate: every consumer of this fixture drives
+    # managers programmatically (typed CRUD, symbolic entrypoints), so the id
+    # never enters an LLM prompt and cannot break cache replay. Randomness
+    # isolates concurrent runs without needing pre-test cleanup. LLM-facing
+    # routing evals use RoutingScenario's fixed ids instead.
     context = f"tests/destination_routing/{request.node.name}/{uuid.uuid4().hex}"
     team_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
     ContextRegistry.clear()
@@ -88,12 +93,29 @@ def llm_config(request) -> dict[str, str]:
     return request.param
 
 
+# Fixed per-scenario team ids (62M band, distinct from the 61M band in
+# tests/contact_manager/test_update.py and the 41k ids in EVAL_TEAM_SUMMARIES).
+# The ids are embedded verbatim in the accessible-teams system-prompt block and
+# echoed back in `destination="team:<id>"` tool-call arguments, so they must be
+# identical on every run for LLM-cache replay to hit; a random id can never
+# replay. Each scenario name owns a distinct pair so concurrently running
+# tests never share a team root.
+_SCENARIO_TEAM_BASE_IDS = {
+    "guidance_personal": 62_000_101,
+    "guidance_shared": 62_000_111,
+    "function_shared": 62_000_121,
+}
+
+
 class RoutingScenario:
     """Isolated memory roots and shared-team metadata for routing evals."""
 
     def __init__(self, name: str) -> None:
+        # The personal root keeps a per-run uuid: a fresh root isolates
+        # concurrent runs without cleanup, and the 32-char hex never breaks
+        # replay because cache keys scrub long hex runs from prompt text.
         unique = uuid.uuid4().hex
-        base_id = 40_000_000 + uuid.uuid4().int % 1_000_000_000
+        base_id = _SCENARIO_TEAM_BASE_IDS[name]
         self.context = f"tests/destination_routing_eval/{name}/{unique}"
         self.patch_team_id = base_id
         self.research_team_id = base_id + 1
@@ -118,6 +140,10 @@ class RoutingScenario:
         ]
 
     def setup(self) -> None:
+        # Fixed team ids persist across runs on a shared backend: drop any
+        # rows a crashed earlier run left behind before the test counts them.
+        for root in (f"Teams/{self.patch_team_id}", f"Teams/{self.research_team_id}"):
+            delete_context_tree(root)
         ContextRegistry.clear()
         SESSION_DETAILS.reset()
         unisdk.set_context(self.context, relative=False)
