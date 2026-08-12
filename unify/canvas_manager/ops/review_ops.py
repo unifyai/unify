@@ -230,6 +230,7 @@ def _parent_html(
     source: str,
     props: Dict[str, Any],
     rows: Dict[str, Any],
+    actions: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """The harness page, mirroring what console's CanvasFrame does.
 
@@ -272,7 +273,7 @@ def _parent_html(
       type: 'canvas/init', protocol: 1, channel: 'review',
       source: {_js(source)},
       theme: 'light', props: {_js(props)},
-      aliases: {_js(sorted(rows))}, actions: [],
+      aliases: {_js(sorted(rows))}, actions: {_js(actions or [])},
     }}, '*', [channel.port2]);
   }});
 
@@ -326,6 +327,7 @@ def _render(
     source: str,
     props: Dict[str, Any],
     rows: Dict[str, Any],
+    actions: List[Dict[str, Any]],
     out_dir: Path,
 ) -> ReviewReport:
     """Serve, frame, render both themes, screenshot. Runs on its own thread."""
@@ -361,6 +363,7 @@ def _render(
         source=source,
         props=props,
         rows=rows,
+        actions=actions,
     ).encode("utf8")
 
     page_errors: List[str] = []
@@ -450,6 +453,7 @@ def render_and_review(
     bundle: str,
     props: Dict[str, Any],
     rows: Optional[Dict[str, Any]] = None,
+    actions: Optional[List[Dict[str, Any]]] = None,
     out_dir: Optional[Path] = None,
     intent: str = "",
 ) -> ReviewReport:
@@ -483,6 +487,7 @@ def render_and_review(
             source=bundle,
             props=props,
             rows=rows or {},
+            actions=actions or [],
             out_dir=target,
             intent=intent,
         ).result()
