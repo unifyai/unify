@@ -28,6 +28,8 @@ from unify.llm_broker.usage import (
     usage_from_body,
     usage_from_stream_tail,
 )
+from unify.llm_broker.proxy import Proxy, build_proxy_router
+from unify.llm_broker.voice import build_voice_router
 
 LOGGER = logging.getLogger(__name__)
 
@@ -285,11 +287,17 @@ def build_router(broker: Broker) -> APIRouter:
         model = str(body.get("model") or "").strip()
         if not model:
             return _refusal(400, "`model` is required.")
+        # The body's model is provider-shaped and forwarded verbatim; the
+        # ledger names the same model in accounting form. Orchestra recognises
+        # an OpenRouter call by exactly this marker -- authorizing with the
+        # bare id left the metering gate refusing every model its curated
+        # catalogue did not happen to cover.
+        accounting_model = f"{model}@openrouter"
         assistant_id = _assistant_id(request, body)
 
         refusal = await broker.authorize(
             caller_key=caller_key,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
         )
         if refusal is not None:
@@ -312,7 +320,7 @@ def build_router(broker: Broker) -> APIRouter:
                 "Content-Type": "application/json",
             },
             body=body,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
             caller_key=caller_key,
             stream=stream,
@@ -331,11 +339,16 @@ def build_router(broker: Broker) -> APIRouter:
         model = str(body.get("model") or "").strip()
         if not model:
             return _refusal(400, "`model` is required.")
+        # Same split as the OpenRouter route: bare id to the provider,
+        # accounting form to the ledger, so metering matches the curated
+        # catalogue's own ``@anthropic`` entries rather than relying on
+        # suffix-stripped comparison.
+        accounting_model = f"{model}@anthropic"
         assistant_id = _assistant_id(request, body)
 
         refusal = await broker.authorize(
             caller_key=caller_key,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
         )
         if refusal is not None:
@@ -360,7 +373,7 @@ def build_router(broker: Broker) -> APIRouter:
             url=f"{settings.anthropic_api_base.rstrip('/')}/v1/messages",
             headers=headers,
             body=body,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
             caller_key=caller_key,
             stream=stream,
@@ -378,11 +391,16 @@ def build_app(settings: Optional[BrokerSettings] = None) -> FastAPI:
     resolved = settings or load_settings()
     broker = Broker(resolved)
     app = FastAPI(title="Unify LLM broker", docs_url=None, redoc_url=None)
+    proxy = Proxy(resolved.credential_proxies)
     app.state.broker = broker
+    app.state.proxy = proxy
     app.include_router(build_router(broker))
+    app.include_router(build_voice_router(resolved.voice_providers))
+    app.include_router(build_proxy_router(proxy))
 
     @app.on_event("shutdown")
     async def _close() -> None:
         await broker.aclose()
+        await proxy.aclose()
 
     return app

@@ -14,7 +14,6 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
     {
         "comms",
         "contacts",
-        "dashboards",
         "canvas",
         "ingestion",
         "tasks",

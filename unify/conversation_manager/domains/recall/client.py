@@ -21,6 +21,7 @@ from typing import Any, Mapping
 
 import aiohttp
 
+from unify.common.broker import broker_origin
 from unify.conversation_manager.domains.recall.events import (
     EVENT_VIDEO_FRAME,
     SUBSCRIBED_EVENTS,
@@ -139,8 +140,17 @@ def recall_region() -> str:
 
 
 def recall_base_url() -> str:
-    """Base URL for the configured region."""
+    """Base URL for dispatching bots.
 
+    With a broker sidecar the pod holds no ``RECALL_API_KEY``; route through the
+    sidecar's header-swap proxy, which holds the key and forwards to the region
+    host. The ``/api/v1`` suffix matches the direct URL so callers building
+    paths are unchanged. Self-host / local dev talks to the region directly.
+    """
+
+    origin = broker_origin()
+    if origin:
+        return f"{origin}/proxy/recall/api/v1"
     return f"https://{recall_region()}.recall.ai/api/v1"
 
 
@@ -152,7 +162,14 @@ def recall_configured() -> bool:
     provider.
     """
 
-    return bool((os.environ.get("RECALL_API_KEY") or "").strip())
+    if (os.environ.get("RECALL_API_KEY") or "").strip():
+        return True
+    # The key moved to the broker sidecar. RECALL_RELAY_SECRET is provisioned
+    # together with it (see the module docstring) and stays on the pod, so its
+    # presence is the local signal that Recall is available through the broker.
+    return bool(broker_origin()) and bool(
+        (os.environ.get("RECALL_RELAY_SECRET") or "").strip(),
+    )
 
 
 def meet_bridge_base_url() -> str:
@@ -182,8 +199,15 @@ class RecallClient:
     """
 
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None):
-        key = api_key if api_key is not None else os.environ.get("RECALL_API_KEY")
-        key = (key or "").strip()
+        if api_key is None:
+            # With a broker the pod holds no RECALL_API_KEY; present the pod's
+            # UNIFY_KEY as the nonce and let the sidecar swap in the real key.
+            api_key = (
+                os.environ.get("UNIFY_KEY")
+                if broker_origin()
+                else os.environ.get("RECALL_API_KEY")
+            )
+        key = (api_key or "").strip()
         if not key:
             raise RecallNotConfigured(
                 "RECALL_API_KEY is not set; this environment cannot dispatch "

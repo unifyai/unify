@@ -170,10 +170,25 @@ def _commit_contexts_for_rollback(
         commit_hashes[ctx_name] = commit_info["commit_hash"]
 
 
+def _rollback_to_committed(commit_hashes: Dict[str, Any]) -> None:
+    """Restore every scenario context to its stored commit."""
+
+    def rollback_context(ctx_name: str) -> None:
+        unisdk.rollback_context(
+            name=ctx_name,
+            commit_hash=commit_hashes[ctx_name],
+        )
+
+    ctx_names = list(commit_hashes.keys())
+    if ctx_names:
+        unisdk.map(rollback_context, ctx_names, mode="asyncio")
+
+
 def _setup_scenario(
     request: pytest.FixtureRequest,
     ctx: str,
     lock_name: str,
+    test_lock_name: str,
     commit_hashes: Dict[str, Any],
 ) -> Tuple[ContactManager, Dict[str, int]]:
     """
@@ -217,11 +232,22 @@ def _setup_scenario(
             print(f"Scenario already seeded ({ctx}), rebuilding local state...")
             id_mapping = rebuild_id_mapping(cm, _CONTACTS_DATA)
             _rebuild_commit_hashes(ctx, commit_hashes)
-            # Check if embeddings exist, create if missing (for older scenarios)
-            if _ensure_embeddings_exist(cm._ctx):
-                # Embeddings were created, need to recommit
-                print(f"Recommitting {ctx} with new embeddings...")
-                _commit_contexts_for_rollback(ctx, commit_hashes)
+            # Serialize with the scenario's tests and restore the committed
+            # state before recommitting: tests roll back at START, so a
+            # finished test's created contacts stay live until the next
+            # test's rollback. An unguarded recommit here snapshots that
+            # residue into the rollback target, and every later test then
+            # faithfully restores the leaked rows — contact counts (and any
+            # prompt built from them) become dependent on process
+            # interleaving. Lock order is scenario lock -> test lock,
+            # matching the per-test fixtures which take only the test lock.
+            with mutation_test_lock(test_lock_name):
+                _rollback_to_committed(commit_hashes)
+                # Check if embeddings exist, create if missing
+                if _ensure_embeddings_exist(cm._ctx):
+                    # Embeddings were created, need to recommit
+                    print(f"Recommitting {ctx} with new embeddings...")
+                    _commit_contexts_for_rollback(ctx, commit_hashes)
         else:
             # Scenario not seeded - seed it
             print(f"Seeding contact manager scenario ({ctx})...")
@@ -256,6 +282,7 @@ async def contact_read_scenario(
         request,
         ctx="tests/contact/ReadScenario",
         lock_name="cm_read_scenario",
+        test_lock_name="cm_read",
         commit_hashes=_READ_SCENARIO_COMMIT_HASHES,
     )
 
@@ -314,6 +341,7 @@ async def contact_mutation_scenario(
         request,
         ctx="tests/contact/MutationScenario",
         lock_name="cm_mutation_scenario",
+        test_lock_name="cm_mutation",
         commit_hashes=_MUTATION_SCENARIO_COMMIT_HASHES,
     )
 
@@ -374,5 +402,6 @@ async def contact_scenario(
         request,
         ctx="tests/contact/ReadScenario",
         lock_name="cm_read_scenario",
+        test_lock_name="cm_read",
         commit_hashes=_READ_SCENARIO_COMMIT_HASHES,
     )

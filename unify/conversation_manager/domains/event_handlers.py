@@ -1167,6 +1167,7 @@ async def _(
             message=guidance_text,
             source="meet_interaction",
             agent_service_url=_resolve_agent_service_url(),
+            meet_surface_state={"assistant_screen_share_active": True},
         )
         await cm.call_manager._socket_server.queue_for_clients(
             "app:call:notification",
@@ -4151,8 +4152,8 @@ _MEET_LOG_TYPES: dict[type, str] = {
 }
 
 _MEET_INTERACTION_NOTIFICATIONS: dict[type, str] = {
-    AssistantScreenShareStarted: "The user enabled assistant screen sharing — they can now see your desktop.",
-    AssistantScreenShareStopped: "The user disabled assistant screen sharing — they can no longer see your desktop.",
+    AssistantScreenShareStarted: "Screen sharing is on — the people you are talking to can see your desktop.",
+    AssistantScreenShareStopped: "Screen sharing is off — nobody can see your desktop now.",
     UserScreenShareStarted: "The user started sharing their screen with you.",
     UserScreenShareStopped: "The user stopped sharing their screen.",
     MeetScreenShareStarted: "Someone in the meeting started sharing their screen with you.",
@@ -4168,14 +4169,15 @@ _MEET_INTERACTION_NOTIFICATIONS: dict[type, str] = {
 # to visual references immediately, without waiting for the slow brain.
 _MEET_FAST_BRAIN_GUIDANCE: dict[type, str] = {
     AssistantScreenShareStarted: (
-        "Screen sharing is now ON — the user can see your desktop. "
-        "Screenshots are being captured and processed in the background. "
-        "If the user references something on screen, acknowledge briefly "
-        '("Got it", "I see", "Okay") and wait — visual context will '
+        "Screen sharing is now ON — the people you are talking to can see your "
+        "desktop, and on a call with several of them that may be more than one "
+        "person. Screenshots are being captured and processed in the "
+        "background. If someone references something on screen, acknowledge "
+        'briefly ("Got it", "I see", "Okay") and wait — visual context will '
         "be processed shortly. Do NOT describe or guess screen contents."
     ),
     AssistantScreenShareStopped: (
-        "Screen sharing is now OFF — the user can no longer see your desktop."
+        "Screen sharing is now OFF — nobody can see your desktop any more."
     ),
     UserScreenShareStarted: (
         "The user is now sharing their screen with you. Visual context is "
@@ -4284,6 +4286,21 @@ async def _(
     else:
         cm._frontend_reported_meet_surfaces.add(attr)
 
+    if isinstance(
+        event,
+        (AssistantScreenShareStarted, AssistantScreenShareStopped),
+    ):
+        # Membership decides this surface, so the viewer set is updated even when
+        # the derived flag does not move: the second person to open the desktop
+        # has to be counted, or their own close would take it away from the
+        # first. The flag check below then suppresses the notification, which is
+        # right -- nothing changed that the assistant needs telling about.
+        value = cm.note_assistant_screen_share_viewer(
+            user_id=event.viewer_user_id,
+            source=event.viewer_source,
+            watching=value,
+        )
+
     # Restating the current state carries no new information: notifying again
     # would tell the assistant the screen share just started for a second time.
     if getattr(cm, attr) == value:
@@ -4336,6 +4353,7 @@ async def _(
                 message=fast_brain_text,
                 source="meet_interaction",
                 agent_service_url=_resolve_agent_service_url(),
+                meet_surface_state={attr: value},
             )
             await cm.event_broker.publish(
                 "app:call:notification",

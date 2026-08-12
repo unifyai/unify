@@ -110,9 +110,9 @@ class TestContextRegistration:
 
     @pytest.mark.parametrize("table", CANVAS_TABLES)
     def test_every_table_supports_team_destinations(self, table):
-        # The dashboards equivalent omitted its Actions table, which made
-        # `destination="team:N"` fail at runtime for tiles. Asserting per table
-        # rather than in aggregate is what would have caught it.
+        # An earlier manager once omitted one of its tables here, which made
+        # `destination="team:N"` fail at runtime for that table only. Asserting
+        # per table rather than in aggregate is what catches that.
         from unify.common.authorship import SHARED_SCOPED_TABLES
 
         assert table in SHARED_SCOPED_TABLES

@@ -294,10 +294,9 @@ jobs:
           libasound2t64 libatspi2.0-0 libgtk-3-0 libnspr4 libwayland-client0 \
           libxcomposite1 libxdamage1 libxrandr2 xvfb
 
-    - name: Install uv and poetry
+    - name: Install uv
       run: |
         pip install uv
-        pip install poetry
 
     - name: Configure local package paths
       run: |
@@ -313,7 +312,7 @@ jobs:
     - name: Install orchestra dependencies
       run: |
         cd "$ORCHESTRA_REPO_PATH"
-        poetry install --no-interaction
+        uv sync --frozen
 
     - name: Restore existing consolidated cache
       uses: actions/cache/restore@v4
@@ -355,7 +354,15 @@ jobs:
         exit $TEST_EXIT_CODE
 
     - name: Upload cache diff
-      if: always() && inputs.cache_mode == 'write-misses'
+      # Fail-closed: a shard that did not pass records nothing. Cache entries
+      # carry no per-test attribution and consolidation is outcome-blind, so
+      # one failing roll's trajectory would enter the shared store and -- since
+      # write-misses replays hits -- reproduce the same failure on every rerun
+      # until a prompt change rotates its keys. Discarding the whole shard's
+      # diff costs one re-roll of its passing tests; a poisoned entry costs a
+      # key rotation. Logs still upload on failure below -- they are how a bad
+      # roll gets diagnosed.
+      if: success() && inputs.cache_mode == 'write-misses'
       uses: actions/upload-artifact@v4
       with:
         name: cache-diff-${{ github.run_id }}-${{ steps.normalize-path.outputs.test_path_normalized }}

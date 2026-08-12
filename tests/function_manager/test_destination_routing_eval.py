@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 import pytest
 import unisdk
 
@@ -25,7 +23,11 @@ async def test_team_function_routes_to_the_matching_shared_team(llm_config):
     scenario = RoutingScenario("function_shared")
     scenario.setup()
     manager = FunctionManager(include_primitives=False)
-    function_name = f"normalize_patch_ticket_{uuid.uuid4().hex[:8]}"
+    # The function name is embedded in the user message, so it must be
+    # identical on every run for LLM-cache replay to hit. Leftover-row safety
+    # comes from the scenario's pre-test team-root cleanup and its per-run
+    # personal root.
+    function_name = "normalize_patch_ticket_5163"
 
     try:
         messages = await run_direct_routing_loop(
