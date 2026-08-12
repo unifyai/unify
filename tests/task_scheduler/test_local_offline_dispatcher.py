@@ -77,7 +77,6 @@ class TestBuildLocalOfflineRunnerEnv:
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
 
         required = {
-            "UNITY_OFFLINE_TASK_MODE",
             "UNITY_OFFLINE_RUN_KEY",
             "UNITY_OFFLINE_TASK_ID",
             "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
@@ -99,13 +98,6 @@ class TestBuildLocalOfflineRunnerEnv:
         snap = _make_snapshot(task_name="")
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
         assert env["UNITY_OFFLINE_TASK_REQUEST"] == f"Execute task {snap.task_id}"
-
-    def test_mode_is_actor(self):
-        env = od._build_local_offline_runner_env(
-            _make_snapshot(),
-            wake=Wake.scheduled.value,
-        )
-        assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
 
     def test_function_id_omitted_when_no_entrypoint(self):
         env = od._build_local_offline_runner_env(
@@ -246,7 +238,7 @@ class TestDispatch:
                 "-m",
                 "unify.task_scheduler.offline_runner",
             )
-            assert captured["env"]["UNITY_OFFLINE_TASK_MODE"] == "actor"
+            assert captured["env"]["UNITY_OFFLINE_RUN_KEY"]
             assert captured["env"]["UNITY_OFFLINE_TASK_WAKE"] == Wake.scheduled.value
             assert "PATH" in captured["env"]
         finally:

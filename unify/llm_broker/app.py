@@ -287,11 +287,17 @@ def build_router(broker: Broker) -> APIRouter:
         model = str(body.get("model") or "").strip()
         if not model:
             return _refusal(400, "`model` is required.")
+        # The body's model is provider-shaped and forwarded verbatim; the
+        # ledger names the same model in accounting form. Orchestra recognises
+        # an OpenRouter call by exactly this marker -- authorizing with the
+        # bare id left the metering gate refusing every model its curated
+        # catalogue did not happen to cover.
+        accounting_model = f"{model}@openrouter"
         assistant_id = _assistant_id(request, body)
 
         refusal = await broker.authorize(
             caller_key=caller_key,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
         )
         if refusal is not None:
@@ -314,7 +320,7 @@ def build_router(broker: Broker) -> APIRouter:
                 "Content-Type": "application/json",
             },
             body=body,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
             caller_key=caller_key,
             stream=stream,
@@ -333,11 +339,16 @@ def build_router(broker: Broker) -> APIRouter:
         model = str(body.get("model") or "").strip()
         if not model:
             return _refusal(400, "`model` is required.")
+        # Same split as the OpenRouter route: bare id to the provider,
+        # accounting form to the ledger, so metering matches the curated
+        # catalogue's own ``@anthropic`` entries rather than relying on
+        # suffix-stripped comparison.
+        accounting_model = f"{model}@anthropic"
         assistant_id = _assistant_id(request, body)
 
         refusal = await broker.authorize(
             caller_key=caller_key,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
         )
         if refusal is not None:
@@ -362,7 +373,7 @@ def build_router(broker: Broker) -> APIRouter:
             url=f"{settings.anthropic_api_base.rstrip('/')}/v1/messages",
             headers=headers,
             body=body,
-            model=model,
+            model=accounting_model,
             assistant_id=assistant_id,
             caller_key=caller_key,
             stream=stream,

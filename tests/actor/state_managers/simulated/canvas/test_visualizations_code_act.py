@@ -90,7 +90,7 @@ async def _seed_repairs(dm: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Routing tests: actor should use primitives.dashboards for visualizations
+# Routing tests: a visualization request must author a canvas
 # ---------------------------------------------------------------------------
 
 VISUALIZATION_QUESTIONS = [
@@ -125,14 +125,8 @@ async def test_code_act_visualization_routes_to_canvas(question: str):
             f"Expected primitives.canvas.create_view to be called, "
             f"but canvas calls were: {canvas_calls}"
         )
-        # Canvas must be the *first* visual surface reached. A later tile call is
-        # legitimate fallback -- without an installed toolchain the build gate
-        # rejects every canvas, and an actor that then gives the user nothing
-        # would be worse. What must not happen is reaching for a tile first.
-        first_visual = next(
-            (c for c in calls if "canvas" in c or "dashboards" in c),
-            "",
+        # Canvas is the only visual surface; nothing else may be reached for.
+        assert not [c for c in calls if "dashboards" in c], (
+            f"A visualization request reached for the retired dashboards "
+            f"surface: {calls}"
         )
-        assert (
-            "canvas" in first_visual
-        ), f"A visualization request reached for a tile before a canvas: {calls}"
