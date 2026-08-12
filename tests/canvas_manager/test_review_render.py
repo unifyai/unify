@@ -115,6 +115,38 @@ class TestHarnessContract:
         assert "task_id" not in html
         assert "actions: []" in html
 
+    def test_declared_actions_are_offered_as_descriptors(self):
+        # The review must mount the canvas's controls the way console will, so
+        # the declared action metadata crosses — but only the metadata: the
+        # descriptor shape has no dispatch target to leak.
+        from unify.canvas_manager.ops.action_ops import action_descriptors
+        from unify.canvas_manager.types.action import CanvasAction
+
+        descriptors = action_descriptors(
+            [
+                CanvasAction(
+                    name="approve_reply",
+                    label="Approve & queue send",
+                    function_name="approve_smartlead_reply",
+                    confirm="Send it?",
+                    destructive=True,
+                ),
+            ],
+        )
+        html = review_ops._parent_html(
+            host_origin="http://127.0.0.1:1",
+            host_document="host/v1/index.html",
+            source="export default () => null",
+            props={},
+            rows={},
+            actions=descriptors,
+        )
+        assert '"approve_reply"' in html
+        assert "requiresConfirmation" in html
+        assert "function_id" not in html
+        assert "function_name" not in html
+        assert "task_id" not in html
+
     def test_the_frame_is_sandboxed_the_way_console_sandboxes_it(self):
         html = review_ops._parent_html(
             host_origin="http://127.0.0.1:1",
