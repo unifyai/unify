@@ -163,6 +163,13 @@ class IngestionManager(BaseIngestionManager):
         # chunks immediately rather than through a queue -- and an inline run
         # dies with the process anyway, so nothing durable is needed to steer it.
         self._inline_control: Dict[str, Dict[str, bool]] = {}
+        # Run keys whose two-phase dispatch (stage, upload, publish) is in
+        # flight in this process. Uploads only ever run in the submitting
+        # process, so a queued dispatched-tier row with no dispatch_id and no
+        # entry here is not "still uploading" -- its submitter died before
+        # publish, and no worker will ever pick it up. Membership is what lets
+        # a status read make that call deterministically, without timers.
+        self._dispatching: set[str] = set()
         # Cached answer to "is the fleet actually reachable", resolved on first
         # use rather than at construction so a manager can be built in a process
         # that never ingests without paying for a probe.
@@ -412,7 +419,16 @@ class IngestionManager(BaseIngestionManager):
                 declared,
             )
             return
-        self._dispatch(run_key, runs_context, request)
+        # Registered before the pool picks it up, for the same reason as the
+        # inline flags: a status read racing the pool must see the dispatch as
+        # in flight, not as dead.
+        with self._lock:
+            self._dispatching.add(run_key)
+        # Off the caller's thread: staging and uploading a multi-hundred-MB
+        # source takes as long as the uplink takes, and `submit` promises a
+        # handle immediately. Failures land on the run row, exactly as an
+        # inline run's do.
+        self._pool.submit(self._dispatch_guarded, run_key, runs_context, request)
 
     # ── execution ─────────────────────────────────────────────────────────
 
@@ -934,11 +950,11 @@ class IngestionManager(BaseIngestionManager):
         Paged by offset because the backend serves at most a page per read, so a
         single large read would silently return a prefix.
 
-        The rows do end up in memory, and the bound on that is the tier ceiling
-        rather than anything here: a table only reaches this method when its
-        counted size is under ``MAX_INLINE_ROWS``, which is the same bound a rows
-        source of the same size already carries. A larger table is dispatched and
-        never arrives here.
+        The rows do end up in memory, unbounded by anything here: every table
+        source runs in process today, because the fleet's unit of work is a
+        staged file and no rows job type exists yet. ``MAX_INLINE_ROWS`` is the
+        boundary such a job type would restore; until then a very large table
+        costs this process memory in exchange for actually executing.
 
         One consequence worth knowing: a resumed run re-reads the source rather
         than a frozen copy of it, so if the source has been written to in between,
@@ -971,6 +987,42 @@ class IngestionManager(BaseIngestionManager):
             row_count=len(rows),
         )
 
+    def _dispatch_guarded(
+        self,
+        run_key: str,
+        runs_context: str,
+        request: IngestionRequest,
+    ) -> None:
+        """Run the dispatch, landing any failure on the run row.
+
+        A dispatch that raises without recording anything leaves the row
+        `queued` forever -- the one state whose next step is "keep polling",
+        which is exactly wrong for a run that will never start. The failure is
+        the run's outcome, so it is written where every other outcome lives.
+        """
+        try:
+            self._dispatch(run_key, runs_context, request)
+        except Exception as error:
+            self._update_run(
+                run_key,
+                runs_context,
+                {
+                    "state": "failed",
+                    "error": str(error),
+                    "finished_at": _now(),
+                },
+            )
+            self._record_event(
+                run_key,
+                destination=request.destination,
+                stage="parse",
+                level="error",
+                message=f"Dispatch to the worker fleet failed: {error}",
+            )
+        finally:
+            with self._lock:
+                self._dispatching.discard(run_key)
+
     def _dispatch(
         self,
         run_key: str,
@@ -998,13 +1050,25 @@ class IngestionManager(BaseIngestionManager):
                 "plane or run the self-host worker services.",
             )
 
+        paths = self._resolve_paths(request.source)
+        if not paths:
+            # The fleet's unit of work is a staged file, and publishing a
+            # dispatch with zero jobs succeeds while its status folds to
+            # `queued` forever. A source that stages no files cannot dispatch;
+            # refusing here turns an infinite hang into a run-row failure.
+            raise RuntimeError(
+                f"A {request.source.kind!r} source stages no files, and the "
+                "worker fleet only executes staged files. This run should have "
+                "been routed in process; submit it again.",
+            )
+
         dispatch_id = dispatch_run(
             base_url=self._settings.resolved_pipeline_url(),
             run_key=run_key,
             request=request,
             request_key=f"jobs/{run_key}/request.json",
             request_payload=request.model_dump(mode="json"),
-            paths=self._resolve_paths(request.source),
+            paths=paths,
             # Where the fleet should journal this run's events: the same two
             # contexts an in-process run writes, so `get_status` reads one
             # history whichever tier executed the work.
@@ -1098,8 +1162,39 @@ class IngestionManager(BaseIngestionManager):
         answer that says so via `next_step` beats an exception on a read path.
         """
         dispatch_id = row.get("dispatch_id")
-        if not dispatch_id or row.get("state") in TERMINAL_STATES:
+        if row.get("state") in TERMINAL_STATES:
             return row
+        if not dispatch_id:
+            if row.get("executed_as") != "dispatched":
+                return row
+            with self._lock:
+                still_dispatching = row["run_key"] in self._dispatching
+            if still_dispatching:
+                # Sources are still being staged and uploaded; the fleet has
+                # not heard of this run yet, and that is fine.
+                return row
+            # Uploads only run in the submitting process, so a dispatched row
+            # with no dispatch id and no upload in flight here was orphaned by
+            # its submitter dying before publish. No worker will ever pick it
+            # up; leaving it `queued` tells the caller to poll forever.
+            failed = dict(row)
+            failed["state"] = "failed"
+            failed["error"] = (
+                "The dispatch never reached the worker fleet (the submitting "
+                "process ended before the run was published). Nothing was "
+                "stored; submit again."
+            )
+            failed["finished_at"] = _now()
+            self._update_run(
+                row["run_key"],
+                runs_context,
+                {
+                    "state": failed["state"],
+                    "error": failed["error"],
+                    "finished_at": failed["finished_at"],
+                },
+            )
+            return failed
         if not self._settings.resolved_pipeline_url():
             return row
 
