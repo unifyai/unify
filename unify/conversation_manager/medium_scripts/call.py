@@ -174,16 +174,12 @@ def _voice_broker_kwargs(provider: str) -> dict:
     where no sidecar is configured (self-host / local dev), leaving the plugin's
     own env-key behaviour intact.
     """
-    from urllib.parse import urlparse
+    from unify.common.broker import broker_origin
 
-    gateway = os.environ.get("UNILLM_LLM_GATEWAY_URL", "").strip()
-    unify_key = os.environ.get("UNIFY_KEY", "").strip()
-    if not gateway or not unify_key:
+    origin = broker_origin()
+    if not origin:
         return {}
-    parsed = urlparse(gateway)
-    if not parsed.scheme or not parsed.netloc:
-        return {}
-    origin = f"{parsed.scheme}://{parsed.netloc}"
+    unify_key = os.environ["UNIFY_KEY"]
     return {
         "base_url": f"{origin}{_VOICE_BROKER_PATHS[provider]}",
         "api_key": unify_key,
