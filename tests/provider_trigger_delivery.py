@@ -358,19 +358,17 @@ def _orchestra_worker_env() -> dict[str, str]:
 def _orchestra_python_bin() -> Path:
     """Interpreter of Orchestra's repo-local virtualenv.
 
-    ``<orchestra>/.venv`` is the one invariant location: dev machines create
-    it when bootstrapping Orchestra, and CI installs with
-    POETRY_VIRTUALENVS_IN_PROJECT=true. Resolving through poetry at test time
-    instead is a trap — poetry adopts an activated foreign virtualenv, and
-    inside CI's tmux test sessions it fails outright.
+    ``<orchestra>/.venv`` is the one invariant location: ``uv sync`` creates
+    it on dev machines and in CI alike. Resolving through the package manager
+    at test time instead is a trap — it can adopt an activated foreign
+    virtualenv, and inside CI's tmux test sessions it fails outright.
     """
 
     python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
     if not python_bin.exists():
         raise RuntimeError(
-            f"Orchestra venv not found at {python_bin}; install Orchestra "
-            "with an in-project virtualenv "
-            "(POETRY_VIRTUALENVS_IN_PROJECT=true poetry install).",
+            f"Orchestra venv not found at {python_bin}; run uv sync in "
+            "the orchestra checkout.",
         )
     return python_bin
 

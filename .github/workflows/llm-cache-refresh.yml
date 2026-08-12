@@ -294,10 +294,9 @@ jobs:
           libasound2t64 libatspi2.0-0 libgtk-3-0 libnspr4 libwayland-client0 \
           libxcomposite1 libxdamage1 libxrandr2 xvfb
 
-    - name: Install uv and poetry
+    - name: Install uv
       run: |
         pip install uv
-        pip install poetry
 
     - name: Configure local package paths
       run: |
@@ -311,11 +310,9 @@ jobs:
       run: uv run playwright install --with-deps
 
     - name: Install orchestra dependencies
-      env:
-        POETRY_VIRTUALENVS_IN_PROJECT: "true"
       run: |
         cd "$ORCHESTRA_REPO_PATH"
-        poetry install --no-interaction
+        uv sync --frozen
 
     - name: Restore existing consolidated cache
       uses: actions/cache/restore@v4
