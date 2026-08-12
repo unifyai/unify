@@ -23,6 +23,7 @@ import logging
 import os
 import random
 import re
+import time
 
 import hashlib
 
@@ -58,7 +59,25 @@ from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_
 # Orchestra availability check for requires_orchestra marker                   #
 # --------------------------------------------------------------------------- #
 def _check_orchestra_available() -> bool:
-    """Check if Orchestra server is reachable. Cached after first call."""
+    """Check if Orchestra server is reachable.
+
+    The verdict is cached for the process lifetime so every caller —
+    pytest_sessionstart's init decision, per-test ``requires_orchestra``
+    skips, per-test remote context setup — agrees with the decision made at
+    session start. A mid-session flip would be worse than either steady
+    state: if session setup skipped ``unify.init()``, later tests seeing
+    True would run against an uninitialised runtime.
+
+    Under parallel_run (``UNITY_TEST_SOCKET`` set) the first call retries
+    for up to 30s before concluding False: parallel_run boots Orchestra
+    just before spawning sessions, and dozens of sessions probing a
+    still-warming server can also transiently time out even after
+    ``local.sh check`` passed. Caching one racy False made
+    pytest_sessionstart skip ``unify.init()`` while tests still ran,
+    crashing later with "EVENT_BUS has not been initialised yet". Outside
+    parallel_run a single probe decides immediately, so a developer running
+    plain pytest without Orchestra doesn't wait.
+    """
     if hasattr(_check_orchestra_available, "_cached"):
         return _check_orchestra_available._cached
 
@@ -76,15 +95,22 @@ def _check_orchestra_available() -> bool:
         url = f"{base}/projects"
     else:
         url = f"{base.rstrip('/')}/v0/projects"
-    try:
-        with httpx.Client(timeout=2.0) as client:
-            resp = client.get(url)
-            # 200 = success, 401/403 = auth required but server is up
-            _check_orchestra_available._cached = resp.status_code in (200, 401, 403)
-    except Exception:
-        _check_orchestra_available._cached = False
 
-    return _check_orchestra_available._cached
+    deadline = time.monotonic() + (30.0 if os.environ.get("UNITY_TEST_SOCKET") else 0.0)
+    while True:
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                resp = client.get(url)
+                # 200 = success, 401/403 = auth required but server is up
+                available = resp.status_code in (200, 401, 403)
+        except Exception:
+            available = False
+        if available or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+
+    _check_orchestra_available._cached = available
+    return available
 
 
 def _derive_test_context(item: pytest.Item) -> str:
