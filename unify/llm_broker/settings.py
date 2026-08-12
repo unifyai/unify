@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
+from unify.llm_broker.proxy import CredentialProxy
 from unify.llm_broker.voice import VoiceProvider
 
 #: How long a positive authorisation may be reused for the same key and model.
@@ -42,6 +43,9 @@ class BrokerSettings:
     #: leaves the routes present but refusing -- the same shape as an LLM leg
     #: whose key is absent.
     voice_providers: Mapping[str, VoiceProvider] = field(default_factory=dict)
+    #: Non-LLM REST providers (Tavily, Recall) reached through the header-swap
+    #: proxy. Empty leaves the routes present but refusing.
+    credential_proxies: Mapping[str, CredentialProxy] = field(default_factory=dict)
 
     @property
     def authorize_url(self) -> str:
@@ -111,6 +115,30 @@ def _load_voice_providers() -> dict[str, VoiceProvider]:
     return providers
 
 
+def _load_credential_proxies() -> dict[str, CredentialProxy]:
+    proxies = {
+        "tavily": CredentialProxy(
+            name="tavily",
+            upstream_base=os.environ.get(
+                "TAVILY_UPSTREAM_BASE",
+                "https://api.tavily.com",
+            ),
+            auth_scheme="Bearer",
+            api_key=os.environ.get("TAVILY_API_KEY") or None,
+        ),
+    }
+    # Recall's host is region-scoped; without a region there is no upstream to
+    # forward to, so the provider stays unconfigured even if a key is present.
+    region = os.environ.get("RECALL_REGION", "").strip()
+    proxies["recall"] = CredentialProxy(
+        name="recall",
+        upstream_base=f"https://{region}.recall.ai" if region else "",
+        auth_scheme="Token",
+        api_key=(os.environ.get("RECALL_API_KEY") or None) if region else None,
+    )
+    return proxies
+
+
 def load_settings() -> BrokerSettings:
     """Read broker configuration from the sidecar's environment.
 
@@ -136,4 +164,5 @@ def load_settings() -> BrokerSettings:
         ),
         auth_ttl_s=_float_env("UNIFY_LLM_BROKER_AUTH_TTL_S", _DEFAULT_AUTH_TTL_S),
         voice_providers=_load_voice_providers(),
+        credential_proxies=_load_credential_proxies(),
     )

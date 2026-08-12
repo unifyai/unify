@@ -28,6 +28,7 @@ from unify.llm_broker.usage import (
     usage_from_body,
     usage_from_stream_tail,
 )
+from unify.llm_broker.proxy import Proxy, build_proxy_router
 from unify.llm_broker.voice import build_voice_router
 
 LOGGER = logging.getLogger(__name__)
@@ -379,12 +380,16 @@ def build_app(settings: Optional[BrokerSettings] = None) -> FastAPI:
     resolved = settings or load_settings()
     broker = Broker(resolved)
     app = FastAPI(title="Unify LLM broker", docs_url=None, redoc_url=None)
+    proxy = Proxy(resolved.credential_proxies)
     app.state.broker = broker
+    app.state.proxy = proxy
     app.include_router(build_router(broker))
     app.include_router(build_voice_router(resolved.voice_providers))
+    app.include_router(build_proxy_router(proxy))
 
     @app.on_event("shutdown")
     async def _close() -> None:
         await broker.aclose()
+        await proxy.aclose()
 
     return app
