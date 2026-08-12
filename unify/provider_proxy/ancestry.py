@@ -58,7 +58,7 @@ def _google_node(raw: dict[str, Any], drive_id: str) -> dict[str, Any]:
 
 
 async def google_get(drive_id: str, item_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30) as http:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
         resp = await http.get(
             f"{_GOOGLE_BASE}/files/{item_id}",
             params={
@@ -107,11 +107,15 @@ def _ms_drive_base(drive_id: str) -> str:
 def _ms_item_url(drive_id: str, item_id: str) -> str:
     base = _ms_drive_base(drive_id)
     root_item = not item_id or item_id in ("root", "")
+    if drive_id.startswith("share:") and root_item:
+        # A share base already ends at the driveItem; appending ``/root`` would
+        # address a segment beneath an item, which Graph rejects.
+        return base
     return f"{base}/root" if root_item else f"{base}/items/{item_id}"
 
 
 async def ms_get(drive_id: str, item_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30) as http:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
         resp = await http.get(
             _ms_item_url(drive_id, item_id),
             params={"$select": "id,name,folder,file,parentReference,webUrl"},
@@ -125,11 +129,12 @@ async def ms_get(drive_id: str, item_id: str) -> dict[str, Any]:
 
 def _ms_path_url(drive_id: str, anchor_item_id: Optional[str], path: str) -> str:
     base = _ms_drive_base(drive_id)
-    anchor = (
-        "root"
-        if not anchor_item_id or anchor_item_id == "root"
-        else f"items/{anchor_item_id}"
-    )
+    root_anchor = not anchor_item_id or anchor_item_id == "root"
+    if drive_id.startswith("share:") and root_anchor:
+        # Path addressing under a share anchors on the driveItem itself:
+        # ``/shares/{id}/driveItem:/sub/path``. There is no ``/root`` segment.
+        return f"{base}:/{path}" if path else base
+    anchor = "root" if root_anchor else f"items/{anchor_item_id}"
     if path:
         return f"{base}/{anchor}:/{path}"
     return f"{base}/{anchor}"
@@ -146,7 +151,7 @@ async def ms_get_by_path(
     ``parentReference``) are returned, so no ``$select`` (which would require the
     trailing-colon path-query form) is needed.
     """
-    async with httpx.AsyncClient(timeout=30) as http:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
         resp = await http.get(
             _ms_path_url(drive_id, anchor_item_id, path),
             headers=_headers("microsoft"),
