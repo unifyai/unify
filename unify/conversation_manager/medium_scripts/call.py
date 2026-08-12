@@ -153,6 +153,43 @@ ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
 IDLE_SMALLTALK_STATE_TIMEOUT_S = 0.2
 
 
+# The path each voice plugin is pointed at on the broker sidecar. Deepgram takes
+# its full listen endpoint; Cartesia appends ``/tts/websocket`` to the host it is
+# given; ElevenLabs appends to a ``/v1`` base. All three convert an http(s) base
+# to ws(s) themselves, so a loopback http base yields a loopback ws connection.
+_VOICE_BROKER_PATHS = {
+    "deepgram": "/voice/deepgram/v1/listen",
+    "cartesia": "/voice/cartesia",
+    "elevenlabs": "/voice/elevenlabs/v1",
+}
+
+
+def _voice_broker_kwargs(provider: str) -> dict:
+    """base_url/api_key that route a voice plugin through the broker sidecar.
+
+    The plugins otherwise read their provider key from the environment. In a pod
+    that key is no longer there -- it lives only in the sidecar -- so point the
+    plugin at the sidecar over loopback and hand it the pod's UNIFY_KEY as the
+    nonce the sidecar checks; the sidecar swaps in the real key. Returns ``{}``
+    where no sidecar is configured (self-host / local dev), leaving the plugin's
+    own env-key behaviour intact.
+    """
+    from urllib.parse import urlparse
+
+    gateway = os.environ.get("UNILLM_LLM_GATEWAY_URL", "").strip()
+    unify_key = os.environ.get("UNIFY_KEY", "").strip()
+    if not gateway or not unify_key:
+        return {}
+    parsed = urlparse(gateway)
+    if not parsed.scheme or not parsed.netloc:
+        return {}
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return {
+        "base_url": f"{origin}{_VOICE_BROKER_PATHS[provider]}",
+        "api_key": unify_key,
+    }
+
+
 def _drain_elevenlabs_twin_pronunciation_buffer(
     pending: str,
     emitted: list[str],
@@ -225,7 +262,12 @@ def prewarm(_ctx=None):
     global STT, VAD, SPEAKER_EMBEDDER
     try:
         _log.info("Prewarm: initializing STT, VAD and turn detector…")
-        STT = deepgram.STT(model="nova-3", language="en-GB", enable_diarization=True)
+        STT = deepgram.STT(
+            model="nova-3",
+            language="en-GB",
+            enable_diarization=True,
+            **_voice_broker_kwargs("deepgram"),
+        )
         VAD = silero.VAD.load(min_speech_duration=0.15, min_silence_duration=1.0)
         _log.info("Prewarm complete")
     except Exception as e:  # noqa: BLE001
@@ -1497,7 +1539,12 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Fallback for whenever pre-loading fails
     if STT is None:
-        STT = deepgram.STT(model="nova-3", language="en-GB", enable_diarization=True)
+        STT = deepgram.STT(
+            model="nova-3",
+            language="en-GB",
+            enable_diarization=True,
+            **_voice_broker_kwargs("deepgram"),
+        )
         VAD = silero.VAD.load(min_speech_duration=0.15, min_silence_duration=1.0)
 
     stt_instance = STT
@@ -2034,10 +2081,12 @@ async def entrypoint(ctx: agents.JobContext):
         tts_instance = elevenlabs.TTS(
             voice_id=voice_id or elevenlabs.DEFAULT_VOICE_ID,
             model="eleven_multilingual_v2",
+            **_voice_broker_kwargs("elevenlabs"),
         )
     else:
         tts_instance = cartesia.TTS(
             voice=voice_id or cartesia.tts.TTSDefaultVoiceId,
+            **_voice_broker_kwargs("cartesia"),
         )
 
     session = AgentSession(
