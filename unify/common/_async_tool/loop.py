@@ -123,6 +123,20 @@ def _parse_tool_policy_result(
     return str(mode), tools, eager
 
 
+def _is_cache_miss_error(exc: BaseException | None) -> bool:
+    """True when *exc* (or anything in its cause/context chain) is a
+    read-only LLM-cache miss (``unillm.caching.CacheMissError``)."""
+    from unillm.caching import CacheMissError
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        if isinstance(exc, CacheMissError):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ if exc.__cause__ is not None else exc.__context__
+    return False
+
+
 def prune_duplicate_tool_calls(tool_calls: list) -> tuple[list, set[str]]:
     """Remove duplicate tool calls from a list.
 
@@ -2758,6 +2772,21 @@ async def async_tool_loop_inner(
                 if llm_task.cancelled():
                     raise asyncio.CancelledError
                 if llm_task.exception():
+                    # Cached-replay determinism: a read-only cache miss while
+                    # tools are still in flight means the live run never
+                    # consumed this step — a tool completion (or steering
+                    # event) superseded it mid-call and the loop re-issued the
+                    # turn with updated context, so no entry was ever
+                    # recorded. Mirror that outcome here: discard the step and
+                    # fall back to the tool-wait block, which grants a fresh
+                    # turn once the superseding event lands. With nothing in
+                    # flight the miss is genuinely fatal and propagates as
+                    # before.
+                    if _is_cache_miss_error(llm_task.exception()) and (
+                        tools_data.pending
+                    ):
+                        llm_turn_required = False
+                        continue
                     try:
                         llm_task.result()
                     except Exception as e:
