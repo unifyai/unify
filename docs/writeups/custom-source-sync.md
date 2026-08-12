@@ -2,7 +2,7 @@
 
 Every state manager that supports git-tracked source definitions —
 tasks, functions, venvs, guidance, knowledge, contacts, secrets,
-blacklist, data seeds, dashboards, the integration registry — follows a
+blacklist, data seeds, the integration registry — follows a
 single reconcile contract, implemented once in
 `unify/common/custom_sync.py` and adapted per manager. This document is
 the contract. The repo rule
@@ -10,7 +10,7 @@ the contract. The repo rule
 
 ## Why one contract
 
-The ten managers historically carried near copy-paste reconcile loops
+The synced managers historically carried near copy-paste reconcile loops
 that evolved independently. The divergence was drift, not design, and it
 produced real production defects:
 
@@ -51,8 +51,8 @@ produced real production defects:
      guidance, knowledge, blacklist.
    - *Derived-from-content* (allowed only where the content **is** the
      identity): functions and venvs (`name` — the call-site contract),
-     data seeds (`context|seed_value`), dashboards (`tile_id` /
-     `layout_id`), integration registry (`slug`), contacts
+     data seeds (`context|seed_value`), integration registry
+     (`slug`), contacts
      (`first_name|surname` fallback), secrets (`name` fallback).
    Changing a key policy is an identity migration for every deployment
    and needs an explicit plan, not a drive-by edit.

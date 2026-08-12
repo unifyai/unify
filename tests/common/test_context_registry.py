@@ -36,10 +36,10 @@ class RegistryExampleManager:
             TableContext(name="Files", description="File payload rows."),
             TableContext(name="Data", description="User data tables."),
             TableContext(name="BlackList", description="Blocked contact details."),
-            TableContext(name="Dashboards/Tiles", description="Dashboard tile rows."),
+            TableContext(name="Canvas/Views", description="Canvas view rows."),
             TableContext(
-                name="Dashboards/Layouts",
-                description="Dashboard layout rows.",
+                name="Canvas/Actions",
+                description="Canvas action rows.",
             ),
             TableContext(name="Transcripts", description="Conversation messages."),
             TableContext(name="Exchanges", description="Conversation exchanges."),
@@ -240,26 +240,26 @@ def test_team_owned_non_shared_tables_live_under_assistant_subtree():
     assert get_ctx == "Teams/5/Assistants/42/SearchCache"
 
 
-def test_team_owned_dashboards_meta_homes_with_the_rows_it_fingerprints():
-    # The custom-dashboards sync hash must resolve to the same root as the
-    # Tiles/Layouts rows it fingerprints. When Dashboards/Meta was not
-    # shared-scoped, a team-owned assistant read the hash from one root while
-    # writing rows to another, so a stale hash in the wrong root satisfied the
-    # aggregate check forever and the team root was never (re)planted.
+def test_team_owned_sync_meta_homes_with_the_rows_it_fingerprints():
+    # A sync-state Meta table must resolve to the same root as the rows it
+    # fingerprints. When a Meta table is not shared-scoped, a team-owned
+    # assistant reads the hash from one root while writing rows to another,
+    # so a stale hash in the wrong root satisfies the aggregate check
+    # forever and the team root is never (re)planted.
     _make_team_owned()
 
     _, meta_root, _ = ContextRegistry.resolve_root(
         RegistryExampleManager,
-        "Dashboards/Meta",
+        "Workflows/Meta",
         destination=None,
     )
-    _, tiles_root, _ = ContextRegistry.resolve_root(
+    _, rows_root, _ = ContextRegistry.resolve_root(
         RegistryExampleManager,
-        "Dashboards/Tiles",
+        "Workflows",
         destination=None,
     )
 
-    assert meta_root == tiles_root == "Teams/5"
+    assert meta_root == rows_root == "Teams/5"
 
 
 def test_team_owned_read_roots_have_no_personal_root():
@@ -312,7 +312,7 @@ def test_files_data_and_blacklist_are_shared_scoped():
         ]
 
 
-def test_resolve_root_supports_dashboard_tables_without_provisioning():
+def test_resolve_root_supports_canvas_tables_without_provisioning():
     SESSION_DETAILS.team_ids = [7]
 
     with patch(
@@ -320,7 +320,7 @@ def test_resolve_root_supports_dashboard_tables_without_provisioning():
     ) as create_context:
         manager_name, root_identity, root_context = ContextRegistry.resolve_root(
             RegistryExampleManager,
-            "Dashboards/Tiles",
+            "Canvas/Views",
             destination="team:7",
         )
 
@@ -400,8 +400,8 @@ def test_lazy_provisioning_is_cached_per_root():
         "Files",
         "Data",
         "BlackList",
-        "Dashboards/Tiles",
-        "Dashboards/Layouts",
+        "Canvas/Views",
+        "Canvas/Actions",
         "Transcripts",
         "Exchanges",
         "Images",
