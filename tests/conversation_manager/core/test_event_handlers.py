@@ -189,6 +189,29 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm._frontend_reported_meet_surfaces = set()
     cm.memory_manager = None
 
+    # Real viewer-set behaviour: the handler derives
+    # ``assistant_screen_share_active`` from this set, so a MagicMock's
+    # auto-returned truthy stub would make every assertion about the flag
+    # meaningless.
+    from unify.conversation_manager.conversation_manager import ConversationManager
+
+    cm._assistant_screen_share_viewers = set()
+    cm.assistant_screen_share_viewer_key = (
+        ConversationManager.assistant_screen_share_viewer_key
+    )
+    cm.note_assistant_screen_share_viewer = (
+        ConversationManager.note_assistant_screen_share_viewer.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+    cm.drop_assistant_screen_share_viewers = (
+        ConversationManager.drop_assistant_screen_share_viewers.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+
     # Create a SimulatedContactManager and populate with sample contacts
     contact_manager = SimulatedContactManager()
 
@@ -2018,6 +2041,37 @@ class TestActorEventHandlers:
 # =============================================================================
 
 
+def _reset_surfaces_cm(surfaces, viewers, dropped=None, claimed=None):
+    """Minimal stand-in for ``reset_meet_surfaces``, with a real viewer set.
+
+    ``assistant_screen_share_active`` is derived from the viewer set, so the two
+    are seeded together — a stub with the flag set and no viewers is a state the
+    real object cannot reach.
+    """
+    from unify.conversation_manager.conversation_manager import ConversationManager
+
+    def _drop(source):
+        if dropped is not None:
+            dropped.append(source)
+        return 0
+
+    cm = SimpleNamespace(
+        _frontend_reported_meet_surfaces=set(
+            surfaces if claimed is None else claimed,
+        ),
+        _assistant_screen_share_viewers=set(viewers),
+        drop_unpaired_screenshots=_drop,
+        **{name: True for name in surfaces},
+    )
+    cm.drop_assistant_screen_share_viewers = (
+        ConversationManager.drop_assistant_screen_share_viewers.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+    return cm
+
+
 class TestMeetInteractionEventHandlers:
     """Tests for screen share and remote control event handlers."""
 
@@ -2047,6 +2101,89 @@ class TestMeetInteractionEventHandlers:
         )
         await EventHandler.handle_event(event, mock_cm)
 
+        assert mock_cm.assistant_screen_share_active is False
+
+    @pytest.mark.asyncio
+    async def test_one_viewer_leaving_keeps_the_desktop_open_for_the_others(
+        self,
+        mock_cm,
+    ):
+        """Membership decides the surface, not the last event to arrive.
+
+        Everyone on a room call mounts the liveview for themselves, so the
+        assistant is only unwatched once the last of them closes it. Deriving
+        the flag from the newest event instead would let whoever leaves first
+        tell the assistant nobody is looking.
+        """
+        call = "call:sess-1"
+        for user_id in ("user-1", "user-2"):
+            await EventHandler.handle_event(
+                AssistantScreenShareStarted(
+                    viewer_user_id=user_id,
+                    viewer_source=call,
+                ),
+                mock_cm,
+            )
+        assert mock_cm.assistant_screen_share_active is True
+        # The second arrival is counted without re-announcing a live share.
+        assert len(mock_cm.notifications_bar.notifications) == 1
+
+        await EventHandler.handle_event(
+            AssistantScreenShareStopped(viewer_user_id="user-1", viewer_source=call),
+            mock_cm,
+        )
+        assert mock_cm.assistant_screen_share_active is True
+
+        await EventHandler.handle_event(
+            AssistantScreenShareStopped(viewer_user_id="user-2", viewer_source=call),
+            mock_cm,
+        )
+        assert mock_cm.assistant_screen_share_active is False
+
+    @pytest.mark.asyncio
+    async def test_a_stop_from_one_surface_leaves_another_surface_watching(
+        self,
+        mock_cm,
+    ):
+        """The Desktop tab and a call are separate viewers of one desktop."""
+        await EventHandler.handle_event(
+            AssistantScreenShareStarted(
+                viewer_user_id="user-1",
+                viewer_source="desktop_pane",
+            ),
+            mock_cm,
+        )
+        await EventHandler.handle_event(
+            AssistantScreenShareStarted(
+                viewer_user_id="user-1",
+                viewer_source="call:sess-1",
+            ),
+            mock_cm,
+        )
+
+        # Leaving the call closes only what the call owned.
+        assert mock_cm.drop_assistant_screen_share_viewers("call:sess-1") is True
+        assert mock_cm.assistant_screen_share_active is True
+
+        await EventHandler.handle_event(
+            AssistantScreenShareStopped(
+                viewer_user_id="user-1",
+                viewer_source="desktop_pane",
+            ),
+            mock_cm,
+        )
+        assert mock_cm.assistant_screen_share_active is False
+
+    @pytest.mark.asyncio
+    async def test_a_client_that_sends_no_viewer_still_opens_and_closes(
+        self,
+        mock_cm,
+    ):
+        """A Console older than viewer tracking must not pin the desktop open."""
+        await EventHandler.handle_event(AssistantScreenShareStarted(), mock_cm)
+        assert mock_cm.assistant_screen_share_active is True
+
+        await EventHandler.handle_event(AssistantScreenShareStopped(), mock_cm)
         assert mock_cm.assistant_screen_share_active is False
 
     @pytest.mark.asyncio
@@ -2295,11 +2432,7 @@ class TestMeetInteractionEventHandlers:
         )
 
         every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
-        cm = SimpleNamespace(
-            _frontend_reported_meet_surfaces=set(every_surface),
-            drop_unpaired_screenshots=lambda _source: 0,
-            **{name: True for name in every_surface},
-        )
+        cm = _reset_surfaces_cm(every_surface, viewers={"desktop_pane:user-1"})
 
         ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
 
@@ -2308,6 +2441,34 @@ class TestMeetInteractionEventHandlers:
         for name in DESKTOP_SCOPED_MEET_SURFACES:
             assert getattr(cm, name) is True, name
         assert cm._frontend_reported_meet_surfaces == set(DESKTOP_SCOPED_MEET_SURFACES)
+        assert cm._assistant_screen_share_viewers == {"desktop_pane:user-1"}
+
+    def test_reset_meet_surfaces_closes_the_desktop_the_call_was_watching(self):
+        """With only call viewers, the boundary does close the desktop.
+
+        The counterpart to sparing the Desktop tab: viewers that belonged to the
+        call go with it, so a share nobody kept open outside the call does not
+        leak into the next one — and remote control cannot stay held by someone
+        who is no longer even watching.
+        """
+        from unify.conversation_manager.conversation_manager import (
+            CALL_SCOPED_MEET_SURFACES,
+            DESKTOP_SCOPED_MEET_SURFACES,
+            ConversationManager,
+        )
+
+        every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
+        cm = _reset_surfaces_cm(
+            every_surface,
+            viewers={"call:sess-1:user-1", "call:sess-1:user-2"},
+        )
+
+        ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
+
+        assert cm._assistant_screen_share_viewers == set()
+        assert cm.assistant_screen_share_active is False
+        assert cm.user_remote_control_active is False
+        assert cm._frontend_reported_meet_surfaces == set()
 
     def test_reset_meet_surfaces_drops_the_frames_those_surfaces_fed(self):
         """Closing a surface takes its unpaired frames with it.
@@ -2324,10 +2485,13 @@ class TestMeetInteractionEventHandlers:
 
         dropped: list[str] = []
         every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
-        cm = SimpleNamespace(
-            _frontend_reported_meet_surfaces=set(),
-            drop_unpaired_screenshots=lambda source: dropped.append(source),
-            **{name: True for name in every_surface},
+        # A Desktop tab is still open, so the assistant's own surface survives
+        # the boundary and keeps its frames.
+        cm = _reset_surfaces_cm(
+            every_surface,
+            viewers={"desktop_pane:user-1"},
+            dropped=dropped,
+            claimed=set(),
         )
 
         ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]

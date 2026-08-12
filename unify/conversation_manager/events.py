@@ -1304,6 +1304,12 @@ class FastBrainNotification(Event):
     # which it should happen. Markers have already been stripped from
     # ``message``; these are what they resolved to.
     console_steps: list = field(default_factory=list)
+    # Meet-surface flags this notification reports, as ``{attribute: bool}``
+    # using the conversation manager's own attribute names. The fast brain
+    # applies these directly: ``message`` is prose written for an LLM and is
+    # rewritten freely, so inferring state from its wording silently breaks the
+    # moment the copy changes.
+    meet_surface_state: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -2401,26 +2407,40 @@ class FileSyncComplete(Event):
 
 @dataclass
 class AssistantScreenShareStarted(Event):
-    """User enabled assistant screen sharing during a Unify Meet session.
+    """One viewer opened the assistant's desktop.
 
-    The assistant's desktop is now visible to the user.
+    Several people can watch at once -- every participant in a room call mounts
+    the liveview for itself, and the Console's Desktop tab opens the same
+    surface with no call at all. ``viewer_user_id`` and ``viewer_source``
+    identify who, so a later stop closes that one viewer rather than the
+    surface: whether anyone is still watching is the size of the viewer set,
+    not the last event to arrive.
+
+    ``viewer_source`` is ``call:<call_id>`` for a call surface or
+    ``desktop_pane`` for the standalone tab. Both empty means a client that
+    predates viewer tracking, which is treated as the single legacy viewer.
     """
 
     topic: ClassVar[str | None] = "app:comms:assistant_screen_share_started"
 
     reason: str = ""
+    viewer_user_id: str = ""
+    viewer_source: str = ""
 
 
 @dataclass
 class AssistantScreenShareStopped(Event):
-    """User disabled assistant screen sharing during a Unify Meet session.
+    """One viewer closed the assistant's desktop.
 
-    The assistant's desktop is no longer visible to the user.
+    See :class:`AssistantScreenShareStarted` -- this closes the identified
+    viewer, and the desktop stops being visible only once no viewer is left.
     """
 
     topic: ClassVar[str | None] = "app:comms:assistant_screen_share_stopped"
 
     reason: str = ""
+    viewer_user_id: str = ""
+    viewer_source: str = ""
 
 
 @dataclass

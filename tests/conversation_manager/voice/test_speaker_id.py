@@ -8,7 +8,7 @@ ring buffer, centroid accumulation, and the SpeakerTracker state machine
 
 The tracker tests drive a stub embedder that derives deterministic vectors
 from the audio content itself, so the full pipeline (ring buffer slice →
-embedding → centroid → pinning/enrollment) is exercised without the ONNX
+embedding → centroid → clustering/enrollment) is exercised without the ONNX
 model. A separate real-model smoke test runs only when the model is already
 cached locally.
 """
@@ -356,15 +356,17 @@ class TestSpeakerTracker:
         # finalize rather than embedded, so it contributes no cluster.
         _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.2)
         await tracker.finalize()
-        assert tracker.resolve("S0") is None
-        assert tracker.diagnostics()["segments_dropped"] == 1
+        stats = tracker.diagnostics()
+        assert stats["segments_dropped"] == 1
+        assert stats["segments_embedded"] == 0
+        assert stats["clusters"] == 0
 
     async def test_short_segments_accumulate_until_they_can_be_embedded(self):
         """Backchannels are buffered per id, not discarded.
 
         Several sub-threshold finals from one speaker are concatenated and
-        embedded once together, so the speaker is still attributed instead of
-        the turns vanishing.
+        embedded once together, so their audio still reaches a voice cluster
+        instead of the turns vanishing.
         """
         tracker = _make_tracker(enrolled={5: VOICE_A})
         clock = _Clock()
@@ -372,14 +374,14 @@ class TestSpeakerTracker:
             _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.9)
         await tracker.finalize()
 
-        resolution = tracker.resolve("S0")
-        assert resolution is not None
-        assert resolution.contact_id == 5
         stats = tracker.diagnostics()
         assert stats["segments_observed"] == 3
         assert stats["segments_buffered"] == 2  # first two held, third flushed
         assert stats["segments_embedded"] == 1  # one embedding for all three
         assert stats["clusters"] == 1
+        # All three turns' audio is behind the one cluster.
+        cluster = tracker._speakers["S0"].clusters[0]
+        assert cluster.accumulator.total_duration_s == pytest.approx(2.7, abs=0.05)
 
     async def test_buffered_audio_is_prepended_to_the_next_full_segment(self):
         """A short turn followed by a long one yields a single merged segment.

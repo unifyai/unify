@@ -1168,9 +1168,13 @@ class CommsManager:
                     ),
                     "assistant_screen_share_started": lambda r: AssistantScreenShareStarted(
                         reason=r or "User enabled assistant screen sharing.",
+                        viewer_user_id=str(event.get("viewer_user_id") or ""),
+                        viewer_source=str(event.get("viewer_source") or ""),
                     ),
                     "assistant_screen_share_stopped": lambda r: AssistantScreenShareStopped(
                         reason=r or "User disabled assistant screen sharing.",
+                        viewer_user_id=str(event.get("viewer_user_id") or ""),
+                        viewer_source=str(event.get("viewer_source") or ""),
                     ),
                     "user_screen_share_started": lambda r: UserScreenShareStarted(
                         reason=r or "User started sharing their screen.",

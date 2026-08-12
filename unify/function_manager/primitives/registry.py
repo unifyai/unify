@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class PromptText:
+    """The overview fields rendered for one manager in the actor prompt."""
+
+    domain: str
+    description: str
+    use_when: str
+    examples: str
+    special_note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ManagerSpec:
     """
     Configuration for a single manager in the tool surface.
@@ -59,6 +70,30 @@ class ManagerSpec:
     use_when: str = ""
     examples: str = ""
     special_note: str | None = None
+    # A manager that replaces this one for new work. The primary prompt fields
+    # above may steer authoring toward that replacement, so they only render
+    # while the replacement is exposed in the same scope; when it is absent,
+    # ``standalone`` renders instead. A prompt must never route to a tool the
+    # session cannot call — an actor told "author over there" with no "there"
+    # in scope refuses work its visible tools fully support.
+    superseded_by: str | None = None
+    standalone: PromptText | None = None
+
+    def prompt_text(self, exposed_aliases: frozenset[str]) -> PromptText:
+        """The overview text to render given which managers are exposed."""
+        if (
+            self.superseded_by is not None
+            and self.superseded_by not in exposed_aliases
+            and self.standalone is not None
+        ):
+            return self.standalone
+        return PromptText(
+            domain=self.domain,
+            description=self.description,
+            use_when=self.use_when,
+            examples=self.examples,
+            special_note=self.special_note,
+        )
 
 
 # =============================================================================
@@ -1208,16 +1243,19 @@ class ToolSurfaceRegistry:
             "Choose the right manager for your task:\n",
         )
 
+        exposed_aliases = primitive_scope.scoped_managers
+
         # ── Section 1: Brief manager overview (routing-focused) ──
         for spec in specs:
-            lines.append(f"\n**{spec.domain}** → `primitives.{spec.manager_alias}`")
-            lines.append(f"- {spec.description}")
-            if spec.use_when:
-                lines.append(f"- **Use when**: {spec.use_when}")
-            if spec.examples:
-                lines.append(f"- **Examples**: {spec.examples}")
-            if spec.special_note:
-                lines.append(f"- **Note**: {spec.special_note}")
+            text = spec.prompt_text(exposed_aliases)
+            lines.append(f"\n**{text.domain}** → `primitives.{spec.manager_alias}`")
+            lines.append(f"- {text.description}")
+            if text.use_when:
+                lines.append(f"- **Use when**: {text.use_when}")
+            if text.examples:
+                lines.append(f"- **Examples**: {text.examples}")
+            if text.special_note:
+                lines.append(f"- **Note**: {text.special_note}")
 
         # ── Section 2: Manager selection priorities ──
         if len(specs) > 1:
@@ -1245,7 +1283,6 @@ class ToolSurfaceRegistry:
             )
 
         # ── Section 3: Routing guidance for commonly confused pairs ──
-        exposed_aliases = primitive_scope.scoped_managers
         for guidance in _ROUTING_GUIDANCE:
             if guidance["managers"].issubset(exposed_aliases):
                 lines.append(f"\n**CRITICAL: {guidance['title']} Routing**:")

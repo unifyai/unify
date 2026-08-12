@@ -42,10 +42,6 @@ from unify.conversation_manager.domains.notifications import (
 from unify.conversation_manager.domains.contact_index import (
     ContactIndex,
 )
-from unify.conversation_manager.task_actions import (
-    STEERING_OPERATIONS,
-    parse_action_name,
-)
 from unify.session_details import SESSION_DETAILS
 
 # =============================================================================
@@ -917,17 +913,13 @@ class TestHangUpTool:
         mock_cm.call_manager.has_active_google_meet = True
         mock_cm.call_manager._disconnect_contact = {}
         mock_cm.call_manager.end_call = AsyncMock()
-        brain_action_tools._notify_browser_meet_leave = AsyncMock()
 
         # hang_up defers; the leave only happens on teardown.
         await brain_action_tools.hang_up()
-        brain_action_tools._notify_browser_meet_leave.assert_not_awaited()
+        brain_action_tools._event_broker.publish.assert_not_awaited()
 
         result = await brain_action_tools._perform_hang_up_teardown()
 
-        brain_action_tools._notify_browser_meet_leave.assert_awaited_once_with(
-            "googlemeet",
-        )
         mock_cm.call_manager.end_call.assert_not_awaited()
         published_topics = [
             call.args[0]
@@ -1313,7 +1305,10 @@ class TestSendEmailTool:
     @pytest.mark.asyncio
     async def test_requires_at_least_one_recipient(self, brain_action_tools):
         """Returns error if no recipients provided."""
-        result = await brain_action_tools.send_email(subject="Test", body="Body")
+        result = await brain_action_tools.send_email(
+            subject="Test",
+            body="Hello, checking in.",
+        )
         assert result["status"] == "error"
         assert "at least one recipient" in result["error"].lower()
 
@@ -1327,7 +1322,7 @@ class TestSendEmailTool:
             to=[1],
             reply_all=True,
             subject="Test",
-            body="Body",
+            body="Hello, checking in.",
         )
         assert result["status"] == "error"
         assert "mutually exclusive" in result["error"].lower()
@@ -1727,82 +1722,70 @@ class TestActTool:
 
 
 class TestBuildActionSteeringTools:
-    """Tests for build_action_steering_tools method."""
+    """Tests for build_action_steering_tools method.
 
-    def test_returns_empty_dict_when_no_in_flight_actions(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Returns empty dict when no in-flight actions."""
+    The steering surface is six fixed tools addressed by ``handle_id``. The
+    set never varies with the in-flight action state — tool definitions
+    precede messages in provider prompt-cache keys, so a changing schema
+    would re-bill the static prompt on every action transition. Targets
+    resolve at call time, with corrective errors for stale ids.
+    """
+
+    FIXED_TOOL_NAMES = {
+        "interject_action",
+        "stop_action",
+        "pause_action",
+        "resume_action",
+        "ask_action",
+        "answer_clarification_action",
+    }
+
+    def _running_handle(self):
+        handle = MagicMock()
+        handle._pause_event = MagicMock()
+        handle._pause_event.is_set.return_value = True
+        return handle
+
+    def _paused_handle(self):
+        handle = MagicMock()
+        handle._pause_event = MagicMock()
+        handle._pause_event.is_set.return_value = False
+        return handle
+
+    def test_fixed_tools_with_no_in_flight_actions(self, brain_action_tools, mock_cm):
+        """The full fixed tool set is offered even with nothing in flight."""
         mock_cm.in_flight_actions = {}
         tools = brain_action_tools.build_action_steering_tools()
-        assert tools == {}
+        assert set(tools.keys()) == self.FIXED_TOOL_NAMES
 
-    def test_generates_tools_for_in_flight_action(self, brain_action_tools, mock_cm):
-        """Generates steering tools for each in-flight action.
-
-        Note: With pause/resume flipping, only ONE of pause/resume is generated
-        depending on the handle's pause state. For a running action (default),
-        only pause is available.
-        """
-        # Create a mock handle that appears to be running (not paused)
-        mock_handle = MagicMock()
-        mock_handle._pause_event = MagicMock()
-        mock_handle._pause_event.is_set.return_value = True  # Running (not paused)
-
-        mock_cm.in_flight_actions = {
-            0: {
-                "query": "List all contacts",
-                "handle": mock_handle,
-                "handle_actions": [],
-            },
-        }
-        tools = brain_action_tools.build_action_steering_tools()
-
-        # Should have tools for ask, stop, interject, pause (NOT resume when running)
-        # (but NOT answer_clarification without pending clarifications)
-        tool_names = list(tools.keys())
-
-        # Should have pause but NOT resume when running
-        assert any(
-            "pause_" in n for n in tool_names
-        ), "Should have pause tool when running"
-        assert not any(
-            "resume_" in n for n in tool_names
-        ), "Should NOT have resume tool when running"
-
-        # Other steering tools should be present
-        assert any("ask_" in n for n in tool_names)
-        assert any("stop_" in n for n in tool_names)
-        assert any("interject_" in n for n in tool_names)
-
-    def test_tool_names_follow_expected_format(self, brain_action_tools, mock_cm):
-        """Tool names follow the build_action_name format."""
-        mock_cm.in_flight_actions = {
-            0: {
-                "query": "Search web",
-                "handle": MagicMock(),
-                "handle_actions": [],
-            },
-        }
-        tools = brain_action_tools.build_action_steering_tools()
-        for name in tools.keys():
-            # Should be parseable
-            parsed = parse_action_name(name)
-            assert parsed.operation in [op.name for op in STEERING_OPERATIONS]
-            assert parsed.handle_id == 0
-
-    def test_generates_answer_clarification_when_pending(
+    def test_fixed_tools_with_none_in_flight_actions(
         self,
         brain_action_tools,
         mock_cm,
     ):
-        """Generates answer_clarification tool when pending clarifications exist."""
+        """None in_flight_actions still yields the full fixed tool set."""
+        mock_cm.in_flight_actions = None
+        tools = brain_action_tools.build_action_steering_tools()
+        assert set(tools.keys()) == self.FIXED_TOOL_NAMES
+
+    def test_tool_set_constant_across_action_transitions(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """The tool set is identical for running, paused, and multiple actions."""
+        mock_cm.in_flight_actions = {}
+        empty_names = set(brain_action_tools.build_action_steering_tools().keys())
+
         mock_cm.in_flight_actions = {
             0: {
-                "query": "Do something",
-                "handle": MagicMock(),
+                "query": "Action one",
+                "handle": self._running_handle(),
+                "handle_actions": [],
+            },
+            1: {
+                "query": "Action two",
+                "handle": self._paused_handle(),
                 "handle_actions": [
                     {
                         "action_name": "clarification_request",
@@ -1812,80 +1795,84 @@ class TestBuildActionSteeringTools:
                 ],
             },
         }
-        tools = brain_action_tools.build_action_steering_tools()
-        answer_tools = [n for n in tools.keys() if "answer_clarification" in n]
-        assert len(answer_tools) == 1
+        busy_names = set(brain_action_tools.build_action_steering_tools().keys())
 
-    def test_no_answer_clarification_without_pending(self, brain_action_tools, mock_cm):
-        """No answer_clarification tool when no pending clarifications."""
+        assert empty_names == busy_names == self.FIXED_TOOL_NAMES
+
+    def test_steering_tools_have_docstrings(self, brain_action_tools, mock_cm):
+        """Every fixed steering tool documents its handle_id addressing."""
+        tools = brain_action_tools.build_action_steering_tools()
+        for name, fn in tools.items():
+            assert fn.__doc__ is not None, f"{name} should have docstring"
+            assert (
+                "handle_id" in fn.__doc__
+            ), f"{name} docstring should explain handle_id"
+
+    @pytest.mark.asyncio
+    async def test_stale_handle_id_returns_corrective_error(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """An unknown handle_id gets an error listing the live ids."""
         mock_cm.in_flight_actions = {
             0: {
-                "query": "Do something",
-                "handle": MagicMock(),
-                "handle_actions": [],  # No pending clarifications
-            },
-        }
-        tools = brain_action_tools.build_action_steering_tools()
-        answer_tools = [n for n in tools.keys() if "answer_clarification" in n]
-        assert len(answer_tools) == 0
-
-    def test_skips_answered_clarifications(self, brain_action_tools, mock_cm):
-        """Does not generate tool for already answered clarifications."""
-        mock_cm.in_flight_actions = {
-            0: {
-                "query": "Do something",
-                "handle": MagicMock(),
-                "handle_actions": [
-                    {
-                        "action_name": "clarification_request",
-                        "query": "Need info?",
-                        "call_id": "call_answered",
-                        "response": "Here's the answer",  # Already answered
-                    },
-                ],
-            },
-        }
-        tools = brain_action_tools.build_action_steering_tools()
-        answer_tools = [n for n in tools.keys() if "answer_clarification" in n]
-        assert len(answer_tools) == 0
-
-    def test_handles_multiple_actions(self, brain_action_tools, mock_cm):
-        """Generates tools for multiple in-flight actions."""
-        # Create mock handles
-        mock_handle1 = MagicMock()
-        mock_handle1._pause_event = MagicMock()
-        mock_handle1._pause_event.is_set.return_value = True  # Running
-
-        mock_handle2 = MagicMock()
-        mock_handle2._pause_event = MagicMock()
-        mock_handle2._pause_event.is_set.return_value = True  # Running
-
-        mock_cm.in_flight_actions = {
-            0: {
-                "query": "Action one",
-                "handle": mock_handle1,
-                "handle_actions": [],
-            },
-            1: {
-                "query": "Action two",
-                "handle": mock_handle2,
+                "query": "Only action",
+                "handle": self._running_handle(),
                 "handle_actions": [],
             },
         }
         tools = brain_action_tools.build_action_steering_tools()
-        # Should have steering tools for both actions
-        action0_tools = [n for n in tools.keys() if "__0" in n]
-        action1_tools = [n for n in tools.keys() if "__1" in n]
-        assert len(action0_tools) > 0
-        assert len(action1_tools) > 0
+        result = await tools["stop_action"](handle_id=7, reason="stale")
+        assert result["status"] == "error"
+        assert result["operation"] == "stop"
+        assert "handle_id=7" in result["message"]
+        assert "[0]" in result["message"]
 
-    def test_paused_handle_only_shows_resume(self, brain_action_tools, mock_cm):
-        """When handle is paused, only resume_* is generated (not pause_*)."""
-        # Create a paused handle (pause_event is cleared)
-        mock_handle = MagicMock()
-        mock_handle._pause_event = MagicMock()
-        mock_handle._pause_event.is_set.return_value = False  # Paused
+    @pytest.mark.asyncio
+    async def test_interject_delegates_to_handle(self, brain_action_tools, mock_cm):
+        """interject_action resolves the handle at call time and interjects."""
+        mock_handle = self._running_handle()
+        mock_handle.interject = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Test",
+                "handle": mock_handle,
+                "handle_actions": [],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["interject_action"](handle_id=0, message="New info")
+        mock_handle.interject.assert_called_once()
+        assert result["status"] == "ok"
+        assert result["operation"] == "interject"
 
+    @pytest.mark.asyncio
+    async def test_pause_running_action_delegates(self, brain_action_tools, mock_cm):
+        """pause_action pauses a running handle."""
+        mock_handle = self._running_handle()
+        mock_handle.pause = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Running action",
+                "handle": mock_handle,
+                "handle_actions": [],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["pause_action"](handle_id=0)
+        mock_handle.pause.assert_called_once()
+        assert result["operation"] == "pause"
+
+    @pytest.mark.asyncio
+    async def test_pause_already_paused_short_circuits(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """pause_action on a paused handle reports so without delegating."""
+        mock_handle = self._paused_handle()
+        mock_handle.pause = AsyncMock()
         mock_cm.in_flight_actions = {
             0: {
                 "query": "Paused action",
@@ -1894,18 +1881,79 @@ class TestBuildActionSteeringTools:
             },
         }
         tools = brain_action_tools.build_action_steering_tools()
-        tool_names = list(tools.keys())
-
-        # Should have resume but NOT pause when paused
-        assert any(
-            "resume_" in n for n in tool_names
-        ), "Should have resume tool when paused"
-        assert not any(
-            "pause_" in n for n in tool_names
-        ), "Should NOT have pause tool when paused"
+        result = await tools["pause_action"](handle_id=0)
+        mock_handle.pause.assert_not_called()
+        assert result["status"] == "ok"
+        assert "already paused" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_storage_check_handle_paused_shows_resume(
+    async def test_resume_paused_action_delegates(self, brain_action_tools, mock_cm):
+        """resume_action resumes a paused handle."""
+        mock_handle = self._paused_handle()
+        mock_handle.resume = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Paused action",
+                "handle": mock_handle,
+                "handle_actions": [],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["resume_action"](handle_id=0)
+        mock_handle.resume.assert_called_once()
+        assert result["operation"] == "resume"
+
+    @pytest.mark.asyncio
+    async def test_resume_running_action_short_circuits(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """resume_action on a running handle reports so without delegating."""
+        mock_handle = self._running_handle()
+        mock_handle.resume = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Running action",
+                "handle": mock_handle,
+                "handle_actions": [],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["resume_action"](handle_id=0)
+        mock_handle.resume.assert_not_called()
+        assert result["status"] == "ok"
+        assert "not paused" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_pause_state_treated_as_running(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """A handle without _pause_event (unknown state) pauses, not resumes."""
+        mock_handle = MagicMock(spec=["pause", "resume"])
+        mock_handle.pause = AsyncMock()
+        mock_handle.resume = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Action with unknown state",
+                "handle": mock_handle,
+                "handle_actions": [],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+
+        pause_result = await tools["pause_action"](handle_id=0)
+        mock_handle.pause.assert_called_once()
+        assert pause_result["operation"] == "pause"
+
+        resume_result = await tools["resume_action"](handle_id=0)
+        mock_handle.resume.assert_not_called()
+        assert "not paused" in resume_result["message"]
+
+    @pytest.mark.asyncio
+    async def test_storage_check_handle_forwards_pause_state(
         self,
         brain_action_tools,
         mock_cm,
@@ -1913,17 +1961,17 @@ class TestBuildActionSteeringTools:
         """_StorageCheckHandle forwards inner handle's pause state.
 
         Regression: _StorageCheckHandle didn't expose _pause_event, so
-        get_handle_paused_state returned None (unknown). This caused
-        build_action_steering_tools to always offer pause_* and never
-        offer resume_* — even when the inner loop was paused. The CM's
-        LLM would then call pause_* repeatedly while trying to resume,
-        producing serial "Pause" events visible on the frontend.
+        get_handle_paused_state returned None (unknown) and a paused inner
+        loop looked running. pause_action would then delegate a redundant
+        pause instead of reporting the action already paused, producing
+        serial "Pause" events visible on the frontend.
         """
         from unify.actor.code_act_actor import _StorageCheckHandle
 
         inner_handle = MagicMock()
         inner_handle._pause_event = asyncio.Event()
         inner_handle._pause_event.set()  # Start running
+        inner_handle.pause = AsyncMock()
 
         # Block result() so the lifecycle stays in phase 1 ("task")
         _block = asyncio.Event()
@@ -1958,14 +2006,11 @@ class TestBuildActionSteeringTools:
             }
 
             tools = brain_action_tools.build_action_steering_tools()
-            tool_names = list(tools.keys())
+            result = await tools["pause_action"](handle_id=0)
 
-            assert any(
-                "resume_" in n for n in tool_names
-            ), f"Should have resume tool when paused, got: {tool_names}"
-            assert not any(
-                "pause_" in n for n in tool_names
-            ), f"Should NOT have pause tool when paused, got: {tool_names}"
+            inner_handle.pause.assert_not_called()
+            assert result["status"] == "ok"
+            assert "already paused" in result["message"]
         finally:
             _block.set()
             wrapped._lifecycle_task.cancel()
@@ -1974,73 +2019,204 @@ class TestBuildActionSteeringTools:
             except (asyncio.CancelledError, Exception):
                 pass
 
-    def test_running_handle_only_shows_pause(self, brain_action_tools, mock_cm):
-        """When handle is running, only pause_* is generated (not resume_*)."""
-        # Create a running handle (pause_event is set)
+    @pytest.mark.asyncio
+    async def test_ask_serves_completed_action(self, brain_action_tools, mock_cm):
+        """ask_action reaches actions that have already completed."""
         mock_handle = MagicMock()
-        mock_handle._pause_event = MagicMock()
-        mock_handle._pause_event.is_set.return_value = True  # Running
+        mock_ask_handle = MagicMock()
+        mock_ask_handle.result = AsyncMock(return_value="Answer")
+        mock_handle.ask = AsyncMock(return_value=mock_ask_handle)
 
-        mock_cm.in_flight_actions = {
+        mock_cm.in_flight_actions = {}
+        mock_cm.completed_actions = {
             0: {
-                "query": "Running action",
+                "query": "Find contacts",
                 "handle": mock_handle,
                 "handle_actions": [],
             },
         }
+        mock_cm._pending_steering_tasks = set()
+        mock_cm._current_state_snapshot = None
+        mock_cm.event_broker.publish = AsyncMock()
+
         tools = brain_action_tools.build_action_steering_tools()
-        tool_names = list(tools.keys())
+        result = await tools["ask_action"](handle_id=0, question="What did you find?")
 
-        # Should have pause but NOT resume when running
-        assert any(
-            "pause_" in n for n in tool_names
-        ), "Should have pause tool when running"
-        assert not any(
-            "resume_" in n for n in tool_names
-        ), "Should NOT have resume tool when running"
+        for task in list(mock_cm._pending_steering_tasks):
+            await task
 
-    def test_handle_without_pause_event_shows_pause(self, brain_action_tools, mock_cm):
-        """When handle has no _pause_event (unknown state), defaults to pause_*."""
-        # Create a handle without _pause_event
-        mock_handle = MagicMock(spec=[])  # No attributes
+        mock_handle.ask.assert_called_once()
+        assert result["status"] == "ok"
+        assert result["operation"] == "ask"
 
+    @pytest.mark.asyncio
+    async def test_ask_unknown_handle_errors(self, brain_action_tools, mock_cm):
+        """ask_action on an id neither in flight nor completed errors."""
+        mock_cm.in_flight_actions = {}
+        mock_cm.completed_actions = {}
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["ask_action"](handle_id=5, question="Anything?")
+        assert result["status"] == "error"
+        assert result["operation"] == "ask"
+
+    @pytest.mark.asyncio
+    async def test_answer_clarification_without_pending_errors(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """answer_clarification_action errors when nothing is pending."""
         mock_cm.in_flight_actions = {
             0: {
-                "query": "Action with unknown state",
-                "handle": mock_handle,
-                "handle_actions": [],
-            },
-        }
-        tools = brain_action_tools.build_action_steering_tools()
-        tool_names = list(tools.keys())
-
-        # Should default to showing pause (assume running) when state unknown
-        assert any("pause_" in n for n in tool_names), "Should default to pause tool"
-        assert not any(
-            "resume_" in n for n in tool_names
-        ), "Should NOT have resume tool when state unknown"
-
-    def test_steering_tools_have_docstrings(self, brain_action_tools, mock_cm):
-        """Generated steering tools have docstrings."""
-        mock_cm.in_flight_actions = {
-            0: {
-                "query": "Test action",
+                "query": "Do something",
                 "handle": MagicMock(),
                 "handle_actions": [],
             },
         }
         tools = brain_action_tools.build_action_steering_tools()
-        for name, fn in tools.items():
-            assert fn.__doc__ is not None, f"{name} should have docstring"
-            assert (
-                "Test action" in fn.__doc__
-            ), f"{name} docstring should mention action"
+        result = await tools["answer_clarification_action"](
+            handle_id=0,
+            answer="Here you go",
+        )
+        assert result["status"] == "error"
+        assert "no pending clarification" in result["message"]
 
-    def test_handles_none_in_flight_actions(self, brain_action_tools, mock_cm):
-        """Handles None in_flight_actions gracefully."""
-        mock_cm.in_flight_actions = None
+    @pytest.mark.asyncio
+    async def test_answer_clarification_ignores_answered_clarifications(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """Already answered clarifications no longer count as pending."""
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Do something",
+                "handle": MagicMock(),
+                "handle_actions": [
+                    {
+                        "action_name": "clarification_request",
+                        "query": "Need info?",
+                        "call_id": "call_answered",
+                        "response": "Here's the answer",
+                    },
+                ],
+            },
+        }
         tools = brain_action_tools.build_action_steering_tools()
-        assert tools == {}
+        result = await tools["answer_clarification_action"](
+            handle_id=0,
+            answer="Again?",
+        )
+        assert result["status"] == "error"
+        assert "no pending clarification" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_answer_clarification_single_pending_without_call_id(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """With exactly one pending clarification, call_id may be omitted."""
+        mock_handle = MagicMock()
+        mock_handle.answer_clarification = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Do something",
+                "handle": mock_handle,
+                "handle_actions": [
+                    {
+                        "action_name": "clarification_request",
+                        "query": "Need more info?",
+                        "call_id": "call_123",
+                    },
+                ],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["answer_clarification_action"](
+            handle_id=0,
+            answer="Here is the answer",
+        )
+        mock_handle.answer_clarification.assert_called_once_with(
+            "call_123",
+            "Here is the answer",
+        )
+        assert result["status"] == "ok"
+        assert result["operation"] == "answer_clarification"
+
+    @pytest.mark.asyncio
+    async def test_answer_clarification_targets_call_id(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """An explicit call_id picks one of several pending clarifications."""
+        mock_handle = MagicMock()
+        mock_handle.answer_clarification = AsyncMock()
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Do something",
+                "handle": mock_handle,
+                "handle_actions": [
+                    {
+                        "action_name": "clarification_request",
+                        "query": "First question?",
+                        "call_id": "call_first",
+                    },
+                    {
+                        "action_name": "clarification_request",
+                        "query": "Second question?",
+                        "call_id": "call_second",
+                    },
+                ],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["answer_clarification_action"](
+            handle_id=0,
+            answer="For the second one",
+            call_id="call_second",
+        )
+        mock_handle.answer_clarification.assert_called_once_with(
+            "call_second",
+            "For the second one",
+        )
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_answer_clarification_ambiguous_without_call_id_errors(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """Several pending clarifications require an explicit call_id."""
+        mock_cm.in_flight_actions = {
+            0: {
+                "query": "Do something",
+                "handle": MagicMock(),
+                "handle_actions": [
+                    {
+                        "action_name": "clarification_request",
+                        "query": "First question?",
+                        "call_id": "call_first",
+                    },
+                    {
+                        "action_name": "clarification_request",
+                        "query": "Second question?",
+                        "call_id": "call_second",
+                    },
+                ],
+            },
+        }
+        tools = brain_action_tools.build_action_steering_tools()
+        result = await tools["answer_clarification_action"](
+            handle_id=0,
+            answer="Which one?",
+        )
+        assert result["status"] == "error"
+        assert "call_id" in result["message"]
+        assert "call_first" in result["message"]
+        assert "call_second" in result["message"]
 
 
 class TestMakeSteeringTool:
@@ -2335,30 +2511,7 @@ class TestToolDocstrings:
 
 
 class TestCompletedActionTools:
-    """Tests for completed action tools (ask and close)."""
-
-    def test_build_completed_action_tools_includes_ask_and_close(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """build_completed_action_tools generates both ask_* and close_* tools."""
-        mock_cm.completed_actions = {
-            0: {
-                "query": "Find contacts",
-                "handle": MagicMock(),
-                "handle_actions": [],
-            },
-        }
-
-        tools = brain_action_tools.build_completed_action_tools()
-        tool_names = list(tools.keys())
-
-        ask_tools = [n for n in tool_names if n.startswith("ask_")]
-        assert len(ask_tools) == 1, f"Expected 1 ask tool, got {ask_tools}"
-        assert not any(
-            n.startswith("close_") for n in tool_names
-        ), f"close_* should not appear for completed actions: {tool_names}"
+    """Completed actions expose no per-action tools; ask_action serves them."""
 
     def test_no_completed_actions_yields_no_tools(
         self,
@@ -2368,14 +2521,15 @@ class TestCompletedActionTools:
         """Empty completed_actions yields no tools."""
         mock_cm.completed_actions = {}
         tools = brain_action_tools.build_completed_action_tools()
-        assert len(tools) == 0
+        assert tools == {}
 
-    def test_multiple_completed_actions_yield_tools_for_each(
+    def test_completed_actions_yield_no_per_action_tools(
         self,
         brain_action_tools,
         mock_cm,
     ):
-        """Each completed action gets its own ask_* tool."""
+        """Completed actions add nothing to the tool surface — the fixed
+        ask_action steering tool serves them by handle_id."""
         mock_cm.completed_actions = {
             0: {
                 "query": "Find contacts",
@@ -2390,9 +2544,7 @@ class TestCompletedActionTools:
         }
 
         tools = brain_action_tools.build_completed_action_tools()
-        ask_tools = [n for n in tools if n.startswith("ask_")]
-        assert len(ask_tools) == 2
-        assert not any(n.startswith("close_") for n in tools)
+        assert tools == {}
 
 
 class TestBrainToolsIntegration:

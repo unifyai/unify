@@ -363,6 +363,7 @@ class TestJobDispatch:
                 boss_contact,
                 False,
                 extra_metadata=None,
+                fallback_env=None,
             )
 
     @pytest.mark.asyncio
@@ -394,6 +395,7 @@ class TestJobDispatch:
                 boss_contact,
                 False,
                 extra_metadata=None,
+                fallback_env=None,
             )
 
 

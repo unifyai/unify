@@ -210,8 +210,10 @@ def _install_entrypoint_fakes(monkeypatch, sequence, extra_metadata=None):
         voice=SimpleNamespace(provider="cartesia", id=""),
         voice_call=SimpleNamespace(outbound=True, channel="whatsapp_call"),
         is_coordinator=False,
+        is_multiplayer=False,
         org_id=None,
         unify_key="",
+        export_to_env=lambda: None,
     )
 
     broker = _FakeEventBroker()

@@ -30,6 +30,10 @@ EXCLUDE_DIRS = {
     ".pytest_cache",
     ".mypy_cache",
     "fixtures",
+    # Deliberate hang fixture spawned by the parallel_run meta-tests
+    # (tests/parallel_run/conftest.py HANG_FIXTURES_DIR); running it as an
+    # ordinary matrix entry just sleeps until the session timeout kills it.
+    "hang_fixtures",
     ".git",
     ".venv",
     "venv",

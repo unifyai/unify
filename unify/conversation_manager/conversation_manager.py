@@ -143,6 +143,11 @@ DESKTOP_SCOPED_MEET_SURFACES = (
     "assistant_screen_share_active",
     "user_remote_control_active",
 )
+# Viewer-source namespace for someone watching the assistant's desktop from
+# inside a call, as ``call:<call_id>``. The Console composes the full source; the
+# namespace alone is what a call boundary closes. Kept in step with
+# ``console/src/lib/assistants/desktopViewer.ts``.
+CALL_VIEWER_SOURCE = "call"
 
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
@@ -478,6 +483,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # ``*_MEET_SURFACES`` tuples above, which decide what a call boundary
         # closes.
         self.assistant_screen_share_active: bool = False
+        # Who currently has the assistant's desktop open, as
+        # ``"<source>:<user_id>"``. ``assistant_screen_share_active`` above is
+        # this set's emptiness, cached so the ~15 readers of the flag (and the
+        # generic ``_MEET_STATE_FLAGS`` setattr path) keep working unchanged.
+        # Membership, not the last event, decides: several people watch the same
+        # desktop at once, and one of them closing their tab must not tell the
+        # assistant that nobody is looking.
+        self._assistant_screen_share_viewers: set[str] = set()
         self.user_screen_share_active: bool = False
         # Someone in a browser meeting is sharing a screen with us. Kept apart
         # from ``user_screen_share_active`` because that one also gates the
@@ -801,6 +814,56 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         return self.assistant_screen_share_active
 
+    @staticmethod
+    def assistant_screen_share_viewer_key(user_id: str, source: str) -> str:
+        """Identify one viewer of the assistant's desktop.
+
+        A client that predates viewer tracking sends neither field; it collapses
+        to a single legacy key so its start/stop pair still opens and closes the
+        surface. Without that, an un-upgraded Console would add a viewer it could
+        never remove and pin the desktop open for the rest of the session.
+        """
+        return f"{source or 'legacy'}:{user_id or 'legacy'}"
+
+    def note_assistant_screen_share_viewer(
+        self,
+        *,
+        user_id: str,
+        source: str,
+        watching: bool,
+    ) -> bool:
+        """Add or remove one viewer; return whether anyone is watching now."""
+        key = self.assistant_screen_share_viewer_key(user_id, source)
+        if watching:
+            self._assistant_screen_share_viewers.add(key)
+        else:
+            self._assistant_screen_share_viewers.discard(key)
+        return bool(self._assistant_screen_share_viewers)
+
+    def drop_assistant_screen_share_viewers(self, source: str) -> bool:
+        """Drop every viewer watching through ``source``; return who is left.
+
+        The reason the viewer set exists: a call ending closes the viewers it
+        owns and leaves a standalone Desktop tab watching, which is why
+        ``assistant_screen_share_active`` cannot simply be cleared at a call
+        boundary -- see ``DESKTOP_SCOPED_MEET_SURFACES``.
+
+        Sources are namespaced, so a namespace drops everything under it:
+        ``CALL_VIEWER_SOURCE`` closes every call viewer without needing to know
+        which call, which is what a call boundary wants -- a pod runs one call at
+        a time, so no call viewer outlives one.
+        """
+        prefix = f"{source}:"
+        self._assistant_screen_share_viewers = {
+            key
+            for key in self._assistant_screen_share_viewers
+            if not key.startswith(prefix)
+        }
+        self.assistant_screen_share_active = bool(
+            self._assistant_screen_share_viewers,
+        )
+        return self.assistant_screen_share_active
+
     def reset_meet_surfaces(self) -> None:
         """Close the call-scoped meet surfaces at a call boundary.
 
@@ -822,9 +885,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         nothing. Frames paired with an utterance stay — those are evidence for
         something somebody said, and remain true after the screen goes.
 
-        Only ``CALL_SCOPED_MEET_SURFACES`` is touched — see
-        ``DESKTOP_SCOPED_MEET_SURFACES`` for why the assistant's own desktop
-        must survive a call boundary.
+        The assistant's own desktop is not in ``CALL_SCOPED_MEET_SURFACES`` and
+        is not blanket-cleared — see ``DESKTOP_SCOPED_MEET_SURFACES``. Its
+        *call* viewers are still closed here, which is the distinction the viewer
+        set exists to make: the people who were watching from the call stop
+        watching when the call goes, and a Desktop tab open beside it does not.
         """
 
         for surface, screenshot_sources in CALL_SCOPED_MEET_SURFACES.items():
@@ -832,6 +897,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self._frontend_reported_meet_surfaces.discard(surface)
             for source in screenshot_sources:
                 self.drop_unpaired_screenshots(source)
+
+        still_watched = self.drop_assistant_screen_share_viewers(CALL_VIEWER_SOURCE)
+        if not still_watched:
+            # Nobody can be driving a desktop nobody is looking at, and a
+            # remote-control flag left set makes the assistant refuse to act for
+            # the rest of the session while it waits to be handed back.
+            self.user_remote_control_active = False
+            self._frontend_reported_meet_surfaces.discard(
+                "assistant_screen_share_active",
+            )
+            self._frontend_reported_meet_surfaces.discard(
+                "user_remote_control_active",
+            )
+            self.drop_unpaired_screenshots("assistant")
 
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""

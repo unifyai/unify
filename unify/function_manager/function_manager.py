@@ -7846,8 +7846,19 @@ if __name__ == "__main__":
                 return await fn(**call_kwargs)
             return fn(**call_kwargs)
 
+        from unify.provider_proxy.session import scrub_platform_secrets_from_environ
+
         try:
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+            # A stored function runs the same caller-authored code as the code
+            # tool does, in the same process, so it needs the same withholding
+            # of platform credentials from the environment it can read.
+            with (
+                scrub_platform_secrets_from_environ(),
+                redirect_stdout(
+                    stdout_capture,
+                ),
+                redirect_stderr(stderr_capture),
+            ):
                 if steering is None:
                     result = await _run_implementation(implementation)
                 else:
@@ -7946,7 +7957,9 @@ if __name__ == "__main__":
         # Use the scoped primitive_scope from this FunctionManager
         for spec in self._registry.manager_specs(self._primitive_scope):
             manager_name = spec.manager_alias
-            description = spec.description
+            description = spec.prompt_text(
+                self._primitive_scope.scoped_managers,
+            ).description
 
             # Get primitive rows which contain signature and docstring
             single_scope = PrimitiveScope(scoped_managers=frozenset({manager_name}))

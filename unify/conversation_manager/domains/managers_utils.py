@@ -994,6 +994,18 @@ async def actor_watch_notifications(
                 break
             continue
 
+        # An empty payload means "nothing to report", never a real
+        # notification — treat it as end-of-stream once the handle is done.
+        # The explicit yield guards against a handle whose
+        # ``next_notification`` completes synchronously: ``wait_for`` awaits
+        # the coroutine inline, so without it this loop would never suspend
+        # and would starve the entire event loop.
+        if not notif:
+            if already_done:
+                break
+            await asyncio.sleep(0)
+            continue
+
         # Determine whether this is a turn-complete response or a progress
         # notification. The loop emits responses with {"type": "response", ...}.
         is_response = isinstance(notif, dict) and notif.get("type") == "response"
