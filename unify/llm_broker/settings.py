@@ -7,8 +7,10 @@ in the pod the provider credentials are mounted.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Mapping, Optional
+
+from unify.llm_broker.voice import VoiceProvider
 
 #: How long a positive authorisation may be reused for the same key and model.
 #:
@@ -35,6 +37,11 @@ class BrokerSettings:
     anthropic_api_key: Optional[str]
     anthropic_api_base: str
     auth_ttl_s: float
+    #: Voice STT/TTS providers keyed by the path segment the plugin is pointed
+    #: at (``/voice/<name>/...``). Empty when no voice keys are mounted, which
+    #: leaves the routes present but refusing -- the same shape as an LLM leg
+    #: whose key is absent.
+    voice_providers: Mapping[str, VoiceProvider] = field(default_factory=dict)
 
     @property
     def authorize_url(self) -> str:
@@ -54,6 +61,54 @@ def _float_env(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if value >= 0 else default
+
+
+#: Static shape of each voice provider: where its bytes go and where its
+#: credential sits. The key comes from the sidecar env; everything else is a
+#: property of the provider's protocol, confirmed against the installed plugin.
+_VOICE_REGISTRY = (
+    # Deepgram STT authenticates its listen socket with an Authorization header.
+    (
+        "deepgram",
+        "https://api.deepgram.com",
+        "DEEPGRAM_API_KEY",
+        "header",
+        "Authorization",
+        "Token {key}",
+    ),
+    # Cartesia TTS carries the key as an ``api_key`` query parameter, not a header.
+    (
+        "cartesia",
+        "https://api.cartesia.ai",
+        "CARTESIA_API_KEY",
+        "query",
+        "api_key",
+        "{key}",
+    ),
+    # ElevenLabs TTS uses an ``xi-api-key`` header holding the bare key.
+    (
+        "elevenlabs",
+        "https://api.elevenlabs.io",
+        "ELEVEN_API_KEY",
+        "header",
+        "xi-api-key",
+        "{key}",
+    ),
+)
+
+
+def _load_voice_providers() -> dict[str, VoiceProvider]:
+    providers: dict[str, VoiceProvider] = {}
+    for name, base, env_key, cred_in, cred_name, cred_template in _VOICE_REGISTRY:
+        providers[name] = VoiceProvider(
+            name=name,
+            upstream_base=os.environ.get(f"{name.upper()}_UPSTREAM_BASE", base),
+            api_key=os.environ.get(env_key) or None,
+            cred_in=cred_in,
+            cred_name=cred_name,
+            cred_template=cred_template,
+        )
+    return providers
 
 
 def load_settings() -> BrokerSettings:
@@ -80,4 +135,5 @@ def load_settings() -> BrokerSettings:
             "https://api.anthropic.com",
         ),
         auth_ttl_s=_float_env("UNIFY_LLM_BROKER_AUTH_TTL_S", _DEFAULT_AUTH_TTL_S),
+        voice_providers=_load_voice_providers(),
     )
