@@ -189,6 +189,29 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm._frontend_reported_meet_surfaces = set()
     cm.memory_manager = None
 
+    # Real viewer-set behaviour: the handler derives
+    # ``assistant_screen_share_active`` from this set, so a MagicMock's
+    # auto-returned truthy stub would make every assertion about the flag
+    # meaningless.
+    from unify.conversation_manager.conversation_manager import ConversationManager
+
+    cm._assistant_screen_share_viewers = set()
+    cm.assistant_screen_share_viewer_key = (
+        ConversationManager.assistant_screen_share_viewer_key
+    )
+    cm.note_assistant_screen_share_viewer = (
+        ConversationManager.note_assistant_screen_share_viewer.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+    cm.drop_assistant_screen_share_viewers = (
+        ConversationManager.drop_assistant_screen_share_viewers.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+
     # Create a SimulatedContactManager and populate with sample contacts
     contact_manager = SimulatedContactManager()
 
@@ -2047,6 +2070,89 @@ class TestMeetInteractionEventHandlers:
         )
         await EventHandler.handle_event(event, mock_cm)
 
+        assert mock_cm.assistant_screen_share_active is False
+
+    @pytest.mark.asyncio
+    async def test_one_viewer_leaving_keeps_the_desktop_open_for_the_others(
+        self,
+        mock_cm,
+    ):
+        """Membership decides the surface, not the last event to arrive.
+
+        Everyone on a room call mounts the liveview for themselves, so the
+        assistant is only unwatched once the last of them closes it. Deriving
+        the flag from the newest event instead would let whoever leaves first
+        tell the assistant nobody is looking.
+        """
+        call = "call:sess-1"
+        for user_id in ("user-1", "user-2"):
+            await EventHandler.handle_event(
+                AssistantScreenShareStarted(
+                    viewer_user_id=user_id,
+                    viewer_source=call,
+                ),
+                mock_cm,
+            )
+        assert mock_cm.assistant_screen_share_active is True
+        # The second arrival is counted without re-announcing a live share.
+        assert len(mock_cm.notifications_bar.notifications) == 1
+
+        await EventHandler.handle_event(
+            AssistantScreenShareStopped(viewer_user_id="user-1", viewer_source=call),
+            mock_cm,
+        )
+        assert mock_cm.assistant_screen_share_active is True
+
+        await EventHandler.handle_event(
+            AssistantScreenShareStopped(viewer_user_id="user-2", viewer_source=call),
+            mock_cm,
+        )
+        assert mock_cm.assistant_screen_share_active is False
+
+    @pytest.mark.asyncio
+    async def test_a_stop_from_one_surface_leaves_another_surface_watching(
+        self,
+        mock_cm,
+    ):
+        """The Desktop tab and a call are separate viewers of one desktop."""
+        await EventHandler.handle_event(
+            AssistantScreenShareStarted(
+                viewer_user_id="user-1",
+                viewer_source="desktop_pane",
+            ),
+            mock_cm,
+        )
+        await EventHandler.handle_event(
+            AssistantScreenShareStarted(
+                viewer_user_id="user-1",
+                viewer_source="call:sess-1",
+            ),
+            mock_cm,
+        )
+
+        # Leaving the call closes only what the call owned.
+        assert mock_cm.drop_assistant_screen_share_viewers("call:sess-1") is True
+        assert mock_cm.assistant_screen_share_active is True
+
+        await EventHandler.handle_event(
+            AssistantScreenShareStopped(
+                viewer_user_id="user-1",
+                viewer_source="desktop_pane",
+            ),
+            mock_cm,
+        )
+        assert mock_cm.assistant_screen_share_active is False
+
+    @pytest.mark.asyncio
+    async def test_a_client_that_sends_no_viewer_still_opens_and_closes(
+        self,
+        mock_cm,
+    ):
+        """A Console older than viewer tracking must not pin the desktop open."""
+        await EventHandler.handle_event(AssistantScreenShareStarted(), mock_cm)
+        assert mock_cm.assistant_screen_share_active is True
+
+        await EventHandler.handle_event(AssistantScreenShareStopped(), mock_cm)
         assert mock_cm.assistant_screen_share_active is False
 
     @pytest.mark.asyncio

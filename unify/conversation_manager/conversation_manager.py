@@ -478,6 +478,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # ``*_MEET_SURFACES`` tuples above, which decide what a call boundary
         # closes.
         self.assistant_screen_share_active: bool = False
+        # Who currently has the assistant's desktop open, as
+        # ``"<source>:<user_id>"``. ``assistant_screen_share_active`` above is
+        # this set's emptiness, cached so the ~15 readers of the flag (and the
+        # generic ``_MEET_STATE_FLAGS`` setattr path) keep working unchanged.
+        # Membership, not the last event, decides: several people watch the same
+        # desktop at once, and one of them closing their tab must not tell the
+        # assistant that nobody is looking.
+        self._assistant_screen_share_viewers: set[str] = set()
         self.user_screen_share_active: bool = False
         # Someone in a browser meeting is sharing a screen with us. Kept apart
         # from ``user_screen_share_active`` because that one also gates the
@@ -799,6 +807,51 @@ class ConversationManager(metaclass=SingletonABCMeta):
         computer primitives — the prompt guides the LLM to spin up a concurrent
         ``act(persist=True)`` session when one isn't already running.
         """
+        return self.assistant_screen_share_active
+
+    @staticmethod
+    def assistant_screen_share_viewer_key(user_id: str, source: str) -> str:
+        """Identify one viewer of the assistant's desktop.
+
+        A client that predates viewer tracking sends neither field; it collapses
+        to a single legacy key so its start/stop pair still opens and closes the
+        surface. Without that, an un-upgraded Console would add a viewer it could
+        never remove and pin the desktop open for the rest of the session.
+        """
+        return f"{source or 'legacy'}:{user_id or 'legacy'}"
+
+    def note_assistant_screen_share_viewer(
+        self,
+        *,
+        user_id: str,
+        source: str,
+        watching: bool,
+    ) -> bool:
+        """Add or remove one viewer; return whether anyone is watching now."""
+        key = self.assistant_screen_share_viewer_key(user_id, source)
+        if watching:
+            self._assistant_screen_share_viewers.add(key)
+        else:
+            self._assistant_screen_share_viewers.discard(key)
+        return bool(self._assistant_screen_share_viewers)
+
+    def drop_assistant_screen_share_viewers(self, source: str) -> bool:
+        """Drop every viewer watching through ``source``; return who is left.
+
+        The reason the viewer set exists: a call ending closes the viewers it
+        owns (``call:<call_id>``) and leaves a standalone Desktop tab watching,
+        which is why ``assistant_screen_share_active`` cannot simply be cleared
+        at a call boundary -- see ``DESKTOP_SCOPED_MEET_SURFACES``.
+        """
+        prefix = f"{source}:"
+        self._assistant_screen_share_viewers = {
+            key
+            for key in self._assistant_screen_share_viewers
+            if not key.startswith(prefix)
+        }
+        self.assistant_screen_share_active = bool(
+            self._assistant_screen_share_viewers,
+        )
         return self.assistant_screen_share_active
 
     def reset_meet_surfaces(self) -> None:
