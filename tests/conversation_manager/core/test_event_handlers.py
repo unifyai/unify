@@ -2041,6 +2041,37 @@ class TestActorEventHandlers:
 # =============================================================================
 
 
+def _reset_surfaces_cm(surfaces, viewers, dropped=None, claimed=None):
+    """Minimal stand-in for ``reset_meet_surfaces``, with a real viewer set.
+
+    ``assistant_screen_share_active`` is derived from the viewer set, so the two
+    are seeded together — a stub with the flag set and no viewers is a state the
+    real object cannot reach.
+    """
+    from unify.conversation_manager.conversation_manager import ConversationManager
+
+    def _drop(source):
+        if dropped is not None:
+            dropped.append(source)
+        return 0
+
+    cm = SimpleNamespace(
+        _frontend_reported_meet_surfaces=set(
+            surfaces if claimed is None else claimed,
+        ),
+        _assistant_screen_share_viewers=set(viewers),
+        drop_unpaired_screenshots=_drop,
+        **{name: True for name in surfaces},
+    )
+    cm.drop_assistant_screen_share_viewers = (
+        ConversationManager.drop_assistant_screen_share_viewers.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+    return cm
+
+
 class TestMeetInteractionEventHandlers:
     """Tests for screen share and remote control event handlers."""
 
@@ -2401,11 +2432,7 @@ class TestMeetInteractionEventHandlers:
         )
 
         every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
-        cm = SimpleNamespace(
-            _frontend_reported_meet_surfaces=set(every_surface),
-            drop_unpaired_screenshots=lambda _source: 0,
-            **{name: True for name in every_surface},
-        )
+        cm = _reset_surfaces_cm(every_surface, viewers={"desktop_pane:user-1"})
 
         ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
 
@@ -2414,6 +2441,34 @@ class TestMeetInteractionEventHandlers:
         for name in DESKTOP_SCOPED_MEET_SURFACES:
             assert getattr(cm, name) is True, name
         assert cm._frontend_reported_meet_surfaces == set(DESKTOP_SCOPED_MEET_SURFACES)
+        assert cm._assistant_screen_share_viewers == {"desktop_pane:user-1"}
+
+    def test_reset_meet_surfaces_closes_the_desktop_the_call_was_watching(self):
+        """With only call viewers, the boundary does close the desktop.
+
+        The counterpart to sparing the Desktop tab: viewers that belonged to the
+        call go with it, so a share nobody kept open outside the call does not
+        leak into the next one — and remote control cannot stay held by someone
+        who is no longer even watching.
+        """
+        from unify.conversation_manager.conversation_manager import (
+            CALL_SCOPED_MEET_SURFACES,
+            DESKTOP_SCOPED_MEET_SURFACES,
+            ConversationManager,
+        )
+
+        every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
+        cm = _reset_surfaces_cm(
+            every_surface,
+            viewers={"call:sess-1:user-1", "call:sess-1:user-2"},
+        )
+
+        ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
+
+        assert cm._assistant_screen_share_viewers == set()
+        assert cm.assistant_screen_share_active is False
+        assert cm.user_remote_control_active is False
+        assert cm._frontend_reported_meet_surfaces == set()
 
     def test_reset_meet_surfaces_drops_the_frames_those_surfaces_fed(self):
         """Closing a surface takes its unpaired frames with it.
@@ -2430,10 +2485,13 @@ class TestMeetInteractionEventHandlers:
 
         dropped: list[str] = []
         every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
-        cm = SimpleNamespace(
-            _frontend_reported_meet_surfaces=set(),
-            drop_unpaired_screenshots=lambda source: dropped.append(source),
-            **{name: True for name in every_surface},
+        # A Desktop tab is still open, so the assistant's own surface survives
+        # the boundary and keeps its frames.
+        cm = _reset_surfaces_cm(
+            every_surface,
+            viewers={"desktop_pane:user-1"},
+            dropped=dropped,
+            claimed=set(),
         )
 
         ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
