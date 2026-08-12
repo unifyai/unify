@@ -15,8 +15,6 @@ from unify.common.authorship import (
 )
 from unify.common.model_to_fields import model_to_fields
 from unify.contact_manager.types.contact import Contact
-from unify.dashboard_manager.types.dashboard import DashboardRecordRow
-from unify.dashboard_manager.types.tile import TileRecordRow
 from unify.file_manager.types.file import Document, FileRecord
 from unify.function_manager.types.function import Function
 from unify.function_manager.types.meta import FunctionsMeta
@@ -72,8 +70,6 @@ def test_update_payloads_cannot_change_authoring_assistant_id() -> None:
         FileRecord,
         Document,
         BlackList,
-        DashboardRecordRow,
-        TileRecordRow,
         Message,
         Exchange,
         Image,

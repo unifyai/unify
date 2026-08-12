@@ -318,7 +318,6 @@ class ContextRegistry:
 
         from unify.canvas_manager.canvas_manager import CanvasManager
         from unify.contact_manager.contact_manager import ContactManager
-        from unify.dashboard_manager.dashboard_manager import DashboardManager
         from unify.knowledge_manager.knowledge_manager import KnowledgeManager
         from unify.transcript_manager.transcript_manager import TranscriptManager
         from unify.task_scheduler.task_scheduler import TaskScheduler
@@ -334,7 +333,6 @@ class ContextRegistry:
         managers = [
             CanvasManager,
             ContactManager,
-            DashboardManager,
             KnowledgeManager,
             TranscriptManager,
             TaskScheduler,

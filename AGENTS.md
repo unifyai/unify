@@ -397,7 +397,7 @@ message and **not** evidence that scanning is off.
 # Custom Source Sync: one engine, one identity contract
 
 All git-tracked source definitions (tasks, functions, venvs, guidance,
-knowledge, contacts, secrets, blacklist, data seeds, dashboards,
+knowledge, contacts, secrets, blacklist, data seeds,
 integration registry) reconcile through the shared engine in
 `unify/common/custom_sync.py`. Full contract:
 [`docs/writeups/custom-source-sync.md`](../../docs/writeups/custom-source-sync.md).
@@ -1082,7 +1082,6 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - **Steers**: `DataManager.ingest` (row writes), the file parse pipeline, and the hosted pipeline control plane (`/infra/pipeline/*`) for dispatched runs.
 
 ### CanvasManager
-*(Replaces `DashboardManager`, which is deprecated and slated for removal — decision 8 of the workflows design.)*
 - **Role**: Assistant-authored generative React UI. The actor writes real TSX against `@unity/canvas-kit`; it is linted, typechecked, bundled, rendered headlessly and critiqued before publish; Console displays it in a genuinely isolated frame.
 - **Scope**: `create_view`, `update_view`, `refresh_props`, `get_view`, `list_views`, `delete_view`, `preview`, `run_invocation`, `list_invocations` via `primitives.canvas.*`. Rows live in `Canvas/Views` / `Canvas/Actions` / `Canvas/Invocations`; a routing token is registered with the backend on publish.
 - **Data plane**: query bindings (context-backed tables, executed server-side per view) and materialised props (LLM-shaped reads frozen at author/refresh time). Connected-app data must be **stored first** (via `primitives.ingestion.submit`) and bound as an ordinary table.

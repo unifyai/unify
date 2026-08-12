@@ -524,7 +524,6 @@ class FlowHarness:
             "transcript": "get_transcript_manager",
             "secret": "get_secret_manager",  # pragma: allowlist secret
             "data": "get_data_manager",
-            "dashboard": "get_dashboard_manager",
         }
         getter_name = alias_getters.get(alias, f"get_{alias}_manager")
         getter = getattr(ManagerRegistry, getter_name, None)
