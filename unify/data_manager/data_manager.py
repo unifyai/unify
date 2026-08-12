@@ -105,7 +105,6 @@ DATA_META_TABLE = "Data/Meta"
 # Known absolute prefixes that indicate a path should not be resolved
 _ABSOLUTE_PREFIXES = (
     "Data/",
-    "Dashboards/",
     "Files/",
     "FileRecords/",
     "Teams/",

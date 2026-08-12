@@ -1,7 +1,7 @@
 # Custom Source Sync: one engine, one identity contract
 
 All git-tracked source definitions (tasks, functions, venvs, guidance,
-knowledge, contacts, secrets, blacklist, data seeds, dashboards,
+knowledge, contacts, secrets, blacklist, data seeds,
 integration registry) reconcile through the shared engine in
 `unify/common/custom_sync.py`. Full contract:
 [`docs/writeups/custom-source-sync.md`](../../docs/writeups/custom-source-sync.md).

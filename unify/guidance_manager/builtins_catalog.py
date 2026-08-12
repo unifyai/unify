@@ -89,7 +89,7 @@ unknown or impossible.
      executing, so it can never be stale.
    - `/opt/system-sources/orchestra`: backend REST API + Postgres — users,
      projects, contexts, logging, assistants, billing, API keys.
-   - `/opt/system-sources/console`: the web Console — dashboards, assistant
+   - `/opt/system-sources/console`: the web Console — canvases, assistant
      management, onboarding checklist, interfaces/tabs/tiles.
    - `/opt/system-sources/unify-deploy`: hosted communication stack (phone,
      SMS, email, WhatsApp adapters), deployment infra, self-host stack.

@@ -1,7 +1,7 @@
 """Canvas record types.
 
 A canvas is one whole view: a single TSX module that renders the entire surface.
-Unlike dashboard tiles there is no separate layout record — React composes, so
+There is no separate layout record — React composes, so
 the grid, the placement and the responsive behaviour all live in the authored
 code. That removes a table, the twelve-column placement model, and the class of
 bug where deleting a tile leaves a dashboard pointing at nothing.
