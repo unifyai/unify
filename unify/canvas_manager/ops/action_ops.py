@@ -192,6 +192,45 @@ def resolve_function_id(action: CanvasAction, *, function_manager) -> int | None
     return None
 
 
+def action_descriptors(actions: Sequence[CanvasAction]) -> List[Dict[str, Any]]:
+    """The action metadata a frame is allowed to see.
+
+    Mirrors the kit's ``CanvasActionDescriptor``: name, label and input shape,
+    never the dispatch target. The review harness hands these to the rendered
+    canvas so its controls mount exactly as they will in front of a viewer.
+    """
+    return [
+        {
+            "name": action.name,
+            "label": action.label,
+            "icon": action.icon,
+            "inputSchema": action.input_schema,
+            "requiresConfirmation": bool(action.confirm),
+            "destructive": action.destructive,
+        }
+        for action in actions
+    ]
+
+
+def descriptors_from_rows(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Frame-facing descriptors rebuilt from stored ``Canvas/Actions`` rows."""
+    return [
+        {
+            "name": row.get("action_name"),
+            "label": row.get("label"),
+            "icon": row.get("icon"),
+            "inputSchema": (
+                json.loads(row["input_schema_json"])
+                if row.get("input_schema_json")
+                else None
+            ),
+            "requiresConfirmation": bool(row.get("confirm")),
+            "destructive": bool(row.get("destructive")),
+        }
+        for row in rows
+    ]
+
+
 def serialize_input_schema(action: CanvasAction) -> str | None:
     """Serialise an action's input schema for storage."""
     return (

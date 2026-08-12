@@ -273,7 +273,6 @@ def _fallback_entity_name(entity_type: CoordinatorActivityEntityType) -> str:
         "task": "Task",
         "knowledge": "Knowledge",
         "guidance": "Guidance",
-        "dashboard": "Dashboard",
         "function": "Function",
         "data": "Data",
         "validation": "Validation",

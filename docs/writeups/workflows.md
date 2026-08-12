@@ -107,7 +107,6 @@ something genuinely failed to plant.
 | canvas | yes | pre-built view + bindings + actions |
 | integrations, secrets | requirement | declared and checked; never carried |
 | contacts, transcripts, blacklist | **no** | runtime-populated by the workflow's own functions |
-| dashboards | **no** | deprecated; canvas replaces them |
 
 Contacts are observed entities — a curated bundle cannot know them, so a bundle
 ships the *function that populates* contacts, never contact rows.

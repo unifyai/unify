@@ -26,7 +26,9 @@ from unify.canvas_manager.base import DEFAULT_VISIBILITY, BaseCanvasManager
 from unify.canvas_manager.ops import binding_ops, build_ops, token_ops
 from unify.canvas_manager.ops.binding_ops import BindingError
 from unify.canvas_manager.ops.action_ops import (
+    action_descriptors,
     coerce_actions,
+    descriptors_from_rows,
     resolve_function_id,
     serialize_input_schema,
     validate_actions,
@@ -199,6 +201,7 @@ class CanvasManager(BaseCanvasManager):
         bundle: str,
         props: Dict[str, Any],
         rows: Optional[Dict[str, Any]] = None,
+        actions: Optional[List[Dict[str, Any]]] = None,
         intent: str = "",
     ) -> ReviewReport:
         """Render the compiled canvas and look at it.
@@ -221,6 +224,7 @@ class CanvasManager(BaseCanvasManager):
             bundle=bundle,
             props=props,
             rows=rows,
+            actions=actions,
             intent=intent,
         )
 
@@ -360,6 +364,7 @@ class CanvasManager(BaseCanvasManager):
                 bundle=bundle,
                 props=props or {},
                 rows=samples,
+                actions=action_descriptors(resolved_actions),
                 intent=f"{title}. {description or ''}".strip(),
             )
             if review
@@ -498,6 +503,16 @@ class CanvasManager(BaseCanvasManager):
         elif tsx is not None and review:
             samples = self._sample_stored_bindings(existing)
 
+        # Actions are validated before the review for the same reason as
+        # bindings: the render gate mounts the canvas's controls against the
+        # action set the revision will actually publish.
+        resolved_actions: Optional[List[CanvasAction]] = None
+        if actions is not None:
+            try:
+                resolved_actions = validate_actions(coerce_actions(actions))
+            except ValueError as error:
+                return CanvasResult(token=token, error=str(error))
+
         if tsx is not None:
             build, bundle = self._build(tsx)
             if not build.ok:
@@ -526,6 +541,11 @@ class CanvasManager(BaseCanvasManager):
                         f"{description or existing.get('description') or ''}"
                     ).strip(),
                     rows=samples,
+                    actions=(
+                        action_descriptors(resolved_actions)
+                        if resolved_actions is not None
+                        else descriptors_from_rows(self._stored_actions(token))
+                    ),
                 )
                 if not review_report.rendered:
                     return CanvasResult(
@@ -567,11 +587,14 @@ class CanvasManager(BaseCanvasManager):
             updates["bindings_json"] = binding_ops.serialize_bindings(resolved)
             updates["binding_contexts"] = binding_ops.binding_contexts(resolved)
 
-        if actions is not None:
+        if resolved_actions is not None:
             try:
+                # Target resolution happens at store time, so a rename between
+                # the review and the write still comes back as a structured
+                # error rather than an exception mid-revision.
                 self._store_actions(
                     token,
-                    validate_actions(coerce_actions(actions)),
+                    resolved_actions,
                     context=self._table_for_root(root_context, ACTIONS_TABLE),
                 )
             except ValueError as error:
@@ -717,6 +740,7 @@ class CanvasManager(BaseCanvasManager):
             bundle=record.bundle_code,
             props=json.loads(record.props_json or "{}"),
             rows=self._sample_stored_bindings(row or {}),
+            actions=descriptors_from_rows(self._stored_actions(token)),
             intent=f"{record.title}. {record.description or ''}".strip(),
         )
 
@@ -855,6 +879,18 @@ class CanvasManager(BaseCanvasManager):
             if rows:
                 return rows[0], context
         return None, ""
+
+    def _stored_actions(self, token: str) -> List[Dict[str, Any]]:
+        """Every declared action row for one canvas."""
+        dm = self._get_dm()
+        for context in self._read_tables(ACTIONS_TABLE):
+            rows = dm.filter(
+                context,
+                filter=f"canvas_token == '{token}'",
+            )
+            if rows:
+                return rows
+        return []
 
     def _find_action(self, token: str, action_name: str) -> Optional[Dict[str, Any]]:
         """The declared action for one name, or None if the canvas dropped it."""
