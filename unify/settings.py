@@ -335,12 +335,20 @@ class ProductionSettings(BaseSettings):
         return "" if self.DEPLOY_ENV == "production" else f"-{self.DEPLOY_ENV}"
 
     def validate_llm_providers(self) -> None:
-        """Validate that at least one LLM provider credential is set.
+        """Validate that the runtime has some way to reach an LLM provider.
+
+        Either a raw provider credential in the environment, or a broker
+        sidecar (hosted pods hold no provider keys at all -- every LLM call
+        routes through the sidecar, authenticated by the pod's UNIFY_KEY).
 
         Raises:
-            RuntimeError: If no LLM provider credentials are set.
+            RuntimeError: If neither a credential nor a broker is available.
         """
         if not self.UNITY_VALIDATE_LLM_PROVIDERS:
+            return
+        from unify.common.broker import broker_origin
+
+        if broker_origin() is not None:
             return
         available = {
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
@@ -351,7 +359,8 @@ class ProductionSettings(BaseSettings):
             raise RuntimeError(
                 "At least one LLM provider credential is required. "
                 "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, "
-                "and/or DEEPSEEK_API_KEY.",
+                "and/or DEEPSEEK_API_KEY, or configure the broker "
+                "sidecar (UNILLM_LLM_GATEWAY_URL + UNIFY_KEY).",
             )
 
 
