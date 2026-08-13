@@ -73,9 +73,14 @@ jobs:
     steps:
     - name: Validate spend controls
       shell: bash
+      env:
+        # Free-form dispatch inputs: reach the shell through the environment so
+        # backticks, quotes and $() in them are data, not script.
+        TEST_PATH_INPUT: ${{ inputs.test_path }}
+        EXTRA_ARGS_INPUT: ${{ inputs.parallel_run_args }}
       run: |
-        TEST_PATH="${{ inputs.test_path }}"
-        EXTRA_ARGS="${{ inputs.parallel_run_args }}"
+        TEST_PATH="$TEST_PATH_INPUT"
+        EXTRA_ARGS="$EXTRA_ARGS_INPUT"
 
         fail() {
           echo "Refusing protected LLM run: $1" >&2
@@ -135,9 +140,13 @@ jobs:
 
     - id: set-matrix
       shell: bash
+      env:
+        # Free-form dispatch inputs: see the validate job above.
+        TEST_PATH_INPUT: ${{ inputs.test_path }}
+        EXTRA_ARGS_INPUT: ${{ inputs.parallel_run_args }}
       run: |
-        TEST_PATH="${{ inputs.test_path }}"
-        EXTRA_ARGS="${{ inputs.parallel_run_args }}"
+        TEST_PATH="$TEST_PATH_INPUT"
+        EXTRA_ARGS="$EXTRA_ARGS_INPUT"
         declare -a RAW_PATHS=()
         declare -a PATHS=()
 
@@ -325,11 +334,17 @@ jobs:
     - name: Run protected LLM tests
       id: run-tests
       shell: bash
+      env:
+        # matrix.test_path is derived from the test_path input, so it carries the
+        # same free-form text; route all three through the environment.
+        TIMEOUT_MINUTES_INPUT: ${{ inputs.timeout_minutes }}
+        TEST_PATH_INPUT: ${{ matrix.test_path }}
+        EXTRA_ARGS_INPUT: ${{ inputs.parallel_run_args }}
       run: |
         set +e
-        TIMEOUT=$(( ${{ inputs.timeout_minutes }} * 60 ))
-        TEST_PATH="${{ matrix.test_path }}"
-        EXTRA_ARGS="${{ inputs.parallel_run_args }}"
+        TIMEOUT=$(( ${TIMEOUT_MINUTES_INPUT:-30} * 60 ))
+        TEST_PATH="$TEST_PATH_INPUT"
+        EXTRA_ARGS="$EXTRA_ARGS_INPUT"
 
         Xvfb :99 -screen 0 1920x1080x24 &
         XVFB_PID=$!
@@ -547,8 +562,11 @@ jobs:
     - name: Resolve cache-diff source run
       id: src
       shell: bash
+      env:
+        # Free-form dispatch input: see the validate job above.
+        TEST_PATH_INPUT: ${{ inputs.test_path }}
       run: |
-        TEST_PATH="${{ inputs.test_path }}"
+        TEST_PATH="$TEST_PATH_INPUT"
         if [[ "$TEST_PATH" == CONSOLIDATE_FROM:* ]]; then
           RUN_ID="${TEST_PATH#CONSOLIDATE_FROM:}"
         else
