@@ -32,7 +32,12 @@ from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
 from unify.common import runtime_oauth
-from unify.provider_proxy.ancestry import is_allowed, ms_get_by_path, parent_path
+from unify.provider_proxy.ancestry import (
+    WorkspaceProbeFailed,
+    is_allowed,
+    ms_get_by_path,
+    parent_path,
+)
 from unify.provider_proxy.classify import (
     KIND_BATCH,
     KIND_FILE_READ,
@@ -580,7 +585,28 @@ def build_app() -> FastAPI:
         methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     )
     async def handle(provider: str, rest_path: str, request: Request) -> Response:
-        return await _dispatch(provider, rest_path, request)
+        try:
+            return await _dispatch(provider, rest_path, request)
+        except WorkspaceProbeFailed as failure:
+            # An access check could not resolve the item with the provider.
+            # Answering with what the provider said keeps the sandbox able to
+            # act; letting this escape produced a bodiless 500 that named
+            # neither the cause nor the request.
+            logger.warning(
+                "Access-check probe failed (%s) for %s: %s",
+                failure.status_code,
+                failure.url or rest_path,
+                failure.detail,
+            )
+            return JSONResponse(
+                status_code=failure.status_code,
+                content={
+                    "error": {
+                        "code": "workspaceProbeFailed",
+                        "message": failure.detail,
+                    },
+                },
+            )
 
     return app
 
