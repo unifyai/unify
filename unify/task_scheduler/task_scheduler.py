@@ -82,7 +82,7 @@ from .machine_state import (
     consume_live_task_run_provenance,
     find_running_execution_for_task,
     find_terminal_execution_for_task,
-    latest_task_run_reference_for_source,
+    list_task_run_history,
     peek_live_task_run_provenance,
     remember_live_task_run_provenance,
     update_task_run_record,
@@ -254,6 +254,10 @@ class TaskScheduler(BaseTaskScheduler):
                 ToolSpec(fn=self._filter_tasks, display_label="Filtering tasks"),
                 ToolSpec(fn=self._search_tasks, display_label="Searching tasks"),
                 ToolSpec(fn=self._reduce, display_label="Summarising tasks"),
+                ToolSpec(
+                    fn=self._list_task_runs,
+                    display_label="Listing task runs",
+                ),
                 ToolSpec(
                     fn=self._list_provider_trigger_catalog,
                     display_label="Listing provider trigger catalog",
@@ -1614,14 +1618,23 @@ class TaskScheduler(BaseTaskScheduler):
         execution = self._running_execution(task_id)
         if execution is None:
             return
+        # The row this is cancelling is the one already in hand, so reference
+        # it directly. Looking it up again called
+        # latest_task_run_reference_for_source without its required
+        # source_task_log_id, which raised TypeError the moment anything
+        # reached here.
         update_task_run_record(
-            latest_task_run_reference_for_source(
-                assistant_id=SESSION_DETAILS.assistant_context,
-                task_id=int(task_id),
+            TaskRunReference(
+                assistant_id=execution.assistant_id
+                or str(SESSION_DETAILS.assistant_context),
+                run_key=execution.run_key,
+                source_task_log_id=execution.source_task_log_id,
             ),
             {
                 "state": ExecutionState.cancelled.value,
-                "ended_at": datetime.now(timezone.utc).isoformat(),
+                # completed_at, not ended_at: nothing reads ended_at, so
+                # cancelled runs showed no finish time anywhere.
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -3160,6 +3173,47 @@ class TaskScheduler(BaseTaskScheduler):
             unique_id_field="task_id",
         )
         return [Task(**self._sanitize_activation(dict(lg))) for lg in filled]
+
+    def _list_task_runs(
+        self,
+        *,
+        task_id: int,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Return one task's runs, newest first: when each ran and what happened.
+
+        Use this for any question about a task actually running, as opposed to
+        how it is set up: did it run today, when did it last run, did it fail,
+        what did it produce, when is it due next. The task row itself carries
+        only authored intent — its schedule and whether it is armed — and can
+        never answer these.
+
+        Each entry carries ``state`` (``scheduled`` for an occurrence still
+        ahead, then ``running`` and one of ``completed`` / ``failed`` /
+        ``cancelled``), ``scheduled_for`` (the moment it belongs to),
+        ``started_at`` / ``completed_at``, ``result_summary`` for what the run
+        produced, and ``error`` when it failed. A single ``scheduled`` entry
+        dated ahead is the next run; its absence means nothing is currently
+        armed for this task.
+
+        ``run_key`` identifies one run, and is what
+        ``get_run_event_children`` needs to walk that run's internals when a
+        failure needs diagnosing beyond its ``error``.
+
+        Parameters
+        ----------
+        task_id : int
+            The task whose runs to list.
+        limit : int, default ``20``
+            Maximum runs returned.
+        """
+
+        task = self._resolve_task_for_mutation(task_id)
+        return list_task_run_history(
+            task_id=int(task_id),
+            destination=task.destination,
+            limit=limit,
+        )
 
     def _filter_tasks(
         self,

@@ -13,7 +13,15 @@ def _scheduler_with_task(
     destination: str | None = None,
 ) -> TaskScheduler:
     scheduler = TaskScheduler.__new__(TaskScheduler)
-    scheduler._get_task_or_raise = lambda tid: SimpleNamespace(destination=destination)
+    # Both the resolved task's destination and its trigger: the callers here
+    # reach a task through `_resolve_task_for_mutation`, which asks whether it
+    # carries a provider-event trigger before returning it. A stub with only
+    # `destination` raised AttributeError from inside the code under test, so
+    # every test in this file failed for a reason none of them were about.
+    scheduler._get_task_or_raise = lambda tid: SimpleNamespace(
+        destination=destination,
+        trigger=None,
+    )
     return scheduler
 
 
@@ -36,7 +44,17 @@ def _fake_find_running_execution(*, running_states):
         queried = states if states is not None else _DEFAULT_OPEN_STATES
         for state in queried:
             if state in running_states:
-                return SimpleNamespace(task_id=task_id, state=state.value)
+                # Enough of a real snapshot to reference the row: cancelling
+                # one now patches the execution it already found rather than
+                # looking it up again, which is what the lookup it replaced
+                # could not do without a source_task_log_id it never had.
+                return SimpleNamespace(
+                    task_id=task_id,
+                    state=state.value,
+                    run_key=f"live:scheduled:42:{task_id}:rev:once",
+                    assistant_id="42",
+                    source_task_log_id=555,
+                )
         return None
 
     return _fake
@@ -91,17 +109,16 @@ def test_cancel_open_executions_still_cancels_non_running_open_states(
         "update_task_run_record",
         lambda reference, updates: update_calls.append(updates),
     )
-    monkeypatch.setattr(
-        task_scheduler_module,
-        "latest_task_run_reference_for_source",
-        lambda **kwargs: "run-ref",
-    )
     scheduler = _scheduler_with_task()
 
     scheduler._cancel_open_executions(0)
 
     assert len(update_calls) == 1
     assert update_calls[0]["state"] == ExecutionState.cancelled.value
+    # `completed_at`, not `ended_at`. Nothing reads `ended_at`, so a cancelled
+    # run showed no finish time anywhere it was displayed.
+    assert update_calls[0]["completed_at"]
+    assert "ended_at" not in update_calls[0]
 
 
 def _reconcile_one_update(scheduler) -> list[int]:
