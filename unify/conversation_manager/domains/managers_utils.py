@@ -2903,4 +2903,10 @@ async def init_conv_manager(
                 "correctly. Please try again shortly.",
                 error_type="init_failed",
             )
+            # The raise below unwinds into a bare create_task that nobody
+            # awaits, so on its own it ends here and the pod carries on
+            # looking healthy with no actor and no managers. Recording it on
+            # the ConversationManager is what lets the inactivity loop retire
+            # the pod instead.
+            cm.unserviceable_reason = f"manager initialization failed: {e}"
             raise
