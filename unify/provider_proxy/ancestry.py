@@ -36,6 +36,75 @@ class WorkspaceFileNotFound(Exception):
     """Raised when an item is absent or masked by the allowlist."""
 
 
+class WorkspaceProbeFailed(Exception):
+    """The provider refused a resolution probe, carrying what it said.
+
+    Access checks resolve an item's ancestry from the provider, and that probe
+    can fail for reasons the caller needs to see: an expired grant, an identity
+    that cannot reach the item, a redirect the provider will not complete. The
+    proxy translates this into the upstream status and message, so the sandbox
+    reads what the provider said rather than an unexplained proxy error.
+    """
+
+    def __init__(self, status_code: int, detail: str, url: str = "") -> None:
+        super().__init__(detail or f"provider returned {status_code}")
+        self.status_code = status_code
+        self.detail = detail
+        self.url = url
+
+
+def _redirect_without_target(resp: httpx.Response) -> bool:
+    """A redirect the client was told to follow but that names nowhere to go.
+
+    ``follow_redirects`` is on for these probes, so a 3xx surviving to the
+    caller means the response carried no ``Location``. Microsoft Graph answers
+    some sharing-link resolutions this way -- notably a business share read by
+    an identity that cannot resolve it -- and it is a dead end rather than a
+    transport fault, so it is worth naming separately.
+    """
+    return resp.is_redirect or (300 <= resp.status_code < 400)
+
+
+def _raise_for_probe(resp: httpx.Response) -> None:
+    """Translate a failed probe into ``WorkspaceProbeFailed``.
+
+    Replaces ``raise_for_status``: that raises an ``httpx`` error which nothing
+    upstream catches, so an unusual provider response became a bodiless 500
+    from the proxy itself -- the one shape that tells a caller nothing at all.
+    """
+    if resp.status_code < 400 and not _redirect_without_target(resp):
+        return
+    if _redirect_without_target(resp):
+        raise WorkspaceProbeFailed(
+            502,
+            (
+                f"The provider redirected this request ({resp.status_code}) "
+                "without saying where to. Nothing further can be resolved from "
+                "here. For a sharing link this usually means the connected "
+                "account cannot resolve that share at all -- most often a "
+                "personal Microsoft account reading a work/school tenant's "
+                "share. Check the connected identity before retrying."
+            ),
+            str(resp.request.url),
+        )
+    detail = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                detail = str(error.get("message") or "")
+            elif error:
+                detail = str(error)
+    except ValueError:
+        detail = resp.text[:300]
+    raise WorkspaceProbeFailed(
+        resp.status_code,
+        detail or f"the provider returned {resp.status_code}",
+        str(resp.request.url),
+    )
+
+
 def _headers(provider: str) -> dict[str, str]:
     token = get_provider_access_token(provider)
     return {"Authorization": f"Bearer {token}"}
@@ -69,7 +138,7 @@ async def google_get(drive_id: str, item_id: str) -> dict[str, Any]:
         )
     if resp.status_code == 404:
         raise WorkspaceFileNotFound(item_id)
-    resp.raise_for_status()
+    _raise_for_probe(resp)
     return _google_node(resp.json(), drive_id)
 
 
@@ -123,7 +192,7 @@ async def ms_get(drive_id: str, item_id: str) -> dict[str, Any]:
         )
     if resp.status_code == 404:
         raise WorkspaceFileNotFound(item_id)
-    resp.raise_for_status()
+    _raise_for_probe(resp)
     return _ms_node(resp.json(), drive_id)
 
 
@@ -158,7 +227,7 @@ async def ms_get_by_path(
         )
     if resp.status_code == 404:
         return None
-    resp.raise_for_status()
+    _raise_for_probe(resp)
     return _ms_node(resp.json(), drive_id)
 
 
