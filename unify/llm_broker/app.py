@@ -381,7 +381,21 @@ def build_router(broker: Broker) -> APIRouter:
 
     @router.get("/healthz")
     async def healthz() -> dict:
-        """Readiness for the pod, not a report on which keys are present."""
+        """Whether this process is answering. Never whether anything else is.
+
+        The pod probes this to decide two things it cannot take back: the
+        runtime container does not start until this answers, and a container
+        that stops answering is restarted. Both are right for a broker that
+        has frozen, and both are catastrophic for a broker that is fine while
+        a provider is not -- an OpenRouter outage would become every assistant
+        pod restarting at once, and none of them starting.
+
+        So this reports on nothing but itself. Do not add a provider
+        reachability check, a credential check, or a call to Orchestra: the
+        answer must stay a constant that only an unresponsive event loop can
+        fail to return. What keys are present is likewise not its business --
+        a broker with none is still serving, and says so.
+        """
         return {"ok": True}
 
     return router
