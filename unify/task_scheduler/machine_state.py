@@ -73,6 +73,14 @@ _EXECUTION_QUERY_FIELDS = [
     "revision",
     "requires_filesystem",
     "requires_computer",
+    # What a run actually did. Omitting these meant no read path in the
+    # runtime could see whether an execution had started, when it finished or
+    # why it failed -- so nothing here could answer "did the briefing run this
+    # morning?" even though the ledger had recorded the answer.
+    "started_at",
+    "completed_at",
+    "result_summary",
+    "error",
 ]
 _DEFAULT_TRIGGER_PAGE_SIZE = 200
 _OPEN_EXECUTION_STATES = (
@@ -508,7 +516,14 @@ def update_task_run_record(
     run_reference: TaskRunReference | None,
     updates: Mapping[str, Any],
 ) -> None:
-    """Patch one previously materialized execution row back in Orchestra."""
+    """Patch one previously materialized execution row back in Orchestra.
+
+    The envelope drops its own empty fields, but ``updates`` is passed
+    through as given: a None in there is the caller saying "clear this".
+    Stripping it too meant a run that succeeded after a failed attempt on the
+    same run_key could never clear the earlier ``error``, and the row read as
+    a completed run that had also failed.
+    """
 
     if run_reference is None:
         return
@@ -520,9 +535,9 @@ def update_task_run_record(
                 "assistant_id": run_reference.assistant_id,
                 "run_key": run_reference.run_key,
                 "source_task_log_id": run_reference.source_task_log_id,
-                "updates": _drop_none_values(dict(updates)),
             },
-        ),
+        )
+        | {"updates": dict(updates)},
     )
 
 
@@ -768,6 +783,73 @@ def find_running_execution_for_task(
     if not rows:
         return None
     return _row_to_execution(rows[0])
+
+
+#: The run facts worth handing a caller asking what happened, in the order a
+#: reader wants them. Deliberately not the whole row: trigger routing and
+#: dispatch offsets answer "how would this fire", not "what did it do".
+_RUN_HISTORY_FIELDS = (
+    "run_key",
+    "task_id",
+    "task_name",
+    "state",
+    "wake",
+    "delivery",
+    "scheduled_for",
+    "started_at",
+    "completed_at",
+    "result_summary",
+    "error",
+)
+
+
+def list_task_run_history(
+    *,
+    task_id: int,
+    destination: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return one task's occurrences, newest first, as plain run facts.
+
+    The ledger has always recorded when a task ran, what it produced and why
+    it failed, and nothing in the runtime could read it: the execution
+    helpers here each answer one dispatch question ("is one in flight?",
+    "has any finished?") and return a snapshot shaped for that decision. So
+    "did the briefing run this morning?" had no answer available to the
+    assistant, however plainly the rows said yes.
+
+    Dicts rather than ``TaskExecutionSnapshot`` because this is a different
+    question: the snapshot carries what dispatch needs to route a wake, and
+    none of what a reader wants to know about a run that already happened.
+
+    Includes the open occurrence when there is one, because "when does it run
+    next" is the same question asked forwards.
+    """
+
+    filter_clauses = [f"task_id == {int(task_id)}"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=max(int(limit), 1),
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        entries = getattr(row, "entries", row)
+        if not isinstance(entries, Mapping):
+            continue
+        history.append(
+            {key: entries.get(key) for key in _RUN_HISTORY_FIELDS if key in entries},
+        )
+    # Newest first by the moment the occurrence belongs to. An on-demand run
+    # has no scheduled_for, so it sorts by when it actually started.
+    history.sort(
+        key=lambda run: str(run.get("scheduled_for") or run.get("started_at") or ""),
+        reverse=True,
+    )
+    return history[: max(int(limit), 1)]
 
 
 def find_terminal_execution_for_task(
