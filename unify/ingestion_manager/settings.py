@@ -52,14 +52,12 @@ class IngestionSettings(BaseSettings):
 
         return (SETTINGS.conversation.COMMS_URL or "").rstrip("/")
 
-    # Row count at or below which a rows or table source runs in process.
-    #
-    # This is not a memory limit -- it is a latency boundary. Below it, queue
-    # round-trip and worker cold start dominate the work itself, and the common
-    # case is a plan that fetches a page from an API and builds a canvas over it
-    # in the next step. Above it, ingestion is sustained I/O that belongs on
-    # workers that scale horizontally and do not compete with the assistant for
-    # its own process.
+    # Row count at or below which a rows or table source would run in process
+    # once the fleet can execute rows work at all. Not consulted by the tier
+    # decision today: the fleet's unit of work is a staged file, so rows and
+    # tables always run in process -- see ``policy.choose_tier``. Kept because
+    # it names the latency boundary a rows job type will restore, and reverting
+    # to routing on it must not require rediscovering the number.
     MAX_INLINE_ROWS: int = 10_000
 
     # Threads draining the in-process queue. Small on purpose: in-process work

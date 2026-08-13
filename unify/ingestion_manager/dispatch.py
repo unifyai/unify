@@ -183,14 +183,19 @@ def dispatch_run(
             f"{len(paths)} file(s); refusing to dispatch a partial run.",
         )
     for target, path in zip(sources, paths):
-        _upload(
-            base_url,
-            assistant_id=assistant_id,
-            run_key=run_key,
-            target=target,
-            name=Path(path).name,
-            payload=Path(path).read_bytes(),
-        )
+        # Streamed from disk, never read whole. The dispatch tier exists so a
+        # large file's bytes stay out of the assistant's process; loading them
+        # here just to upload them would spend the very memory the boundary
+        # protects, and it is exactly the multi-hundred-MB files that dispatch.
+        with Path(path).open("rb") as source_file:
+            _upload(
+                base_url,
+                assistant_id=assistant_id,
+                run_key=run_key,
+                target=target,
+                name=Path(path).name,
+                payload=source_file,
+            )
 
     published = _post(
         base_url,
@@ -234,7 +239,7 @@ def _upload(
     run_key: str,
     target: Dict[str, Any],
     name: str,
-    payload: bytes,
+    payload: Any,
 ) -> None:
     """Put one object where the control plane said to put it.
 
@@ -243,6 +248,10 @@ def _upload(
     through the plane's upload route -- which is the self-host shape, where the
     plane and the workers share a volume. The caller does not choose: the target
     it was handed says which applies.
+
+    ``payload`` is bytes or an open binary file; a file streams from disk with
+    its length taken from the descriptor, so an upload's memory cost is a
+    buffer, not the file.
     """
     upload_url = str(target.get("upload_url") or "")
     if upload_url:

@@ -867,6 +867,30 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
        directly carry no valid token and will fail — always use the proxy base
        URLs above.
 
+       **A sharing URL resolves through the API, never through its web page.**
+       When given a OneDrive/SharePoint sharing link (`.../:f:/g/...`,
+       `1drv.ms`, ...), encode it into a share token and walk the Graph shares
+       surface through the proxy — do not fetch the link itself, parse its
+       HTML, or scrape page-embedded grants:
+
+       ```python
+       import base64
+       share = "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+       hdrs = {"Authorization": f"Bearer {get_oauth_access_token('microsoft')}"}
+       item = httpx.get(f"{base}/shares/{share}/driveItem", headers=hdrs).json()
+       kids = httpx.get(f"{base}/shares/{share}/driveItem/children", headers=hdrs).json()
+       data = httpx.get(f"{base}/shares/{share}/driveItem:/sub/file.csv:/content", headers=hdrs)
+       ```
+
+       The proxy redeems the link automatically (`Prefer:
+       redeemSharingLinkIfNecessary`), so anyone-with-the-link and cross-tenant
+       shares work without the user opening them first. After the first
+       resolution you can also address the item as
+       `/drives/{item['parentReference']['driveId']}/items/{item['id']}`.
+       Anyone-with-the-link shares never appear in `sharedWithMe` — absence
+       there does not mean absence of access; resolve the link itself. For
+       Google links, take the file id from the URL and use `files/{id}`.
+
        **The connected mailbox has a first-class surface.** To send from, or
        read/search, the user's own connected Gmail/Outlook mailbox, use
        `primitives.workspace_email.*` (`send`, `list_messages`, `search`,
