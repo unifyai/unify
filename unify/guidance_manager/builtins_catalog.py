@@ -166,6 +166,18 @@ What makes this non-obvious:
   `{GOOGLE_DRIVE_BASE}/files/{id}?supportsAllDrives=true` — no share-token
   step exists or is needed.
 
+When a share will not resolve, identify the connected account before
+retrying variations. `GET {MICROSOFT_GRAPH_BASE}/me` returns
+`userPrincipalName` and `id`; a work/school (Entra) identity can resolve
+another tenant's shares, a personal Microsoft account (MSA) generally
+cannot, and `/sites/*` refuses outright for one with "This API is not
+supported for MSA accounts". Two signatures point the same way: a redirect
+the provider will not complete (reported as "redirected ... without saying
+where to"), and `sharedWithMe` returning zero items where a share was
+expected. If the account is an MSA, no request shape will fix it — say so
+and ask for the workspace to be reconnected through the work/school flow,
+or for the folder's `driveId` and `itemId` directly.
+
 To then STORE what the share holds (spreadsheets into queryable tables,
 documents into collections), download the files and hand them to
 `primitives.ingestion.submit` — do not re-implement storage.
