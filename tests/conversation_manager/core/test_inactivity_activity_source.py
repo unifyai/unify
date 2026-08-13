@@ -15,10 +15,12 @@ worth tracing.
 
 from unify.conversation_manager.events import (
     AssistantUpdateEvent,
+    Error,
     Event,
     GetBusEventsResponse,
     GetChatHistory,
     InitializationComplete,
+    IntegrationToolsSyncFailed,
     OpenSlowBrainTurn,
     Ping,
     StartupEvent,
@@ -31,6 +33,20 @@ def test_only_provably_internal_events_stop_counting_as_presence():
     # The pod telling itself it booted, and a reply to its own query.
     assert InitializationComplete.counts_as_activity is False
     assert GetBusEventsResponse.counts_as_activity is False
+
+
+def test_a_pod_cannot_hold_itself_open_by_failing():
+    """Failure output is the pod talking to itself, however loud.
+
+    Whatever these were a response to already counted when it arrived -- a
+    message, a due task, an assignment -- so discounting them drops nothing
+    a person did. Counting them let a pod with no managers stay alive on its
+    own noise: nine integration syncs failed at boot and were its last
+    recorded activity for forty-five minutes, and later a send it could not
+    complete was retried seven times and reset the clock each time.
+    """
+    assert Error.counts_as_activity is False
+    assert IntegrationToolsSyncFailed.counts_as_activity is False
 
 
 def test_a_person_doing_something_still_keeps_the_pod_alive():
@@ -62,6 +78,12 @@ def test_the_default_is_to_count():
     The safe direction is keeping a live pod alive: wrongly counting costs
     an idle pod some extra minutes, wrongly discounting drops a session
     somebody is in the middle of.
+
+    That asymmetry survives the pod that stayed up for three hours unable to
+    serve, because what was wrong there was not the tagging: a pod that
+    cannot serve now retires on `unserviceable_reason` whatever its clock
+    says. Inverting this default would trade a bounded cost for the one
+    failure this flag can actually cause.
     """
     assert Event.counts_as_activity is True
 

@@ -68,6 +68,11 @@ def _namespace() -> str:
     return SETTINGS.DEPLOY_ENV
 
 
+def _bootstrap_namespace() -> str:
+    # Must match communication.infra.assistant_sessions.bootstrap_namespace().
+    return f"{_namespace()}-sessions"
+
+
 def _session_name_from_job(job) -> str | None:
     labels = job.metadata.labels or {}
     annotations = job.metadata.annotations or {}
@@ -155,11 +160,28 @@ def read_assistant_session(session_name: str) -> dict[str, Any]:
 
 
 def read_session_bootstrap_secret_record(secret_name: str) -> BootstrapSecretRecord:
-    """Read a bootstrap Secret together with its owner annotations."""
+    """Read a bootstrap Secret together with its owner annotations.
+
+    Bootstrap Secrets live in the dedicated ``{ns}-sessions`` namespace so the
+    pod's ServiceAccount can be scoped to read there without access to
+    ``production`` Secrets. Falls back to the pod's own namespace for legacy
+    Secrets written before the move (remove once none remain).
+    """
 
     _load_clients()
     assert _core_api is not None
-    secret = _core_api.read_namespaced_secret(name=secret_name, namespace=_namespace())
+    try:
+        secret = _core_api.read_namespaced_secret(
+            name=secret_name,
+            namespace=_bootstrap_namespace(),
+        )
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        secret = _core_api.read_namespaced_secret(
+            name=secret_name,
+            namespace=_namespace(),
+        )
     data = secret.data or {}
     raw = data.get("startup.json", "")
     metadata = getattr(secret, "metadata", None)

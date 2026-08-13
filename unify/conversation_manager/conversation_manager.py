@@ -407,6 +407,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.last_activity_time = self.loop.time()
         self._last_activity_source = "startup"
         self.shutdown_reason: str | None = None
+        # Set when the process has established it cannot serve this assistant
+        # at all -- currently only a failed manager init, which leaves no
+        # actor and no managers for the rest of the pod's life. Liveness is
+        # otherwise a question about traffic, and a pod being *talked to* says
+        # nothing about whether it can answer: one that could not held a live
+        # assistant for three hours, failing every scheduled task and every
+        # message, while Console presence kept resetting its idle clock.
+        self.unserviceable_reason: str | None = None
         self.stop = stop
 
         self.event_broker = event_broker
@@ -3078,22 +3086,46 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
             # Control-plane drain: once in-flight work is gone, shut down so
             # the next wake loads a fresh client bundle.
+            #
+            # Only the probe is shielded. Wrapping the shutdown too is what
+            # let `await self.stop()` -- a TypeError, because `stop` is an
+            # Event and not a coroutine -- read as a transient probe failure
+            # for three weeks: the pod logged that it was shutting down every
+            # 30s and never did, and drains completed only when the control
+            # plane force-stopped the session at its deadline.
             if not has_active_work:
                 try:
                     from unify.runtime.drain_gate import is_admission_blocked
 
-                    if is_admission_blocked():
-                        LOGGER.info(
-                            "Drain in progress and ACTIVE_WORK empty; "
-                            "shutting down for restart",
-                        )
-                        await self.stop()
-                        return
+                    drain_armed = is_admission_blocked()
                 except Exception:  # noqa: BLE001 — never break inactivity loop
                     LOGGER.debug(
                         "drain gate probe in inactivity failed",
                         exc_info=True,
                     )
+                    drain_armed = False
+                if drain_armed:
+                    await self._request_shutdown(
+                        "drain_restart",
+                        "Drain in progress and ACTIVE_WORK empty; "
+                        "shutting down for restart",
+                    )
+                    break
+
+            # A pod that cannot serve retires regardless of how busy its
+            # inbox looks. Nothing here recovers in place: the replacement is
+            # scheduled fresh, which is also how it picks up the image that
+            # fixed whatever broke this one. Retrying in process could not
+            # have done that -- the credential check that started this ran
+            # against an image that had already been superseded.
+            if not has_active_work and self.unserviceable_reason:
+                await self._request_shutdown(
+                    "unserviceable",
+                    "Cannot serve this assistant "
+                    f"({self.unserviceable_reason}); retiring so a fresh pod "
+                    "takes over",
+                )
+                break
 
             # A pod with no assistant has nobody to be idle *from*: its only
             # traffic is the pre-startup keepalive, which is not presence.
@@ -3142,6 +3174,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
             if effective_idle_seconds > self.inactivity_timeout or ghost_publish:
                 if ghost_publish:
+                    reason = "ghost_publish"
                     log_str = (
                         f"Ghost-publish shutdown: pubsub_idle={pubsub_idle:.0f}s "
                         f"but eventbus_idle stuck at {eventbus_idle:.1f}s "
@@ -3149,13 +3182,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         f"(timeout={self.inactivity_timeout}s)"
                     )
                 else:
-                    self.shutdown_reason = "idle_timeout"
+                    reason = "idle_timeout"
                     log_str = f"Inactivity timeout reached ({self.inactivity_timeout}s), requesting shutdown"
-                LOGGER.info(f"{DEFAULT_ICON} {log_str}")
-                self._session_logger.info("session_end", log_str)
-                self.stop.set()
-                await self.event_broker.aclose()
+                await self._request_shutdown(reason, log_str)
                 break  # Exit the loop after triggering shutdown
+
+    async def _request_shutdown(self, reason: str, log_str: str) -> None:
+        """Signal the process to wind down, from any reason the loop recognises.
+
+        One sequence for every exit so a new one cannot half-implement it. The
+        drain branch used to open-code its own and got it wrong, which is why
+        this exists rather than three call sites that look similar.
+        """
+
+        self.shutdown_reason = reason
+        LOGGER.info(f"{DEFAULT_ICON} {log_str}")
+        self._session_logger.info("session_end", log_str)
+        self.stop.set()
+        await self.event_broker.aclose()
 
     def set_details(self, payload: dict):
         """Populate assistant/user/voice details into SESSION_DETAILS."""

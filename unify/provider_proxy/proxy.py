@@ -32,7 +32,12 @@ from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
 from unify.common import runtime_oauth
-from unify.provider_proxy.ancestry import is_allowed, ms_get_by_path, parent_path
+from unify.provider_proxy.ancestry import (
+    WorkspaceProbeFailed,
+    is_allowed,
+    ms_get_by_path,
+    parent_path,
+)
 from unify.provider_proxy.classify import (
     KIND_BATCH,
     KIND_FILE_READ,
@@ -128,6 +133,11 @@ async def _forward(
     provider rejects it with 401, forces one refresh from Orchestra and retries
     once. A persistent 401 is normalized to a clean "reconnect account" 401 so
     stale-expiry metadata never surfaces as an opaque 500.
+
+    Transport failures (timeouts, connection errors, a redirect the client
+    cannot follow) are normalized to a 502 naming the failure. They would
+    otherwise surface as opaque 500s from the proxy itself, which reads as a
+    proxy bug rather than the upstream condition it is.
     """
     url = f"{_UPSTREAM[provider]}/{rest_path}"
     if query_string:
@@ -140,29 +150,52 @@ async def _forward(
     if not token:
         return _reconnect_response(provider)
 
-    async with _make_client(follow_redirects) as http:
-        resp = await http.request(
-            method,
-            url,
-            headers={**base_headers, "Authorization": f"Bearer {token}"},
-            content=body,
-        )
-        if resp.status_code == 401:
-            new_token = runtime_oauth.refresh_provider_access_token(provider)
-            if new_token and new_token != token:
-                resp = await http.request(
-                    method,
-                    url,
-                    headers={**base_headers, "Authorization": f"Bearer {new_token}"},
-                    content=body,
-                )
+    try:
+        async with _make_client(follow_redirects) as http:
+            resp = await http.request(
+                method,
+                url,
+                headers={**base_headers, "Authorization": f"Bearer {token}"},
+                content=body,
+            )
             if resp.status_code == 401:
-                return _reconnect_response(provider)
+                new_token = runtime_oauth.refresh_provider_access_token(provider)
+                if new_token and new_token != token:
+                    resp = await http.request(
+                        method,
+                        url,
+                        headers={
+                            **base_headers,
+                            "Authorization": f"Bearer {new_token}",
+                        },
+                        content=body,
+                    )
+                if resp.status_code == 401:
+                    return _reconnect_response(provider)
+    except httpx.HTTPError as exc:
+        return httpx.Response(
+            502,
+            json={
+                "error": {
+                    "code": "upstreamUnreachable",
+                    "message": f"{type(exc).__name__}: {exc}",
+                },
+            },
+        )
     return resp
 
 
-def _passthrough_response(resp: httpx.Response) -> Response:
+def _passthrough_response(
+    resp: httpx.Response,
+    rewrite: Optional[Any] = None,
+) -> Response:
     headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP}
+    location = headers.get("location")
+    if rewrite is not None and location:
+        # A redirect target on the upstream host is only followable through
+        # the proxy: the sandbox holds the proxy nonce, not a provider token,
+        # so an unrewritten Location is a dead end by construction.
+        headers["location"] = rewrite(location)
     return Response(
         content=resp.content,
         status_code=resp.status_code,
@@ -397,6 +430,17 @@ def _parse_query(query_string: str) -> dict[str, str]:
     return out
 
 
+def _is_ms_shares_path(rest_path: str) -> bool:
+    segs = [s for s in rest_path.split("/") if s]
+    if segs and segs[0] in ("v1.0", "beta"):
+        segs = segs[1:]
+    return bool(segs) and segs[0] == "shares"
+
+
+def _locator_is_share(loc: Optional[Locator]) -> bool:
+    return loc is not None and loc.drive_id.startswith("share:")
+
+
 async def _dispatch(provider: str, rest_path: str, request: Request) -> Response:
     session = current_session()
     if session is None:
@@ -414,6 +458,16 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
     query_string = request.url.query
     body = await request.body()
     incoming_headers = dict(request.headers)
+    rewrite = _rewriter(provider, session)
+
+    if provider == "microsoft" and _is_ms_shares_path(rest_path):
+        # Anyone-with-the-link shares (including cross-tenant SharePoint ones)
+        # are not usable through ``/shares`` until the recipient redeems the
+        # link — the API equivalent of opening it in a browser. The caller
+        # handed the assistant the link, so redemption is the intent;
+        # ``IfNecessary`` keeps it a no-op for shares the account can already
+        # reach. A caller-supplied Prefer wins.
+        incoming_headers.setdefault("prefer", "redeemSharingLinkIfNecessary")
 
     c = classify(provider, method, rest_path, query)
 
@@ -427,7 +481,7 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             body or None,
             follow_redirects=False,
         )
-        return _passthrough_response(resp)
+        return _passthrough_response(resp, rewrite)
 
     if c.kind == KIND_UNKNOWN:
         return _forbidden(
@@ -449,7 +503,7 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             incoming_headers,
             body or None,
         )
-        return _passthrough_response(resp)
+        return _passthrough_response(resp, rewrite)
 
     # KIND_FILE_READ
     if c.is_listing:
@@ -465,14 +519,17 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             query_string,
             incoming_headers,
             None,
+            # A share's children listing may sit behind the share-token 308;
+            # ordinary drive listings never redirect, so this is inert there.
+            follow_redirects=_locator_is_share(parent_loc)
+            or _locator_is_share(c.parent),
         )
         if resp.status_code >= 400:
-            return _passthrough_response(resp)
+            return _passthrough_response(resp, rewrite)
         try:
             payload = resp.json()
         except (ValueError, TypeError):
-            return _passthrough_response(resp)
-        rewrite = _rewriter(provider, session)
+            return _passthrough_response(resp, rewrite)
         if c.changes_list:
             filtered = await filter_changes(provider, payload, rewrite)
         else:
@@ -495,9 +552,13 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             query_string,
             incoming_headers,
             None,
-            follow_redirects=c.is_content,
+            # Content downloads redirect to pre-signed storage URLs; share
+            # reads may redirect through the share-token canonicalization 308.
+            # Both are follow-through-with-auth cases (httpx drops the token
+            # on a cross-origin hop by itself).
+            follow_redirects=c.is_content or _locator_is_share(c.target),
         )
-        return _passthrough_response(resp)
+        return _passthrough_response(resp, rewrite)
 
     # Root/drive listings and drive metadata: no item to mask.
     resp = await _forward(
@@ -507,8 +568,9 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
         query_string,
         incoming_headers,
         None,
+        follow_redirects=c.operation == "get_share",
     )
-    return _passthrough_response(resp)
+    return _passthrough_response(resp, rewrite)
 
 
 def build_app() -> FastAPI:
@@ -523,7 +585,28 @@ def build_app() -> FastAPI:
         methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     )
     async def handle(provider: str, rest_path: str, request: Request) -> Response:
-        return await _dispatch(provider, rest_path, request)
+        try:
+            return await _dispatch(provider, rest_path, request)
+        except WorkspaceProbeFailed as failure:
+            # An access check could not resolve the item with the provider.
+            # Answering with what the provider said keeps the sandbox able to
+            # act; letting this escape produced a bodiless 500 that named
+            # neither the cause nor the request.
+            logger.warning(
+                "Access-check probe failed (%s) for %s: %s",
+                failure.status_code,
+                failure.url or rest_path,
+                failure.detail,
+            )
+            return JSONResponse(
+                status_code=failure.status_code,
+                content={
+                    "error": {
+                        "code": "workspaceProbeFailed",
+                        "message": failure.detail,
+                    },
+                },
+            )
 
     return app
 

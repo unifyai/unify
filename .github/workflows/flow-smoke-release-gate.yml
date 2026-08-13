@@ -110,8 +110,11 @@ jobs:
 
     - name: Acknowledge LLM spend (manual runs)
       if: github.event_name == 'workflow_dispatch'
+      env:
+        # Free-form dispatch input; compare it as data, not as script text.
+        CONFIRM_LLM_SPEND: ${{ inputs.confirm_llm_spend }}
       run: |
-        if [[ "${{ inputs.confirm_llm_spend }}" != "LLM_SPEND_OK" ]]; then
+        if [[ "$CONFIRM_LLM_SPEND" != "LLM_SPEND_OK" ]]; then
           echo "Refusing live flow smoke: confirm_llm_spend must be LLM_SPEND_OK" >&2
           exit 1
         fi
@@ -259,9 +262,11 @@ jobs:
 
     - name: Run flow smoke
       id: run-tests
+      env:
+        TIMEOUT_MINUTES_INPUT: ${{ inputs.timeout_minutes || 30 }}
       run: |
         set +e
-        TIMEOUT=$(( ${{ inputs.timeout_minutes || 30 }} * 60 ))
+        TIMEOUT=$(( ${TIMEOUT_MINUTES_INPUT:-30} * 60 ))
 
         # xvfb-run swallows signals; start Xvfb directly so cancellation
         # reaches parallel_run.sh.
