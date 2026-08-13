@@ -331,3 +331,61 @@ class TestAssistantAttribution:
 
     def test_no_id_anywhere_is_simply_unattributed(self):
         assert _assistant_id(self._request(), {}) is None
+
+
+class TestHealthz:
+    """What the pod is allowed to conclude from this endpoint.
+
+    The manifest probes it twice, for two decisions it cannot take back: the
+    runtime container does not start until it answers, and a container that
+    stops answering is restarted. Both are right for a frozen broker and
+    catastrophic for a healthy one, so the answer must depend on nothing but
+    this process.
+    """
+
+    def test_a_broker_with_no_provider_keys_is_still_serving(self):
+        """Credentials are not health. A keyless broker answers and says so.
+
+        Were this to report on keys, a secret that failed to mount would stop
+        the runtime from starting at all rather than failing the calls that
+        needed it.
+        """
+        keyless = BrokerSettings(
+            host="127.0.0.1",
+            port=0,
+            orchestra_url="https://orchestra.test/v0",
+            openrouter_api_key=None,
+            openrouter_api_base="https://openrouter.test/api/v1",
+            anthropic_api_key=None,
+            anthropic_api_base="https://anthropic.test",
+            auth_ttl_s=0.0,
+        )
+        with TestClient(build_app(keyless)) as client:
+            response = client.get("/healthz")
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+    def test_it_answers_without_reaching_orchestra_or_a_provider(self, monkeypatch):
+        """An upstream outage must not read as this container being broken.
+
+        A provider check here would turn one OpenRouter incident into every
+        assistant pod restarting at once, and none of them starting again
+        until it cleared.
+        """
+        calls: list[str] = []
+
+        def _explode(*args, **kwargs):
+            calls.append("outbound")
+            raise AssertionError("healthz must not make an outbound call")
+
+        # Only the async client: both the provider and control-plane legs are
+        # AsyncClients, while TestClient is itself an httpx.Client -- patching
+        # that one breaks the harness rather than catching the broker.
+        monkeypatch.setattr(httpx.AsyncClient, "send", _explode)
+
+        with TestClient(build_app(_SETTINGS)) as client:
+            response = client.get("/healthz")
+
+        assert response.status_code == 200
+        assert calls == []

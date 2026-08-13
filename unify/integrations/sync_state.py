@@ -42,7 +42,16 @@ class IntegrationSyncState:
 
     def to_prompt_line(self) -> str:
         suffix = ""
-        if self.status == "ready" and self.tool_count is not None:
+        if self.status == "ready" and self.tool_count == 0:
+            # A sync that succeeded but materialized nothing is not usable,
+            # and calling it plain "ready" sends the actor searching for
+            # tools that do not exist. Name the condition and the remedy.
+            suffix = (
+                " (connected, but 0 tools materialized — likely missing "
+                "credentials or scopes; ask the user to reconnect the app "
+                "in Console)"
+            )
+        elif self.status == "ready" and self.tool_count is not None:
             suffix = f" ({self.tool_count} active tools)"
         elif self.status == "failed" and self.error:
             suffix = f" ({self.error})"

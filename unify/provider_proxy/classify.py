@@ -139,6 +139,14 @@ def _ms_split_drive_base(rest: str) -> tuple[str, str] | None:
         if after == "driveItem" or after.startswith("driveItem/"):
             remainder = after[len("driveItem") :].lstrip("/")
             return (f"share:{share_id}", remainder)
+        if after.startswith("driveItem:"):
+            # Path addressing under a share anchors on the shared driveItem
+            # itself (``/shares/{id}/driveItem:/sub/path:``). Normalize to the
+            # ``root:`` form the path classifier already understands; the
+            # ancestry layer maps a share base's root anchor back onto the
+            # driveItem-relative URL shape.
+            remainder = after[len("driveItem:") :]
+            return (f"share:{share_id}", f"root:{remainder}")
     return None
 
 
@@ -241,7 +249,11 @@ def _ms_parse_drive_base(segs: list[str]) -> DriveBase | None:
         if len(segs) == 2:
             return DriveBase(f"share:{segs[1]}", [])
         if segs[2] == "driveItem":
-            return DriveBase(f"share:{segs[1]}", segs[3:])
+            # Keep the marker segment: the shared driveItem is an *item*, not a
+            # drive root, so its tail classifies as item subresources rather
+            # than drive-tail operations (which would 403 ``content`` and build
+            # invalid ``/driveItem/root`` ancestry URLs for ``children``).
+            return DriveBase(f"share:{segs[1]}", segs[2:])
         return None
     if segs[0] in _MS_CONTAINER_PREFIX and len(segs) >= 3:
         container_id = segs[1]
@@ -518,8 +530,23 @@ def _classify_microsoft(
     if base is None:
         return Classification("microsoft", KIND_UNKNOWN, rest_str)
 
-    if base.drive_id.startswith("share:") and not base.rest:
-        return Classification("microsoft", KIND_FILE_READ, "get_share")
+    if base.drive_id.startswith("share:"):
+        if not base.rest:
+            # ``/shares/{id}`` — sharing metadata, not the item itself.
+            return Classification("microsoft", KIND_FILE_READ, "get_share")
+        # ``/shares/{id}/driveItem[...]`` — the shared item's own surface.
+        # ``root`` is the anchor sentinel: the ancestry layer resolves it to
+        # the driveItem itself for a share base.
+        classified = _classify_ms_item_subresource(
+            method,
+            base.drive_id,
+            "root",
+            base.rest[1:],
+            rest_str,
+        )
+        if classified is not None:
+            return classified
+        return Classification("microsoft", KIND_UNKNOWN, rest_str)
 
     return _classify_ms_drive_tail(method, base.drive_id, base.rest, rest_str, query)
 

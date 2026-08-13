@@ -294,6 +294,17 @@ jobs:
 
     - id: set-matrix
       shell: bash
+      env:
+        # Same reason as the should-run-tests step above: these values are
+        # attacker-controlled text. parallel_run_cmd is extracted from a commit
+        # message or a PR title, and the workflow_dispatch inputs are free-form
+        # (env_file_content is a whole pasted .env). Interpolating any of them
+        # directly into run: would execute backticks, quotes and $() they carry.
+        PARALLEL_CMD_RAW: ${{ needs.should-run-tests.outputs.parallel_run_cmd }}
+        INPUT_PATH_RAW: ${{ inputs.test_path }}
+        INPUT_ARGS_RAW: ${{ inputs.parallel_run_args }}
+        CONFIRM_FULL_MATRIX_RAW: ${{ inputs.confirm_full_matrix }}
+        ENV_FILE_CONTENT_INPUT: ${{ inputs.env_file_content }}
       run: |
         # Parse test paths and flags, then create matrix entries for each path.
         # Each unique path gets its own parallel GitHub runner.
@@ -313,12 +324,12 @@ jobs:
         #   all direct test files (space-separated), plus recursive jobs for subdirs
         # This maximizes parallelism regardless of how paths are specified.
 
-        PARALLEL_CMD="${{ needs.should-run-tests.outputs.parallel_run_cmd }}"
-        INPUT_PATH="${{ inputs.test_path }}"
-        INPUT_ARGS="${{ inputs.parallel_run_args }}"
-        CONFIRM_FULL_MATRIX="${{ inputs.confirm_full_matrix }}"
+        PARALLEL_CMD="$PARALLEL_CMD_RAW"
+        INPUT_PATH="$INPUT_PATH_RAW"
+        INPUT_ARGS="$INPUT_ARGS_RAW"
+        CONFIRM_FULL_MATRIX="$CONFIRM_FULL_MATRIX_RAW"
         EVENT_NAME="${{ github.event_name }}"
-        ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
+        ENV_FILE_CONTENT_RAW="$ENV_FILE_CONTENT_INPUT"
         ENV_FILE_CONTENT=""
 
         if [[ -n "$ENV_FILE_CONTENT_RAW" ]]; then
@@ -830,11 +841,15 @@ jobs:
 
     - name: Setup environment from env_file_content
       if: inputs.env_file_content != ''
+      env:
+        # Free-form input (a whole pasted .env), so it reaches the shell through
+        # the environment rather than being interpolated into the script text.
+        ENV_FILE_CONTENT_INPUT: ${{ inputs.env_file_content }}
       run: |
         # Write env_file_content to .env, handling both base64-encoded and raw formats
         # - parallel_cloud_run.sh sends base64-encoded content
         # - Manual UI paste can be raw .env content (more convenient)
-        CONTENT="${{ inputs.env_file_content }}"
+        CONTENT="$ENV_FILE_CONTENT_INPUT"
 
         # Try to decode as base64; if it fails or produces binary garbage, assume raw content
         if DECODED=$(echo "$CONTENT" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then

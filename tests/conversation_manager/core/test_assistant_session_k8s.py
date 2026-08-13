@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from kubernetes.client.rest import ApiException
+
 from unify.conversation_manager import (
     assistant_session_k8s as assistant_session_k8s_module,
 )
@@ -90,5 +92,38 @@ def test_read_session_bootstrap_secret_record_returns_owner_annotations(monkeypa
     )
     core_api.read_namespaced_secret.assert_called_once_with(
         name="assistant-session-bootstrap-42-activation-42",
-        namespace="staging",
+        namespace="staging-sessions",
     )
+
+
+def test_read_session_bootstrap_secret_record_falls_back_to_session_namespace(
+    monkeypatch,
+):
+    payload = {"assistant_id": "42", "api_key": "user-key"}
+    core_api = MagicMock()
+    core_api.read_namespaced_secret.side_effect = [
+        ApiException(status=404),  # not yet migrated to the sessions namespace
+        _fake_secret(
+            payload=payload,
+            annotations={
+                assistant_session_k8s_module.SESSION_REF_ANNOTATION: "assistant-session-42",
+                assistant_session_k8s_module.ACTIVATION_ID_ANNOTATION: "activation-42",
+            },
+        ),
+    ]
+
+    monkeypatch.setattr(assistant_session_k8s_module, "_load_clients", lambda: None)
+    monkeypatch.setattr(assistant_session_k8s_module, "_namespace", lambda: "staging")
+    monkeypatch.setattr(assistant_session_k8s_module, "_core_api", core_api)
+
+    record = assistant_session_k8s_module.read_session_bootstrap_secret_record(
+        "assistant-session-bootstrap-42-activation-42",
+    )
+
+    assert record.payload == payload
+    assert [
+        c.kwargs["namespace"] for c in core_api.read_namespaced_secret.call_args_list
+    ] == [
+        "staging-sessions",
+        "staging",
+    ]

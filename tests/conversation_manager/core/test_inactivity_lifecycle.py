@@ -1101,3 +1101,192 @@ class TestEdgeCases:
 
         # aclose should only be called once
         assert aclose_count == 1, f"aclose called {aclose_count} times, expected 1"
+
+
+# =============================================================================
+# Test: Control-plane drain
+# =============================================================================
+
+
+class TestDrainShutdown:
+    """A drain armed by the control plane must actually end the process."""
+
+    def _cm(self, event_broker, stop_event):
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        cm = ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=stop_event,
+        )
+        cm.inactivity_check_interval = 0.05
+        # Nowhere near the idle timeout: a drain must not have to wait for it.
+        cm.inactivity_timeout = 3600
+        cm.last_activity_time = cm.loop.time()
+        return cm
+
+    @pytest.mark.asyncio
+    async def test_armed_drain_shuts_down_while_the_pod_is_far_from_idle(
+        self,
+        event_broker,
+    ):
+        """The drain branch must end the process, not merely announce it.
+
+        It used to call ``await self.stop()`` -- ``stop`` is an Event, so that
+        raised TypeError into an ``except Exception`` guarding the probe. The
+        pod logged "shutting down for restart" every 30s for as long as it
+        lived and never shut down; drains only completed when the control
+        plane force-stopped the session at its deadline.
+        """
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+
+        with patch(
+            "unify.runtime.drain_gate.is_admission_blocked",
+            return_value=True,
+        ):
+            check_task = asyncio.create_task(cm.check_inactivity())
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pytest.fail("Armed drain did not shut the conversation manager down")
+            finally:
+                check_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await check_task
+
+        assert cm.shutdown_reason == "drain_restart"
+
+    @pytest.mark.asyncio
+    async def test_a_failing_drain_probe_leaves_the_pod_running(self, event_broker):
+        """The probe is best-effort; a control-plane blip must not kill a pod.
+
+        This is the shield the shutdown call was wrongly sharing: it belongs
+        around the probe alone.
+        """
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+
+        with patch(
+            "unify.runtime.drain_gate.is_admission_blocked",
+            side_effect=RuntimeError("comms unreachable"),
+        ):
+            check_task = asyncio.create_task(cm.check_inactivity())
+            await asyncio.sleep(0.2)
+            check_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await check_task
+
+        assert not stop_event.is_set()
+        assert cm.shutdown_reason is None
+
+
+# =============================================================================
+# Test: Unserviceable pod retirement
+# =============================================================================
+
+
+class TestUnserviceableRetirement:
+    """A pod that cannot serve must not keep the assistant's session."""
+
+    @pytest.mark.asyncio
+    async def test_a_pod_that_cannot_serve_retires_without_waiting_to_be_idle(
+        self,
+        event_broker,
+    ):
+        """Being talked to is not evidence a pod can answer.
+
+        A failed manager init leaves no actor for the rest of the pod's life,
+        and every wake it then receives fails. Because presence heartbeats
+        count as activity, its idle clock never ran down: one such pod held a
+        live assistant for three hours, swallowing two scheduled runs and a
+        user message, while the fix sat in an image it could not reach.
+        """
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        stop_event = asyncio.Event()
+        cm = ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=stop_event,
+        )
+        cm.inactivity_check_interval = 0.05
+        cm.inactivity_timeout = 3600
+        # Freshly "active": the idle path would never fire here.
+        cm.last_activity_time = cm.loop.time()
+        cm.unserviceable_reason = "manager initialization failed: no LLM credential"
+
+        check_task = asyncio.create_task(cm.check_inactivity())
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pytest.fail("Unserviceable pod did not retire")
+        finally:
+            check_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await check_task
+
+        assert cm.shutdown_reason == "unserviceable"
+
+    @pytest.mark.asyncio
+    async def test_a_serviceable_pod_is_left_alone(self, event_broker):
+        """The gate is the recorded reason, not merely being early in startup."""
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        stop_event = asyncio.Event()
+        cm = ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=stop_event,
+        )
+        cm.inactivity_check_interval = 0.05
+        cm.inactivity_timeout = 3600
+        cm.last_activity_time = cm.loop.time()
+
+        check_task = asyncio.create_task(cm.check_inactivity())
+        await asyncio.sleep(0.2)
+        check_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await check_task
+
+        assert not stop_event.is_set()
+        assert cm.shutdown_reason is None

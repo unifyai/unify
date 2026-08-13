@@ -1626,6 +1626,13 @@ class Ping(Event):
 @dataclass
 class Error(Event):
     prominent: ClassVar[bool] = True
+    # The pod's own failure output. Whatever the error was a response to --
+    # a message, a due task -- already counted as presence when it arrived,
+    # so discounting this drops nothing; counting it lets a pod that can only
+    # fail hold itself open on the strength of failing. One did, retrying a
+    # send seven times and then listing its own error as the last thing that
+    # touched its idle clock.
+    counts_as_activity: ClassVar[bool] = False
 
     message: str
 
@@ -2382,6 +2389,11 @@ class IntegrationToolsSyncFailed(Event):
     """Unity failed to prepare active provider tools for an app."""
 
     topic: ClassVar[str | None] = "app:comms:integration_tools_sync_failed"
+    # Emitted by the pod's own sync coordinator, once per app, never by a
+    # person. A pod whose managers had not initialized failed all nine at
+    # boot and then reported this as its last activity for forty-five
+    # minutes.
+    counts_as_activity: ClassVar[bool] = False
 
     app_slug: str
     app_display_name: str | None = None
