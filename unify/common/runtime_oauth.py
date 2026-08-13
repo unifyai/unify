@@ -319,6 +319,27 @@ def get_refresh_token_oauth_env_overlay() -> dict[str, str]:
     return dict(ensure_proxy_running().sandbox_env())
 
 
+def connected_oauth_providers() -> list[str]:
+    """Canonical names of providers with a live workspace connection.
+
+    Presence of the provider's refresh (or access) token in the runtime
+    secret store is the connection: it is what the proxy will exchange for
+    real access. No network call is made, so this is safe to evaluate at
+    prompt-build time.
+    """
+    secret_manager = _get_secret_manager()
+    connected: list[str] = []
+    for name, metadata in sorted(_OAUTH_PROVIDER_METADATA.items()):
+        token_names = [metadata.refresh_token_secret, metadata.access_token_secret]
+        if any(
+            _get_secret_value(secret_manager, token_name)
+            for token_name in token_names
+            if token_name
+        ):
+            connected.append(name)
+    return connected
+
+
 def get_oauth_prompt_context() -> str:
     """Return actor-facing documentation for OAuth runtime helpers."""
     doc = inspect.getdoc(get_oauth_access_token) or ""
@@ -326,11 +347,27 @@ def get_oauth_prompt_context() -> str:
         f"def {get_oauth_access_token.__name__}"
         f"{inspect.signature(get_oauth_access_token)}"
     )
+    connected = connected_oauth_providers()
+    if connected:
+        status = (
+            "Currently connected workspace providers: "
+            + ", ".join(f"`{name}`" for name in connected)
+            + ". These work right now — do not ask the user to connect them "
+            "again."
+        )
+    else:
+        status = (
+            "No workspace provider is currently connected. "
+            "`get_oauth_access_token(...)` will fail until the user connects "
+            "a Google or Microsoft account from the Workspace dialog in "
+            "Console; say so instead of attempting workarounds."
+        )
     return (
         "### OAuth Access Token Helper: `get_oauth_access_token(...)`\n\n"
         "`get_oauth_access_token(...)` is available inside `execute_code` "
         "Python sessions and stored Python functions. It is a normal sandbox "
         "helper, not a JSON tool call.\n\n"
+        f"{status}\n\n"
         f"```python\n{signature}\n```\n\n"
         f"{doc}"
     )

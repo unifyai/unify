@@ -59,19 +59,18 @@ class TestTierSelection:
             choose_tier(request(RowsSource(rows=[{"a": 1}] * 10)), SETTINGS) == "inline"
         )
 
-    def test_a_large_row_set_is_dispatched(self):
-        # Past the ceiling this is sustained I/O. Workers scale out for it; the
-        # assistant's process would be competing with itself.
+    def test_a_large_row_set_runs_in_process(self):
+        """Even past the ceiling, because the fleet cannot execute it.
+
+        The fleet's unit of work is a staged file: dispatching a rows source
+        publishes zero jobs, and a zero-job dispatch folds to `queued` forever.
+        A slow, checkpointed inline run beats an eternal hang; the ceiling
+        returns to routing the day a rows job type exists.
+        """
         assert (
             choose_tier(request(RowsSource(rows=[{"a": 1}] * 500)), SETTINGS)
-            == "dispatched"
+            == "inline"
         )
-
-    def test_the_ceiling_is_inclusive(self):
-        # Stated because an off-by-one here silently moves the boundary, and the
-        # boundary is the only number in the design.
-        rows = [{"a": 1}] * SETTINGS.MAX_INLINE_ROWS
-        assert choose_tier(request(RowsSource(rows=rows)), SETTINGS) == "inline"
 
     @pytest.mark.parametrize(
         "source",
@@ -102,18 +101,13 @@ class TestTierSelection:
             choose_tier(request(FilesSource(paths=["tiny.csv"])), SETTINGS)
         )
 
-    def test_a_counted_table_is_judged_on_its_exact_count(self):
+    def test_a_table_runs_in_process_whatever_its_count(self):
+        # Same reason as rows: a table source stages no file, so there is no
+        # job the fleet could run for it.
         source = TableSource(context="Data/Source")
         assert choose_tier(request(source), SETTINGS, row_count=10) == "inline"
-        assert choose_tier(request(source), SETTINGS, row_count=10_000) == "dispatched"
-
-    def test_an_uncounted_table_is_dispatched(self):
-        # An unknown size is not evidence of a small one. A table can hold
-        # millions of rows, so the unmeasured case takes the safe route.
-        assert (
-            choose_tier(request(TableSource(context="Data/Source")), SETTINGS)
-            == "dispatched"
-        )
+        assert choose_tier(request(source), SETTINGS, row_count=10_000) == "inline"
+        assert choose_tier(request(source), SETTINGS, row_count=None) == "inline"
 
     def test_without_a_fleet_everything_runs_in_process(self):
         """Safe rather than merely tolerated.
