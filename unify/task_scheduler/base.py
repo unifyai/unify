@@ -108,6 +108,14 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         deadlines and triggers, or summarise/compare existing entries. This
         call must never create, modify, or delete tasks.
 
+        It also answers what a task has actually *done*: whether it ran, when
+        it last ran, whether a run failed and why, what a run produced, and
+        when the next run is due. A task's own fields are authored intent and
+        cannot answer any of those, so ask for the outcome you want rather
+        than for the schedule you would have to reason from — "did the daily
+        briefing run this morning, and what did it produce?" rather than "what
+        time is the daily briefing set to run?".
+
         Clarifications
         --------------
         Do not use this method to ask the human questions. If the caller needs

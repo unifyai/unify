@@ -188,6 +188,14 @@ _WORKFLOW_SHELF = textwrap.dedent("""
     the workflow's recorded installation settings, already resolved. The
     settings tool exists for reading and discussing configuration with the
     user, not for runs to fetch their own.
+
+    **"Is it working?" is a question about runs.** A workflow reports what
+    it planted and whether its jobs are armed; neither says whether the work
+    is happening. For "has my briefing been running", "did it go out this
+    morning", "why did I not get one" — take the `task_id` from the
+    installation's `jobs` and ask `primitives.tasks` about that task's runs.
+    An armed job whose occurrences are all failing looks identical to a
+    healthy one from the installation record alone.
 """)
 
 

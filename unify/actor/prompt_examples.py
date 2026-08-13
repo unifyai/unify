@@ -975,11 +975,45 @@ async def execute_task_by_description_with_guidance(description: str) -> str:
 '''
 
 
+def get_primitives_task_run_history_example() -> str:
+    """Example: answering whether a task actually ran, and finding its run_key."""
+
+    return '''
+# Example: "Did my daily briefing run this morning? Is it still working?"
+async def check_task_is_running_as_intended(task_name: str) -> str:
+    """Answer from the runs, never from the schedule.
+
+    A task row says when it is *meant* to run and whether it is armed. It
+    cannot say whether it ran, and a task can be perfectly armed while every
+    occurrence is being lost. Reading the cadence back to the user as if it
+    were an answer is exactly the mistake this avoids.
+    """
+    handle = await primitives.tasks.ask(
+        f"For the task named '{task_name}': list its recent runs, and say "
+        "whether it ran today, what the last run produced, whether any run "
+        "failed and why, and when the next run is due."
+    )
+    return await handle.result()
+
+
+# The run_key the next example needs comes from that same history: each run
+# carries one, and it is the only way to reach a run's internals.
+async def diagnose_last_failure(task_name: str) -> str:
+    handle = await primitives.tasks.ask(
+        f"For the task named '{task_name}': return the run_key and error of "
+        "its most recent failed run, or say that none failed."
+    )
+    return await handle.result()
+'''
+
+
 def get_primitives_task_run_event_children_example() -> str:
     """Example: depth-1 EventBus walk for a failed Tasks/Executions run."""
 
     return '''
 # Example: Diagnose a failed task execution via depth-1 EventBus walk
+# `run_key` comes from the task's run history -- see the run-history example;
+# there is no other way to obtain one.
 async def diagnose_failed_execution(run_key: str) -> str:
     """Walk EventBus children one level at a time; expand only failing nodes."""
     notify({"type": "progress", "message": f"Inspecting EventBus children for {run_key}."})
@@ -1943,6 +1977,7 @@ def get_example_function_map() -> dict[str, callable]:
         "get_primitives_contact_update_example": get_primitives_contact_update_example,
         # Tasks
         "get_primitives_task_execute_example": get_primitives_task_execute_example,
+        "get_primitives_task_run_history_example": get_primitives_task_run_history_example,
         "get_primitives_task_run_event_children_example": get_primitives_task_run_event_children_example,
         "get_primitives_task_recurring_creation_example": get_primitives_task_recurring_creation_example,
         # Knowledge (JSON tools — not primitives)
