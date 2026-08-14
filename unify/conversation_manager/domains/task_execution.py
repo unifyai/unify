@@ -1,6 +1,7 @@
 """Task-execution wake-reason helpers for conversation-manager handlers."""
 
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 from time import perf_counter
 import uuid
@@ -25,13 +26,15 @@ from unify.logger import LOGGER
 from unify.manager_registry import ManagerRegistry
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.types.activated_by import ActivatedBy
-from unify.task_scheduler.types.execution import Delivery, Wake
+from unify.task_scheduler.types.execution import Delivery, ExecutionState, Wake
 from unify.task_scheduler.machine_state import (
     TaskExecutionSnapshot,
     TaskRunProvenance,
+    TaskRunReference,
     get_open_task_execution,
     list_trigger_executions,
     remember_live_task_run_provenance,
+    update_task_run_record,
     validate_task_due_execution,
 )
 
@@ -91,6 +94,42 @@ class _ConversationTaskExecutionDelegate:
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
         )
+
+
+def _record_task_start_failure(
+    *,
+    activation: TaskExecutionSnapshot | None,
+    assistant_id: str | None,
+    reason: str,
+) -> None:
+    """Terminalize an occurrence that fired and could not be started.
+
+    Failing to start used to leave the ledger exactly as it was: the row
+    stayed ``scheduled`` with no error and no end, so nothing recorded that a
+    run had been lost. Worse than the missing audit line, projection reads the
+    earliest open occurrence as the definition's head, so the row that never
+    ran kept that seat and no later occurrence was ever minted -- a transient
+    failure to start ended the series for good.
+
+    Recorded here rather than left to the supervisor sweep because this is the
+    one place that knows *why*. The sweep expires the same row half an hour
+    later with a generic reason; this writes the actual one, immediately.
+    """
+
+    if activation is None or not activation.run_key:
+        return
+    update_task_run_record(
+        TaskRunReference(
+            assistant_id=activation.assistant_id or (assistant_id or ""),
+            run_key=activation.run_key,
+            source_task_log_id=activation.source_task_log_id,
+        ),
+        {
+            "state": ExecutionState.failed.value,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "error": reason,
+        },
+    )
 
 
 async def _register_live_task_handle(
@@ -609,6 +648,11 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             f"Scheduled task '{_task_due_label(event, activation)}' failed to start "
             f"through TaskScheduler.execute: {type(exc).__name__}: {exc}"
         )
+        _record_task_start_failure(
+            activation=activation,
+            assistant_id=assistant_id_for_run,
+            reason=error_message,
+        )
         cm._session_logger.error("task_due", error_message)
         cm.notifications_bar.push_notif("Tasks", error_message, event.timestamp)
         publish_system_error(
@@ -688,6 +732,11 @@ async def _handle_task_trigger_requested_event(
         error_message = (
             f"REST-triggered task '{_task_trigger_label(event)}' failed to start "
             f"through TaskScheduler.execute: {type(exc).__name__}: {exc}"
+        )
+        _record_task_start_failure(
+            activation=activation,
+            assistant_id=assistant_id,
+            reason=error_message,
         )
         cm._session_logger.error("task_trigger", error_message)
         cm.notifications_bar.push_notif("Tasks", error_message, event.timestamp)
