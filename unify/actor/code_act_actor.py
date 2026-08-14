@@ -1122,11 +1122,15 @@ def _build_storage_tools(
     ask_tools: dict,
     completed_tool_metadata: dict | None = None,
     task_entrypoint_review: dict[str, Any] | None = None,
-) -> tuple[Dict[str, Callable], list[str]]:
+) -> tuple[Dict[str, Callable], list[str], list[str]]:
     """Build the tool dict shared by both post-processing and proactive storage loops.
 
-    Returns ``(tools, storage_active_lines)`` so callers can reference
-    which inner tools are still actively reviewing skills.
+    Returns ``(tools, storage_active_lines, dormant_lines)`` so callers can
+    reference which inner tools are still actively reviewing skills and
+    which completed tools can be queried. Tool docstrings deliberately stay
+    static — per-run listings belong in the (volatile tail of the) system
+    prompt so the serialized tool schemas are byte-identical across loops
+    and stay prompt-cache-friendly.
     """
     fm = actor.function_manager
     gm = actor.guidance_manager
@@ -1195,29 +1199,17 @@ def _build_storage_tools(
             dormant_lines.append(f"- `{name}`")
 
     if ask_tools:
-        doc_sections: list[str] = [
-            "Ask a follow-up question about a completed tool from the "
-            "trajectory to inspect its internal reasoning or results.",
-        ]
-        if storage_active_lines:
-            doc_sections.append(
-                "\nStorage-active tools (background skill review in progress):\n"
-                + "\n".join(storage_active_lines)
-                + "\n\nThese tools have completed their primary task but are "
-                "currently reviewing their execution for reusable skills. "
-                "You can ask what they have stored or are considering.",
-            )
-        if dormant_lines:
-            doc_sections.append(
-                "\nCompleted tools (dormant):\n" + "\n".join(dormant_lines),
-            )
-
-        _ask_doc = "\n".join(doc_sections)
 
         async def ask_about_completed_tool(
             tool_name: str,
             question: str,
         ) -> str:
+            """Ask a follow-up question about a completed tool from the trajectory.
+
+            Use this to inspect a completed tool's internal reasoning or
+            results. The available tool names are listed in the Completed
+            Tools section of this prompt.
+            """
             fn = ask_tools.get(tool_name)
             if fn is None:
                 return (
@@ -1233,14 +1225,12 @@ def _build_storage_tools(
                 return str(result)
             return str(handle)
 
-        ask_about_completed_tool.__doc__ = _ask_doc
         tools["ask_about_completed_tool"] = ask_about_completed_tool
 
     # ── Wire steering tools for storage-active inner handles ──────────
 
     if storage_active_handles:
         _sa_handles = storage_active_handles
-        _sa_listing = "\n".join(storage_active_lines)
 
         def _resolve_handle(tool_name: str) -> tuple[Any | None, str | None]:
             h = _sa_handles.get(tool_name)
@@ -1269,8 +1259,6 @@ def _build_storage_tools(
             await h.stop(reason=reason)
             return f"Stopped inner storage for '{tool_name}': {reason}"
 
-        stop_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
-
         async def interject_inner_storage(tool_name: str, message: str) -> str:
             """Inject a directive into an inner storage loop's conversation.
 
@@ -1285,8 +1273,6 @@ def _build_storage_tools(
             await h.interject(message)
             return f"Interjected into inner storage for '{tool_name}'."
 
-        interject_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
-
         async def pause_inner_storage(tool_name: str) -> str:
             """Temporarily pause an inner storage loop.
 
@@ -1300,8 +1286,6 @@ def _build_storage_tools(
             await h.pause()
             return f"Paused inner storage for '{tool_name}'."
 
-        pause_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
-
         async def resume_inner_storage(tool_name: str) -> str:
             """Resume a previously paused inner storage loop.
 
@@ -1313,8 +1297,6 @@ def _build_storage_tools(
                 return err
             await h.resume()
             return f"Resumed inner storage for '{tool_name}'."
-
-        resume_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
 
         tools["stop_inner_storage"] = stop_inner_storage
         tools["interject_inner_storage"] = interject_inner_storage
@@ -1563,7 +1545,7 @@ def _build_storage_tools(
             submit_offline_certification_evidence
         )
 
-    return tools, storage_active_lines
+    return tools, storage_active_lines, dormant_lines
 
 
 # ---------------------------------------------------------------------------
@@ -1609,7 +1591,7 @@ def _start_storage_check_loop(
         else None
     )
 
-    tools, storage_active_lines = _build_storage_tools(
+    tools, storage_active_lines, dormant_lines = _build_storage_tools(
         actor=actor,
         ask_tools=ask_tools,
         completed_tool_metadata=completed_tool_metadata,
@@ -1622,6 +1604,17 @@ def _start_storage_check_loop(
         _prepare_trajectory_for_storage_review(trajectory),
         default=str,
     )
+
+    completed_tools_section = ""
+    if storage_active_lines or dormant_lines:
+        listing = "\n".join([*storage_active_lines, *dormant_lines])
+        completed_tools_section = (
+            "## Completed Tools\n\n"
+            "These completed tools from the trajectory can be queried via "
+            "`ask_about_completed_tool` (entries marked [storage-active] "
+            "are still running their own background skill review):\n\n"
+            f"{listing}\n\n"
+        )
 
     # Build optional section about inner storage loops.
     inner_storage_section = ""
@@ -1669,7 +1662,7 @@ def _start_storage_check_loop(
         instructions = (
             "## Instructions\n\n"
             "1. Skill storage was proactively triggered during this run. "
-            "Start by reviewing the proactive storage summaries above and "
+            "Start by reviewing the proactive storage summaries below and "
             "checking the function, guidance, and knowledge stores to see "
             "what was already added.\n"
             "2. Search the existing stores to confirm exactly what was stored "
@@ -1754,23 +1747,28 @@ def _start_storage_check_loop(
             f"```json\n{metadata_json}\n```\n\n"
         )
 
+    # Static doctrine first, volatile trajectory last: every storage loop
+    # shares the same byte-identical prefix (role + doctrine + instructions),
+    # so provider prompt caching only pays cold tokens for the per-run tail.
     system_prompt = (
         "You are a skill librarian. A CodeActActor has just completed a task. "
         "Your job is to review the execution trajectory and decide whether "
         "anything is worth persisting for future reuse. Often nothing is — "
         "that is perfectly fine.\n\n"
-        "## Completed Trajectory\n\n"
-        f"{trajectory_json}\n\n"
-        "## Final Result\n\n"
-        f"{original_result}\n\n"
-        f"{stop_context_section}"
-        f"{task_entrypoint_section}"
-        f"{inner_storage_section}"
-        f"{proactive_storage_section}"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
         f"{_STORAGE_THREE_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
         f"{instructions}"
+        "\n\n"
+        f"{stop_context_section}"
+        f"{task_entrypoint_section}"
+        f"{inner_storage_section}"
+        f"{completed_tools_section}"
+        f"{proactive_storage_section}"
+        "## Completed Trajectory\n\n"
+        f"{trajectory_json}\n\n"
+        "## Final Result\n\n"
+        f"{original_result}"
     )
 
     client = new_llm_client(actor._model)
@@ -1818,7 +1816,7 @@ def _start_proactive_storage_loop(
     if fm is None or gm is None:
         return None
 
-    tools, storage_active_lines = _build_storage_tools(
+    tools, storage_active_lines, dormant_lines = _build_storage_tools(
         actor=actor,
         ask_tools=ask_tools,
         completed_tool_metadata=completed_tool_metadata,
@@ -1830,6 +1828,17 @@ def _start_proactive_storage_loop(
         _prepare_trajectory_for_storage_review(trajectory),
         default=str,
     )
+
+    completed_tools_section = ""
+    if storage_active_lines or dormant_lines:
+        listing = "\n".join([*storage_active_lines, *dormant_lines])
+        completed_tools_section = (
+            "## Completed Tools\n\n"
+            "These completed tools from the trajectory can be queried via "
+            "`ask_about_completed_tool` (entries marked [storage-active] "
+            "are still running their own background skill review):\n\n"
+            f"{listing}\n\n"
+        )
 
     inner_storage_section = ""
     if storage_active_lines:
@@ -1866,21 +1875,25 @@ def _start_proactive_storage_loop(
         "follow-up storage review, so be specific."
     )
 
+    # Static doctrine first, volatile trajectory last — same prompt-cache
+    # prefix as the post-run storage check.
     system_prompt = (
         "You are a skill librarian. A CodeActActor is currently executing "
         "a task and has proactively requested skill storage. Your job is "
         "to review the execution trajectory so far and store the "
         "requested skill(s) for future reuse. Often nothing is worth "
         "storing — that is perfectly fine.\n\n"
-        "## Storage Request\n\n"
-        f"{request}\n\n"
-        "## Trajectory So Far\n\n"
-        f"{trajectory_json}\n\n"
-        f"{inner_storage_section}"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
         f"{_STORAGE_THREE_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
         f"{instructions}"
+        "\n\n"
+        f"{inner_storage_section}"
+        f"{completed_tools_section}"
+        "## Storage Request\n\n"
+        f"{request}\n\n"
+        "## Trajectory So Far\n\n"
+        f"{trajectory_json}"
     )
 
     client = new_llm_client(actor._model)
