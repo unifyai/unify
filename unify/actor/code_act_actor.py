@@ -4,6 +4,7 @@ import copy
 import functools
 import inspect
 import json
+import re
 import sys
 import traceback
 import uuid
@@ -972,6 +973,145 @@ _STORAGE_BASE_INSTRUCTIONS = (
 )
 
 # ---------------------------------------------------------------------------
+# Trajectory compaction for storage review prompts
+# ---------------------------------------------------------------------------
+
+# Read-only store operations whose results the librarian can (and should)
+# re-derive live with its own tools. Write operations (add/update/delete/…)
+# stay verbatim — their results are small and record what changed.
+_STORE_READ_TOOL_RE = re.compile(
+    r"^(?:FunctionManager|GuidanceManager|KnowledgeManager)"
+    r"_(?:search|filter|list|get)",
+)
+_TRAJ_SYSTEM_STUB_THRESHOLD = 2_000
+_TRAJ_STORE_READ_STUB_THRESHOLD = 300
+_TRAJ_TOOL_RESULT_HEAD = 4_000
+_TRAJ_TOOL_RESULT_TAIL = 1_000
+
+
+def _prepare_trajectory_for_storage_review(
+    messages: list[dict] | None,
+) -> list[dict]:
+    """Compact a trajectory snapshot for a skill-librarian prompt.
+
+    The librarian judges what the actor *did*, not what it was told it
+    could do, and it queries the stores live with its own tools. Three
+    rewrites keep the review prompt bounded without hiding decision
+    signal:
+
+    * Large system messages collapse to a one-line stub — the review
+      prompt's own storage doctrine is authoritative. Small system
+      messages (e.g. parent-chat context) stay verbatim.
+    * Large results of store *reads* (FunctionManager / GuidanceManager /
+      KnowledgeManager search/filter/list/get, including results
+      delivered through ``check_status_*`` placeholders) collapse to an
+      entry count. The call and its arguments stay visible: "searched
+      the store, found nothing, built it by hand" is exactly the signal
+      that something is worth storing, and empty/short results stay
+      verbatim for that reason.
+    * Any other oversized tool result keeps its head and tail around an
+      elision marker.
+    """
+    prepared = make_messages_safe_for_context_dump(messages)
+
+    name_by_call_id: dict[str, str] = {}
+    for msg in prepared:
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            tc_id = tc.get("id")
+            fn_name = (tc.get("function") or {}).get("name")
+            if tc_id and fn_name:
+                name_by_call_id[str(tc_id)] = str(fn_name)
+
+    def _origin_tool_name(msg: dict) -> str | None:
+        name = msg.get("name") or name_by_call_id.get(
+            str(msg.get("tool_call_id") or ""),
+        )
+        if not name:
+            return None
+        name = str(name)
+        # ``check_status_<call_id>`` delivers an async tool's real result;
+        # resolve back to the originating tool for classification.
+        if name.startswith("check_status_"):
+            return name_by_call_id.get(name[len("check_status_") :], name)
+        return name
+
+    def _entry_count(content: str) -> str | None:
+        try:
+            parsed = json.loads(content)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(parsed, list):
+            return f"{len(parsed)} entries"
+        return None
+
+    def _content_text(content: object) -> str | None:
+        """Flatten message content to plain text for measurement/rewrites.
+
+        Tool results arrive either as a plain string or as an OpenAI
+        content-parts list (``[{"type": "text", "text": ...}, ...]``) —
+        execute_code results use the latter. Rewrites always store back a
+        plain string; that is fine for a serialized trajectory dump.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    parts.append(
+                        (
+                            text
+                            if isinstance(text, str)
+                            else f"[{part.get('type') or 'non-text'} part]"
+                        ),
+                    )
+                else:
+                    parts.append(str(part))
+            return "\n".join(parts)
+        return None
+
+    for msg in prepared:
+        content = _content_text(msg.get("content"))
+        if content is None:
+            continue
+        role = msg.get("role")
+        if role == "system":
+            if len(content) > _TRAJ_SYSTEM_STUB_THRESHOLD:
+                msg["content"] = (
+                    f"[System prompt omitted ({len(content):,} chars). The "
+                    "storage doctrine in this review prompt is "
+                    "authoritative.]"
+                )
+            continue
+        if role != "tool":
+            continue
+        origin = _origin_tool_name(msg)
+        if (
+            origin
+            and _STORE_READ_TOOL_RE.match(origin)
+            and len(content) > _TRAJ_STORE_READ_STUB_THRESHOLD
+        ):
+            count = _entry_count(content)
+            size = f"{len(content):,} chars"
+            detail = f"{count}, {size}" if count else size
+            msg["content"] = (
+                f"[{origin} result omitted ({detail}). Query the stores "
+                "directly with your tools; they are the source of truth.]"
+            )
+        elif len(content) > _TRAJ_TOOL_RESULT_HEAD + _TRAJ_TOOL_RESULT_TAIL:
+            omitted = len(content) - _TRAJ_TOOL_RESULT_HEAD - _TRAJ_TOOL_RESULT_TAIL
+            msg["content"] = (
+                content[:_TRAJ_TOOL_RESULT_HEAD]
+                + f"\n… [{omitted:,} chars omitted] …\n"
+                + content[-_TRAJ_TOOL_RESULT_TAIL:]
+            )
+    return prepared
+
+
+# ---------------------------------------------------------------------------
 # Shared storage tool construction
 # ---------------------------------------------------------------------------
 
@@ -1478,7 +1618,10 @@ def _start_storage_check_loop(
 
     # ── Build prompt ──────────────────────────────────────────────────
 
-    trajectory_json = json.dumps(trajectory, indent=2, default=str)
+    trajectory_json = json.dumps(
+        _prepare_trajectory_for_storage_review(trajectory),
+        default=str,
+    )
 
     # Build optional section about inner storage loops.
     inner_storage_section = ""
@@ -1683,7 +1826,10 @@ def _start_proactive_storage_loop(
 
     # ── Build prompt ──────────────────────────────────────────────────
 
-    trajectory_json = json.dumps(trajectory, indent=2, default=str)
+    trajectory_json = json.dumps(
+        _prepare_trajectory_for_storage_review(trajectory),
+        default=str,
+    )
 
     inner_storage_section = ""
     if storage_active_lines:
