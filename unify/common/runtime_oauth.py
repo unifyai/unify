@@ -326,13 +326,20 @@ def connected_oauth_providers() -> list[str]:
     secret store is the connection: it is what the proxy will exchange for
     real access. No network call is made, so this is safe to evaluate at
     prompt-build time.
+
+    The lookup must go through :func:`_read_access_token`, which consults the
+    in-memory OAuth store first. Raw tokens are deliberately withheld from the
+    ``Secrets`` context, ``.env`` and ``os.environ``, so a plain secret lookup
+    sees a correctly-stored token as absent and reports every provider
+    disconnected — inverting the check into one that passes only when the
+    sandbox-isolation invariant has been broken.
     """
     secret_manager = _get_secret_manager()
     connected: list[str] = []
     for name, metadata in sorted(_OAUTH_PROVIDER_METADATA.items()):
         token_names = [metadata.refresh_token_secret, metadata.access_token_secret]
         if any(
-            _get_secret_value(secret_manager, token_name)
+            _read_access_token(secret_manager, token_name)
             for token_name in token_names
             if token_name
         ):

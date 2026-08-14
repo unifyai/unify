@@ -219,3 +219,116 @@ def test_refresh_token_oauth_token_names_are_sensitive_subset():
     # Expiry / granted-scope metadata is NOT sensitive and stays out of this set.
     assert "MICROSOFT_TOKEN_EXPIRES_AT" not in names
     assert "GOOGLE_GRANTED_SCOPES" not in names
+
+
+# ── Connected-provider reporting (actor prompt context) ──────────────────────
+
+
+class _IsolatedSecretManager:
+    """A SecretManager holding raw tokens the way production does.
+
+    ``_sync_assistant_secrets`` keeps access/refresh tokens in an in-memory
+    store and never mirrors them to the ``Secrets`` context, ``.env`` or
+    ``os.environ``, so sandboxed actor code cannot read them and bypass the
+    provider proxy. Only non-sensitive metadata (expiry, granted scopes) is
+    reachable through ``_get_secret_value``.
+    """
+
+    def __init__(self, oauth_tokens: dict[str, str], secrets: dict[str, str]) -> None:
+        self._oauth_tokens = oauth_tokens
+        self.secrets = secrets
+
+    def get_oauth_token(self, name: str) -> str | None:
+        return self._oauth_tokens.get(name)
+
+    def _get_secret_value(self, name: str) -> str | None:
+        return self.secrets.get(name)
+
+
+def test_connected_providers_sees_tokens_held_only_in_memory(monkeypatch):
+    # The production storage shape: the token is present and usable, but is
+    # deliberately absent from the secret store the legacy lookup consults.
+    sm = _IsolatedSecretManager(
+        oauth_tokens={"MICROSOFT_ACCESS_TOKEN": "real-ms-token"},
+        secrets={"MICROSOFT_GRANTED_SCOPES": "Files.Read.All"},
+    )
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.connected_oauth_providers() == ["microsoft"]
+
+
+def test_connected_providers_reports_each_provider_independently(monkeypatch):
+    sm = _IsolatedSecretManager(
+        oauth_tokens={
+            "GOOGLE_REFRESH_TOKEN": "real-google-refresh",
+            "MICROSOFT_ACCESS_TOKEN": "real-ms-token",
+        },
+        secrets={},
+    )
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.connected_oauth_providers() == ["google", "microsoft"]
+
+
+def test_a_refresh_token_alone_is_a_connection(monkeypatch):
+    # The proxy exchanges the refresh token for access, so a provider with only
+    # a refresh token stored is still connected.
+    sm = _IsolatedSecretManager(
+        oauth_tokens={"MICROSOFT_REFRESH_TOKEN": "real-ms-refresh"},
+        secrets={},
+    )
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.connected_oauth_providers() == ["microsoft"]
+
+
+def test_no_tokens_reports_nothing_connected(monkeypatch):
+    # Non-sensitive metadata lingering in the secret store must not read as a
+    # connection on its own -- only a token the proxy can exchange counts.
+    sm = _IsolatedSecretManager(
+        oauth_tokens={},
+        secrets={
+            "MICROSOFT_GRANTED_SCOPES": "Files.Read.All",
+            "MICROSOFT_TOKEN_EXPIRES_AT": _future_expiry(),
+        },
+    )
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.connected_oauth_providers() == []
+
+
+def test_the_actor_prompt_names_a_connected_provider(monkeypatch):
+    # The single consumer: an inverted check tells the actor the workspace is
+    # unavailable, and an actor forbidden from falling back then refuses
+    # without ever issuing a request.
+    sm = _IsolatedSecretManager(
+        oauth_tokens={"MICROSOFT_ACCESS_TOKEN": "real-ms-token"},
+        secrets={},
+    )
+    _install_secret_manager(monkeypatch, sm)
+    _install_fake_proxy(monkeypatch)
+
+    context = runtime_oauth.get_oauth_prompt_context()
+
+    assert "Currently connected workspace providers" in context
+    assert "`microsoft`" in context
+    assert "No workspace provider is currently connected" not in context
+
+
+def test_the_actor_prompt_still_reports_a_genuine_disconnection(monkeypatch):
+    sm = _IsolatedSecretManager(oauth_tokens={}, secrets={})
+    _install_secret_manager(monkeypatch, sm)
+    _install_fake_proxy(monkeypatch)
+
+    context = runtime_oauth.get_oauth_prompt_context()
+
+    assert "No workspace provider is currently connected" in context
+
+
+def test_a_legacy_secret_store_token_still_counts(monkeypatch):
+    # Self-host and test environments that still populate the secret store
+    # directly keep working: _read_access_token falls back to it.
+    sm = _FakeSecretManager({"GOOGLE_ACCESS_TOKEN": "legacy-google-token"})
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.connected_oauth_providers() == ["google"]
