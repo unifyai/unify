@@ -3047,97 +3047,54 @@ class CodeActActor(BaseCodeActActor):
             Key concepts
             -----------
             - **language**: "python" | "bash" | "zsh" | "sh" | "powershell"
-            - **surface**: which machine to run on.
-              - "local" (default): the local host itself — the only surface that
-                supports stateful sessions and venvs.
-              - "assistant_desktop": the assistant's managed VM.
-              - "user_desktop": the user's own linked machine, when the user has
-                granted access (pass ``user_id`` to disambiguate when more than
-                one user desktop is linked).
-              Remote surfaces ("assistant_desktop"/"user_desktop") are **stateless
-              one-shots**: ``state_mode`` must be "stateless" and ``session_id`` /
-              ``session_name`` / ``venv_id`` must be omitted. Use them to run a
-              shell command or a self-contained Python snippet on that machine.
-            - **state_mode**:
-              - "stateless": fresh execution; no persistence of intermediate variables.
-                Environment globals and FunctionManager-discovered functions are
-                always available.
-              - "stateful": persistent session; state accumulates across calls
-              - "read_only": reads from an existing session but does not persist changes
-            - **session_id/session_name**:
-              - only meaningful for stateful/read_only
-              - for stateful: if omitted, defaults to **session_id=0** (the default session)
-              - to create an additional stateful session, provide a fresh `session_name` (recommended)
-                or an explicit `session_id` > 0
-              - **Python session_id=0** is special:
-                - If this tool is called from inside a running CodeAct `act()` loop, session 0 maps to the
-                  **current per-call Python sandbox** (shared via the ContextVar binding).
-                - If no sandbox is bound (e.g. calling the tool directly in a unit test), session 0 behaves
-                  like a normal in-process Python session managed by the SessionExecutor.
-
-            Best practices
-            --------------
-            - Use **stateful** when doing multi-step work (cd then ls; load data then analyze).
-            - Use **stateless** for one-off checks or when you need isolation.
-            - Use **read_only** to "peek" without mutating state (what-if exploration).
-            - Use `list_sessions()` and `inspect_state()` to decide which session to use.
+            - **surface**: "local" (default; the only surface with stateful
+              sessions and venvs), "assistant_desktop" (managed VM),
+              "user_desktop" (the user's own linked machine; pass
+              ``user_id`` when more than one is linked). Remote surfaces are
+              **stateless one-shots**: ``state_mode`` must be "stateless"
+              and ``session_id`` / ``session_name`` / ``venv_id`` omitted.
+            - **state_mode**: "stateless" (default; fresh run, environment
+              globals and FunctionManager-discovered functions still
+              available), "stateful" (state accumulates), "read_only"
+              (reads an existing session without persisting).
+            - **session_id/session_name**: stateful/read_only only.
+              Stateful defaults to **session_id=0** — inside a running
+              act() loop, the current per-call Python sandbox. Create an
+              additional session with a fresh ``session_name`` (recommended)
+              or an explicit ``session_id`` > 0; choose via
+              ``list_sessions()`` / ``inspect_state()``.
 
             Output
             ------
-            Returns either a dict or an ExecutionResult object with the following fields:
-
-            - **stdout**: For in-process Python, a List[TextPart | ImagePart] preserving
-              rich output (text and images from print()/display()). For shell or venv
-              execution, a plain string.
-            - **stderr**: Same format as stdout (list for in-process Python, string otherwise).
-            - **result**: The evaluated result of the last expression (Any), or None.
-              If the last expression is a steerable handle, it is automatically
-              adopted by the outer loop for mid-flight steering.
-            - **error**: Error message string if execution failed, otherwise None.
-            - **language**: The language used for execution.
-            - **state_mode**: The state mode used ("stateless", "stateful", or "read_only").
-            - **session_id**: The session ID (int) if stateful/read_only, otherwise None.
-            - **session_name**: The session name alias if one was assigned, otherwise None.
-            - **venv_id**: The virtual environment ID if applicable, otherwise None.
-            - **session_created**: True if a new session was created by this call.
-            - **duration_ms**: Execution duration in milliseconds.
+            A dict or ExecutionResult with: ``stdout`` / ``stderr`` (rich
+            List[TextPart | ImagePart] for in-process Python; plain string
+            for shell/venv), ``result`` (last expression's value — a
+            steerable handle as the last expression is automatically adopted
+            by the outer loop for mid-flight steering), ``error``,
+            ``language``, ``state_mode``, ``session_id``, ``session_name``,
+            ``venv_id``, ``session_created``, ``duration_ms``.
 
             Runtime credential helpers
             --------------------------
-            Python execution globals include ``get_oauth_access_token(provider)``
-            for connected-account (BYOD) OAuth. It returns a local capability
-            handle (not a raw token) to use with the workspace proxy base URLs
-            (``MICROSOFT_GRAPH_BASE`` / ``GOOGLE_DRIVE_BASE`` / ``GOOGLE_API_BASE``);
-            the proxy injects the real token and enforces the file-access
-            allowlist. Static API keys and provider SDKs that read credentials
-            from the environment may still use ``os.environ`` after checking
-            available secret names.
+            Python globals include ``get_oauth_access_token(provider)`` for
+            connected-account OAuth: a local capability handle (not a raw
+            token) used with the workspace proxy base URLs — see
+            ``help(get_oauth_access_token)``. Static API keys stay in
+            ``os.environ``.
 
             Steering while the block runs
             -----------------------------
-            Python blocks are steerable in flight. Checkpoints sit between
+            Python blocks are steerable in flight: checkpoints sit between
             top-level statements, at the top of every loop body, and before
-            every ``primitives.*`` call, so a correction arriving partway
-            through can reach the block instead of only being able to kill it.
-
-            When one arrives, the block suspends at its next checkpoint and
-            you are given a turn with a report of how far it got. Two ways
-            forward: ``stop_execute_code_<call_id>`` abandons the block so you
-            can write a corrected one, or interjecting again resumes it as
-            written. Prefer stopping when the correction changes what the
-            remaining work should do, and resuming when it does not.
-
-            Generated code may read ``steering.messages`` for the interjection
-            texts delivered so far, which lets a long loop adapt without being
-            abandoned. Blocks that ignore it behave exactly as written.
-
-            A checkpoint can only run when the block yields. A synchronous
-            call that blocks — ``time.sleep``, non-async HTTP, a tight compute
-            loop — holds execution until it returns, so prefer async calls in
-            work that may need correcting partway through.
-
-            For in-process Python execution with rich output, the result is wrapped in an
-            ExecutionResult object (a Pydantic model implementing FormattedToolResult).
+            every ``primitives.*`` call. On a correction the block suspends
+            and you get a turn with a progress report:
+            ``stop_execute_code_<call_id>`` abandons the block (choose when
+            the correction changes the remaining work); interjecting again
+            resumes it as written. Generated code may read
+            ``steering.messages`` to adapt without being abandoned. A
+            checkpoint only runs when the block yields — synchronous
+            blocking calls hold execution, so prefer async calls in work
+            that may need correcting partway through.
             """
             _ = thought  # Thought is logged by the LLM; not used programmatically.
             if code is None or code.strip() == "":
@@ -3849,49 +3806,21 @@ class CodeActActor(BaseCodeActActor):
                 Execute a single function or primitive by name.
 
                 **This is the preferred tool for any task that maps to a single
-                function or primitive call.** Use it instead of ``execute_code``
-                whenever the task can be accomplished by invoking one callable
-                with keyword arguments — no surrounding Python logic needed.
+                function or primitive call** — a primitive
+                (``primitives.contacts.ask``, ``primitives.tasks.update``, …)
+                or a stored function discovered via FunctionManager. It
+                **structurally guarantees** the returned handle is exposed to
+                the outer loop for steering (ask, stop, pause, resume,
+                interject); inside ``execute_code`` a handle is only adopted
+                if it happens to be the last expression. Use ``execute_code``
+                only for genuine multi-step composition (conditional logic,
+                loops, combining intermediate results).
 
-                Why prefer this tool
-                --------------------
-                ``execute_function`` **structurally guarantees** that the
-                returned handle is exposed to the outer loop for steering
-                (ask, stop, pause, resume, interject). When you write the
-                same call inside ``execute_code``, the handle is only
-                adopted if it happens to be the last expression — a pattern
-                that is easy to break by adding prints, notifications, or
-                error handling around the call.
-
-                When to use ``execute_function`` vs ``execute_code``
-                ----------------------------------------------------
-                - **Single primitive call** (e.g. ``primitives.contacts.ask``,
-                  ``primitives.web.ask``, ``primitives.tasks.update``)
-                  → always ``execute_function``.
-                - **Single stored function call** (discovered via
-                  FunctionManager) → always ``execute_function``.
-                - **Multi-step composition**, conditional logic, loops,
-                  or any code that genuinely needs to combine multiple
-                  calls or process intermediate results
-                  → use ``execute_code``.
-
-                Resolution order
-                ----------------
-                1. The current sandbox namespace (environment-injected callables,
-                   previously discovered FunctionManager functions, etc.).
-                2. The FunctionManager store (by exact name lookup).
-                3. If neither matches, a ``NameError`` is raised naturally.
-
-                Key concepts
-                ------------
-                - **language**: ``"python"`` | ``"bash"`` | ``"zsh"`` | ``"sh"`` | ``"powershell"``
-                - **state_mode**:
-                  - ``"stateless"``: no session; clean execution; no persistence
-                  - ``"stateful"``: persistent session; state accumulates
-                  - ``"read_only"``: reads from an existing session but does not
-                    persist changes
-                - **session_id / session_name**: only meaningful for
-                  stateful / read_only (same semantics as ``execute_code``)
+                Resolution order: the current sandbox namespace first, then
+                the FunctionManager store by exact name; otherwise a
+                ``NameError`` is raised. ``language`` / ``state_mode`` /
+                ``session_id`` / ``session_name`` keep ``execute_code``
+                semantics.
 
                 Parameters
                 ----------
@@ -3899,32 +3828,30 @@ class CodeActActor(BaseCodeActActor):
                     One-sentence, first-person rationale for this call, shown
                     to the user. Always provide it.
                 function_name : str
-                    Exact name of the function or primitive to execute.
-                    For primitives, use the dotted path as it appears in the
-                    sandbox (e.g. ``"primitives.contacts.ask"``).
+                    Exact name of the function or primitive to execute
+                    (dotted path for primitives, e.g.
+                    ``"primitives.contacts.ask"``).
                 call_kwargs : dict, optional
-                    Keyword arguments to pass to the function, each value in
-                    the type the target declares — numbers and booleans
-                    unquoted, not stringified.
+                    Keyword arguments to pass. Values keep the callee's own
+                    types — a plain keyword-argument mapping, not a string
+                    map: numbers, booleans, lists, and objects unquoted,
+                    exactly as the target signature declares them
+                    (``{"max_results": 5}``, not ``{"max_results": "5"}``,
+                    which fails type validation at the callee).
 
                 Steering while the function runs
                 -------------------------------
-                Steerable in flight, like ``execute_code``. When the stored
-                implementation is synthesised into the sandbox, checkpoints
-                are placed inside the function's own body as well, so a long
-                loop within a stored function can be corrected partway through
-                rather than only before it starts or after it finishes.
-
-                A correction suspends the call at its next checkpoint and
-                gives you a turn: ``stop_execute_function_<call_id>`` abandons
-                it, interjecting again resumes it.
+                Steerable in flight, like ``execute_code`` — checkpoints are
+                placed inside a stored implementation's own body, so a long
+                loop can be corrected partway through. A correction suspends
+                the call and gives you a turn:
+                ``stop_execute_function_<call_id>`` abandons it, interjecting
+                again resumes it.
 
                 Returns
                 -------
                 dict | ExecutionResult
-                    Same shape as ``execute_code`` output (stdout, stderr, result,
-                    error, language, state_mode, session_id, session_name,
-                    session_created, duration_ms).
+                    Same shape as ``execute_code`` output.
                 """
                 _ = thought  # Thought is logged by the LLM; not used programmatically.
                 call_kwargs = call_kwargs or {}
@@ -4413,33 +4340,25 @@ class CodeActActor(BaseCodeActActor):
             """
             List all active sessions across all languages (Python + shell).
 
-            Use this tool whenever you need to choose which session to use for a
-            subsequent `execute_code(..., state_mode="stateful"/"read_only")` call.
+            Use this to choose which session a subsequent
+            `execute_code(..., state_mode="stateful"/"read_only")` call
+            should target.
 
             Parameters
             ----------
             detail:
-                Controls how much information is returned per session:
-                - "summary": metadata + a short `state_summary` string (default)
-                - "full": best-effort enrichment using cheap inspection where available
+                "summary" (default): metadata + a short `state_summary`;
+                "full": best-effort enrichment via cheap inspection.
 
             Returns
             -------
             dict:
-                {"sessions": [ ... ]} where each entry includes (best-effort):
-                - language: "python" | "bash" | "zsh" | "sh" | "powershell"
-                - session_id: int (scoped per language + venv_id)
-                - venv_id: int | None (Python only)
-                - session_name: optional human-friendly alias (if registered)
-                - created_at / last_used: timestamps when available
-                - state_summary: a short human-readable summary (e.g. "3 names", "cwd=/repo")
-
-            Notes
-            -----
-            - Session IDs are **scoped per (language, venv_id)**, so `python` session 0 and
-              `bash` session 0 can coexist.
-            - The default per-call Python sandbox is exposed as `python` session_id=0 (venv_id=None)
-              when it is bound for the current call.
+                {"sessions": [...]}; each entry carries language,
+                session_id, venv_id (Python only), session_name,
+                created_at / last_used, and state_summary. Session IDs are
+                **scoped per (language, venv_id)**; the default per-call
+                Python sandbox appears as `python` session_id=0
+                (venv_id=None) when bound.
             """
             detail = (detail or "summary").strip()
 
@@ -4541,34 +4460,28 @@ class CodeActActor(BaseCodeActActor):
             """
             Inspect the state of a specific session (Python or shell).
 
-            This tool is for debugging and for deciding whether to:
-            - continue in the same session (stateful)
-            - start a fresh session (stateful without session_id/session_name)
-            - run a one-off (stateless)
-            - do a what-if (read_only)
+            Use it to decide whether to continue in a session, start fresh,
+            run stateless, or do a read_only what-if.
 
             Parameters
             ----------
             session_name:
-                Optional human-friendly alias for a session (preferred when available).
+                Human-friendly alias (preferred when available).
             session_id + language (+ optional venv_id):
-                Directly identify a session. `session_id` is scoped per (language, venv_id).
+                Direct identity; `session_id` is scoped per (language,
+                venv_id).
             detail:
-                "summary" | "names" | "full"
-                - Prefer "summary" when you just need quick context.
-                - Use "names" to see what variables exist without dumping values.
-                - Use "full" sparingly (can be large; values are truncated/redacted best-effort).
+                "summary" (quick context) | "names" (variable names only) |
+                "full" (sparingly; values truncated/redacted best-effort).
 
-            Defaults
-            --------
-            If no session selector is provided, this inspects the **current per-call Python sandbox**
-            (python session_id=0, venv_id=None) when bound.
+            With no selector, inspects the **current per-call Python
+            sandbox** (python session_id=0, venv_id=None) when bound.
 
             Returns
             -------
-            dict with:
-            - session: {language, session_id, session_name, venv_id}
-            - state: implementation-specific state representation (Python vars; shell cwd/env/functions/aliases)
+            dict with `session` ({language, session_id, session_name,
+            venv_id}) and `state` (Python vars; shell
+            cwd/env/functions/aliases).
             """
             detail = (detail or "summary").strip()
 
@@ -4731,8 +4644,7 @@ class CodeActActor(BaseCodeActActor):
             """
             Close a specific session and free resources.
 
-            Use this to proactively manage resources when you are done with a session.
-            This operation is **idempotent**: closing an already-closed/non-existent session
+            **Idempotent**: closing an already-closed/non-existent session
             returns `closed=False, reason="not_found"` rather than raising.
 
             Parameters
@@ -4745,9 +4657,8 @@ class CodeActActor(BaseCodeActActor):
             Returns
             -------
             dict:
-                - closed: bool
-                - reason: "success" | "not_found" | "error"
-                - session: {language, session_id, session_name}
+                closed (bool), reason ("success" | "not_found" | "error"),
+                session ({language, session_id, session_name}).
             """
             resolved: SessionKey | None = None
             if session_name:
@@ -4811,15 +4722,14 @@ class CodeActActor(BaseCodeActActor):
             """
             Close all active sessions across all languages.
 
-            This is a blunt cleanup tool. Prefer `close_session(...)` when you only
-            want to discard a specific polluted/unused session.
+            Blunt cleanup — prefer `close_session(...)` to discard one
+            specific polluted/unused session.
 
             Returns
             -------
             dict:
-                - closed_count: int
-                - languages: list[str] (languages that had sessions closed)
-                - details: per-language counts
+                closed_count (int), languages (list[str]), details
+                (per-language counts).
             """
             closed_counts: dict[str, int] = {
                 "python": 0,
@@ -5534,7 +5444,9 @@ class CodeActActor(BaseCodeActActor):
                 "function_name : str\n"
                 "    Exact name of the function to execute.\n"
                 "call_kwargs : dict, optional\n"
-                "    Keyword arguments to pass to the function.\n"
+                "    Keyword arguments to pass to the function. Values keep\n"
+                "    the callee's declared types — numbers/booleans unquoted\n"
+                '    (``{"max_results": 5}``, not ``{"max_results": "5"}``).\n'
                 'language : str, default ``"python"``\n'
                 "    Language of the function.\n"
                 'state_mode : str, default ``"stateless"``\n'
