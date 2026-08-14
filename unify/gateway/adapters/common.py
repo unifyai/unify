@@ -11,12 +11,16 @@ from fastapi import HTTPException, Request
 from unify.gateway.context import GatewayContext
 from unify.settings import SETTINGS
 
+#: Every name here must be a field Orchestra's ``/admin/assistant`` accepts:
+#: one unknown name 422s the whole request, which ``get_assistant`` degrades
+#: to the local-assistant stub — silently breaking email- and phone-keyed
+#: lookups.
 ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
     "is_coordinator,is_multiplayer,organization_id,voice_id,voice_provider,first_name,"
-    "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,is_local,"
+    "surname,desktop_mode,managed_desktop_status,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"
     "about,job_title,timezone"
@@ -91,7 +95,6 @@ def validate_attachments(raw_attachments: Any) -> list[dict[str, Any]]:
 def _local_assistant_data(assistant_id: str | None = None) -> dict[str, Any]:
     return {
         "assistant_id": assistant_id or "local-assistant",
-        "deploy_env": None,
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
@@ -127,7 +130,6 @@ def _local_assistant_data(assistant_id: str | None = None) -> dict[str, Any]:
 def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
     return {
         "assistant_id": assistant["agent_id"],
-        "deploy_env": assistant.get("deploy_env"),
         "user_id": assistant["user_id"],
         "api_key": assistant["api_key"],
         "user_first_name": assistant["user_first_name"] or "",
