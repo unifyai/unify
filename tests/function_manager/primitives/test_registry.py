@@ -188,31 +188,41 @@ def test_prompt_context_single_manager_no_general_rules():
     scope = PrimitiveScope.single("files")
     context = registry.prompt_context(scope)
     # Should NOT include multi-manager rules
-    assert "Manager Selection Priorities" not in context
     assert "General Rules" not in context
 
 
 def test_prompt_context_multiple_managers_has_general_rules():
-    """prompt_context() includes general rules for multiple managers."""
+    """prompt_context() includes general rules for multiple managers.
+
+    The selection-priorities list and the confused-pair routing blocks live
+    in builtin guidance (platform/manager-routing); the inline rules keep a
+    consult pointer instead.
+    """
     registry = get_registry()
     scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "tasks"}))
     context = registry.prompt_context(scope)
-    assert "Manager Selection Priorities" in context
     assert "General Rules" in context
+    assert "Manager Selection Priorities" not in context
+    assert "choosing between overlapping state managers" in context
 
 
-def test_prompt_context_routing_guidance_only_when_both_present():
-    """prompt_context() only includes routing guidance when both managers are scoped."""
+def test_prompt_context_confused_pair_blocks_live_in_guidance():
+    """The data-vs-files routing block lives in the platform/manager-routing
+    builtin guidance entry, never inline — the prompt keeps only the consult
+    pointer."""
     registry = get_registry()
-    # data+files has routing guidance
     scope_both = PrimitiveScope(scoped_managers=frozenset({"data", "files"}))
     context_both = registry.prompt_context(scope_both)
-    assert "primitives.data.*` vs `primitives.files.*" in context_both
+    assert "primitives.data.*` vs `primitives.files.*" not in context_both
+    assert "choosing between overlapping state managers" in context_both
 
-    # files only should NOT have data/files routing guidance
-    scope_files = PrimitiveScope.single("files")
-    context_files = registry.prompt_context(scope_files)
-    assert "primitives.data.*` vs `primitives.files.*" not in context_files
+    from unify.guidance_manager.builtins_catalog import PLATFORM_GUIDANCE_ENTRIES
+
+    routing = PLATFORM_GUIDANCE_ENTRIES["platform/manager-routing"]["content"]
+    assert "`primitives.data.*` vs\n`primitives.files.*`" in routing or (
+        "primitives.data" in routing and "primitives.files" in routing
+    )
+    assert "Manager selection priorities" in routing
 
 
 # ────────────────────────────────────────────────────────────────────────────

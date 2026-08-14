@@ -897,6 +897,11 @@ class _MemoisedNamespace:
         self._session = session
         self._path = path
 
+    def __dir__(self):
+        # Forward to the wrapped target so `dir(primitives.<manager>)`
+        # lists real method names in steered execution.
+        return dir(self._target)
+
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._target, name)
         if not callable(attr):
