@@ -420,6 +420,13 @@ def discover_all():
 # Markers whose presence decides which shard a test belongs to. eval is the
 # judgement tier; llm_call is anything that reaches a model at all, cached or
 # not, and so answers to the shared cache rather than to this repository.
+#
+# The deterministic tier is the *absence* of both, so the two markers together
+# define it by subtraction. That makes it only as trustworthy as they are
+# applied: a test that reaches a model without carrying llm_call is counted
+# deterministic here and will be run as one. llm_call was retrofitted long
+# after eval, so treat an unmarked model-reaching test as a labelling bug
+# rather than evidence that the tier is cheap.
 TRACKED_MARKERS = ("eval", "llm_call")
 
 

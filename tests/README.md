@@ -104,11 +104,35 @@ async def test_natural_language_query():
     ...
 ```
 
+### `eval` vs `llm_call`
+
+Two independent questions, not two levels of one:
+
+| Marker | Asks | Effect |
+|---|---|---|
+| `llm_call` | does this test reach a model? | cost/deselection only |
+| `eval` | is the model's answer the thing under test? | eval tier, plus cache lookups pinned to `exact` keying |
+
+A test can reach a model and still assert something exact — "did it call the
+right tool?" — and that is `llm_call` without `eval`. An eval is scoring the
+answer itself, which is why it refuses a canonically-equivalent recording: a
+reworded tool description is an ordinary way to change what a model picks, so
+a canonical hit would score the trajectory from before the change.
+
+Neither marker implies the other, and they are applied independently today.
+
+**CI reads the absence of both as the deterministic tier**
+(`TRACKED_MARKERS` in `.github/scripts/discover_test_paths.py`), so an
+unmarked test is one you are asserting never reaches a model. `llm_call` was
+added long after `eval`, so if you find a model-reaching test carrying
+neither, that is a missing marker rather than a free test.
+
 ### Running by Category
 
 ```bash
-parallel_run --eval-only tests       # Only eval tests
-parallel_run --symbolic-only tests   # Only symbolic tests
+parallel_run --eval-only tests           # Only eval tests
+parallel_run --symbolic-only tests       # Only symbolic tests
+parallel_run --deterministic-only tests  # Only tests carrying neither marker
 ```
 
 ---
