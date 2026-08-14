@@ -2448,7 +2448,7 @@ Orchestra (`api.unify.ai/v0` prod, `api.staging.internal.saas.unify.ai/v0` stagi
 
 ## The two dependencies
 
-- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, dashboards, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
+- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, canvas tokens, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
 - **`auth_admin_key`** — matches the Bearer against the server's `ORCHESTRA_ADMIN_KEY` (`secrets.compare_digest`), a Cloud Scheduler OIDC token, or an `AdminUser`'s key. Only the **`/admin/*`** routers (registered with `ADMIN_AUTH`) use it. It **gates operations; it does not grant a data scope.**
 
 ### Consequences (do not relearn these the hard way)
