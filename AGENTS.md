@@ -2311,6 +2311,65 @@ legacy-name list — is in
 [`.agents/global-rules/situational/deployed-system-topology.md`](.agents/global-rules/situational/deployed-system-topology.md).
 Read it before any non-trivial infra work.
 
+# Empty is not absent
+
+A command that returns nothing has told you one of two things, and it does not
+say which: *there is nothing there*, or *I could not look*. Infra CLIs answer
+the second case by exiting `0` and printing nothing, so the failure arrives
+wearing the costume of a finding. Every instance below cost real time, and
+several produced confident, wrong statements about production before anyone
+noticed.
+
+This rule is about `gcloud`, `kubectl`, `gh`, and third-party HTTP APIs.
+Orchestra's admin-versus-user split has its own rule
+(`orchestra-admin-vs-user-api-access.md`) and its own fix; do not fold the two
+together.
+
+## The three ways a zero lies
+
+**Credentials expired mid-session.** `gcloud`'s token refresh fails, and
+`kubectl`'s GKE auth plugin fails with it. A `kubectl get` then returns no
+rows; `gcloud builds list --format=value(...)` prints empty columns; a cost
+query reads `$0.00`. Nothing errors, nothing exits non-zero. A polling loop is
+the worst place for this: it will happily report "no change" every interval
+for an hour while holding no credentials at all.
+
+**The selector matches nothing.** A label that was renamed (`app=droid` when
+the live label is `app=unity`), a filter with a stray space in a timestamp
+(`2026-08-08 T00:00:00Z`), a `--region` left at the `global` default. The
+query is valid and correctly executed against the wrong target. This is the
+most dangerous of the three, because **re-running it reproduces the same
+answer** — repetition feels like verification and is not.
+
+**A response body parsed with a forgiving default.** `d.get("logs", [])`
+turns `{"detail": "..."}` into `[]`, and the script prints `found: 0`. The API
+said exactly what was wrong; the parser discarded it. An HTTP 200 on one
+endpoint is not evidence that a credential works on a different one.
+
+## What to do
+
+- **Prove the query could have answered.** Before believing a zero, run the
+  same shape of command against something you know exists. A test that cannot
+  fail has proved nothing.
+- **Check liveness explicitly, not by inference.** `gcloud auth print-access-token
+  >/dev/null 2>&1 || echo EXPIRED` costs nothing and turns a silent empty into
+  a stated one. Do it before a batch and again after a long poll.
+- **Never let a loop treat empty as a state.** A poller must distinguish "no
+  result yet" from "could not ask", and stop on the second. Blank output for
+  several consecutive iterations is a fault, not a plateau.
+- **Never parse with a default that can absorb an error.** Inspect the status
+  code and the error field first, then read the payload.
+- **Sanity-check the shape.** Exactly zero rows, `$0.00`, or an empty list from
+  a system you know is busy is a claim about your query, not about the system.
+  Suspect the tool before you report the finding.
+
+## When reporting
+
+If a result contradicts what the system is known to be doing, say it is
+unverified rather than presenting it as a finding — and re-run it once
+credentials are known good. Retracting a confident zero costs far more trust
+than flagging an uncertain one.
+
 # Deployed System Topology (shared context)
 
 This is broad orientation so agents in **any** repo know the shape of the deployed
@@ -2389,7 +2448,7 @@ Orchestra (`api.unify.ai/v0` prod, `api.staging.internal.saas.unify.ai/v0` stagi
 
 ## The two dependencies
 
-- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, canvas tokens, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
+- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, dashboards, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
 - **`auth_admin_key`** — matches the Bearer against the server's `ORCHESTRA_ADMIN_KEY` (`secrets.compare_digest`), a Cloud Scheduler OIDC token, or an `AdminUser`'s key. Only the **`/admin/*`** routers (registered with `ADMIN_AUTH`) use it. It **gates operations; it does not grant a data scope.**
 
 ### Consequences (do not relearn these the hard way)
