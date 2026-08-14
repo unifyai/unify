@@ -966,7 +966,13 @@ class TaskScheduler(BaseTaskScheduler):
             None,
         ] = "default",
     ) -> SteerableToolHandle:
-        """Answer read-only questions about existing tasks."""
+        """Answer read-only questions about existing tasks.
+
+        Quoted task names/descriptions/reference tokens are matched
+        exactly — copy them verbatim into ``text``, including punctuation
+        and suffixes; verification and later lookups depend on the
+        literal string.
+        """
 
         client = new_llm_client()
         tools = dict(self.get_tools("ask"))
@@ -1039,7 +1045,13 @@ class TaskScheduler(BaseTaskScheduler):
             None,
         ] = "default",
     ) -> SteerableToolHandle:
-        """Apply a mutation request expressed in plain English."""
+        """Apply a mutation request expressed in plain English.
+
+        Quoted task names/descriptions/reference tokens are matched
+        exactly — copy them verbatim into ``text``, including punctuation
+        and suffixes; verification and later lookups depend on the
+        literal string.
+        """
 
         client = new_llm_client()
         tools = dict(self.get_tools("update"))

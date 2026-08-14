@@ -116,6 +116,10 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         briefing run this morning, and what did it produce?" rather than "what
         time is the daily briefing set to run?".
 
+        Quoted task names/descriptions/reference tokens are matched exactly —
+        copy them verbatim into ``text``, including punctuation and suffixes;
+        verification and later lookups depend on the literal string.
+
         Clarifications
         --------------
         Do not use this method to ask the human questions. If the caller needs
@@ -197,6 +201,10 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Do *not* request *how* the change should be implemented; just
         describe the desired end-state in natural language and allow the
         `update` method to determine the best method to apply it.
+
+        Quoted task names/descriptions/reference tokens are matched exactly —
+        copy them verbatim into ``text``, including punctuation and suffixes;
+        verification and later lookups depend on the literal string.
 
         Parameters
         ----------
@@ -333,7 +341,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
           results, intentional skips, degraded fallbacks) need stdlib
           ``logging`` PHASE/SKIP/SOFT_FAIL trails in stored entrypoints /
           helpers called via ``execute_function``.
-        - Putting diagnostic detail in user-facing ``notify()`` instead of logs.
+        - Putting diagnostic detail in user-facing notifications instead of logs.
         - Nesting ``asyncio.run(...)`` in sync symbolic entrypoints or helpers —
           the offline runner already calls ``asyncio.run`` around task
           execution. Prefer ``async def`` + ``await``, or ``run_coro_sync``.
