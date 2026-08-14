@@ -155,3 +155,28 @@ def test_reference_quiz_notification_stays_minimal() -> None:
     assert "Mandatory:" in text
     assert "Star Wars" not in text
     assert "pop-culture" not in text
+
+
+def test_reference_quiz_notification_scopes_duplicates_to_this_conversation() -> None:
+    """The no-duplicate rule must not strand a user whose clue is stale.
+
+    Confirm-instead-of-resend only applies to a clue sent in the current
+    conversation; a dispatch from an earlier session is lost from the user's
+    point of view and must trigger a fresh send, never an "on its way" claim.
+    """
+    event = CoordinatorOnboardingEvent(
+        subtype="reference_quiz_clue_requested",
+        message="User clicked the email reference-quiz trigger.",
+        details={
+            "channel": "email",
+            "tool_name": "send_email",
+            "trigger_step_id": "email-reference",
+            "reply_step_id": "email-reply",
+            "interaction": {"type": "reference_quiz"},
+        },
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "THIS conversation" in text
+    assert "earlier session" in text
+    assert "lost" in text
+    assert "fresh clue" in text
