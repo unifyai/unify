@@ -125,7 +125,7 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "(empty results, intentional skips, degraded fallbacks), log "
         "briefly via stdlib `logging` rather than silent returns. Keep "
         "progress notifications user-facing — diagnostics belong in "
-        "logging, not `notify()`.\n\n"
+        "logging, not user-facing notifications.\n\n"
         f"Activation reason: {reason.value}\n"
         f"Task id: {task.task_id}"
     )
