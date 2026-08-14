@@ -1296,6 +1296,33 @@ class TestOnboardingPromptLeakageGuard:
         )
         assert "Trigger ... from T-W1N" in prompt
 
+    def test_reference_quiz_treats_prior_session_clue_as_lost(self):
+        """A clue dispatched before this conversation must be re-sent, not
+        confirmed: pointing a returning user at a days-old email is a silent
+        failure ("it's on its way") from their side of the mailbox."""
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [
+                    {
+                        "id": "email-reply",
+                        "title": "Reply to email",
+                        "phase": "Communication",
+                        "status": "in_progress",
+                        "dispatched_at": "2026-07-31T15:02:49+00:00",
+                        "kind": "reply",
+                    },
+                ],
+                "next_targets": [],
+            },
+        )
+        assert "counts as sent if I sent it in THIS conversation" in prompt
+        assert "predates this conversation" in prompt
+        assert "re-send a fresh clue" in prompt
+        assert "NEVER claim an old clue is on its way" in prompt
+        assert "since 2026-07-31T15:02:49+00:00" in prompt
+
     def test_onboarding_requires_responsive_unify_message_chat(self):
         prompt = _build(is_coordinator=True, coordinator_onboarding_active=True)
         assert "Rules for unify_message during onboarding" in prompt

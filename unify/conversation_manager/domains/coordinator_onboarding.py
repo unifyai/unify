@@ -434,10 +434,13 @@ def _coordinator_onboarding_notification_text(
             " This notification means the user clicked the trigger row — that "
             "click unlocked my outbound tool. A verbal ask or 'go ahead' on a "
             "call before they clicked does NOT count; if that happened, tell them "
-            "to click the matching row in the Onboarding checklist. If I have "
-            "already sent a clue on this channel for this step, I do NOT send "
-            "another — I confirm it's on its way. I send a clue now only if none "
-            "has gone out yet after their click."
+            "to click the matching row in the Onboarding checklist. If I sent a "
+            "clue on this channel earlier in THIS conversation, I do NOT send "
+            "another — I confirm it's on its way. A clue dispatched in an "
+            "earlier session (the progress block's 'since' timestamp predates "
+            "this conversation) counts as lost: the user no longer has it in "
+            "front of them, so I send a fresh clue now instead of pointing at "
+            "the old one — and I never tell them an old clue is on its way."
         )
         clue_note = (
             " I invent my own short sci-fi quote clue on the spot — there is "
