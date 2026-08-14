@@ -62,15 +62,18 @@ class StateManagerEnvironment(BaseEnvironment):
         self._primitive_scope = primitives.primitive_scope
         self._allowed_methods = frozenset(allowed_methods) if allowed_methods else None
         self._registry = get_registry()
-        # Tools are not filtered — everything stays callable; only the
-        # inlined docs are limited to the core. `prompt_documented_names`
-        # tells the actor's search-overlap exclusion what the prompt covers,
-        # so undocumented primitives stay searchable.
+        # Tools are not filtered — everything stays callable.
+        # `prompt_documented_names` tells the actor's search-overlap
+        # exclusion what the prompt documents inline. In the default
+        # (unfiltered) mode no method docs are inlined at all, so nothing
+        # is excluded and every primitive — including the core `ask` /
+        # `update` methods — stays discoverable via FunctionManager search.
+        # In the filtered (`allowed_methods`) mode the docs are fully
+        # inlined, so the attribute stays None and the actor excludes all
+        # of this environment's tools from search.
         self.prompt_documented_names: Optional[frozenset[str]] = None
         if self._allowed_methods is None:
-            self.prompt_documented_names = frozenset(
-                self._registry.core_prompt_methods(self._primitive_scope),
-            )
+            self.prompt_documented_names = frozenset()
 
     @property
     def namespace(self) -> str:
@@ -155,93 +158,61 @@ class StateManagerEnvironment(BaseEnvironment):
         parts.append("""\
 ### State Manager Rules
 
-- **Do not answer from scratch when `primitives` is available**:
-  - If the user asks an information question, prefer calling the relevant \
-state manager via `await primitives.<manager>.ask(...)` instead of answering \
-purely from memory.
-  - This applies even when you think you "already know" the answer \
-— use the manager as evidence/ground truth.
+- **Do not answer from scratch when `primitives` is available**: prefer \
+calling the relevant state manager via `await primitives.<manager>.ask(...)` \
+over answering purely from memory — even when you think you "already know" \
+the answer. Treat manager return values as the primary ground truth.
 
-- **Read vs write**:
-  - `await primitives.<manager>.ask(...)` is typically **pure** (read-only).
-  - `await primitives.<manager>.update(...)`, `.execute(...)`, `.refactor(...)` \
-are **impure** (they mutate state or start work).
+- **Read vs write**: `.ask(...)` is typically **pure** (read-only); \
+`.update(...)`, `.execute(...)`, `.refactor(...)` are **impure** (they \
+mutate state or start work).
 
-- **Orchestra / `Data/*` tables (HARD — never client-scan)**:
-  - Push predicates and aggregations into `primitives.data.filter` / \
-`.reduce` / `.filter_join` / `.reduce_join` / `.update_rows`.
-  - Never pull a large table into Python (`filter` with empty/vacuous \
-predicate + high `limit`, then `for row in rows:` / pandas) to count, \
-aggregate, or decide updates.
-  - Prefer `reduce` over fetch+`len`/sum/group; prefer one selective \
-`update_rows(..., filter=...)` (or `update_by_ids` on ids from \
-`include_ids=True`) over download-then-per-row updates.
+- **Mutation methods are self-contained**: go straight to `.update(...)` / \
+`.execute(...)` / `.refactor(...)` — do NOT first call `.ask(...)` on the \
+**same manager** to check existing state (mutation methods already inspect \
+existing records). Bundle the full intent, including any "check if exists" \
+logic, into the mutation call's natural-language `text` argument.
 
-- **Mutation methods are self-contained**: when storing or modifying records \
-via `.update(...)` / `.execute(...)` / `.refactor(...)`, go straight to the \
-mutation method — do NOT first call `.ask(...)` on the **same manager** to \
-check existing state. These methods already inspect existing records \
-internally, so a preemptive `.ask(...)` on the same manager is duplicative. \
-Bundle the full intent (including any "check if exists" logic) into the \
-mutation call's natural-language `text` argument.
+- **Steerable handles**: Manager calls return `SteerableToolHandle` objects \
+for in-flight control. Either **await the result** for immediate use, or \
+**return the handle as the last expression** of `execute_code` to hand \
+steering control back to the outer loop. Prefer returning the handle for \
+long-running or steering-prone operations; prefer awaiting when the same \
+code block needs the result. If intent is neutral or uncertain, default to \
+returning the handle and only await when same-block composition truly \
+requires it.
 
-- **Prefer return values as evidence**: treat return values from state managers \
-as the primary ground truth.
-
-- **Steerable handles**: Manager calls return `SteerableToolHandle` objects for \
-in-flight control.
-  You can either **await the result** for immediate use, or **return the handle \
-as the last expression** of `execute_code` to hand steering control back to the \
-outer loop (see `execute_code` docstring).
-  Prefer returning the handle when the operation may be long-running or likely \
-to need user steering (progress updates, corrections, cancellation). Prefer \
-awaiting when you need the result immediately for additional logic in the same \
-code block. If intent is neutral or uncertain, default to returning the handle \
-and only await when same-block composition truly requires it.
-
-- **Progress notifications around primitives calls**:
-  - Treat `primitives.*` calls as potentially long-running by default.
-  - Emit `notify({...})` before each primitives call so the outer loop can surface progress.
-  - If you await a primitives call and continue with additional steps, emit another \
-`notify({...})` describing what comes next.
-  - If you return a handle directly, send one kickoff notification before returning \
-the handle.
-  - Keep notifications user-facing and high-level; avoid internal diagnostics
-    in `notify()` (stack traces, schema dumps, call IDs). Soft-failure and
-    stage diagnostics belong in stdlib `logging` with `PHASE` / `SKIP` /
-    `SOFT_FAIL` markers so Job/EventBus trails stay reconstructable without
-    bloating user-facing progress.
-  - Do not use `notify()` to announce the final result — your response text handles that.
+- **Progress notifications**: surface progress with the `send_notification` \
+tool between `execute_code` blocks; keep messages user-facing and high-level \
+(diagnostics belong in stdlib `logging` with `PHASE`/`SKIP`/`SOFT_FAIL` \
+markers), and do not announce the final result this way — your response \
+text handles that.
 
   **SteerableToolHandle API:**
 
   | Method | Returns | Purpose |
   |--------|---------|---------|
   | `await handle.result()` | `str` | Wait for the final result |
-  | `await handle.ask(question)` | `SteerableToolHandle` | Query status without modifying execution |
-  | `await handle.interject(message)` | `None` | Inject corrections or context mid-flight |
+  | `await handle.ask(question)` | `SteerableToolHandle` | Query status |
+  | `await handle.interject(message)` | `None` | Inject corrections mid-flight |
   | `await handle.pause()` | `str | None` | Pause at the next safe point |
   | `await handle.resume()` | `str | None` | Resume a paused operation |
   | `await handle.stop(reason=None)` | `None` | Terminate immediately |
-  | `handle.done()` | `bool` | Check if execution has completed |
+  | `handle.done()` | `bool` | Completed? |
 
   ```python
   handle = await primitives.tasks.execute(task_id=123)
+  await handle.interject("Also include the Q2 numbers")  # mid-flight
   result = await handle.result()  # wait for completion
-
-  # Mid-flight steering (while handle is running):
-  await handle.interject("Also include the Q2 numbers")
-  await handle.pause()   # pause if needed
-  await handle.resume()  # continue later
-  await handle.stop()    # cancel if no longer needed
   ```""")
 
         if self._allowed_methods is not None:
             # Per-method filtering: build method docs only for allowed methods.
             parts.append(self._build_filtered_method_docs())
         else:
-            # Routing overview + core method docs + discovery note; the
-            # rest of the method surface is discovered via search.
+            # Routing overview + discovery/introspection pointer; the
+            # method surface is discovered via search and read via
+            # help()/inspect.signature at run time.
             registry_ctx = self._registry.prompt_context(self._primitive_scope)
             if registry_ctx:
                 parts.append(registry_ctx)

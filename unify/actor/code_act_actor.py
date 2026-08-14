@@ -2421,7 +2421,11 @@ class CodeActActor(BaseCodeActActor):
                 # The exclusion deduplicates search results against what the
                 # prompt documents. When an environment declares
                 # `prompt_documented_names`, only that subset is excluded —
-                # undocumented primitives must stay searchable.
+                # undocumented primitives must stay searchable. State manager
+                # primitives declare an empty set (their method docs are not
+                # inlined), so core methods like `ask`/`update` are
+                # searchable; computer-control tools remain excluded because
+                # their name index stays in the prompt.
                 _documented = getattr(env, "prompt_documented_names", None)
                 for tool_name, tool_meta in env.get_tools().items():
                     if tool_meta.function_id is not None:

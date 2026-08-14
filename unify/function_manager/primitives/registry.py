@@ -130,7 +130,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
         use_when=(
             "The assistant needs to proactively contact people or post into "
-            "assistant-owned communication channels as part of a task"
+            "assistant-owned channels"
         ),
         examples=(
             "'Text Alice that the meeting moved', 'Email all shortlisted leads', "
@@ -146,7 +146,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         priority=3,
         domain="People & Relationships",
         description="People, organizations, contact records (names, emails, phones, roles, locations)",
-        use_when="Questions about specific people, contact info, 'who is X?', 'find contact in Y location'",
+        use_when="Questions about specific people, contact info, 'who is X?'",
         examples="'Who is our contact at Acme Corp?', 'Find Alice's email', 'Contacts in Berlin?'",
     ),
     ManagerSpec(
@@ -286,9 +286,9 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "and attached files, a whole folder, or a reshape of a stored table"
         ),
         use_when=(
-            "Anything that puts NEW data somewhere it can later be queried, "
-            "searched or bound to a canvas — API responses, connected-app pulls, "
-            "attachments, uploads, exports, folder syncs, table reshapes"
+            "Anything that puts NEW data somewhere queryable — API responses, "
+            "connected-app pulls, attachments, uploads, folder syncs, table "
+            "reshapes"
         ),
         examples=(
             "'Pull my HubSpot deals in and chart them', 'Ingest this PDF', "
@@ -347,7 +347,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         priority=2,
         domain="Conversation History",
         description="Past messages, conversation history, communication records (chat/SMS/email)",
-        use_when="Questions about past communications, 'what did X say?', 'last message about Y?', 'conversation with Z?'",
+        use_when="Questions about past communications, 'what did X say?'",
         examples="'What did Bob say yesterday?', 'Last SMS with Alice?', 'Messages mentioning budget?'",
     ),
     ManagerSpec(
@@ -358,7 +358,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         priority=4,
         domain="Durable Work & Tracking",
         description="Task management, assignments, deadlines, priorities, execution event diagnostics",
-        use_when="Questions about tasks/work items, 'what's due?', diagnosing a failed Tasks/Executions run via EventBus tree walk",
+        use_when="Questions about tasks/work items, 'what's due?', diagnosing a failed run via EventBus tree walk",
         examples="'What tasks are due today?', 'Show Alice's open tasks', 'Walk EventBus children for run_key=…'",
     ),
     ManagerSpec(
@@ -379,8 +379,8 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         excluded_methods=frozenset(),
         priority=5,
         domain="Time-Sensitive & External Research",
-        description="Quick one-off internet queries against the public web (headlines, weather, definitions, current events). Not for gated sites, browser automation, or multi-step web procedures — use Tavily + SecretManager + ComputerPrimitives directly for those",
-        use_when="Fast, simple public-web lookups: current events, weather, news, definitions, stock prices, quick factual questions",
+        description="Quick one-off internet queries against the public web. Not for gated sites, browser automation, or multi-step web procedures — use Tavily + SecretManager + ComputerPrimitives directly for those",
+        use_when="Fast, simple public-web lookups: current events, weather, news, definitions, quick factual questions",
         examples="'What is the Eisenhower Matrix?', 'Weather in Berlin today?', 'Latest AI news?', 'Current stock price?'",
     ),
     ManagerSpec(
@@ -408,7 +408,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
         use_when=(
             "Questions about files themselves (metadata, layout, parsing), "
-            "file-path-based context resolution, document rendering"
+            "document rendering"
         ),
         examples=(
             "'Parse the attached PDF', 'What's in document X?', "
@@ -441,12 +441,9 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
         special_note=(
             "Distinct from `primitives.comms.send_email`, which sends AS THE "
-            "ASSISTANT from its managed mailbox and is wired into the contact "
-            "graph. Use `workspace_email` only to act on the user's own "
-            "connected account. Recipients here are plain email-address "
-            "strings, not contact ids. Requires a connected workspace account "
-            "with the relevant Gmail/Graph scopes; errors clearly if none is "
-            "connected."
+            "ASSISTANT from its managed mailbox. Recipients here are plain "
+            "email-address strings, not contact ids; requires a connected "
+            "workspace account (errors clearly if none)."
         ),
     ),
     ManagerSpec(
@@ -467,43 +464,29 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         priority=6,
         domain="Integration App Discovery & Connected SaaS Apps",
         description=(
-            "`primitives.integrations.search_integrations` is the app discovery "
-            "surface for both Native Unity-deploy packages and Third-party "
-            "provider-backed apps. It answers support, deployment activation, "
-            "provider connection, and sync/materialization status. Each result "
-            "includes a `connections` array and `account_count` when multiple "
-            "accounts are linked to the same app; pass `connection_id` on "
-            "tool calls when usage mode is `explicit`, or rely on Console "
-            "`primary` / `pool` selection otherwise. Provider tools execute "
-            "through Orchestra policy/audit after materialization; native "
-            "package functions keep their existing custom function, MCP, "
-            "guidance, and computer-use routing."
+            "`primitives.integrations.search_integrations` is the app "
+            "discovery surface for Native Unity-deploy packages and "
+            "Third-party provider-backed apps: support, deployment "
+            "activation, provider connection (including which accounts — "
+            "`connections` / `account_count`; pass `connection_id` when "
+            "usage mode is `explicit`), and sync/materialization status"
         ),
         use_when=(
-            "The user asks to read or act in connected external apps such as "
-            "HubSpot, Salesforce, Google Drive, Gmail, Slack, Notion, Clay, "
-            "or a native deployment package. Also use it when a user asks "
-            "whether an integration is available, native vs third-party, "
-            "enabled for this assistant, connected (including which accounts), "
-            "missing secrets/scopes, expired, or blocked by policy."
+            "The user asks to read or act in connected external apps "
+            "(HubSpot, Salesforce, Google Drive, Gmail, Slack, Notion, …) "
+            "or asks whether an integration is supported, enabled, "
+            "connected, missing secrets/scopes, expired, or blocked"
         ),
         examples=(
-            "'Find recent HubSpot leads', 'Search Salesforce opportunities', "
-            "'Look up Google Drive files modified this week', 'Search Gmail "
-            "for invoices from Acme', 'Send this approved update to Slack', "
-            "'Which CRM integrations are connected?', "
-            "'Which HubSpot accounts are linked?'"
+            "'Find recent HubSpot leads', 'Search Gmail for invoices from "
+            "Acme', 'Which CRM integrations are connected?'"
         ),
         special_note=(
-            "Use `search_integrations` to answer whether an app is supported, "
-            "Native or Third-party, enabled/connected, or still syncing. "
             "FunctionManager search remains the only actor-facing discovery "
-            "surface for executable functions/tools. Native apps become "
-            "executable through deployment-enabled package functions; "
-            "Third-party apps become executable after connection and provider "
-            "tool materialization. Inspect each row's docstring and argspec "
-            "before calling, and require user confirmation for write, "
-            "destructive, bulk-export, or sensitive actions."
+            "surface for executable functions/tools. Inspect each row's "
+            "docstring and argspec before calling, and require user "
+            "confirmation for write, destructive, bulk-export, or sensitive "
+            "actions."
         ),
     ),
     ManagerSpec(
@@ -518,8 +501,8 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "membership, and Coordinator/State onboarding mode"
         ),
         use_when=(
-            "The session is running as a Coordinator and needs privileged setup "
-            "or lifecycle mutations on colleagues and shared workspaces"
+            "The session runs as a Coordinator and needs privileged setup or "
+            "lifecycle mutations"
         ),
         examples=(
             "'Create the Regional Ops Manager colleague', "
@@ -656,63 +639,66 @@ _ROUTING_GUIDANCE: List[Dict[str, Any]] = [
 
 
 # =============================================================================
-# Example generator mapping (manager_alias -> list of function names)
+# Canvas kit reference (rendered inline when the canvas manager is in scope)
 # =============================================================================
 
-_EXAMPLE_GENERATORS: Dict[str, List[str]] = {
-    "contacts": [
-        "get_primitives_contact_ask_example",
-        "get_primitives_contact_update_example",
-    ],
-    "tasks": [
-        "get_primitives_task_execute_example",
-        "get_primitives_task_run_event_children_example",
-    ],
-    "transcripts": [
-        "get_primitives_transcript_ask_example",
-    ],
-    "web": [
-        "get_primitives_web_ask_example",
-    ],
-    "secrets": [
-        "get_primitives_secrets_ask_example",
-        "get_primitives_secrets_update_example",
-    ],
-    "files": [
-        "get_primitives_files_render_extract_example",
-        "get_primitives_files_describe_example",
-        "get_primitives_files_reduce_example",
-        "get_primitives_files_filter_example",
-        "get_primitives_files_search_example",
-    ],
-    "data": [
-        "get_primitives_data_filter_example",
-        "get_primitives_data_reduce_example",
-        "get_primitives_data_external_sync_example",
-    ],
-    "ingestion": [
-        # One example covering every source, because the point of the design is
-        # that they are the same verb -- showing them separately would imply a
-        # choice of function where there is only a choice of argument.
-        "get_primitives_ingestion_sources_example",
-    ],
-    "canvas": [
-        # The component reference comes first: the actor needs to know what it
-        # can compose before the examples showing how to compose it.
-        "get_canvas_kit_reference",
-        "get_primitives_canvas_live_view_example",
-        "get_primitives_canvas_connected_apps_example",
-        "get_primitives_canvas_actions_example",
-        "get_primitives_canvas_revision_example",
-    ],
-    "integrations": [
-        "get_primitives_integrations_function_manager_search_example",
-        "get_primitives_integrations_catalog_status_example",
-        "get_primitives_integrations_materialized_schema_example",
-        "get_primitives_integrations_activation_state_example",
-        "get_primitives_integrations_confirmation_example",
-    ],
-}
+
+def get_canvas_kit_reference() -> str:
+    """The component vocabulary a canvas is authored against.
+
+    Inlined rather than left to be discovered. A canvas is typechecked before it
+    can be published, so a guessed component name is not a graceful degradation —
+    it is a failed build and another round trip. Six kilobytes of reference costs
+    far less than that loop, and only appears when canvas is in scope.
+
+    Generated from the kit's own type declarations by
+    ``scripts/generate_canvas_kit_api.py``; see that script for regeneration and
+    drift checking.
+    """
+    from pathlib import Path
+
+    import unify.canvas_manager as _canvas_pkg
+
+    digest = Path(_canvas_pkg.__file__).resolve().parent / "canvas_kit_api.md"
+    if not digest.is_file():
+        return ""
+    return digest.read_text(encoding="utf8")
+
+
+_CANVAS_CALL_FORMS = """\
+**Canvas call forms** (`from unify.canvas_manager.types import \
+PrimitiveBinding, CanvasAction`):
+
+- Create: `result = await primitives.canvas.create_view(tsx=..., title=..., \
+bindings=[PrimitiveBinding(alias="tasks", manager="tasks", table="Tasks", \
+args={"operation": "filter", "filter": "status != 'done'", "limit": 200})])` \
+— bindings re-run per view, so the canvas stays live.
+- Connected-app data (store first, then bind): call the \
+`primitives.integrations.<app>.<tool>`, store rows with \
+`await primitives.ingestion.submit(RowsSource(rows=...), \
+TableTarget(context=..., unique_keys={...}))`, \
+`await primitives.ingestion.wait(run.run_id, timeout_s=300)`, schedule a \
+refresh via `primitives.tasks.update(...)`, then bind the canvas to that \
+stored table.
+- Viewer actions: `actions=[CanvasAction(name=..., label=..., \
+function_name=..., input_schema={...}, destructive=True, confirm=...)]` — \
+give every array/string in `input_schema` explicit `maxItems`/`maxLength` \
+bounds.
+- Revise in place: `record = await primitives.canvas.get_view(token)` then \
+`await primitives.canvas.update_view(token, \
+tsx=record.tsx_source.replace(...))` — never create a second canvas; the \
+URL is stable.
+- Every result: check `result.build.ok` / `result.build.diagnostics`, \
+`display()` each path in `result.review.screenshots`, and share \
+`result.url` in your reply."""
+
+
+def canvas_kit_prompt_block() -> str:
+    """Kit reference + compressed call forms, rendered inline for canvas scope."""
+    kit = get_canvas_kit_reference()
+    if not kit:
+        return _CANVAS_CALL_FORMS
+    return f"{kit.strip()}\n\n{_CANVAS_CALL_FORMS}"
 
 
 # =============================================================================
@@ -817,7 +803,6 @@ class ToolSurfaceRegistry:
     # Class-level references to canonical data
     MANAGERS = _MANAGER_SPECS
     ROUTING_GUIDANCE = _ROUTING_GUIDANCE
-    EXAMPLE_GENERATORS = _EXAMPLE_GENERATORS
 
     def __init__(self) -> None:
         """Initialize the registry."""
@@ -1199,30 +1184,14 @@ class ToolSurfaceRegistry:
 
         return "\n".join(result_lines)
 
-    def core_prompt_methods(self, primitive_scope: PrimitiveScope) -> set[str]:
-        """The methods documented inline in the actor prompt: each manager's
-        ``ask``.
-
-        Everything else stays out of the prompt and is discovered through
-        FunctionManager search, backed by the platform Functions/Primitives
-        catalogue rows.
-        """
-        core: set[str] = set()
-        for spec in self.manager_specs(primitive_scope):
-            methods = self.primitive_methods(manager_alias=spec.manager_alias)
-            for name in methods:
-                if name == "ask":
-                    core.add(f"primitives.{spec.manager_alias}.{name}")
-        return core
-
     def prompt_context(self, primitive_scope: PrimitiveScope) -> str:
         """
         Generate prompt context for exposed managers.
 
-        Structure: routing guidance first (which manager to pick), then
-        inline documentation for the core methods only. Everything beyond
-        the core is discovered at run time through
-        ``FunctionManager_search_functions``.
+        Structure: routing guidance only (which manager to pick). Method
+        docs are not inlined — they are discovered at run time through
+        ``FunctionManager_search_functions`` and read via ``help()`` /
+        ``inspect.signature`` inside the sandbox.
 
         Args:
             primitive_scope: The scope defining which managers are exposed.
@@ -1236,199 +1205,92 @@ class ToolSurfaceRegistry:
 
         lines = ["### State manager primitives (`primitives.*`)\n"]
         lines.append(
-            "These callables are prompt-injected and excluded from FunctionManager "
-            "search. Call them by exact name via `execute_function`.\n",
-        )
-        lines.append(
-            "Each manager owns a specific domain of the assistant's durable state. "
-            "Choose the right manager for your task:\n",
+            "Always available — call by exact name via `execute_function` or "
+            "inside `execute_code`; the full method surface is also indexed "
+            "by FunctionManager search. Each manager owns one domain of the "
+            "assistant's durable state:\n",
         )
 
         exposed_aliases = primitive_scope.scoped_managers
 
         # ── Section 1: Brief manager overview (routing-focused) ──
+        # Compact by design: one description bullet (+ use-when, + note where
+        # a contract demands it). Deeper routing between overlapping
+        # managers lives in builtin guidance ("choosing between overlapping
+        # state managers"); method APIs live behind search + help().
         for spec in specs:
             text = spec.prompt_text(exposed_aliases)
             lines.append(f"\n**{text.domain}** → `primitives.{spec.manager_alias}`")
-            lines.append(f"- {text.description}")
+            description = text.description
             if text.use_when:
-                lines.append(f"- **Use when**: {text.use_when}")
-            if text.examples:
+                description = f"{description}. **Use when**: {text.use_when}"
+            lines.append(f"- {description}")
+            if text.examples and spec.manager_alias == "canvas":
+                # Canvas keeps its examples: the authoring model is
+                # typecheck-critical and deliberately stays inline.
                 lines.append(f"- **Examples**: {text.examples}")
             if text.special_note:
                 lines.append(f"- **Note**: {text.special_note}")
 
-        # ── Section 2: Manager selection priorities ──
-        if len(specs) > 1:
-            lines.append("\n**Manager Selection Priorities**:")
-            lines.append(
-                "1. **transcripts** for historical communications (what was said/written)",
-            )
-            lines.append("2. **contacts** for people/relationship information")
-            lines.append("3. **tasks** for work items, deadlines, assignments")
-            lines.append(
-                "4. **web** for current external information (weather, news, real-time data)",
-            )
-            lines.append(
-                "5. **files** when dealing with specific documents or file-level operations",
-            )
-            lines.append(
-                "6. **data** for tabular Orchestra contexts (`Data/*` and "
-                "other tables): filter, reduce, join, ingest, update_rows — "
-                "never client-scan large tables in Python",
-            )
-            lines.append(
-                "\nTyped claim / procedure catalogues (`KnowledgeManager_*`, "
-                "`GuidanceManager_*`) are top-level Actor JSON tools, not "
-                "`primitives.*` — use them for durable domain claims and SOPs.",
-            )
-
-        # ── Section 3: Routing guidance for commonly confused pairs ──
-        for guidance in _ROUTING_GUIDANCE:
-            if guidance["managers"].issubset(exposed_aliases):
-                lines.append(f"\n**CRITICAL: {guidance['title']} Routing**:")
-                lines.append(
-                    "These managers serve DIFFERENT purposes - do not confuse them:",
-                )
-                for alias, desc in guidance["guidance"]:
-                    lines.append(f"- **`primitives.{alias}.*`**: {desc}")
-                if guidance.get("examples"):
-                    lines.append("\n**Examples**:")
-                    for question, mgr, call in guidance["examples"]:
-                        lines.append(f'  - "{question}" → `{call}` ({mgr})')
-
-        # ── Section 4: General rules ──
+        # ── Section 2: General rules ──
         if len(specs) > 1:
             lines.append("\n**General Rules**:")
             lines.append(
-                "- All manager calls return a steerable handle; default to returning the handle as the last expression so outer-loop steering/progress stays available. Await `.result()` only for immediate in-code composition",
+                "- All manager calls return a steerable handle; default to "
+                "returning the handle as the last expression so outer-loop "
+                "steering/progress stays available. Await `.result()` only "
+                "for immediate in-code composition",
             )
             lines.append(
-                "- Calls to `primitives.*` are nested tool loops; emit `notify({...})` before each call, and emit a concrete completion update when you await and continue with more steps",
+                "- Calls to `primitives.*` are nested tool loops; surface "
+                "progress with `send_notification` between `execute_code` "
+                "blocks, not from inside generated code. If a manager asks "
+                "for clarification, answer via the handle's API",
             )
             lines.append(
-                "- Notification messages should be user-facing progress summaries, not low-level technical diagnostics",
+                "- Prefer `ask(...)` for read-only queries; only use "
+                "`update(...)`/`execute(...)` when mutations are needed — "
+                "and don't `ask(...)` first on the same manager to pre-check "
+                "state (mutation methods already inspect existing records)",
             )
             lines.append(
-                "- If a manager asks for clarification, wait for the user response and answer via the handle's API",
+                "- When in doubt between managers, prefer the most specific "
+                "domain match; for overlapping pairs (data vs files vs "
+                "ingestion, workspace_email vs comms) search guidance for "
+                '"choosing between overlapping state managers"',
             )
             lines.append(
-                "- Prefer `ask(...)` for read-only queries; only use `update(...)`/`execute(...)` when mutations are needed",
+                "- Typed claim / procedure catalogues (`KnowledgeManager_*`, "
+                "`GuidanceManager_*`) are top-level Actor JSON tools, not "
+                "`primitives.*`",
             )
-            lines.append(
-                "- Don't call `ask(...)` before `update(...)`/`execute(...)` on the same manager to pre-check state; mutation methods already inspect existing records, so a preemptive read is duplicative",
-            )
-            lines.append(
-                "- When in doubt between managers, prefer the most specific domain match",
-            )
-            if "data" in exposed_aliases:
-                lines.append(
-                    "- **Orchestra / `Data/*` efficiency (HARD):** push "
-                    "predicates and aggregations into `primitives.data.filter` "
-                    "/ `.reduce` / `.filter_join` / `.reduce_join` / "
-                    "`.update_rows`. Never `for row in await "
-                    "primitives.data.filter(...)` over a large table without a "
-                    "selective `filter=`. Prefer `reduce` over fetch+`len`/"
-                    "sum/group. Prefer one `update_rows(..., filter=...)` "
-                    "(or `update_by_ids` on ids from `include_ids=True`) over "
-                    "download-then-per-row updates. Shared team Data is "
-                    "already reachable via `primitives.data` — do not read "
-                    "another assistant's private contexts.",
-                )
-                lines.append(
-                    "- **External REST sync:** use "
-                    "`create_external_column` + `filter(..., hydrate=...)` for "
-                    "remote facts and `request_external_write` for mutations. "
-                    "Keep process/queue state as ordinary local columns. "
-                    "`auth_secret_ref` must exist in the owning `Secrets` "
-                    "vault — never inline API keys in bindings. Do not "
-                    "full-mirror a remote REST DB into Orchestra.",
-                )
 
-        # ── Section 5: Core method documentation + discovery note ──
-        lines.append("\n---\n")
-        core = self.core_prompt_methods(primitive_scope)
-        lines.append("### Method Reference (core)\n")
-        lines.append(
-            "Only the core methods below are documented inline. Every "
-            "other `primitives.<manager>.<method>` exists and is callable "
-            "exactly as usual — its signature and docs live in the "
-            "function catalogue. **To discover methods for a task, call "
-            "`FunctionManager_search_functions` with a natural-language "
-            'query** (e.g. "store rows in a structured table"); '
-            "primitive methods come back with `is_primitive`, `argspec` "
-            "and `docstring`. Do not guess signatures — search first, "
-            "then call.\n",
-        )
+        # No per-method docs and no discovery pointer are inlined here:
+        # the base prompt's "Sandbox Environment" section carries the
+        # FunctionManager-search → help()/inspect introspection bridge.
 
-        for spec in specs:
-            mgr_cls = self._load_manager_class(spec.primitive_class_path)
-            method_names = self.primitive_methods(manager_alias=spec.manager_alias)
-            method_names = [
-                m
-                for m in method_names
-                if f"primitives.{spec.manager_alias}.{m}" in core
-            ]
-            if not method_names:
-                continue
-
-            lines.append(f"\n#### `primitives.{spec.manager_alias}`")
-
-            for method_name in method_names:
-                sig_str = self._format_method_signature(mgr_cls, method_name)
-                full_doc = self._extract_method_docstring(mgr_cls, method_name)
-                compact_doc = self._extract_summary_and_params(full_doc)
-                lines.append(f"\n**`.{method_name}{sig_str}`**")
-                if compact_doc:
-                    for doc_line in compact_doc.splitlines():
-                        lines.append(f"  {doc_line}")
+        # ── Canvas kit reference (canvas scope only) ──
+        # The component vocabulary stays inline: a canvas is typechecked
+        # before it can be published, so a guessed component name is a failed
+        # build and another round trip, not a graceful degradation.
+        if "canvas" in exposed_aliases:
+            lines.append("\n---\n")
+            lines.append(canvas_kit_prompt_block())
 
         return "\n".join(lines)
-
-    def prompt_examples(self, primitive_scope: PrimitiveScope) -> str:
-        """
-        Get concatenated examples for exposed managers.
-
-        Args:
-            primitive_scope: The scope defining which managers are exposed.
-
-        Returns:
-            Formatted examples string.
-        """
-        try:
-            from unify.actor.prompt_examples import get_example_function_map
-        except ImportError:
-            logger.warning("Could not import prompt_examples module")
-            return ""
-
-        fn_map = get_example_function_map()
-        examples = []
-
-        for alias in sorted(primitive_scope.scoped_managers):
-            fn_names = _EXAMPLE_GENERATORS.get(alias, [])
-            for fn_name in fn_names:
-                fn = fn_map.get(fn_name)
-                if fn:
-                    try:
-                        example = fn()
-                        if example:
-                            examples.append(example.strip())
-                    except Exception as e:
-                        logger.warning(f"Error generating example {fn_name}: {e}")
-
-        return "\n\n".join(examples)
 
     def computer_prompt_context(self) -> str:
         """
         Generate prompt context for ComputerPrimitives methods.
 
-        Introspects the ComputerBackend abstract class to extract method
-        signatures and docstrings, then formats them into markdown documentation
-        similar to state manager prompt context.
+        Renders a compact name index — signature plus first docstring line
+        per method — instead of the full docstring dump. Full docs stay
+        readable at run time via ``help()`` / ``inspect.signature`` on the
+        session methods.
 
         Returns:
-            Markdown-formatted documentation for computer methods, or empty string
-            if ComputerBackend cannot be loaded.
+            Markdown-formatted name index for computer methods, or empty
+            string if ComputerBackend cannot be loaded.
         """
         try:
             from unify.function_manager.computer_backends import ComputerBackend
@@ -1439,11 +1301,18 @@ class ToolSurfaceRegistry:
 
         method_names = ComputerPrimitives._PRIMITIVE_METHODS
 
-        lines = ["### Computer Method Reference\n"]
+        lines = ["### Computer Method Reference (name index)\n"]
         lines.append(
             "These methods are available on `primitives.computer.desktop.*` "
             "(singleton desktop) and on session handles returned by "
             "`primitives.computer.web.new_session()`.\n",
+        )
+        lines.append(
+            "One-line summaries only. Before any non-obvious call, read the "
+            "full docs from inside `execute_code` with "
+            "`help(primitives.computer.desktop.<method>)` / "
+            "`help(session.<method>)` or `inspect.signature(...)` — do not "
+            "guess parameter semantics from the summary.\n",
         )
 
         for method_name in method_names:
@@ -1455,35 +1324,17 @@ class ToolSurfaceRegistry:
             sig_str = self._format_method_signature(source_cls, method_name)
             full_doc = self._extract_method_docstring(source_cls, method_name)
             full_doc = self._filter_internal_params_from_docstring(full_doc)
-            lines.append(f"\n**`.{method_name}{sig_str}`**")
-            if full_doc:
-                for doc_line in full_doc.splitlines():
-                    lines.append(f"  {doc_line}")
+            summary = ""
+            for doc_line in (full_doc or "").splitlines():
+                if doc_line.strip():
+                    summary = doc_line.strip()
+                    break
+            entry = f"- `.{method_name}{sig_str}`"
+            if summary:
+                entry += f" — {summary}"
+            lines.append(entry)
 
         return "\n".join(lines)
-
-    def computer_prompt_examples(self) -> str:
-        """
-        Get concatenated examples for computer methods.
-
-        Delegates to the get_computer_examples() function in prompt_examples.py,
-        which returns pre-defined examples for computer primitives usage.
-
-        Returns:
-            Formatted examples string from prompt_examples.py, or empty string
-            if the module cannot be imported or the function fails.
-        """
-        try:
-            from unify.actor.prompt_examples import get_computer_examples
-        except ImportError:
-            logger.warning("Could not import prompt_examples module")
-            return ""
-
-        try:
-            return get_computer_examples()
-        except Exception as e:
-            logger.warning(f"Error generating computer examples: {e}")
-            return ""
 
     def _get_method_metadata(
         self,

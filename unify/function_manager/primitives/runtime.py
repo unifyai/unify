@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 import threading
 from typing import Any, Callable, Optional, TYPE_CHECKING
@@ -184,6 +185,43 @@ def _is_dead_session_error(e) -> bool:
     )
 
 
+def _copy_session_method_metadata(wrapper, method_name: str) -> None:
+    """Copy introspection metadata from the backend method onto *wrapper*.
+
+    ``__doc__`` alone is not enough: ``inspect.signature`` on a bare
+    ``(*args, **kwargs)`` wrapper renders a useless signature, so `help()` /
+    `inspect.signature` in the sandbox could not show computer method
+    parameters. Copy ``__signature__`` (with ``self`` stripped, since the
+    wrapper is used like a bound method) and ``__wrapped__`` alongside
+    ``__doc__`` so runtime introspection reads the real contract.
+    """
+    from unify.function_manager.computer_backends import (
+        ComputerBackend,
+        ComputerSession,
+    )
+
+    wrapper.__name__ = method_name
+    # Prefer the rich docstrings from ComputerBackend ABC over ComputerSession's
+    # terse ones.
+    src = getattr(ComputerBackend, method_name, None) or getattr(
+        ComputerSession,
+        method_name,
+        None,
+    )
+    if src is None:
+        return
+    wrapper.__doc__ = src.__doc__
+    wrapper.__wrapped__ = src
+    try:
+        sig = inspect.signature(src)
+        params = list(sig.parameters.values())
+        if params and params[0].name == "self":
+            sig = sig.replace(parameters=params[1:])
+        wrapper.__signature__ = sig
+    except (ValueError, TypeError):
+        pass
+
+
 def _make_session_method(
     method_name: str,
     owner: "ComputerPrimitives",
@@ -201,8 +239,6 @@ def _make_session_method(
     ``on_session_dead`` is an optional callback invoked when a request fails
     with a terminal session error (session removed, browser closed).
     """
-    from unify.function_manager.computer_backends import ComputerSession
-
     is_desktop = mode == "desktop"
 
     async def _call(session, *args, **kwargs):
@@ -242,13 +278,7 @@ def _make_session_method(
                 _publish_desktop_invoked(method_name)
             return _Image.open(io.BytesIO(base64.b64decode(b64)))
 
-        screenshot_wrapper.__name__ = method_name
-        from unify.function_manager.computer_backends import ComputerBackend
-
-        screenshot_wrapper.__doc__ = (
-            getattr(ComputerBackend, method_name, None).__doc__
-            or getattr(ComputerSession, method_name, None).__doc__
-        )
+        _copy_session_method_metadata(screenshot_wrapper, method_name)
         return screenshot_wrapper
 
     async def wrapper(*args, **kwargs):
@@ -300,14 +330,7 @@ def _make_session_method(
             _publish_computer_act_completed(args[0] if args else "", result)
         return result
 
-    wrapper.__name__ = method_name
-    # Prefer the rich docstrings from ComputerBackend ABC over ComputerSession's terse ones
-    from unify.function_manager.computer_backends import ComputerBackend
-
-    wrapper.__doc__ = (
-        getattr(ComputerBackend, method_name, None).__doc__
-        or getattr(ComputerSession, method_name, None).__doc__
-    )
+    _copy_session_method_metadata(wrapper, method_name)
     return wrapper
 
 
@@ -327,11 +350,6 @@ def _make_user_desktop_method(
     routed through ``owner._handle_user_desktop_error`` so a dropped tunnel
     triggers a reconnect on the next call.
     """
-    from unify.function_manager.computer_backends import (
-        ComputerBackend,
-        ComputerSession,
-    )
-
     if method_name == "get_screenshot":
 
         async def screenshot_wrapper(*args, **kwargs):
@@ -348,11 +366,7 @@ def _make_user_desktop_method(
                 raise
             return _Image.open(io.BytesIO(base64.b64decode(b64)))
 
-        screenshot_wrapper.__name__ = method_name
-        screenshot_wrapper.__doc__ = (
-            getattr(ComputerBackend, method_name, None).__doc__
-            or getattr(ComputerSession, method_name, None).__doc__
-        )
+        _copy_session_method_metadata(screenshot_wrapper, method_name)
         return screenshot_wrapper
 
     async def wrapper(*args, **kwargs):
@@ -368,11 +382,7 @@ def _make_user_desktop_method(
             owner._handle_user_desktop_error(user_id, e)
             raise
 
-    wrapper.__name__ = method_name
-    wrapper.__doc__ = (
-        getattr(ComputerBackend, method_name, None).__doc__
-        or getattr(ComputerSession, method_name, None).__doc__
-    )
+    _copy_session_method_metadata(wrapper, method_name)
     return wrapper
 
 
@@ -1468,6 +1478,15 @@ class _AsyncPrimitiveWrapper:
             "_primitive_methods",
             set(registry.primitive_methods(manager_alias=manager_alias)),
         )
+
+    def __dir__(self):
+        """List primitive method names alongside the default attributes.
+
+        Primitive methods are served by ``__getattr__``, which the default
+        ``dir()`` cannot see — without this, ``dir(primitives.<manager>)``
+        on a sync-wrapped manager hides its entire method surface.
+        """
+        return sorted(set(super().__dir__()) | self._primitive_methods)
 
     def __getattr__(self, name: str) -> Any:
         """
