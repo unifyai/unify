@@ -2,7 +2,7 @@
 Integration tests for PrimitiveScope across all system layers.
 
 These tests verify that the scoping mechanism works consistently at ALL levels:
-- Prompts (prompt_context, prompt_examples)
+- Prompts (prompt_context)
 - Tool list (tool_names, get_tools)
 - Semantic search results (search_functions filtering)
 - Primitives syncing (per-manager hash tracking, batched sync)
@@ -86,22 +86,6 @@ def test_prompt_context_only_includes_scoped_managers():
         assert (
             f"primitives.{alias}" not in context
         ), f"Unscoped manager '{alias}' should not appear in prompt context"
-
-
-def test_prompt_examples_only_includes_scoped_managers():
-    """prompt_examples() must NOT include examples for unscoped managers."""
-    registry = get_registry()
-
-    # Scope to only files
-    scope_files = PrimitiveScope.single("files")
-    examples_files = registry.prompt_examples(scope_files)
-
-    # Should contain files examples
-    assert "files" in examples_files.lower()
-
-    # Should NOT contain contacts examples
-    assert "contacts.ask" not in examples_files
-    assert "contacts.update" not in examples_files
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -277,12 +261,14 @@ def test_state_manager_env_get_prompt_context_respects_scope():
     assert "→ `primitives.files`" in context
     assert "→ `primitives.contacts`" in context
 
-    # Only core methods (each manager's `ask`) are documented inline;
-    # contacts has one, files excludes its `ask` from the primitive surface
-    assert "#### `primitives.contacts`" in context
+    # No method docs are inlined for any manager — discovery goes through
+    # FunctionManager search + runtime introspection, taught by the base
+    # prompt's Sandbox Environment section, not per-environment.
+    assert "### Method Discovery & Introspection" not in context
+    assert "#### `primitives.contacts`" not in context
     assert "#### `primitives.files`" not in context
 
-    # Unscoped managers appear neither in routing nor method reference
+    # Unscoped managers do not appear in the routing overview
     assert "→ `primitives.tasks`" not in context
     assert "#### `primitives.tasks`" not in context
 

@@ -1490,6 +1490,37 @@ The local `gh` CLI has two authenticated accounts:
 `magic-marty` is a GitHub service account (Security Lead accountable). Use it
 only for the approval step, not for authoring commits or opening PRs.
 
+### The org's machine accounts are not interchangeable
+
+`unifyai` has two, with deliberately different jobs. They are not a fallback
+for one another, and the names do not say which is which.
+
+| Account | Job | Access |
+|---|---|---|
+| `magic-marty` | **Approves PRs.** Nothing else. | Admin on the private repos |
+| `unify-dev-bot` | **CI automation** — clones private dependencies, dispatches cross-repo workflows, commits dependency bumps. Owns the `CLONE_TOKEN` secret. | Read on `brain`/`branding`, write where it must push |
+
+Never move CI credentials onto `magic-marty`. Its whole value is being a
+different principal from whoever authored the change — that is the separation
+of duties the branch protection exists to enforce. `CLONE_TOKEN` is shared by
+`unify`, `unillm` and `unify-deploy`, so putting it on an account that holds
+admin and can approve releases would mean one leaked CI secret could approve
+its own merge into `main`.
+
+Give `unify-dev-bot` the least access its job needs, and no more: an
+automation credential that can edit rulesets can switch off the release gates.
+It was dropped from admin to write on `unify-deploy` on 2026-08-14 for exactly
+that reason, after a check found nothing requiring admin — a repository
+dispatch, its only cross-repo write, needs write.
+
+`CLONE_TOKEN` is a classic PAT and has expired at least once, silently taking
+out private-dependency clones across three repos and self-host image
+publishing for ten days with nothing reporting it. If private clones start
+failing with `Repository not found` on a repo that plainly exists, suspect the
+token before the repo: GitHub answers 404 rather than 403 when a credential
+cannot see a private repository, so an expired, unauthorised, or
+wrong-account token looks exactly like a missing one.
+
 ### When this applies
 
 - Any `staging` → `main` release PR the agent opens under the active author account
@@ -2311,6 +2342,65 @@ legacy-name list — is in
 [`.agents/global-rules/situational/deployed-system-topology.md`](.agents/global-rules/situational/deployed-system-topology.md).
 Read it before any non-trivial infra work.
 
+# Empty is not absent
+
+A command that returns nothing has told you one of two things, and it does not
+say which: *there is nothing there*, or *I could not look*. Infra CLIs answer
+the second case by exiting `0` and printing nothing, so the failure arrives
+wearing the costume of a finding. Every instance below cost real time, and
+several produced confident, wrong statements about production before anyone
+noticed.
+
+This rule is about `gcloud`, `kubectl`, `gh`, and third-party HTTP APIs.
+Orchestra's admin-versus-user split has its own rule
+(`orchestra-admin-vs-user-api-access.md`) and its own fix; do not fold the two
+together.
+
+## The three ways a zero lies
+
+**Credentials expired mid-session.** `gcloud`'s token refresh fails, and
+`kubectl`'s GKE auth plugin fails with it. A `kubectl get` then returns no
+rows; `gcloud builds list --format=value(...)` prints empty columns; a cost
+query reads `$0.00`. Nothing errors, nothing exits non-zero. A polling loop is
+the worst place for this: it will happily report "no change" every interval
+for an hour while holding no credentials at all.
+
+**The selector matches nothing.** A label that was renamed (`app=droid` when
+the live label is `app=unity`), a filter with a stray space in a timestamp
+(`2026-08-08 T00:00:00Z`), a `--region` left at the `global` default. The
+query is valid and correctly executed against the wrong target. This is the
+most dangerous of the three, because **re-running it reproduces the same
+answer** — repetition feels like verification and is not.
+
+**A response body parsed with a forgiving default.** `d.get("logs", [])`
+turns `{"detail": "..."}` into `[]`, and the script prints `found: 0`. The API
+said exactly what was wrong; the parser discarded it. An HTTP 200 on one
+endpoint is not evidence that a credential works on a different one.
+
+## What to do
+
+- **Prove the query could have answered.** Before believing a zero, run the
+  same shape of command against something you know exists. A test that cannot
+  fail has proved nothing.
+- **Check liveness explicitly, not by inference.** `gcloud auth print-access-token
+  >/dev/null 2>&1 || echo EXPIRED` costs nothing and turns a silent empty into
+  a stated one. Do it before a batch and again after a long poll.
+- **Never let a loop treat empty as a state.** A poller must distinguish "no
+  result yet" from "could not ask", and stop on the second. Blank output for
+  several consecutive iterations is a fault, not a plateau.
+- **Never parse with a default that can absorb an error.** Inspect the status
+  code and the error field first, then read the payload.
+- **Sanity-check the shape.** Exactly zero rows, `$0.00`, or an empty list from
+  a system you know is busy is a claim about your query, not about the system.
+  Suspect the tool before you report the finding.
+
+## When reporting
+
+If a result contradicts what the system is known to be doing, say it is
+unverified rather than presenting it as a finding — and re-run it once
+credentials are known good. Retracting a confident zero costs far more trust
+than flagging an uncertain one.
+
 # Deployed System Topology (shared context)
 
 This is broad orientation so agents in **any** repo know the shape of the deployed
@@ -2389,17 +2479,47 @@ Orchestra (`api.unify.ai/v0` prod, `api.staging.internal.saas.unify.ai/v0` stagi
 
 ## The two dependencies
 
-- **`auth_api_key`** — looks the Bearer token up as a **user API key** and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, canvas tokens, etc.). Results are **scoped to that key's owner**. There is **no admin bypass** here.
+- **`auth_api_key`** — resolves the Bearer and sets `request.state.user_id`. All **data** endpoints use it (`/logs` get/update/`atomic_field_update`, contexts, canvas tokens, etc.). A user key is **scoped to its owner**. `ORCHESTRA_ADMIN_KEY` is accepted here too, as the platform principal `__system__`.
 - **`auth_admin_key`** — matches the Bearer against the server's `ORCHESTRA_ADMIN_KEY` (`secrets.compare_digest`), a Cloud Scheduler OIDC token, or an `AdminUser`'s key. Only the **`/admin/*`** routers (registered with `ADMIN_AUTH`) use it. It **gates operations; it does not grant a data scope.**
 
+## Reading a tenant's data with the admin key
+
+`__system__` owns the platform's own projects — `Builtins`, `AssistantJobs` —
+and nothing else. Point it at an ordinary project name and it resolves
+nothing, so the read returns **`{"detail":"Project X not found."}` with HTTP
+200-shaped handling in most clients**, which is easily misread as "the data is
+not there" rather than "you are not the principal that owns it".
+
+Name the principal to read as:
+
+```bash
+curl -s --get "$ORCHESTRA_URL/logs" -H "Authorization: Bearer $ORCHESTRA_ADMIN_KEY" \
+  --data-urlencode "project_name=Assistants" \
+  --data-urlencode "context=<owner>/<agent>/Tasks" \
+  --data-urlencode "as_user_id=<user_id>"          # add as_organization_id=<n> for an org context
+```
+
+- **Reads only.** Any non-`GET` carrying `as_user_id` is refused `403`. A
+  deployment-wide credential that could write as someone else would leave
+  mutations attributed to a principal that never made them.
+- **The target is named, never inferred.** `Project.name` is not unique —
+  every account has its own `Assistants` — so a bare name under `__system__`
+  would return whichever row sorted first and present one tenant's data as
+  another's.
+- **An unknown `as_user_id` is a `404`**, not an empty result.
+- Every targeted read is logged server-side.
+
 ### Consequences (do not relearn these the hard way)
-- `ORCHESTRA_ADMIN_KEY` on a data endpoint → **`401 {"detail":"Invalid API key"}`** (because `/logs` only does user-key lookup). This is expected, not a broken key.
-- Even an **admin user's own** `UNIFY_KEY` is data-scoped: it returns `0` for another tenant's contexts. Admin status does not widen `/logs` results.
+- Without `as_user_id`, the admin key sees only system projects. An empty read
+  is a scope answer, not a data answer — see `empty-is-not-absent.md`.
+- Even an **admin user's own** `UNIFY_KEY` is data-scoped: it returns `0` for
+  another tenant's contexts. Admin status does not widen `/logs` results.
 - The live `ORCHESTRA_ADMIN_KEY` is the **GCP secret** in `saas-368716` (prod) — repo `.env` copies may be stale. Staging uses a different value. Fetch with `gcloud secrets versions access latest --secret=ORCHESTRA_ADMIN_KEY --project=saas-368716`.
 
-## How to read/write a specific tenant's data smoothly
+## Writing a specific tenant's data
 
-Use the admin API to fetch the target's **own** API key, then use that key on the normal data endpoints:
+Writes still need the owning principal's own key. Fetch it through the admin
+API, then use it on the normal data endpoints:
 
 1. **Enumerate + get keys** (admin key): `GET /admin/assistant` returns every assistant including its `api_key`, `agent_id`, `user_id` (also `GET /admin/assistant/{id}`, `/admin/assistant/user/{user_id}`).
    ```bash
@@ -2412,7 +2532,7 @@ Use the admin API to fetch the target's **own** API key, then use that key on th
    unify.update_logs(logs=log_id, entries={"content": new}, context=ctx, api_key=assistant_key)
    ```
 
-A cross-tenant migration = loop assistants from `/admin/assistant`, then operate per-assistant with each key (no superuser data key exists). `gcloud` Cloud SQL (`prod-ssd`, `saas-368716`) is the direct-DB fallback for bulk passes.
+A cross-tenant migration = loop assistants from `/admin/assistant`, then operate per-assistant with each key (there is no superuser *write* key). `gcloud` Cloud SQL (`prod-ssd`, `saas-368716`) is the direct-DB fallback for bulk passes.
 
 # TaskScheduler surgery (Tasks rows)
 

@@ -964,8 +964,9 @@ async def actor_watch_notifications(
 
     The handle's notification queue carries two kinds of messages:
 
-    - **``type="notification"``** — progress updates emitted by ``notify()``
-      while the actor is still working.
+    - **``type="notification"``** — progress updates emitted by the
+      ``send_notification`` tool (or the active-work heartbeat) while the
+      actor is still working.
     - **``type="response"``** — turn-complete signals emitted when a
       persistent session enters its wait state. These mean the actor has
       finished the current turn and is awaiting the next ``interject``.

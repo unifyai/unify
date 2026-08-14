@@ -411,6 +411,35 @@ def _clear_singletons_between_tests():
 
 
 @pytest.fixture(autouse=True)
+def _exact_cache_keying_for_evals(request):
+    """An eval never accepts a canonically-equivalent recording.
+
+    Canonical keying deliberately lets a recording survive mundane prompt
+    churn, and the invariance it buys includes description rewording --
+    which is one of the ordinary ways to change which tool a model picks.
+    For a functional test that trade is right: the assertion is about the
+    code around the call. For an eval it inverts, because the model's
+    behaviour *is* the subject, so a canonical hit would score the
+    trajectory recorded before the change and report it green.
+
+    Scoped per test rather than per shard: a shard is a directory, and
+    directories hold both kinds.
+    """
+    if request.node.get_closest_marker("eval") is None:
+        yield
+        return
+
+    from unillm.settings import SETTINGS as UNILLM_SETTINGS
+
+    previous = UNILLM_SETTINGS.UNILLM_CACHE_KEYING
+    UNILLM_SETTINGS.UNILLM_CACHE_KEYING = "exact"
+    try:
+        yield
+    finally:
+        UNILLM_SETTINGS.UNILLM_CACHE_KEYING = previous
+
+
+@pytest.fixture(autouse=True)
 def _enable_eventbus_for_marked_tests(request):
     """Enable EventBus publishing for tests marked with @pytest.mark.enable_eventbus.
 
@@ -880,7 +909,13 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "eval: mark a test as a fuzzy evaluation test for English language APIs",
+        "eval: mark a test as a fuzzy evaluation test for English language "
+        "APIs. Selects the eval tier in discover_test_paths.py, and pins cache "
+        "lookups to exact keying so a canonical hit cannot score a trajectory "
+        "recorded before the prompt changed. Distinct from llm_call, which "
+        "says only that a model is reached: eval asks whether the answer was "
+        "good, llm_call whether the call happens at all. The two are applied "
+        "independently and neither implies the other.",
     )
     config.addinivalue_line(
         "markers",

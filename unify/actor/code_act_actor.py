@@ -4,6 +4,7 @@ import copy
 import functools
 import inspect
 import json
+import re
 import sys
 import traceback
 import uuid
@@ -682,19 +683,16 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "When wrapping a procedure into a stored function, pay attention to "
     "points where the original code depended on the user being "
     "informed — especially states that block until the user takes an "
-    "external action. If the original trajectory included a step like "
-    '"notify the user about X, then wait for X to happen", the '
-    "`notify()` call must survive into the stored function. Stripping "
-    "it out creates a silent deadlock: the function blocks waiting for "
-    "a condition the user does not know about.\n\n"
-    "The general principle: a stored function inherits the execution "
-    "environment's `notify()` helper. Any state where "
-    "progress depends on external human action (approving an auth "
-    "prompt, granting a permission, confirming a destructive "
-    "operation) must include a `notify()` call *before* entering the "
-    "wait. Without it, the function waits indefinitely for something "
-    "only the user can provide, and the user has no idea they need "
-    "to act.\n\n"
+    "external action. Stored functions cannot emit user-facing "
+    "notifications mid-execution, so do not bake an indefinite wait on "
+    "external human action (approving an auth prompt, granting a "
+    "permission, confirming a destructive operation) into the function "
+    "body. Instead, have the function return early or raise with a "
+    "clear message describing what the user must do, so the calling "
+    "actor can inform the user (via the `send_notification` tool "
+    "between `execute_code` blocks) and resume afterwards. A silent "
+    "in-function wait is a deadlock: the function blocks on a "
+    "condition the user does not know about.\n\n"
     "### Durable task executor candidates\n\n"
     "A function intended to become a future TaskScheduler executor must "
     "preserve the observed live execution chain, not merely produce a "
@@ -716,7 +714,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "Soft failures (empty results, skipped branches, degraded fallbacks, "
     "status dicts that report problems without raising) are the common "
     "bug shape. Stored functions must leave a reconstructable trail with "
-    "the stdlib `logging` module — not via user-facing `notify()`. Use "
+    "the stdlib `logging` module — not via user-facing notifications. Use "
     "markers `PHASE`, `SKIP`, and `SOFT_FAIL` in the message text so "
     "Job/EventBus captures stay greppable, e.g. "
     "`logging.getLogger(__name__).info('PHASE load_rows count=%s', n)` "
@@ -975,6 +973,145 @@ _STORAGE_BASE_INSTRUCTIONS = (
 )
 
 # ---------------------------------------------------------------------------
+# Trajectory compaction for storage review prompts
+# ---------------------------------------------------------------------------
+
+# Read-only store operations whose results the librarian can (and should)
+# re-derive live with its own tools. Write operations (add/update/delete/…)
+# stay verbatim — their results are small and record what changed.
+_STORE_READ_TOOL_RE = re.compile(
+    r"^(?:FunctionManager|GuidanceManager|KnowledgeManager)"
+    r"_(?:search|filter|list|get)",
+)
+_TRAJ_SYSTEM_STUB_THRESHOLD = 2_000
+_TRAJ_STORE_READ_STUB_THRESHOLD = 300
+_TRAJ_TOOL_RESULT_HEAD = 4_000
+_TRAJ_TOOL_RESULT_TAIL = 1_000
+
+
+def _prepare_trajectory_for_storage_review(
+    messages: list[dict] | None,
+) -> list[dict]:
+    """Compact a trajectory snapshot for a skill-librarian prompt.
+
+    The librarian judges what the actor *did*, not what it was told it
+    could do, and it queries the stores live with its own tools. Three
+    rewrites keep the review prompt bounded without hiding decision
+    signal:
+
+    * Large system messages collapse to a one-line stub — the review
+      prompt's own storage doctrine is authoritative. Small system
+      messages (e.g. parent-chat context) stay verbatim.
+    * Large results of store *reads* (FunctionManager / GuidanceManager /
+      KnowledgeManager search/filter/list/get, including results
+      delivered through ``check_status_*`` placeholders) collapse to an
+      entry count. The call and its arguments stay visible: "searched
+      the store, found nothing, built it by hand" is exactly the signal
+      that something is worth storing, and empty/short results stay
+      verbatim for that reason.
+    * Any other oversized tool result keeps its head and tail around an
+      elision marker.
+    """
+    prepared = make_messages_safe_for_context_dump(messages)
+
+    name_by_call_id: dict[str, str] = {}
+    for msg in prepared:
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            tc_id = tc.get("id")
+            fn_name = (tc.get("function") or {}).get("name")
+            if tc_id and fn_name:
+                name_by_call_id[str(tc_id)] = str(fn_name)
+
+    def _origin_tool_name(msg: dict) -> str | None:
+        name = msg.get("name") or name_by_call_id.get(
+            str(msg.get("tool_call_id") or ""),
+        )
+        if not name:
+            return None
+        name = str(name)
+        # ``check_status_<call_id>`` delivers an async tool's real result;
+        # resolve back to the originating tool for classification.
+        if name.startswith("check_status_"):
+            return name_by_call_id.get(name[len("check_status_") :], name)
+        return name
+
+    def _entry_count(content: str) -> str | None:
+        try:
+            parsed = json.loads(content)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(parsed, list):
+            return f"{len(parsed)} entries"
+        return None
+
+    def _content_text(content: object) -> str | None:
+        """Flatten message content to plain text for measurement/rewrites.
+
+        Tool results arrive either as a plain string or as an OpenAI
+        content-parts list (``[{"type": "text", "text": ...}, ...]``) —
+        execute_code results use the latter. Rewrites always store back a
+        plain string; that is fine for a serialized trajectory dump.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    parts.append(
+                        (
+                            text
+                            if isinstance(text, str)
+                            else f"[{part.get('type') or 'non-text'} part]"
+                        ),
+                    )
+                else:
+                    parts.append(str(part))
+            return "\n".join(parts)
+        return None
+
+    for msg in prepared:
+        content = _content_text(msg.get("content"))
+        if content is None:
+            continue
+        role = msg.get("role")
+        if role == "system":
+            if len(content) > _TRAJ_SYSTEM_STUB_THRESHOLD:
+                msg["content"] = (
+                    f"[System prompt omitted ({len(content):,} chars). The "
+                    "storage doctrine in this review prompt is "
+                    "authoritative.]"
+                )
+            continue
+        if role != "tool":
+            continue
+        origin = _origin_tool_name(msg)
+        if (
+            origin
+            and _STORE_READ_TOOL_RE.match(origin)
+            and len(content) > _TRAJ_STORE_READ_STUB_THRESHOLD
+        ):
+            count = _entry_count(content)
+            size = f"{len(content):,} chars"
+            detail = f"{count}, {size}" if count else size
+            msg["content"] = (
+                f"[{origin} result omitted ({detail}). Query the stores "
+                "directly with your tools; they are the source of truth.]"
+            )
+        elif len(content) > _TRAJ_TOOL_RESULT_HEAD + _TRAJ_TOOL_RESULT_TAIL:
+            omitted = len(content) - _TRAJ_TOOL_RESULT_HEAD - _TRAJ_TOOL_RESULT_TAIL
+            msg["content"] = (
+                content[:_TRAJ_TOOL_RESULT_HEAD]
+                + f"\n… [{omitted:,} chars omitted] …\n"
+                + content[-_TRAJ_TOOL_RESULT_TAIL:]
+            )
+    return prepared
+
+
+# ---------------------------------------------------------------------------
 # Shared storage tool construction
 # ---------------------------------------------------------------------------
 
@@ -985,11 +1122,15 @@ def _build_storage_tools(
     ask_tools: dict,
     completed_tool_metadata: dict | None = None,
     task_entrypoint_review: dict[str, Any] | None = None,
-) -> tuple[Dict[str, Callable], list[str]]:
+) -> tuple[Dict[str, Callable], list[str], list[str]]:
     """Build the tool dict shared by both post-processing and proactive storage loops.
 
-    Returns ``(tools, storage_active_lines)`` so callers can reference
-    which inner tools are still actively reviewing skills.
+    Returns ``(tools, storage_active_lines, dormant_lines)`` so callers can
+    reference which inner tools are still actively reviewing skills and
+    which completed tools can be queried. Tool docstrings deliberately stay
+    static — per-run listings belong in the (volatile tail of the) system
+    prompt so the serialized tool schemas are byte-identical across loops
+    and stay prompt-cache-friendly.
     """
     fm = actor.function_manager
     gm = actor.guidance_manager
@@ -1058,29 +1199,17 @@ def _build_storage_tools(
             dormant_lines.append(f"- `{name}`")
 
     if ask_tools:
-        doc_sections: list[str] = [
-            "Ask a follow-up question about a completed tool from the "
-            "trajectory to inspect its internal reasoning or results.",
-        ]
-        if storage_active_lines:
-            doc_sections.append(
-                "\nStorage-active tools (background skill review in progress):\n"
-                + "\n".join(storage_active_lines)
-                + "\n\nThese tools have completed their primary task but are "
-                "currently reviewing their execution for reusable skills. "
-                "You can ask what they have stored or are considering.",
-            )
-        if dormant_lines:
-            doc_sections.append(
-                "\nCompleted tools (dormant):\n" + "\n".join(dormant_lines),
-            )
-
-        _ask_doc = "\n".join(doc_sections)
 
         async def ask_about_completed_tool(
             tool_name: str,
             question: str,
         ) -> str:
+            """Ask a follow-up question about a completed tool from the trajectory.
+
+            Use this to inspect a completed tool's internal reasoning or
+            results. The available tool names are listed in the Completed
+            Tools section of this prompt.
+            """
             fn = ask_tools.get(tool_name)
             if fn is None:
                 return (
@@ -1096,14 +1225,12 @@ def _build_storage_tools(
                 return str(result)
             return str(handle)
 
-        ask_about_completed_tool.__doc__ = _ask_doc
         tools["ask_about_completed_tool"] = ask_about_completed_tool
 
     # ── Wire steering tools for storage-active inner handles ──────────
 
     if storage_active_handles:
         _sa_handles = storage_active_handles
-        _sa_listing = "\n".join(storage_active_lines)
 
         def _resolve_handle(tool_name: str) -> tuple[Any | None, str | None]:
             h = _sa_handles.get(tool_name)
@@ -1132,8 +1259,6 @@ def _build_storage_tools(
             await h.stop(reason=reason)
             return f"Stopped inner storage for '{tool_name}': {reason}"
 
-        stop_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
-
         async def interject_inner_storage(tool_name: str, message: str) -> str:
             """Inject a directive into an inner storage loop's conversation.
 
@@ -1148,8 +1273,6 @@ def _build_storage_tools(
             await h.interject(message)
             return f"Interjected into inner storage for '{tool_name}'."
 
-        interject_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
-
         async def pause_inner_storage(tool_name: str) -> str:
             """Temporarily pause an inner storage loop.
 
@@ -1163,8 +1286,6 @@ def _build_storage_tools(
             await h.pause()
             return f"Paused inner storage for '{tool_name}'."
 
-        pause_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
-
         async def resume_inner_storage(tool_name: str) -> str:
             """Resume a previously paused inner storage loop.
 
@@ -1176,8 +1297,6 @@ def _build_storage_tools(
                 return err
             await h.resume()
             return f"Resumed inner storage for '{tool_name}'."
-
-        resume_inner_storage.__doc__ += f"\n\nStorage-active tools:\n{_sa_listing}"
 
         tools["stop_inner_storage"] = stop_inner_storage
         tools["interject_inner_storage"] = interject_inner_storage
@@ -1426,7 +1545,7 @@ def _build_storage_tools(
             submit_offline_certification_evidence
         )
 
-    return tools, storage_active_lines
+    return tools, storage_active_lines, dormant_lines
 
 
 # ---------------------------------------------------------------------------
@@ -1472,7 +1591,7 @@ def _start_storage_check_loop(
         else None
     )
 
-    tools, storage_active_lines = _build_storage_tools(
+    tools, storage_active_lines, dormant_lines = _build_storage_tools(
         actor=actor,
         ask_tools=ask_tools,
         completed_tool_metadata=completed_tool_metadata,
@@ -1481,7 +1600,21 @@ def _start_storage_check_loop(
 
     # ── Build prompt ──────────────────────────────────────────────────
 
-    trajectory_json = json.dumps(trajectory, indent=2, default=str)
+    trajectory_json = json.dumps(
+        _prepare_trajectory_for_storage_review(trajectory),
+        default=str,
+    )
+
+    completed_tools_section = ""
+    if storage_active_lines or dormant_lines:
+        listing = "\n".join([*storage_active_lines, *dormant_lines])
+        completed_tools_section = (
+            "## Completed Tools\n\n"
+            "These completed tools from the trajectory can be queried via "
+            "`ask_about_completed_tool` (entries marked [storage-active] "
+            "are still running their own background skill review):\n\n"
+            f"{listing}\n\n"
+        )
 
     # Build optional section about inner storage loops.
     inner_storage_section = ""
@@ -1529,7 +1662,7 @@ def _start_storage_check_loop(
         instructions = (
             "## Instructions\n\n"
             "1. Skill storage was proactively triggered during this run. "
-            "Start by reviewing the proactive storage summaries above and "
+            "Start by reviewing the proactive storage summaries below and "
             "checking the function, guidance, and knowledge stores to see "
             "what was already added.\n"
             "2. Search the existing stores to confirm exactly what was stored "
@@ -1614,23 +1747,28 @@ def _start_storage_check_loop(
             f"```json\n{metadata_json}\n```\n\n"
         )
 
+    # Static doctrine first, volatile trajectory last: every storage loop
+    # shares the same byte-identical prefix (role + doctrine + instructions),
+    # so provider prompt caching only pays cold tokens for the per-run tail.
     system_prompt = (
         "You are a skill librarian. A CodeActActor has just completed a task. "
         "Your job is to review the execution trajectory and decide whether "
         "anything is worth persisting for future reuse. Often nothing is — "
         "that is perfectly fine.\n\n"
-        "## Completed Trajectory\n\n"
-        f"{trajectory_json}\n\n"
-        "## Final Result\n\n"
-        f"{original_result}\n\n"
-        f"{stop_context_section}"
-        f"{task_entrypoint_section}"
-        f"{inner_storage_section}"
-        f"{proactive_storage_section}"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
         f"{_STORAGE_THREE_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
         f"{instructions}"
+        "\n\n"
+        f"{stop_context_section}"
+        f"{task_entrypoint_section}"
+        f"{inner_storage_section}"
+        f"{completed_tools_section}"
+        f"{proactive_storage_section}"
+        "## Completed Trajectory\n\n"
+        f"{trajectory_json}\n\n"
+        "## Final Result\n\n"
+        f"{original_result}"
     )
 
     client = new_llm_client(actor._model)
@@ -1678,7 +1816,7 @@ def _start_proactive_storage_loop(
     if fm is None or gm is None:
         return None
 
-    tools, storage_active_lines = _build_storage_tools(
+    tools, storage_active_lines, dormant_lines = _build_storage_tools(
         actor=actor,
         ask_tools=ask_tools,
         completed_tool_metadata=completed_tool_metadata,
@@ -1686,7 +1824,21 @@ def _start_proactive_storage_loop(
 
     # ── Build prompt ──────────────────────────────────────────────────
 
-    trajectory_json = json.dumps(trajectory, indent=2, default=str)
+    trajectory_json = json.dumps(
+        _prepare_trajectory_for_storage_review(trajectory),
+        default=str,
+    )
+
+    completed_tools_section = ""
+    if storage_active_lines or dormant_lines:
+        listing = "\n".join([*storage_active_lines, *dormant_lines])
+        completed_tools_section = (
+            "## Completed Tools\n\n"
+            "These completed tools from the trajectory can be queried via "
+            "`ask_about_completed_tool` (entries marked [storage-active] "
+            "are still running their own background skill review):\n\n"
+            f"{listing}\n\n"
+        )
 
     inner_storage_section = ""
     if storage_active_lines:
@@ -1723,21 +1875,25 @@ def _start_proactive_storage_loop(
         "follow-up storage review, so be specific."
     )
 
+    # Static doctrine first, volatile trajectory last — same prompt-cache
+    # prefix as the post-run storage check.
     system_prompt = (
         "You are a skill librarian. A CodeActActor is currently executing "
         "a task and has proactively requested skill storage. Your job is "
         "to review the execution trajectory so far and store the "
         "requested skill(s) for future reuse. Often nothing is worth "
         "storing — that is perfectly fine.\n\n"
-        "## Storage Request\n\n"
-        f"{request}\n\n"
-        "## Trajectory So Far\n\n"
-        f"{trajectory_json}\n\n"
-        f"{inner_storage_section}"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
         f"{_STORAGE_THREE_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
         f"{instructions}"
+        "\n\n"
+        f"{inner_storage_section}"
+        f"{completed_tools_section}"
+        "## Storage Request\n\n"
+        f"{request}\n\n"
+        "## Trajectory So Far\n\n"
+        f"{trajectory_json}"
     )
 
     client = new_llm_client(actor._model)
@@ -2424,7 +2580,11 @@ class CodeActActor(BaseCodeActActor):
                 # The exclusion deduplicates search results against what the
                 # prompt documents. When an environment declares
                 # `prompt_documented_names`, only that subset is excluded —
-                # undocumented primitives must stay searchable.
+                # undocumented primitives must stay searchable. State manager
+                # primitives declare an empty set (their method docs are not
+                # inlined), so core methods like `ask`/`update` are
+                # searchable; computer-control tools remain excluded because
+                # their name index stays in the prompt.
                 _documented = getattr(env, "prompt_documented_names", None)
                 for tool_name, tool_meta in env.get_tools().items():
                     if tool_meta.function_id is not None:
@@ -3046,97 +3206,54 @@ class CodeActActor(BaseCodeActActor):
             Key concepts
             -----------
             - **language**: "python" | "bash" | "zsh" | "sh" | "powershell"
-            - **surface**: which machine to run on.
-              - "local" (default): the local host itself — the only surface that
-                supports stateful sessions and venvs.
-              - "assistant_desktop": the assistant's managed VM.
-              - "user_desktop": the user's own linked machine, when the user has
-                granted access (pass ``user_id`` to disambiguate when more than
-                one user desktop is linked).
-              Remote surfaces ("assistant_desktop"/"user_desktop") are **stateless
-              one-shots**: ``state_mode`` must be "stateless" and ``session_id`` /
-              ``session_name`` / ``venv_id`` must be omitted. Use them to run a
-              shell command or a self-contained Python snippet on that machine.
-            - **state_mode**:
-              - "stateless": fresh execution; no persistence of intermediate variables.
-                Environment globals and FunctionManager-discovered functions are
-                always available.
-              - "stateful": persistent session; state accumulates across calls
-              - "read_only": reads from an existing session but does not persist changes
-            - **session_id/session_name**:
-              - only meaningful for stateful/read_only
-              - for stateful: if omitted, defaults to **session_id=0** (the default session)
-              - to create an additional stateful session, provide a fresh `session_name` (recommended)
-                or an explicit `session_id` > 0
-              - **Python session_id=0** is special:
-                - If this tool is called from inside a running CodeAct `act()` loop, session 0 maps to the
-                  **current per-call Python sandbox** (shared via the ContextVar binding).
-                - If no sandbox is bound (e.g. calling the tool directly in a unit test), session 0 behaves
-                  like a normal in-process Python session managed by the SessionExecutor.
-
-            Best practices
-            --------------
-            - Use **stateful** when doing multi-step work (cd then ls; load data then analyze).
-            - Use **stateless** for one-off checks or when you need isolation.
-            - Use **read_only** to "peek" without mutating state (what-if exploration).
-            - Use `list_sessions()` and `inspect_state()` to decide which session to use.
+            - **surface**: "local" (default; the only surface with stateful
+              sessions and venvs), "assistant_desktop" (managed VM),
+              "user_desktop" (the user's own linked machine; pass
+              ``user_id`` when more than one is linked). Remote surfaces are
+              **stateless one-shots**: ``state_mode`` must be "stateless"
+              and ``session_id`` / ``session_name`` / ``venv_id`` omitted.
+            - **state_mode**: "stateless" (default; fresh run, environment
+              globals and FunctionManager-discovered functions still
+              available), "stateful" (state accumulates), "read_only"
+              (reads an existing session without persisting).
+            - **session_id/session_name**: stateful/read_only only.
+              Stateful defaults to **session_id=0** — inside a running
+              act() loop, the current per-call Python sandbox. Create an
+              additional session with a fresh ``session_name`` (recommended)
+              or an explicit ``session_id`` > 0; choose via
+              ``list_sessions()`` / ``inspect_state()``.
 
             Output
             ------
-            Returns either a dict or an ExecutionResult object with the following fields:
-
-            - **stdout**: For in-process Python, a List[TextPart | ImagePart] preserving
-              rich output (text and images from print()/display()). For shell or venv
-              execution, a plain string.
-            - **stderr**: Same format as stdout (list for in-process Python, string otherwise).
-            - **result**: The evaluated result of the last expression (Any), or None.
-              If the last expression is a steerable handle, it is automatically
-              adopted by the outer loop for mid-flight steering.
-            - **error**: Error message string if execution failed, otherwise None.
-            - **language**: The language used for execution.
-            - **state_mode**: The state mode used ("stateless", "stateful", or "read_only").
-            - **session_id**: The session ID (int) if stateful/read_only, otherwise None.
-            - **session_name**: The session name alias if one was assigned, otherwise None.
-            - **venv_id**: The virtual environment ID if applicable, otherwise None.
-            - **session_created**: True if a new session was created by this call.
-            - **duration_ms**: Execution duration in milliseconds.
+            A dict or ExecutionResult with: ``stdout`` / ``stderr`` (rich
+            List[TextPart | ImagePart] for in-process Python; plain string
+            for shell/venv), ``result`` (last expression's value — a
+            steerable handle as the last expression is automatically adopted
+            by the outer loop for mid-flight steering), ``error``,
+            ``language``, ``state_mode``, ``session_id``, ``session_name``,
+            ``venv_id``, ``session_created``, ``duration_ms``.
 
             Runtime credential helpers
             --------------------------
-            Python execution globals include ``get_oauth_access_token(provider)``
-            for connected-account (BYOD) OAuth. It returns a local capability
-            handle (not a raw token) to use with the workspace proxy base URLs
-            (``MICROSOFT_GRAPH_BASE`` / ``GOOGLE_DRIVE_BASE`` / ``GOOGLE_API_BASE``);
-            the proxy injects the real token and enforces the file-access
-            allowlist. Static API keys and provider SDKs that read credentials
-            from the environment may still use ``os.environ`` after checking
-            available secret names.
+            Python globals include ``get_oauth_access_token(provider)`` for
+            connected-account OAuth: a local capability handle (not a raw
+            token) used with the workspace proxy base URLs — see
+            ``help(get_oauth_access_token)``. Static API keys stay in
+            ``os.environ``.
 
             Steering while the block runs
             -----------------------------
-            Python blocks are steerable in flight. Checkpoints sit between
+            Python blocks are steerable in flight: checkpoints sit between
             top-level statements, at the top of every loop body, and before
-            every ``primitives.*`` call, so a correction arriving partway
-            through can reach the block instead of only being able to kill it.
-
-            When one arrives, the block suspends at its next checkpoint and
-            you are given a turn with a report of how far it got. Two ways
-            forward: ``stop_execute_code_<call_id>`` abandons the block so you
-            can write a corrected one, or interjecting again resumes it as
-            written. Prefer stopping when the correction changes what the
-            remaining work should do, and resuming when it does not.
-
-            Generated code may read ``steering.messages`` for the interjection
-            texts delivered so far, which lets a long loop adapt without being
-            abandoned. Blocks that ignore it behave exactly as written.
-
-            A checkpoint can only run when the block yields. A synchronous
-            call that blocks — ``time.sleep``, non-async HTTP, a tight compute
-            loop — holds execution until it returns, so prefer async calls in
-            work that may need correcting partway through.
-
-            For in-process Python execution with rich output, the result is wrapped in an
-            ExecutionResult object (a Pydantic model implementing FormattedToolResult).
+            every ``primitives.*`` call. On a correction the block suspends
+            and you get a turn with a progress report:
+            ``stop_execute_code_<call_id>`` abandons the block (choose when
+            the correction changes the remaining work); interjecting again
+            resumes it as written. Generated code may read
+            ``steering.messages`` to adapt without being abandoned. A
+            checkpoint only runs when the block yields — synchronous
+            blocking calls hold execution, so prefer async calls in work
+            that may need correcting partway through.
             """
             _ = thought  # Thought is logged by the LLM; not used programmatically.
             if code is None or code.strip() == "":
@@ -3217,7 +3334,6 @@ class CodeActActor(BaseCodeActActor):
                     if _notification_up_q is not None
                     else None
                 )
-                sandbox_id = None
                 try:
                     from unify.manager_registry import ManagerRegistry
 
@@ -3263,17 +3379,6 @@ class CodeActActor(BaseCodeActActor):
                     _rs.venv_id,
                     _rs.session_id,
                 )
-                # Inject per-tool notification queue into bound sandbox so notify() works.
-                try:
-                    sb_for_notifs = _CURRENT_SANDBOX.get()
-                    sandbox_id = getattr(sb_for_notifs, "id", None)
-                    if notification_q is not None:
-                        sb_for_notifs.global_state["__notification_up_q__"] = (
-                            notification_q
-                        )
-                except Exception:
-                    pass
-
                 # Execute via SessionExecutor. Route primitives if available in current sandbox.
                 primitives = None
                 computer_primitives = self._computer_primitives
@@ -3302,7 +3407,6 @@ class CodeActActor(BaseCodeActActor):
                                 venv_id=venv_id,
                                 primitives=primitives,
                                 computer_primitives=computer_primitives,
-                                notification_q=notification_q,
                             )
                         except Exception as e:
                             exec_exc = e
@@ -3861,49 +3965,21 @@ class CodeActActor(BaseCodeActActor):
                 Execute a single function or primitive by name.
 
                 **This is the preferred tool for any task that maps to a single
-                function or primitive call.** Use it instead of ``execute_code``
-                whenever the task can be accomplished by invoking one callable
-                with keyword arguments — no surrounding Python logic needed.
+                function or primitive call** — a primitive
+                (``primitives.contacts.ask``, ``primitives.tasks.update``, …)
+                or a stored function discovered via FunctionManager. It
+                **structurally guarantees** the returned handle is exposed to
+                the outer loop for steering (ask, stop, pause, resume,
+                interject); inside ``execute_code`` a handle is only adopted
+                if it happens to be the last expression. Use ``execute_code``
+                only for genuine multi-step composition (conditional logic,
+                loops, combining intermediate results).
 
-                Why prefer this tool
-                --------------------
-                ``execute_function`` **structurally guarantees** that the
-                returned handle is exposed to the outer loop for steering
-                (ask, stop, pause, resume, interject). When you write the
-                same call inside ``execute_code``, the handle is only
-                adopted if it happens to be the last expression — a pattern
-                that is easy to break by adding prints, notifications, or
-                error handling around the call.
-
-                When to use ``execute_function`` vs ``execute_code``
-                ----------------------------------------------------
-                - **Single primitive call** (e.g. ``primitives.contacts.ask``,
-                  ``primitives.web.ask``, ``primitives.tasks.update``)
-                  → always ``execute_function``.
-                - **Single stored function call** (discovered via
-                  FunctionManager) → always ``execute_function``.
-                - **Multi-step composition**, conditional logic, loops,
-                  or any code that genuinely needs to combine multiple
-                  calls or process intermediate results
-                  → use ``execute_code``.
-
-                Resolution order
-                ----------------
-                1. The current sandbox namespace (environment-injected callables,
-                   previously discovered FunctionManager functions, etc.).
-                2. The FunctionManager store (by exact name lookup).
-                3. If neither matches, a ``NameError`` is raised naturally.
-
-                Key concepts
-                ------------
-                - **language**: ``"python"`` | ``"bash"`` | ``"zsh"`` | ``"sh"`` | ``"powershell"``
-                - **state_mode**:
-                  - ``"stateless"``: no session; clean execution; no persistence
-                  - ``"stateful"``: persistent session; state accumulates
-                  - ``"read_only"``: reads from an existing session but does not
-                    persist changes
-                - **session_id / session_name**: only meaningful for
-                  stateful / read_only (same semantics as ``execute_code``)
+                Resolution order: the current sandbox namespace first, then
+                the FunctionManager store by exact name; otherwise a
+                ``NameError`` is raised. ``language`` / ``state_mode`` /
+                ``session_id`` / ``session_name`` keep ``execute_code``
+                semantics.
 
                 Parameters
                 ----------
@@ -3911,32 +3987,30 @@ class CodeActActor(BaseCodeActActor):
                     One-sentence, first-person rationale for this call, shown
                     to the user. Always provide it.
                 function_name : str
-                    Exact name of the function or primitive to execute.
-                    For primitives, use the dotted path as it appears in the
-                    sandbox (e.g. ``"primitives.contacts.ask"``).
+                    Exact name of the function or primitive to execute
+                    (dotted path for primitives, e.g.
+                    ``"primitives.contacts.ask"``).
                 call_kwargs : dict, optional
-                    Keyword arguments to pass to the function, each value in
-                    the type the target declares — numbers and booleans
-                    unquoted, not stringified.
+                    Keyword arguments to pass. Values keep the callee's own
+                    types — a plain keyword-argument mapping, not a string
+                    map: numbers, booleans, lists, and objects unquoted,
+                    exactly as the target signature declares them
+                    (``{"max_results": 5}``, not ``{"max_results": "5"}``,
+                    which fails type validation at the callee).
 
                 Steering while the function runs
                 -------------------------------
-                Steerable in flight, like ``execute_code``. When the stored
-                implementation is synthesised into the sandbox, checkpoints
-                are placed inside the function's own body as well, so a long
-                loop within a stored function can be corrected partway through
-                rather than only before it starts or after it finishes.
-
-                A correction suspends the call at its next checkpoint and
-                gives you a turn: ``stop_execute_function_<call_id>`` abandons
-                it, interjecting again resumes it.
+                Steerable in flight, like ``execute_code`` — checkpoints are
+                placed inside a stored implementation's own body, so a long
+                loop can be corrected partway through. A correction suspends
+                the call and gives you a turn:
+                ``stop_execute_function_<call_id>`` abandons it, interjecting
+                again resumes it.
 
                 Returns
                 -------
                 dict | ExecutionResult
-                    Same shape as ``execute_code`` output (stdout, stderr, result,
-                    error, language, state_mode, session_id, session_name,
-                    session_created, duration_ms).
+                    Same shape as ``execute_code`` output.
                 """
                 _ = thought  # Thought is logged by the LLM; not used programmatically.
                 call_kwargs = call_kwargs or {}
@@ -4093,7 +4167,6 @@ class CodeActActor(BaseCodeActActor):
                         if _notification_up_q is not None
                         else None
                     )
-                    sandbox_id = None
                     _rs = self._resolve_session(
                         state_mode=state_mode,
                         language=str(language),
@@ -4106,17 +4179,6 @@ class CodeActActor(BaseCodeActActor):
                         _rs.venv_id,
                         _rs.session_id,
                     )
-                    # Inject per-tool notification queue into bound sandbox.
-                    try:
-                        sb_for_notifs = _CURRENT_SANDBOX.get()
-                        sandbox_id = getattr(sb_for_notifs, "id", None)
-                        if notification_q is not None:
-                            sb_for_notifs.global_state["__notification_up_q__"] = (
-                                notification_q
-                            )
-                    except Exception:
-                        pass
-
                     # Resolve primitives from current sandbox.
                     primitives = None
                     computer_primitives = self._computer_primitives
@@ -4225,7 +4287,6 @@ class CodeActActor(BaseCodeActActor):
                                         venv_id=resolved_venv_id,
                                         primitives=primitives,
                                         computer_primitives=computer_primitives,
-                                        notification_q=notification_q,
                                     )
                                     _ef_log.debug(
                                         f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
@@ -4438,33 +4499,25 @@ class CodeActActor(BaseCodeActActor):
             """
             List all active sessions across all languages (Python + shell).
 
-            Use this tool whenever you need to choose which session to use for a
-            subsequent `execute_code(..., state_mode="stateful"/"read_only")` call.
+            Use this to choose which session a subsequent
+            `execute_code(..., state_mode="stateful"/"read_only")` call
+            should target.
 
             Parameters
             ----------
             detail:
-                Controls how much information is returned per session:
-                - "summary": metadata + a short `state_summary` string (default)
-                - "full": best-effort enrichment using cheap inspection where available
+                "summary" (default): metadata + a short `state_summary`;
+                "full": best-effort enrichment via cheap inspection.
 
             Returns
             -------
             dict:
-                {"sessions": [ ... ]} where each entry includes (best-effort):
-                - language: "python" | "bash" | "zsh" | "sh" | "powershell"
-                - session_id: int (scoped per language + venv_id)
-                - venv_id: int | None (Python only)
-                - session_name: optional human-friendly alias (if registered)
-                - created_at / last_used: timestamps when available
-                - state_summary: a short human-readable summary (e.g. "3 names", "cwd=/repo")
-
-            Notes
-            -----
-            - Session IDs are **scoped per (language, venv_id)**, so `python` session 0 and
-              `bash` session 0 can coexist.
-            - The default per-call Python sandbox is exposed as `python` session_id=0 (venv_id=None)
-              when it is bound for the current call.
+                {"sessions": [...]}; each entry carries language,
+                session_id, venv_id (Python only), session_name,
+                created_at / last_used, and state_summary. Session IDs are
+                **scoped per (language, venv_id)**; the default per-call
+                Python sandbox appears as `python` session_id=0
+                (venv_id=None) when bound.
             """
             detail = (detail or "summary").strip()
 
@@ -4566,34 +4619,28 @@ class CodeActActor(BaseCodeActActor):
             """
             Inspect the state of a specific session (Python or shell).
 
-            This tool is for debugging and for deciding whether to:
-            - continue in the same session (stateful)
-            - start a fresh session (stateful without session_id/session_name)
-            - run a one-off (stateless)
-            - do a what-if (read_only)
+            Use it to decide whether to continue in a session, start fresh,
+            run stateless, or do a read_only what-if.
 
             Parameters
             ----------
             session_name:
-                Optional human-friendly alias for a session (preferred when available).
+                Human-friendly alias (preferred when available).
             session_id + language (+ optional venv_id):
-                Directly identify a session. `session_id` is scoped per (language, venv_id).
+                Direct identity; `session_id` is scoped per (language,
+                venv_id).
             detail:
-                "summary" | "names" | "full"
-                - Prefer "summary" when you just need quick context.
-                - Use "names" to see what variables exist without dumping values.
-                - Use "full" sparingly (can be large; values are truncated/redacted best-effort).
+                "summary" (quick context) | "names" (variable names only) |
+                "full" (sparingly; values truncated/redacted best-effort).
 
-            Defaults
-            --------
-            If no session selector is provided, this inspects the **current per-call Python sandbox**
-            (python session_id=0, venv_id=None) when bound.
+            With no selector, inspects the **current per-call Python
+            sandbox** (python session_id=0, venv_id=None) when bound.
 
             Returns
             -------
-            dict with:
-            - session: {language, session_id, session_name, venv_id}
-            - state: implementation-specific state representation (Python vars; shell cwd/env/functions/aliases)
+            dict with `session` ({language, session_id, session_name,
+            venv_id}) and `state` (Python vars; shell
+            cwd/env/functions/aliases).
             """
             detail = (detail or "summary").strip()
 
@@ -4756,8 +4803,7 @@ class CodeActActor(BaseCodeActActor):
             """
             Close a specific session and free resources.
 
-            Use this to proactively manage resources when you are done with a session.
-            This operation is **idempotent**: closing an already-closed/non-existent session
+            **Idempotent**: closing an already-closed/non-existent session
             returns `closed=False, reason="not_found"` rather than raising.
 
             Parameters
@@ -4770,9 +4816,8 @@ class CodeActActor(BaseCodeActActor):
             Returns
             -------
             dict:
-                - closed: bool
-                - reason: "success" | "not_found" | "error"
-                - session: {language, session_id, session_name}
+                closed (bool), reason ("success" | "not_found" | "error"),
+                session ({language, session_id, session_name}).
             """
             resolved: SessionKey | None = None
             if session_name:
@@ -4836,15 +4881,14 @@ class CodeActActor(BaseCodeActActor):
             """
             Close all active sessions across all languages.
 
-            This is a blunt cleanup tool. Prefer `close_session(...)` when you only
-            want to discard a specific polluted/unused session.
+            Blunt cleanup — prefer `close_session(...)` to discard one
+            specific polluted/unused session.
 
             Returns
             -------
             dict:
-                - closed_count: int
-                - languages: list[str] (languages that had sessions closed)
-                - details: per-language counts
+                closed_count (int), languages (list[str]), details
+                (per-language counts).
             """
             closed_counts: dict[str, int] = {
                 "python": 0,
@@ -5314,9 +5358,6 @@ class CodeActActor(BaseCodeActActor):
             venv_pool=self._venv_pool,
             shell_pool=self._shell_pool,
         )
-        # Note: __notification_up_q__ is injected dynamically by execute_code
-        # when it receives a _notification_up_q from the async tool loop.
-
         token = _CURRENT_SANDBOX.set(sandbox)
         env_token = _CURRENT_ENVIRONMENTS.set(sandbox_envs)
         llm_profile_token = CURRENT_ACT_LLM_PROFILE.set(act_llm_profile)
@@ -5562,7 +5603,9 @@ class CodeActActor(BaseCodeActActor):
                 "function_name : str\n"
                 "    Exact name of the function to execute.\n"
                 "call_kwargs : dict, optional\n"
-                "    Keyword arguments to pass to the function.\n"
+                "    Keyword arguments to pass to the function. Values keep\n"
+                "    the callee's declared types — numbers/booleans unquoted\n"
+                '    (``{"max_results": 5}``, not ``{"max_results": "5"}``).\n'
                 'language : str, default ``"python"``\n'
                 "    Language of the function.\n"
                 'state_mode : str, default ``"stateless"``\n'
@@ -5583,9 +5626,14 @@ class CodeActActor(BaseCodeActActor):
             )
 
         integration_summary = ""
+        has_integration_packages = False
         try:
             from unify.integration_status import enabled_summary_for_prompt
+            from unify.integration_status.discovery import (
+                discover_available_packages,
+            )
 
+            has_integration_packages = bool(discover_available_packages())
             integration_summary = enabled_summary_for_prompt()
         except Exception:
             integration_summary = ""
@@ -5596,6 +5644,18 @@ class CodeActActor(BaseCodeActActor):
             or None
         )
 
+        # Workspace-OAuth gate for the OAuth helper section — independent of
+        # the integration-packages gate: a workspace-email assistant with
+        # zero packages keeps the OAuth section. Cheap in-memory presence
+        # check; never forces a network sync.
+        has_workspace_oauth = False
+        try:
+            from unify.common.runtime_oauth import has_workspace_oauth_connection
+
+            has_workspace_oauth = has_workspace_oauth_connection()
+        except Exception:
+            has_workspace_oauth = False
+
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] building system prompt")
         system_prompt = build_code_act_prompt(
             environments=sandbox_envs,
@@ -5603,6 +5663,8 @@ class CodeActActor(BaseCodeActActor):
             can_store=effective_can_store,
             guidelines=effective_guidelines,
             discovery_first_policy=self.tool_policy is _USE_DEFAULT,
+            include_external_app_integration=has_integration_packages,
+            include_oauth_helper=has_workspace_oauth,
         )
         logger.debug(
             f"⏱️ [CodeActActor.act +{_act_ms()}] prompt built "

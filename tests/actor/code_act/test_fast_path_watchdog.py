@@ -7,8 +7,9 @@ Eval tests verifying the CodeActActor's fast-path watchdog behaviour.
 When the actor is in persist mode and receives ``[Fast-path result]``
 interjections, it should:
 
-- Escalate via ``notify()`` when the fast path clearly failed or attempted
-  work requiring capabilities it lacks (credentials, multi-step procedures).
+- Escalate via the ``send_notification`` tool when the fast path clearly
+  failed or attempted work requiring capabilities it lacks (credentials,
+  multi-step procedures).
 - Stay quiet (no escalation) when the fast path succeeded at a simple
   atomic action.
 """
@@ -39,8 +40,8 @@ def _make_actor() -> CodeActActor:
     return CodeActActor(
         environments=[computer_env],
         timeout=60,
-        # Fast-path escalation uses execute_code(notify(...)); discovery-first
-        # would hide that tool until FM/GM/KM search runs.
+        # Fast-path escalation uses the send_notification tool; keep the
+        # full tool surface visible so discovery-first doesn't hide it.
         tool_policy=None,
     )
 
@@ -136,9 +137,9 @@ async def test_actor_escalates_on_failed_credential_fast_path():
             "If this result looks wrong or incomplete — especially if the "
             "task falls within your loaded guidance or requires capabilities "
             "the fast path lacks (credentials, secrets, multi-step "
-            "procedures) — escalate via execute_code by calling "
-            '```python\nnotify({"type": "escalation", "message": "<what you can do '
-            'better>"})\n```.  Otherwise, no action needed.',
+            "procedures) — escalate by calling the send_notification tool "
+            'with a message starting with "Escalation:" describing what you '
+            "can do better.  Otherwise, no action needed.",
         )
 
         notification = await _wait_for_escalation(handle, timeout=60)
@@ -195,9 +196,9 @@ async def test_actor_no_escalation_on_successful_atomic_fast_path():
             "If this result looks wrong or incomplete — especially if the "
             "task falls within your loaded guidance or requires capabilities "
             "the fast path lacks (credentials, secrets, multi-step "
-            "procedures) — escalate via execute_code by calling "
-            '```python\nnotify({"type": "escalation", "message": "<what you can do '
-            'better>"})\n```.  Otherwise, no action needed.',
+            "procedures) — escalate by calling the send_notification tool "
+            'with a message starting with "Escalation:" describing what you '
+            "can do better.  Otherwise, no action needed.",
         )
 
         await _assert_no_escalation(handle, window=15)
@@ -252,9 +253,9 @@ async def test_actor_escalates_on_multi_step_fast_path_attempt():
             "If this result looks wrong or incomplete — especially if the "
             "task falls within your loaded guidance or requires capabilities "
             "the fast path lacks (credentials, secrets, multi-step "
-            "procedures) — escalate via execute_code by calling "
-            '```python\nnotify({"type": "escalation", "message": "<what you can do '
-            'better>"})\n```.  Otherwise, no action needed.',
+            "procedures) — escalate by calling the send_notification tool "
+            'with a message starting with "Escalation:" describing what you '
+            "can do better.  Otherwise, no action needed.",
         )
 
         notification = await _wait_for_escalation(handle, timeout=60)

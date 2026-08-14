@@ -277,6 +277,15 @@ def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
     (``graph.microsoft.com`` / ``www.googleapis.com``) with this handle will
     fail: the sandbox holds no real token by design.
 
+    The proxy gives you the FULL provider REST API (list, search, read,
+    rename, move, upload, delete, ``$batch``, ...) but enforces the
+    file-access allowlist: files and folders the user has not permitted are
+    masked — absent from listings/search and not-found on direct access, and
+    writes into a non-permitted location are rejected. Treat masked items as
+    nonexistent. Provider SDKs work too — point the client's base/endpoint at
+    the proxy (e.g. msgraph's ``request_adapter.base_url``, googleapiclient's
+    ``client_options.api_endpoint``).
+
     Parameters
     ----------
     provider:
@@ -293,6 +302,41 @@ def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
         microsoft_token = get_oauth_access_token("microsoft")
         google_token = get_oauth_access_token("google")
 
+    A raw HTTP call through the proxy::
+
+        import os, httpx
+        token = get_oauth_access_token("microsoft")
+        base = os.environ["MICROSOFT_GRAPH_BASE"]  # ~ https://graph.microsoft.com/v1.0
+        resp = httpx.get(
+            f"{base}/me/drive/root/children",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    Scope checks before calling
+    ---------------------------
+    When the provider has a granted-scopes secret (``GOOGLE_GRANTED_SCOPES``
+    / ``MICROSOFT_GRANTED_SCOPES``, space-separated raw OAuth scope strings,
+    not feature names), check the scope the specific API call requires
+    (from the provider's official docs/SDK) against it before calling:
+
+    - Google scopes are full URLs, e.g.
+      ``https://www.googleapis.com/auth/gmail.send``.
+    - Microsoft docs list short names (``Sites.Read.All``); the secret stores
+      them prefixed — search for
+      ``https://graph.microsoft.com/Sites.Read.All``. Only ``offline_access``
+      is stored bare.
+    - Secret missing entirely → proceed normally (expected for
+      admin-consented Microsoft enterprise tenants and self-managed tokens).
+      Scope present → proceed. Scope absent → do not attempt the call; tell
+      the user to reconnect the service from the Console Integrations tab
+      with the missing access.
+
+    Reuse in stored functions
+    -------------------------
+    Reusable OAuth integrations should call
+    ``get_oauth_access_token(provider)`` at runtime, each run; never store or
+    capture a concrete handle/token value inside a function implementation.
+
     Anti-patterns
     -------------
     - Do not call ``graph.microsoft.com`` / ``www.googleapis.com`` directly; use
@@ -303,6 +347,37 @@ def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
     from unify.provider_proxy.proxy import ensure_proxy_running
 
     return ensure_proxy_running().nonce
+
+
+def has_workspace_oauth_connection() -> bool:
+    """Cheapest presence check: is any workspace OAuth provider connected?
+
+    Used to gate the prompt's ``OAuth Access Token Helper`` section on
+    assistant config. Reads SecretManager's in-memory OAuth store (populated
+    by the forced sync at SecretManager construction) with an
+    ``os.environ`` fallback for legacy/test environments — it never forces
+    a network sync, so it is safe at prompt-build time. Best-effort: any
+    failure reports no connection rather than raising.
+    """
+    try:
+        secret_manager = _get_secret_manager()
+    except Exception:
+        secret_manager = None
+    for metadata in _OAUTH_PROVIDER_METADATA.values():
+        for name in (metadata.access_token_secret, metadata.refresh_token_secret):
+            if not name:
+                continue
+            try:
+                if secret_manager is not None and _read_access_token(
+                    secret_manager,
+                    name,
+                ):
+                    return True
+            except Exception:
+                pass
+            if os.environ.get(name):
+                return True
+    return False
 
 
 def get_refresh_token_oauth_env_overlay() -> dict[str, str]:
@@ -326,13 +401,20 @@ def connected_oauth_providers() -> list[str]:
     secret store is the connection: it is what the proxy will exchange for
     real access. No network call is made, so this is safe to evaluate at
     prompt-build time.
+
+    The lookup must go through :func:`_read_access_token`, which consults the
+    in-memory OAuth store first. Raw tokens are deliberately withheld from the
+    ``Secrets`` context, ``.env`` and ``os.environ``, so a plain secret lookup
+    sees a correctly-stored token as absent and reports every provider
+    disconnected — inverting the check into one that passes only when the
+    sandbox-isolation invariant has been broken.
     """
     secret_manager = _get_secret_manager()
     connected: list[str] = []
     for name, metadata in sorted(_OAUTH_PROVIDER_METADATA.items()):
         token_names = [metadata.refresh_token_secret, metadata.access_token_secret]
         if any(
-            _get_secret_value(secret_manager, token_name)
+            _read_access_token(secret_manager, token_name)
             for token_name in token_names
             if token_name
         ):
@@ -341,8 +423,13 @@ def connected_oauth_providers() -> list[str]:
 
 
 def get_oauth_prompt_context() -> str:
-    """Return actor-facing documentation for OAuth runtime helpers."""
-    doc = inspect.getdoc(get_oauth_access_token) or ""
+    """Return the actor-facing OAuth helper stub.
+
+    Deliberately a contract stub: the full procedure (proxy base URLs,
+    provider aliases, scope checks, examples, anti-patterns) lives in
+    ``get_oauth_access_token.__doc__`` and renders in-sandbox via
+    ``help(get_oauth_access_token)`` — do not duplicate it here.
+    """
     signature = (
         f"def {get_oauth_access_token.__name__}"
         f"{inspect.signature(get_oauth_access_token)}"
@@ -364,10 +451,18 @@ def get_oauth_prompt_context() -> str:
         )
     return (
         "### OAuth Access Token Helper: `get_oauth_access_token(...)`\n\n"
-        "`get_oauth_access_token(...)` is available inside `execute_code` "
-        "Python sessions and stored Python functions. It is a normal sandbox "
-        "helper, not a JSON tool call.\n\n"
+        "`get_oauth_access_token(provider)` is a sandbox global (not a "
+        "JSON tool) for connected-account provider REST:\n\n"
         f"{status}\n\n"
         f"```python\n{signature}\n```\n\n"
-        f"{doc}"
+        "It returns a short-lived **local capability handle** for the "
+        "workspace proxy — never a raw provider token. Do not print, log, "
+        "return, or store this handle. Send it as the Bearer token "
+        "against the proxy base URLs in `os.environ` "
+        "(`MICROSOFT_GRAPH_BASE`, `GOOGLE_DRIVE_BASE`, `GOOGLE_API_BASE`), "
+        "never the real provider hosts, which hold no valid token by "
+        "design. The proxy exposes the full provider REST surface but "
+        "masks files outside the user's allowlist — treat masked items "
+        "as nonexistent. Full procedure, provider aliases, scope checks, "
+        "and examples: `help(get_oauth_access_token)`."
     )

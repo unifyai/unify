@@ -203,7 +203,6 @@ async def _ensure_job_running(
                         required_contact_id(assistant_data, "boss_contact_id"),
                     ),
                     "org_id": _s("org_id"),
-                    "deploy_env": _s("deploy_env"),
                 },
                 timeout=5.0,
             )

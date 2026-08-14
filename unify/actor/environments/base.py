@@ -518,6 +518,28 @@ class _CompositeEnvironment(BaseEnvironment):
         """Expose wrapped environments for introspection."""
         return list(self._envs)
 
+    @property
+    def prompt_documented_names(self) -> frozenset[str]:
+        """Tool names the merged prompt documents inline.
+
+        The actor's FunctionManager search-overlap exclusion reads this to
+        decide which tools to hide from search results. Sub-environments
+        that declare ``prompt_documented_names`` contribute exactly that
+        subset; ones that don't are treated as fully prompt-documented
+        (their whole tool surface is contributed), preserving each
+        sub-environment's standalone semantics. Without this forwarding the
+        composite would fall back to "everything documented" and re-exclude
+        primitives its sub-environments deliberately left searchable.
+        """
+        documented: Set[str] = set()
+        for env in self._envs:
+            names = getattr(env, "prompt_documented_names", None)
+            if names is None:
+                documented |= set(env.get_tools().keys())
+            else:
+                documented |= set(names)
+        return frozenset(documented)
+
     def get_tools(self) -> Dict[str, ToolMetadata]:
         merged: Dict[str, ToolMetadata] = {}
         for env in self._envs:

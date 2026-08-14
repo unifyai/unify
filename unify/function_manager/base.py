@@ -144,7 +144,7 @@ class BaseFunctionManager(BaseStateManager):
         - Silent early returns or empty/"ok" results with no ``PHASE`` /
           ``SKIP`` / ``SOFT_FAIL`` trail — soft failures need logs, not just
           stack traces.
-        - Putting diagnostic detail in user-facing ``notify()`` — use the
+        - Putting diagnostic detail in user-facing notifications — use the
           stdlib ``logging`` module with those markers for retrospective
           forensics.
         - Stripping PHASE/SKIP/SOFT_FAIL logging when distilling a live

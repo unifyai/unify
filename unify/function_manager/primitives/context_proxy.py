@@ -16,6 +16,11 @@ class _ManagerProxy:
         self._manager = manager
         self._parent_chat_context = parent_chat_context
 
+    def __dir__(self):
+        # Forward to the wrapped manager so `dir(primitives.<manager>)`
+        # lists real method names in steered/context-forwarded execution.
+        return dir(self._manager)
+
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._manager, name)
         if not callable(attr) or self._parent_chat_context is None:

@@ -79,6 +79,23 @@ async def apply_managed_desktop_ready(
     if desktop_secret:
         SESSION_DETAILS.assistant.desktop_secret = desktop_secret
 
+    # The entitlement fields come from the assistant row read at bootstrap, so a
+    # desktop enabled after this pod started leaves them saying the add-on is
+    # off. The URL above would then be set while ``has_managed_desktop`` stayed
+    # false, and the two surfaces that reach this same VM would disagree: the
+    # browser resolves its container from the URL alone and works, while shell,
+    # python and file access consult entitlement and refuse with "no managed
+    # desktop is assigned" for the life of the pod. A VM that has just reported
+    # itself ready is the most current evidence available that the add-on is
+    # active, so it settles the question here rather than leaving a stale
+    # snapshot to contradict it.
+    # Only a real mode is written back: one caller derives ``vm_type`` from the
+    # same field it would overwrite, and the unset value is the string "none",
+    # which would round-trip an invalid mode straight back into the snapshot.
+    if vm_type in ("ubuntu", "windows"):
+        SESSION_DETAILS.assistant.desktop_mode = vm_type
+    SESSION_DETAILS.assistant.managed_desktop_status = "active"
+
     _t0 = time.perf_counter()
     await asyncio.to_thread(
         assistant_jobs.update_liveview_url,

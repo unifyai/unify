@@ -121,6 +121,27 @@ def test_reset_notification_omits_trigger_ack_suffix() -> None:
     assert "Mandatory:" not in text
 
 
+def test_unskipped_notification_is_silent_state_correction() -> None:
+    """An undone skip corrects the brain's model without a user-facing turn.
+
+    Skips are narrated ("we'll leave that for now"), so the mirror event must
+    both stay silent and override the earlier transcript memory — otherwise
+    the brain keeps calling a pending step skipped.
+    """
+    event = CoordinatorOnboardingEvent(
+        subtype="step_unskipped",
+        message="User un-skipped the 'whatsapp-number' onboarding step.",
+        details={"step_id": "whatsapp-number"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "step_unskipped" in text
+    assert "`whatsapp-number`" in text
+    assert "Do NOT message the user" in text
+    assert "pending again" in text
+    assert "ignore any earlier transcript memory" in text
+    assert "Mandatory:" not in text
+
+
 def test_session_started_chat_notification_pending_scripted_delivery() -> None:
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_session_started",
@@ -155,3 +176,28 @@ def test_reference_quiz_notification_stays_minimal() -> None:
     assert "Mandatory:" in text
     assert "Star Wars" not in text
     assert "pop-culture" not in text
+
+
+def test_reference_quiz_notification_scopes_duplicates_to_this_conversation() -> None:
+    """The no-duplicate rule must not strand a user whose clue is stale.
+
+    Confirm-instead-of-resend only applies to a clue sent in the current
+    conversation; a dispatch from an earlier session is lost from the user's
+    point of view and must trigger a fresh send, never an "on its way" claim.
+    """
+    event = CoordinatorOnboardingEvent(
+        subtype="reference_quiz_clue_requested",
+        message="User clicked the email reference-quiz trigger.",
+        details={
+            "channel": "email",
+            "tool_name": "send_email",
+            "trigger_step_id": "email-reference",
+            "reply_step_id": "email-reply",
+            "interaction": {"type": "reference_quiz"},
+        },
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "THIS conversation" in text
+    assert "earlier session" in text
+    assert "lost" in text
+    assert "fresh clue" in text

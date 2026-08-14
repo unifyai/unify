@@ -173,6 +173,40 @@ async def test_execute_function_does_not_expose_venv_id():
 
 
 @pytest.mark.asyncio
+async def test_execute_function_docstring_carries_call_kwargs_typing_contract():
+    """The ``call_kwargs`` exact-typing rule is a mechanism fact asserted on
+    the ``execute_function`` docstring, which feeds both the prompt Tools
+    section and the JSON tool schema."""
+    fm = _FakeFunctionManager()
+    actor = CodeActActor(
+        function_manager=fm,  # type: ignore[arg-type]
+        can_store=False,
+    )
+
+    try:
+        execute_function = actor.get_tools("act")["execute_function"]
+        if hasattr(execute_function, "fn"):
+            execute_function = execute_function.fn
+
+        doc = " ".join((inspect.getdoc(execute_function) or "").split())
+        schema = method_to_schema(
+            execute_function,
+            tool_name="execute_function",
+            include_class_name=False,
+        )
+    finally:
+        await actor.close()
+
+    assert "Values keep the callee's own types" in doc
+    assert '``{"max_results": 5}``' in doc
+    assert '``{"max_results": "5"}``' in doc
+    assert "fails type validation at the callee" in doc
+
+    description = " ".join(schema["function"]["description"].split())
+    assert "Values keep the callee's own types" in description
+
+
+@pytest.mark.asyncio
 async def test_execute_function_uses_stored_venv_when_caller_omits_it():
     fm = _FakeFunctionManager()
     actor = CodeActActor(

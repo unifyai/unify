@@ -166,6 +166,185 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
         assert len(full.content) > GUIDANCE_PREVIEW_CHARS
 
 
+# Core platform entries and the operative phrases their first
+# GUIDANCE_PREVIEW_CHARS chars must carry: GM search and list reads return
+# ~2,000-char previews, and the follow-up get_guidance call is not mandated,
+# so the preview window has to carry the operative contract.
+_PLATFORM_PREVIEW_CONTRACTS = {
+    "platform/self-knowledge": [
+        "https://docs.unify.ai/llms.txt",
+        "never reproduce",
+    ],
+    "platform/integrations-envelopes": [
+        "get_oauth_access_token(provider)",
+        "NOT a real token",
+        "MICROSOFT_GRAPH_BASE",
+        "`connect_required`",
+        "DO NOT attempt the call",
+    ],
+    "platform/manager-routing": [
+        "DATA INSIDE tables",
+        "FILES themselves",
+        "`primitives.ingestion.submit`",
+        "sends AS THE USER",
+    ],
+    "platform/desktop-procedures": [
+        "only on explicit request",
+        "`PermissionError`",
+        "NEVER modify their machine",
+        "query_llm(prompt, images=[...])",
+        "mixing spaces causes systematic misclicks",
+    ],
+}
+
+
+@_handle_project
+def test_platform_guidance_entries_exist_and_previews_carry_contract(
+    builtins_test_project,
+    monkeypatch,
+):
+    """Deterministic existence layer (no embeddings): each core platform
+    entry seeds idempotently, is retrievable via a non-semantic filter read,
+    and its preview window carries the operative contract."""
+    from unify.guidance_manager import builtins_catalog
+    from unify.guidance_manager.guidance_manager import GUIDANCE_PREVIEW_CHARS
+
+    # Embedding backfill needs the (currently key-gated) embeddings backend;
+    # the existence layer must run without it.
+    monkeypatch.setattr(
+        builtins_catalog,
+        "ensure_vector_column",
+        lambda *args, **kwargs: None,
+    )
+
+    entries = {
+        key: PLATFORM_GUIDANCE_ENTRIES[key] for key in _PLATFORM_PREVIEW_CONTRACTS
+    }
+    assert set(entries) == set(_PLATFORM_PREVIEW_CONTRACTS)
+
+    assert seed_builtin_guidance(entries=entries) is True
+    # Idempotent: converged reseed is a read-only no-op.
+    assert seed_builtin_guidance(entries=entries) is False
+
+    gm = GuidanceManager()
+    rows = gm.filter(filter="is_builtin == True", limit=100)
+    by_id = {row.guidance_id: row for row in rows}
+
+    for key, phrases in _PLATFORM_PREVIEW_CONTRACTS.items():
+        entry = PLATFORM_GUIDANCE_ENTRIES[key]
+        gid = stable_guidance_id(entry["title"])
+        assert gid in by_id, f"{key} missing from non-semantic filter read"
+        row = by_id[gid]
+        assert row.title == entry["title"]
+        # The stored preview (what list reads/search hits actually show) must
+        # carry every operative phrase inside the preview cap. Whitespace is
+        # normalized so line-wrapping tweaks do not break the pin.
+        preview = " ".join(row.content[:GUIDANCE_PREVIEW_CHARS].split())
+        for phrase in phrases:
+            assert phrase in preview, (
+                f"{key}: operative phrase {phrase!r} not in the first "
+                f"{GUIDANCE_PREVIEW_CHARS} chars"
+            )
+        # The full body round-trips verbatim through get_guidance.
+        full = gm.get_guidance(guidance_id=gid)
+        assert full.content == entry["content"]
+
+
+# Task-oriented platform entries: `platform/durable-tasks` plus the enriched
+# `platform/integrations-envelopes` body. Preview phrases must sit inside
+# content[:GUIDANCE_PREVIEW_CHARS] — GM search/list reads show only that
+# window and the follow-up get_guidance is not mandated — while body phrases
+# only need to survive in the full content behind get_guidance.
+_TASK_PREVIEW_CONTRACTS = {
+    "platform/durable-tasks": [
+        "`primitives.tasks.update(text)`",
+        "A draft NEVER fires",
+        "MANDATORY post-create verification",
+        "`provider_event_binding_id`",
+        "WORKAROUND (2026-08",
+        "can never be armed",
+        "matched exactly — copy them verbatim",
+        "literal string",
+        "`primitives.tasks.execute(task_id)`",
+        "contained child actor",
+    ],
+    # The body enrichment must not push the operative head past the preview
+    # cap, so the head phrases are re-pinned here.
+    "platform/integrations-envelopes": [
+        "get_oauth_access_token(provider)",
+        "NOT a real token",
+        "DO NOT attempt the call",
+    ],
+}
+_TASK_BODY_CONTRACTS = {
+    "platform/durable-tasks": [
+        "recurrence is a ledger invariant",
+        "draft|connecting|active|recovering|paused|needs_attention|removing",
+        "PHASE/SKIP/SOFT_FAIL",
+        "list_provider_trigger_catalog",
+        "Do not attach an untested entrypoint at creation",
+    ],
+    "platform/integrations-envelopes": [
+        "integration_tool_pending_approval",
+        "blocked_by_policy",
+        "in-memory OAuth store",
+        "reconnect account",
+    ],
+}
+
+
+@_handle_project
+def test_durable_tasks_guidance_entries_exist_and_previews_carry_contract(
+    builtins_test_project,
+    monkeypatch,
+):
+    """Deterministic existence layer (no embeddings) for the task-oriented
+    entries: idempotent seeding, non-semantic retrieval, operative contract
+    inside the preview window, and depth teaching in the body."""
+    from unify.guidance_manager import builtins_catalog
+    from unify.guidance_manager.guidance_manager import GUIDANCE_PREVIEW_CHARS
+
+    monkeypatch.setattr(
+        builtins_catalog,
+        "ensure_vector_column",
+        lambda *args, **kwargs: None,
+    )
+
+    entries = {key: PLATFORM_GUIDANCE_ENTRIES[key] for key in _TASK_PREVIEW_CONTRACTS}
+    assert set(_TASK_BODY_CONTRACTS) <= set(entries)
+
+    assert seed_builtin_guidance(entries=entries) is True
+    # Idempotent: converged reseed is a read-only no-op.
+    assert seed_builtin_guidance(entries=entries) is False
+
+    gm = GuidanceManager()
+    rows = gm.filter(filter="is_builtin == True", limit=100)
+    by_id = {row.guidance_id: row for row in rows}
+
+    for key, phrases in _TASK_PREVIEW_CONTRACTS.items():
+        entry = PLATFORM_GUIDANCE_ENTRIES[key]
+        gid = stable_guidance_id(entry["title"])
+        assert gid in by_id, f"{key} missing from non-semantic filter read"
+        row = by_id[gid]
+        assert row.title == entry["title"]
+        # Operative phrases must land inside the first GUIDANCE_PREVIEW_CHARS
+        # of the stored content specifically — not merely anywhere in the
+        # entry. Whitespace is normalized so line-wrapping tweaks don't break
+        # the pin.
+        preview = " ".join(row.content[:GUIDANCE_PREVIEW_CHARS].split())
+        for phrase in phrases:
+            assert phrase in preview, (
+                f"{key}: operative phrase {phrase!r} not in the first "
+                f"{GUIDANCE_PREVIEW_CHARS} chars"
+            )
+        # Depth teaching lives in the full body behind get_guidance.
+        full = gm.get_guidance(guidance_id=gid)
+        assert full.content == entry["content"]
+        body = " ".join(full.content.split())
+        for phrase in _TASK_BODY_CONTRACTS.get(key, []):
+            assert phrase in body, f"{key}: body phrase {phrase!r} missing"
+
+
 @_handle_project
 def test_default_library_semantic_search(builtins_test_project):
     seed_builtin_guidance()

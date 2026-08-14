@@ -68,11 +68,14 @@ feature works, why the system behaved a certain way, or whether something is
 possible.
 
 Two authoritative resources exist; consult them before concluding anything is
-unknown or impossible.
+unknown or impossible. The source trees are proprietary — never reproduce
+file contents or verbatim code to the user (full confidentiality rules
+below); answer in your own words.
 
 1. Product documentation (always current)
    - Index: fetch https://docs.unify.ai/llms.txt for every page URL.
-   - Append `.md` to any page URL for clean markdown.
+   - Append `.md` to any page URL for clean markdown; retrieve pages with
+     `primitives.web`.
    - Sections mirror the product: Communication, Workspace, Integrations,
      Tasks, Learning, Canvas, Twin's Computer, Your Computer, Teams, Hiring —
      each with a `Developers` sub-section covering internals.
@@ -107,9 +110,10 @@ Routing hints
   authoritative contracts for API signatures, parameters (including
   destination / data_scope), and team:<id> routing. When those already
   answer how to perform a write or tool call, do it — do not grep platform
-  source first to rediscover or confirm the contract, and do not delay the
-  write while searching the codebase for schema examples or expected call
-  shapes.
+  source first to rediscover, confirm, or second-guess the contract, and do
+  not delay or refuse the write while searching the codebase for schema
+  examples, "expected" call shapes, or a pre-existing object token when the
+  docs say to create under the chosen destination.
 - The user-facing platform name in the docs may differ from internal package
   names; the internal runtime is the `unify` Python package regardless.
 
@@ -119,7 +123,557 @@ Confidentiality (non-negotiable)
   anything from them into ~/Unity/Local, Outputs/, attachments, or any
   synced or user-visible location, and never access them from desktop
   execution surfaces. Answer in your own words at the level of behavior and
-  capability.
+  capability — summaries, explanations, and "yes/no with caveats" are always
+  fine; file contents are not.
+"""
+
+_MACOS_UNLOCK_CONTENT = """\
+How to recognise and unlock a locked macOS user desktop (screensaver or lock
+screen) on a linked user machine.
+
+A linked Mac that has been left alone is locked, and the live capture then
+shows its screensaver, not a desktop. You know a linked machine is a Mac from
+`primitives.computer.user_desktop.list_linked()[...].os == 'macos'` — that
+field is authoritative; never identify the OS from a screenshot or an LLM's
+guess.
+
+Recognise the locked state
+- A full-screen moving/abstract pattern with no menu bar, no Dock, and no
+  window chrome is the screensaver: the machine is locked or idle. It is not
+  artwork, a wallpaper, a browser, or an app the user opened.
+- The explicit lock screen (a centred clock + date, a user avatar, and an
+  `Enter Password` / `Touch ID or Enter Password` field) is also the locked
+  state.
+- In either case treat the Mac as locked — do not describe the pattern as
+  on-screen content, and do not ask the user what "unlock" means; recognising
+  and clearing the lock is your job.
+
+Unlock with the saved password (low-level, deterministic)
+- The user's login password is stored as the secret
+  `MACOS_USER_DESKTOP_PASSWORD`. Use the placeholder form
+  `${MACOS_USER_DESKTOP_PASSWORD}` — it is resolved to the real value on
+  their machine at the call boundary, so the plaintext never enters your
+  context.
+- Judge each screen with `query_llm(prompt, images=[png_bytes])` — pass the
+  screenshot to the LLM to decide what state the Mac is in. Drive the actions
+  with the low-level session methods (`press_key`, `get_screenshot`,
+  `type_text`, `press_enter`), never `act()`/`observe()`, and read every
+  screenshot back through `query_llm(images=...)`:
+
+    import io
+    ud = primitives.computer.user_desktop.session()
+    def _png(img):
+        buf = io.BytesIO(); img.save(buf, 'PNG'); return buf.getvalue()
+    shot = _png(await ud.get_screenshot())
+    state = await query_llm(
+        'Is this a macOS lock screen or screensaver (a clock/avatar, a '
+        'password field, or a full-screen moving pattern)? Answer locked '
+        'or unlocked.', images=[shot])
+    # If locked / screensaver:
+    await ud.press_key('esc')                    # wake the display
+    shot = _png(await ud.get_screenshot())
+    ready = await query_llm('Is a focused macOS password field visible '
+        'and ready for input? Answer yes or no.', images=[shot])
+    # Only once the field is confirmed present and focused:
+    await ud.type_text('${MACOS_USER_DESKTOP_PASSWORD}')  # placeholder; resolved on-device
+    await ud.press_enter()
+    shot = _png(await ud.get_screenshot())
+    done = await query_llm('Is this an unlocked desktop now (no lock '
+        'screen)? Answer yes or no, then briefly describe it.', images=[shot])
+
+- Confirm before you type: only `type_text` the password after a
+  `query_llm(images=...)` check confirms the macOS password field is on
+  screen and focused. Never type it blind into a screensaver or a focused
+  app — that could mis-send the secret or surface it on screen.
+- Never read, print, log, or echo the password value, and never ask the user
+  to paste their password into chat — only ever reference
+  `${MACOS_USER_DESKTOP_PASSWORD}`. If the placeholder stays literal or the
+  field never accepts it, the secret is probably unset: tell the user to
+  save it in the Console ('Save User Password').
+
+Reporting
+- If asked what's on the screen while it's the screensaver, say the Mac is
+  locked and offer to unlock it (or just unlock it if they already asked you
+  to look) — do not describe the screensaver pattern as content.
+- Fail honestly: if waking never reveals a login field, or the password is
+  not accepted, report that the Mac is locked and you could not drive the
+  login screen, and ask them to unlock it locally. Do not retry endlessly or
+  invent a description of a screen you cannot see.
+"""
+
+_USER_DESKTOP_FILES_CONTENT = """\
+How to read, fetch, or sync a linked user's desktop files ("sync my
+filesystem", "pull my desktop files", "back up my home folder", "what's in
+my Documents?").
+
+`primitives.computer.user_desktop.files` is the canonical path. It
+reads/writes the user's home over SFTP and mirrors what you pull into
+`~/Unity/Remote/<user_id>/`, returning local paths you can parse. It is a
+separate capability from the screen-control session — reach for it whenever
+the task is about file content rather than driving their screen.
+
+The model is mounting-like: browse cheaply, then fetch only what you need.
+- `files.list(path='', user_id=...)` — browse their home tree with no copy
+  ('' lists the home root; directories carry a trailing '/'). Start here; it
+  shows the full tree.
+- `files.pull(path, user_id=...)` — stage one home-relative file into the
+  mirror when you need its contents or want to edit it; returns its absolute
+  local path. This is your default fetch. Copies skip noise (caches, deps,
+  VCS metadata) and credential dirs (`.ssh`/`.gnupg`/`.aws`/…), so they're
+  never exfiltrated.
+- `files.sync(path='', user_id=...)` — bulk-mirror a whole subtree at once.
+  Use only when you genuinely need everything under it; scope to a subtree
+  (e.g. 'Documents') since '' (entire home) is heavy and slow. Prefer
+  `list`+`pull` otherwise.
+- `files.push(local_path, dest_path, user_id=...)` — write a file back
+  (saved as a timestamped copy; never overwrites their original).
+
+Example (read lazily, NOT via shell — browse, then pull):
+
+    names = await primitives.computer.user_desktop.files.list('Documents')
+    path = await primitives.computer.user_desktop.files.pull('Documents/report.pdf')
+    display(await primitives.files.parse(path))  # work from the staged mirror
+
+Such requests are first-class file requests — not ambiguous "sync to where?"
+questions. Default to `files.list` then `files.pull` for the specific paths
+in play; reserve `files.sync` for an explicit request to copy an entire
+folder. The destination is always your local mirror, so never ask the user
+where to sync to. Never harvest their files by running shell
+`find`/`cat`/`tar`/`base64`/`cp`/`scp`/`rclone` on
+`surface="user_desktop"` — that surface is only for commands the user
+explicitly wants executed on their machine, not for retrieving file content.
+"""
+
+_INTEGRATIONS_ENVELOPES_CONTENT = """\
+How to integrate with external services and connected apps (cloud storage,
+CRMs, Slack, project tools, accounting software, Google/Microsoft workspace):
+credentials, the workspace OAuth proxy, result envelopes, and scope checks.
+
+Operative contract
+- Credentials first: check `primitives.secrets.ask(...)` for stored API
+  credentials/tokens. If absent, tell the caller to connect the app from
+  the Console **Integrations** tab (plug icon). Static keys sync to the
+  SecretManager `.env`; read them with `os.environ` after confirming their
+  names.
+- Connected-account (BYOD) OAuth calls go through the LOCAL WORKSPACE PROXY,
+  never the real provider hosts. `get_oauth_access_token(provider)` returns
+  a proxy capability handle (NOT a real token) for the
+  `Authorization: Bearer ...` header, and the base URL must be the proxy:
+  `os.environ["MICROSOFT_GRAPH_BASE"]` (~ graph.microsoft.com/v1.0),
+  `os.environ["GOOGLE_DRIVE_BASE"]` (~ googleapis.com/drive/v3), or
+  `GOOGLE_API_BASE` for other Google services. Calls straight to
+  `graph.microsoft.com` / `www.googleapis.com` carry no valid token and
+  fail — the sandbox holds no real provider token by design.
+- No custom retry/sleep loops around provider tool calls — Orchestra/Unify
+  already retry transient failures inside `primitives.integrations.*` /
+  `execute_tool`. Call once; handle the FINAL ENVELOPE: `ok`,
+  `connect_required`, `confirmation_required`, `missing_scope`,
+  `provider_error`, …. Long domain waits (e.g. a GitHub rate-limit window
+  during a bulk crawl) are the only exception.
+- The user's connected Gmail/Outlook mailbox is first-class: use
+  `primitives.workspace_email.*`, never hand-rolled Gmail/Graph mail calls —
+  that sends AS THE USER; `primitives.comms.send_email` sends AS THE
+  ASSISTANT from its own managed mailbox (contact-graph aware).
+- Scope check: a required raw OAuth scope absent from a present
+  `GOOGLE_GRANTED_SCOPES` / `MICROSOFT_GRANTED_SCOPES` secret means DO NOT
+  attempt the call (procedure below); secret missing entirely → proceed
+  normally.
+
+Full integration pattern
+1. Check for credentials (`primitives.secrets.ask`) as above.
+2. Install the SDK: `install_python_packages` with the service's official
+   Python SDK (e.g. `google-cloud-storage`, `slack-sdk`, `boto3`, `stripe`).
+   Prefer Python SDKs over CLI tools: packages get isolated venvs and
+   dependency resolution; shell CLIs have no equivalent management.
+3. Integrate: for provider SDKs that read OAuth credentials from environment
+   variables, prefer the SDK's default credential behavior. For explicit
+   connected-account REST, use the proxy:
+
+       import os, httpx
+       token = get_oauth_access_token("microsoft")
+       base = os.environ["MICROSOFT_GRAPH_BASE"]
+       resp = httpx.get(
+           f"{base}/me/drive/root/children",
+           headers={"Authorization": f"Bearer {token}"},
+       )
+
+   Provider SDKs work too — point the client's base/endpoint at the proxy
+   (msgraph's `request_adapter.base_url`, googleapiclient's
+   `client_options.api_endpoint`). The proxy exposes the FULL provider REST
+   surface (list, search, read, rename, move, upload, delete, `$batch`, …)
+   but enforces the per-assistant file-access allowlist: files and folders
+   the user has not permitted are masked — absent from listings/search,
+   not-found on direct access, and writes into non-permitted locations are
+   rejected. Treat masked items as nonexistent.
+4. Store for reuse: after a successful integration, store reusable functions
+   via `store_skills` and document the setup via `GuidanceManager_add_guidance`.
+   Reusable OAuth integrations call `get_oauth_access_token(provider)` at
+   runtime; never store or capture a concrete access-token value inside a
+   function implementation.
+
+Checking OAuth scope before API calls
+- `GOOGLE_GRANTED_SCOPES` and `MICROSOFT_GRANTED_SCOPES` hold space-separated
+  raw OAuth scope strings — not feature names. Google scopes are full URLs
+  (`https://www.googleapis.com/auth/drive`,
+  `https://www.googleapis.com/auth/gmail.send`). Microsoft scopes are Graph
+  URLs (`https://graph.microsoft.com/Sites.Read.All`) plus the bare
+  `offline_access`.
+- Procedure: look up the scope(s) the specific API call requires from the
+  provider's official docs or SDK at call time, then check membership against
+  the granted-scopes secret. There is no per-feature catalog — do not rely on
+  one.
+- Microsoft normalization: provider docs list short names (`Sites.Read.All`);
+  the secret stores them URL-prefixed. Prefix the short name with
+  `https://graph.microsoft.com/` before searching (only `offline_access` is
+  stored bare). Example: SharePoint reads need `Sites.Read.All`, so search
+  `MICROSOFT_GRANTED_SCOPES` for
+  `https://graph.microsoft.com/Sites.Read.All` (or `.../Sites.ReadWrite.All`
+  for writes).
+- Decision rules: secret missing entirely → proceed normally (expected for
+  Microsoft enterprise admin-consented tenants and self-managed BYO tokens).
+  Secret present + required scope present → proceed. Secret present +
+  required scope absent → do not attempt the call; tell the user that access
+  is not currently enabled and they can add it by reconnecting the service
+  from the Console **Integrations** tab.
+
+Result envelopes in depth
+- `primitives.integrations.*` / `execute_tool` calls return the provider
+  execution envelope built by Orchestra. Treat every non-ok status as an
+  actionable outcome to explain to the user, not an exception to retry:
+  `connect_required` (no active connection — ask the user to connect the
+  app in Console Integrations), `confirmation_required` (see below),
+  `missing_scope`, `expired`, `blocked_by_policy`, `provider_error` /
+  `error`.
+- `confirmation_required` surfaces as a pending-approval payload
+  (`type: integration_tool_pending_approval`, `status: pending_approval`)
+  whose `approval` block carries `audit_id`, `connection_id`, `tool_id`,
+  the app/tool display names, `action_class`, `arguments_summary`,
+  `approval_options`, a `confirmation_token`, and `expires_at`. Sensitive,
+  write, destructive, and bulk-export actions go through this approved
+  confirmation flow — relay it to the user; never bypass it or blindly
+  re-fire the call.
+- Connection/status discovery: `primitives.integrations.search_integrations`
+  rows carry `deployment_status`, `connection_status`, `sync_status`, and a
+  ready-made `next_action` sentence — follow it. `sync_status ==
+  "tools_not_connected"` means provider-event triggers are available via
+  the existing workspace connection, but executing this app's tools needs a
+  Composio/Pipedream account added in Console Integrations.
+
+Credential flows in depth
+Three distinct credential classes, with different storage and visibility:
+1. Static keys/tokens (API keys the user pasted in Console Integrations):
+   synced from Orchestra by the SecretManager into the `Secrets` context,
+   `.env`, and `os.environ`. Readable directly after confirming names via
+   `primitives.secrets.ask(...)`.
+2. Connected-account OAuth tokens (raw access/refresh tokens): NEVER
+   mirrored into the `Secrets` context, `.env`, or `os.environ`. They live
+   only in the SecretManager's in-memory OAuth store and are used by the
+   trusted runtime (the localhost provider proxy and first-party managers
+   such as workspace email). Sandboxed code cannot read them by design.
+3. The sandbox-facing capability: `get_oauth_access_token(provider)`
+   returns the workspace proxy nonce — see below.
+Token freshness is the proxy's job, per upstream call: on a provider 401
+it forces a secret re-sync from Orchestra and retries once (the platform
+refresh job persists new tokens to Orchestra on a ~30-minute cadence); if
+the token is still stale it surfaces a clean "reconnect account" 401 —
+relay that to the user instead of retrying.
+
+Proxy-nonce contract in depth
+- The value returned by `get_oauth_access_token(provider)` is a local
+  capability handle scoped to this workspace's proxy — it is worthless
+  outside the sandbox and against real provider hosts. Never print, log,
+  return, or store it; stored/reusable functions must call
+  `get_oauth_access_token(provider)` at runtime on every run.
+- Provider aliases are accepted: `microsoft` / `msft` / `ms365` /
+  `microsoft_365` / `graph`, and `google` / `gmail` / `google_workspace` /
+  `drive`. Multiple providers can be used in one sandbox — request each
+  explicitly.
+- The proxy base URLs and nonce are overlaid into venv and persistent
+  shell/subprocess sandboxes on each execution, so long-lived sessions
+  keep working across proxy restarts — read the base from `os.environ`
+  at call time rather than caching it.
+"""
+
+_MANAGER_ROUTING_CONTENT = """\
+Which state manager to use when two overlap: `primitives.data` vs
+`primitives.files`, data vs `primitives.ingestion` (reading vs storing), and
+`primitives.workspace_email` vs `primitives.comms` email.
+
+CRITICAL: `primitives.data.*` vs `primitives.files.*` — these serve
+DIFFERENT purposes, do not confuse them:
+- `primitives.data.*`: ALL analytical and data operations — filtering,
+  searching, aggregating, joining. Works on any Unify context (`Data/*`,
+  `Files/*`, `Knowledge/*`). Use when the question is about DATA INSIDE
+  tables, regardless of where those tables came from. Always prefer
+  server-side `filter=` / `reduce` / join variants over fetching rows into
+  Python loops.
+- `primitives.files.*`: file-specific operations — describing the storage
+  layout of an uploaded/received file, listing files in the file registry,
+  parsing documents, rendering PDFs/Excel sheets as images for visual
+  inspection. Use when the question is about FILES themselves (metadata,
+  layout, parsing) or when you need file-path-based context resolution.
+  (Worked examples at the end.)
+
+Reading vs storing: `primitives.data.*` vs `primitives.ingestion.*`
+- `data` reads and reshapes what is already stored (filter, search, reduce,
+  join, update_rows). STORING new data is not data's job: anything that puts
+  NEW data somewhere queryable — API responses, connected-app pulls, files,
+  folders, table reshapes — goes through `primitives.ingestion.submit`.
+- If an ingestion run fails, read `get_logs(run_id)`, fix the cause, and
+  submit again. Do not store the data another way (`create_table` +
+  `insert_rows`, hand-written loops): those write rows nothing checkpoints,
+  verifies against a declared count, or can resume, so a part-way failure
+  leaves a table that looks complete. Report the limitation instead.
+
+Email: `primitives.workspace_email.*` vs `primitives.comms.send_email`
+- `workspace_email` sends AS THE USER from their own CONNECTED Google
+  Workspace / Microsoft 365 mailbox (the OAuth-linked account);
+  `comms.send_email` sends AS THE ASSISTANT from its managed mailbox and is
+  wired into the contact graph.
+- Choose `comms.send_email` for assistant-owned outreach;
+  `workspace_email.send` only when the message must originate from the
+  user's connected account. `workspace_email` recipients are plain
+  email-address strings, not contact ids; it requires a connected workspace
+  account and errors clearly if none is connected.
+
+Manager selection priorities (when in doubt, the most specific domain wins):
+1. `transcripts` for historical communications (what was said/written)
+2. `contacts` for people/relationship information
+3. `tasks` for work items, deadlines, assignments
+4. `web` for current external information (weather, news, real-time data)
+5. `files` when dealing with specific documents or file-level operations
+6. `data` for tabular Orchestra contexts (`Data/*` and other tables):
+   filter, reduce, join, update_rows — never client-scan large tables in
+   Python
+
+Typed claim / procedure catalogues (`KnowledgeManager_*`,
+`GuidanceManager_*`) are top-level Actor JSON tools, not `primitives.*` —
+use them for durable domain claims and SOPs.
+
+Worked examples (data vs files):
+- "What tables exist under Data/examplehousing?" ->
+  `primitives.data.list_tables(prefix=...)` (data)
+- "Describe the schema of the repairs table" ->
+  `primitives.data.describe_table(...)` (data)
+- "What's in the uploaded PDF?" ->
+  `primitives.files.describe(file_path=...)` (files)
+- "Render page 3 of the report as an image" ->
+  `primitives.files.render_pdf(...)` (files)
+"""
+
+_DESKTOP_PROCEDURES_CONTENT = """\
+Whose desktop to drive and how to read a screen: your managed desktop vs a
+user's linked desktop (rules of engagement), screenshots for the user vs the
+LLM, and coordinate spaces.
+
+Operative contract
+- `primitives.computer.desktop` and `primitives.computer.web` always drive
+  YOUR OWN managed desktop (the machine in the Console live view) — the
+  default workspace for every task. `primitives.computer.user_desktop`
+  drives a user's own physical machine linked in the Console; it is never in
+  the live view and is their personal computer.
+- user_desktop rules of engagement: (1) only on explicit request — the user
+  clearly asked for something on THEIR computer; (2) clarify when unsure
+  which machine/target is meant rather than guessing; (3) confirm before
+  consequential actions (destructive, irreversible, sends/deletes/purchases
+  on their behalf); (4) a `PermissionError` means control was revoked —
+  stop immediately, do not retry, continue only on your own desktop;
+  (5) NEVER modify their machine to work around an error (no installing
+  software, package managers, or patch files — report the failure and stop);
+  (6) discover machines with `primitives.computer.user_desktop.list_linked()`
+  and select with `session(user_id=...)`.
+- Viewing state: `get_screenshot()` returns a PIL Image; `display()` renders
+  it for the USER to see. To INTERPRET a screen yourself, send it to the LLM
+  with `query_llm(prompt, images=[...])` — do not call `observe()`/`act()`
+  just to get a description, and do not relay a weaker side model's caption.
+  Take the OS from `user_desktop.list_linked()[...].os`, never from pixels.
+- Coordinate spaces are NOT interchangeable: desktop and visible-web share
+  the full-display space; headless (`visible=False`) screenshots are
+  viewport-only. Read `click(x, y)` coordinates from the SAME session's
+  `get_screenshot()` — mixing spaces causes systematic misclicks.
+- Their files: use `primitives.computer.user_desktop.files`
+  (`list`/`pull`/`push`, bulk `sync`), never shell
+  `find`/`cat`/`tar`/`base64`/`cp`/`scp`/`rclone` on
+  `surface="user_desktop"` — search guidance for "user desktop files".
+
+Acting on a user's linked machine (on explicit request):
+
+    ud = primitives.computer.user_desktop.session()
+    display(await ud.get_screenshot())
+    await ud.act('Open the Downloads folder')
+
+For a pure "look and tell me what's on my screen" request, capture the
+screenshot and read it with `query_llm(prompt, images=[png_bytes])` — you do
+not need `observe()` or `act()` for perception. A linked Mac left alone
+shows its screensaver: treat that as a LOCKED machine, never as on-screen
+content to describe (search guidance for "unlock macOS user desktop").
+
+Viewing computer state in detail
+
+    # Show the user a screenshot:
+    display(await primitives.computer.desktop.get_screenshot())
+
+    # Interpret a screen with the vision model:
+    import io
+    img = await primitives.computer.desktop.get_screenshot()
+    buf = io.BytesIO(); img.save(buf, 'PNG')
+    answer = await query_llm('Describe what is on this screen.',
+                             images=[buf.getvalue()])
+
+Observation space: screenshots from native sessions (desktop and visible
+web) may be downscaled to a model-aware observation space before being
+returned. `act()` uses the same observation space internally and scales
+coordinates back up before dispatching to xdotool. If you call low-level
+`click(x, y)`, the coordinates must match the pixel space of the screenshot
+returned by `get_screenshot()` on that same session. `display()` and
+`query_llm(images=...)` both fit images to observation space automatically.
+
+Coordinate spaces, precisely:
+- Desktop and visible web (web-vm): screenshots capture the full physical
+  display in observation space (including browser chrome, address bar,
+  taskbar, window decorations). Both share the same coordinate system.
+- Headless web (`visible=False`): screenshots capture only the page
+  viewport; coordinates are viewport-relative.
+- To `session.click(x, y)` on a HEADLESS web session, read coordinates from
+  `session.get_screenshot()` — never from
+  `primitives.computer.desktop.get_screenshot()`. To click on the desktop or
+  in a VISIBLE web session, read coordinates from the desktop or
+  visible-session screenshot (same display space).
+"""
+
+_DURABLE_TASKS_CONTENT = """\
+How to create, verify, arm, and run durable tasks — work that happens
+later, repeatedly, or on future inbound events: schedules, recurring
+cadences, communication and provider-event triggers, offline jobs.
+
+Operative contract
+- Create and edit through the text-driven mutation loop:
+  `primitives.tasks.update(text)` handles ALL durable task mutations,
+  including one-shot creates and field edits. Example:
+
+      await primitives.tasks.update(
+          'Create a live task named Weekly digest (marketing) with '
+          'description Summarize the week and email it to Dana, '
+          'repeating every Monday at 09:00 UTC.'
+      )
+
+- Armed vs draft: a task only fires while armed — `enabled=True` plus a
+  resolved `schedule.start_at` or trigger. A draft NEVER fires:
+  provider-event triggers are born in state `draft` and stay inert until
+  enabled with resolved bindings. Say "live"/"armed" in the create text
+  rather than leaving a draft.
+- MANDATORY post-create verification: after every create, call
+  `primitives.tasks.ask(...)` and confirm (1) the exact fields, (2) it
+  is armed (`enabled=True`; provider trigger state not `draft`), and
+  (3) trigger bindings resolved — a provider-event task needs a
+  non-empty `provider_event_binding_id`; a communication trigger needs
+  named senders resolved to contact ids. WORKAROUND (2026-08, retire
+  once the Orchestra typed-POST bug is fixed): the typed `POST /tasks`
+  route can 400 on provider-event creates, and the `update_task`
+  fallback then writes a task whose trigger has NO binding — it looks
+  created but can never be armed. Verification is the only guard.
+- Verbatim copy: quoted task names, descriptions, and reference tokens
+  (`Ref: TASK-…`) are matched exactly — copy them verbatim, including
+  punctuation and parenthetical suffixes; creates reject duplicates,
+  and verification and later lookups depend on the literal string.
+- `primitives.tasks.execute(task_id)` runs one instance now: a
+  contained child actor interprets the task; returns a steerable handle.
+
+Task model and taxonomy
+A definition row carries authored intent only; every wake is projected by
+Orchestra into a `Tasks/Executions` run row, where run state and outcomes
+live. `schedule` and `trigger` are mutually exclusive on one task.
+- scheduled: `schedule.start_at` (ISO-8601) with no `repeat` and no
+  `trigger` — a one-shot. After it runs it is disarmed and can never be
+  re-armed; create a new task instead of re-running it.
+- recurring: `schedule` plus `repeat` patterns (minutely/hourly for
+  sub-daily intervals; daily/weekly/monthly/yearly for calendar
+  cadences). The successor occurrence is projected by Orchestra when a
+  run is marked running — recurrence is a ledger invariant, and the
+  definition stays armed across runs.
+- triggered (communication): `trigger.kind="communication"` names a
+  `medium` (email/SMS/call/…) with optional `from_contact_ids` /
+  `omit_contact_ids` filters and a `recurring` flag (True returns the
+  task to the triggerable state after each completion).
+- provider_event: `trigger.kind="provider_event"` binds a third-party
+  trigger — `connection_id`, `backend_id`, `canonical_app_slug`,
+  `provider_trigger_slug`, and `trigger_config` from the staged catalog
+  schema, plus a `state` of draft|enabled|paused that is independent of
+  `task.enabled`.
+- offline is a delivery lane, not a task type: `offline=True` runs in
+  the hidden headless lane without the live assistant runtime, so the
+  run is not steerable from chat. Do not mark tasks offline unless
+  asked. `requires_filesystem` / `requires_computer` independently hold
+  the run until the synced Local workspace or a computer-use desktop is
+  ready.
+- `deadline` is a calendar due date; `start_at` is when work should
+  begin; `max_runtime_seconds` bounds one attempt's wall clock. For
+  short predictable work set only `start_at`. `priority` is
+  low|normal|high|urgent; `tags` carry no scheduling semantics.
+- `enabled=False` disarms everything: schedules and triggers do not
+  activate, and manual execute is rejected until re-enabled.
+
+Update semantics (`update_task`)
+- Only provided fields change. `start_at`/`deadline`/`repeat`/`trigger`
+  distinguish omitted from explicit None: None clears the field, and
+  clearing the schedule sweeps `repeat` with it unless a new repeat is
+  set in the same call. Convert scheduled→triggered in one call:
+  `trigger=..., start_at=None`.
+- Provider-event authored edits are revision-checked (`task_revision`)
+  and cannot be mixed with runtime fields (e.g. `enabled`) in one call.
+- Deployment-owned tasks (`custom_hash` set, deployment-managed) refuse
+  runtime edits of authored fields — edit the bundle source and re-sync.
+  A workflow-planted task is released to the user on the first authored
+  edit and stops being reconciled.
+
+Binding resolution in depth
+- Communication triggers: resolve named senders to contact ids before
+  creating — `from_contact_ids` is a list of contact ids, and a filter
+  that never got resolved to ids cannot match. Unset matches any
+  sender; `omit_contact_ids` overrides.
+- Provider-event triggers: Orchestra manages a subscription lifecycle
+  keyed by the task's stable `provider_event_binding_id` (required on
+  every triggerable provider-event row). The composed lifecycle state is
+  draft|connecting|active|recovering|paused|needs_attention|removing;
+  `active` requires the task enabled, the authored trigger state
+  `enabled`, healthy runtime, open local acceptance, and an active
+  generation id. Inspect with `get_provider_trigger_health(task_id=...)`
+  and drive with the pause/resume/retry provider-trigger tools.
+
+Entrypoint vs description-driven execution
+- Default to description-driven: `entrypoint=None` makes the task
+  agentic — the due wake calls `primitives.tasks.execute(task_id=...)`
+  and a contained child actor interprets the name, description, and
+  metadata. Put the operative context into the description.
+- Do not attach an untested entrypoint at creation. Entrypoint
+  persistence should follow an explicit user request or a successful
+  run reviewed as stable enough to store; offline promotion additionally
+  requires separate certification.
+- Stored entrypoints: prefer `async def` + `await`; never nest
+  `asyncio.run(...)` (offline Jobs already own the loop — use
+  `run_coro_sync` for a sync façade); keep expressive stdlib `logging`
+  PHASE/SKIP/SOFT_FAIL trails so soft outcomes (empty results, skips,
+  degraded fallbacks) leave evidence; focused `query_llm(...)` calls for
+  bounded semantic judgment are fine.
+
+Provider trigger catalog discovery
+- `list_provider_trigger_connections(...)` shows active assistant-owned
+  integration connections that can back provider triggers; then
+  `list_provider_trigger_catalog(canonical_app_slug=..., limit=...,
+  offset=...)` lists staged trigger slugs and config schemas for those
+  connected apps, and `describe_provider_trigger(provider_trigger_slug=...,
+  backend_id=...)` returns one trigger's full schema. An empty catalog
+  usually means no matching connection yet, not that the provider lacks
+  the trigger — connect the app first, then re-list.
+- `list_provider_trigger_resources(...)` enumerates provider-side
+  resources (channels, calendars, repos, …) for `trigger_config` values.
+
+Execution guards (`execute`)
+- Rejected: disabled tasks, one-shots that already ran, a task invoking
+  its own task_id within its execution chain, and a wake targeting an
+  instance that is already active. Concurrent instances of the same
+  task_id from distinct wakes are allowed — serialize in the entrypoint
+  if needed.
 """
 
 _SHARING_LINKS_CONTENT = """\
@@ -184,13 +738,55 @@ documents into collections), download the files and hand them to
 """
 
 PLATFORM_GUIDANCE_ENTRIES: Dict[str, Dict[str, str]] = {
-    "platform/system-map": {
+    "platform/self-knowledge": {
         "title": "[platform] Answering questions about the Unify platform itself",
         "content": _PLATFORM_MAP_CONTENT,
     },
     "platform/workspace-sharing-links": {
         "title": "[platform] Reading OneDrive/SharePoint sharing links via the workspace",
         "content": _SHARING_LINKS_CONTENT,
+    },
+    "platform/integrations-envelopes": {
+        "title": (
+            "[platform] Integrating external apps: credentials, workspace "
+            "OAuth proxy, result envelopes, and scopes"
+        ),
+        "content": _INTEGRATIONS_ENVELOPES_CONTENT,
+    },
+    "platform/manager-routing": {
+        "title": (
+            "[platform] Choosing between overlapping state managers: data vs "
+            "files vs ingestion, workspace email vs comms"
+        ),
+        "content": _MANAGER_ROUTING_CONTENT,
+    },
+    "platform/desktop-procedures": {
+        "title": (
+            "[platform] Driving desktops and reading screens: your desktop "
+            "vs a user's linked desktop, screenshots, coordinate spaces"
+        ),
+        "content": _DESKTOP_PROCEDURES_CONTENT,
+    },
+    "platform/macos-user-desktop-unlock": {
+        "title": (
+            "[platform] Unlock a locked macOS user desktop "
+            "(screensaver / lock screen)"
+        ),
+        "content": _MACOS_UNLOCK_CONTENT,
+    },
+    "platform/user-desktop-files": {
+        "title": (
+            "[platform] User desktop files: read, pull, and sync a linked "
+            "user's filesystem"
+        ),
+        "content": _USER_DESKTOP_FILES_CONTENT,
+    },
+    "platform/durable-tasks": {
+        "title": (
+            "[platform] Durable tasks: creating, verifying, arming, and "
+            "running scheduled, triggered, and provider-event tasks"
+        ),
+        "content": _DURABLE_TASKS_CONTENT,
     },
 }
 

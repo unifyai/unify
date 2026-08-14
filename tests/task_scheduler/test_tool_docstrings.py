@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import subprocess
@@ -46,6 +47,24 @@ def test_all_update_tools_have_sufficient_docstrings():
         assert (
             len(doc) >= 100
         ), f"Docstring for tool '{name}' is too short (len={len(doc)})"
+
+
+def test_ask_and_update_docstrings_carry_verbatim_copy_contract():
+    """The verbatim-identifier-copy contract lives in the TaskScheduler
+    docstrings (not in the actor prompt), so it must be visible on the docs
+    every consult surface resolves — ``help()`` and FM search both read
+    ``TaskScheduler.ask``/``update``, whose ``__doc__`` and ``__wrapped__``
+    come from the base docstrings via ``functools.wraps``."""
+    for method in (TaskScheduler.ask, TaskScheduler.update):
+        doc = " ".join((inspect.getdoc(method) or "").split())
+        assert "matched exactly" in doc, method
+        assert "copy them verbatim" in doc, method
+        assert "depend on the literal string" in doc, method
+        # FM search unwraps ``__wrapped__`` to the underlying function; the
+        # contract must survive there too.
+        fn = inspect.unwrap(method)
+        unwrapped_doc = " ".join((inspect.getdoc(fn) or "").split())
+        assert "copy them verbatim" in unwrapped_doc, method
 
 
 def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:

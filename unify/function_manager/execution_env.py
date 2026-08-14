@@ -89,6 +89,9 @@ def create_base_globals() -> Dict[str, Any]:
             "callable",
             "issubclass",
             "dir",
+            # The prompt's introspection bridge teaches `help(...)` for
+            # live docs in-sandbox; site injects it into builtins.
+            "help",
             "vars",
             "iter",
             "next",

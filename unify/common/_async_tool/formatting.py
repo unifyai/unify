@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import os
+import tempfile
+import uuid
 from contextlib import suppress
-from typing import Any, List, Protocol, Union, runtime_checkable
+from typing import Any, List, Optional, Protocol, Union, runtime_checkable
 import json
 
 from ..llm_helpers import _dumps, _strip_image_keys, _collect_images
@@ -12,22 +15,59 @@ from ..llm_helpers import _dumps, _strip_image_keys, _collect_images
 TOOL_RESULT_TEXT_CHAR_LIMIT = 32_000
 
 
+def _spill_full_tool_text(text: str) -> Optional[str]:
+    """Best-effort: persist the full untruncated tool text to a tmp file.
+
+    Returns the file path on success, or ``None`` on any failure — spilling
+    must never break the tool-result path.
+
+    The spill directory is per-process (keyed by PID) because no session
+    identifier reaches this module-level helper; callers in ``tools_data.py``
+    invoke ``serialize_tool_content`` without session context, and plumbing
+    one through would widen a shared signature for no functional gain.
+    """
+    # No cleanup beyond OS tmp reaping — unbounded tmp growth in long-lived
+    # pods is the ceiling here. Upgrade path: delete the spill dir when the
+    # owning tool loop closes.
+    try:
+        spill_dir = os.path.join(
+            tempfile.gettempdir(),
+            f"unify-tool-results-{os.getpid()}",
+        )
+        os.makedirs(spill_dir, mode=0o700, exist_ok=True)
+        path = os.path.join(spill_dir, f"{uuid.uuid4()}.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+    except Exception:
+        return None
+
+
 def _truncate_tool_text(
     text: str,
     *,
     limit: int = TOOL_RESULT_TEXT_CHAR_LIMIT,
 ) -> str:
-    """Keep head+tail of oversized tool text with an explicit omission marker."""
+    """Keep head+tail of oversized tool text with an explicit omission marker.
+
+    On truncation the full original text is spilled (best-effort) to a tmp
+    file named in the marker, so the model can recover the omitted middle via
+    ``execute_code`` instead of re-running the call.
+    """
     if len(text) <= limit:
         return text
     omitted = len(text) - limit
     head = limit // 2
     tail = limit - head
-    return (
-        f"{text[:head]}\n\n"
-        f"...[{omitted} characters omitted from tool result]...\n\n"
-        f"{text[-tail:]}"
-    )
+    spill_path = _spill_full_tool_text(text)
+    if spill_path is not None:
+        marker = (
+            f"...[{omitted} characters omitted — full text saved to "
+            f"{spill_path}; readable from execute_code when running locally]..."
+        )
+    else:
+        marker = f"...[{omitted} characters omitted from tool result]..."
+    return f"{text[:head]}\n\n{marker}\n\n{text[-tail:]}"
 
 
 def _truncate_llm_content_blocks(blocks: List[dict]) -> List[dict]:

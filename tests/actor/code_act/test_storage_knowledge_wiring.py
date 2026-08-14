@@ -51,7 +51,7 @@ def _storage_actor_stub(*, with_knowledge: bool = True):
 
 
 def test_storage_tools_include_knowledge_manager_triad():
-    tools, _ = _build_storage_tools(actor=_storage_actor_stub(), ask_tools={})
+    tools, _, _ = _build_storage_tools(actor=_storage_actor_stub(), ask_tools={})
     km_tools = {name for name in tools if name.startswith("KnowledgeManager_")}
     assert km_tools >= {
         "KnowledgeManager_search",
@@ -68,7 +68,7 @@ def test_storage_tools_include_knowledge_manager_triad():
 
 
 def test_storage_tools_omit_knowledge_when_manager_absent():
-    tools, _ = _build_storage_tools(
+    tools, _, _ = _build_storage_tools(
         actor=_storage_actor_stub(with_knowledge=False),
         ask_tools={},
     )

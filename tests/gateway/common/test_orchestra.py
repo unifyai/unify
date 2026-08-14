@@ -163,3 +163,17 @@ async def test_lookup_assistant_raises_404_on_empty_info(
             await orchestra.lookup_assistant("user@example.com", credentials)
 
     assert exc.value.status_code == 404
+
+
+def test_contact_lookup_from_fields_omits_purged_assistant_fields() -> None:
+    """Orchestra 422s the whole request on one unknown field name, and
+    ``_lookup_assistant`` surfaces any non-200 as 404 — so a field left in
+    this list after being purged from Orchestra's Assistant read model
+    silently downgrades every email-keyed lookup (BYOD token resolution
+    included) to its caller's not-found path. ``deploy_env`` (purged
+    2026-06-10) got stuck here and broke exactly that way in production.
+    """
+    from unify.gateway.adapters import common as adapters_common
+
+    assert "deploy_env" not in orchestra.ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    assert "deploy_env" not in adapters_common.ADMIN_CONTACT_LOOKUP_FROM_FIELDS

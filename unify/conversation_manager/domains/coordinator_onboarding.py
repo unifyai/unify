@@ -50,6 +50,9 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
     "workspace_connected": "The user just connected their workspace to you.",
     "integration_connected": "The user just connected a new integration to you.",
     "step_skipped": "The user just skipped an onboarding step.",
+    "step_unskipped": (
+        "The user just un-skipped an onboarding step — it is pending again."
+    ),
     "onboarding_step_started": "The user just started an onboarding step.",
     "onboarding_step_reset": (
         "The user just reset a previously-completed onboarding step — it is "
@@ -107,6 +110,7 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
 # ``orchestra/services/coordinator_service.py``.
 _SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
 _SUBTYPE_STEP_SKIPPED = "step_skipped"
+_SUBTYPE_STEP_UNSKIPPED = "step_unskipped"
 _SUBTYPE_STEP_STARTED = "onboarding_step_started"
 _SUBTYPE_STEP_RESET = "onboarding_step_reset"
 _SUBTYPE_STEP_COMPLETED = "onboarding_step_completed"
@@ -135,6 +139,7 @@ _IMMEDIATE_TRIGGER_ACK_GUIDANCE = (
 _SUBTYPES_WITHOUT_USER_ACK = frozenset(
     {
         _SUBTYPE_ONBOARDING_SESSION_STARTED,
+        _SUBTYPE_STEP_UNSKIPPED,
         _SUBTYPE_STEP_RESET,
         _SUBTYPE_STEP_COMPLETED,
         _SUBTYPE_ONBOARDING_RENDER_UPDATED,
@@ -434,10 +439,13 @@ def _coordinator_onboarding_notification_text(
             " This notification means the user clicked the trigger row — that "
             "click unlocked my outbound tool. A verbal ask or 'go ahead' on a "
             "call before they clicked does NOT count; if that happened, tell them "
-            "to click the matching row in the Onboarding checklist. If I have "
-            "already sent a clue on this channel for this step, I do NOT send "
-            "another — I confirm it's on its way. I send a clue now only if none "
-            "has gone out yet after their click."
+            "to click the matching row in the Onboarding checklist. If I sent a "
+            "clue on this channel earlier in THIS conversation, I do NOT send "
+            "another — I confirm it's on its way. A clue dispatched in an "
+            "earlier session (the progress block's 'since' timestamp predates "
+            "this conversation) counts as lost: the user no longer has it in "
+            "front of them, so I send a fresh clue now instead of pointing at "
+            "the old one — and I never tell them an old clue is on its way."
         )
         clue_note = (
             " I invent my own short sci-fi quote clue on the spot — there is "
@@ -574,6 +582,27 @@ def _coordinator_onboarding_notification_text(
             "checklist. Do not say the skipped step is complete."
         )
         text = f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_STEP_UNSKIPPED:
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = details.get("step_id")
+        step_note = (
+            f" The un-skipped step id is `{step_id}`."
+            if isinstance(step_id, str)
+            else ""
+        )
+        guidance = (
+            "Do NOT message the user about this and do NOT run anything — this "
+            "is a silent state update. The user undid their skip, so this step "
+            "(and any steps that were skipped along with it) is pending again: "
+            "never say it is skipped or that we're leaving it for later, even "
+            "if I acknowledged the earlier skip in this conversation. The 'My "
+            "onboarding progress (live)' block is the only source of truth for "
+            "what is skipped — ignore any earlier transcript memory of the "
+            "skip."
+        )
+        text = f"{subtype_hint} {body}{step_note} {guidance}".strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_RESET:

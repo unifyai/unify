@@ -2013,9 +2013,10 @@ class ConversationManagerBrainActionTools:
                 f"If this result looks wrong or incomplete — especially if "
                 f"the task falls within your loaded guidance or requires "
                 f"capabilities the fast path lacks (credentials, secrets, "
-                f"multi-step procedures) — escalate by calling "
-                f'notify({{"type": "escalation", "message": "<what you can '
-                f'do better>"}}).  Otherwise, no action needed.',
+                f"multi-step procedures) — escalate by calling the "
+                f"send_notification tool with a message starting with "
+                f'"Escalation:" describing what you can do better.  '
+                f"Otherwise, no action needed.",
             )
             return str(result) if result is not None else "done"
 
