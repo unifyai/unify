@@ -442,7 +442,7 @@ async def test_offline_certification_evidence_tool_does_not_execute_entrypoint()
             "function_id": kwargs["function_id"],
         }
 
-    tools, _ = _build_storage_tools(
+    tools, _, _ = _build_storage_tools(
         actor=_storage_actor_stub(),
         ask_tools={},
         task_entrypoint_review={
@@ -499,7 +499,7 @@ async def test_offline_certification_rejection_feedback_is_bounded():
             ],
         }
 
-    tools, _ = _build_storage_tools(
+    tools, _, _ = _build_storage_tools(
         actor=_storage_actor_stub(),
         ask_tools={},
         task_entrypoint_review={

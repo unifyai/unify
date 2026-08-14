@@ -16,14 +16,14 @@ def test_extract_summary_keeps_anti_patterns_for_filter():
 
 
 def test_prompt_context_includes_data_efficiency_rule():
+    """The data manager's special_note is the single inline copy of the
+    data-efficiency rule; the long form lives in the data method docstrings
+    behind help(), not duplicated in the General-Rules bullets."""
     from unify.function_manager.primitives import PrimitiveScope, get_registry
 
     scope = PrimitiveScope(scoped_managers=frozenset({"data", "files"}))
     context = get_registry().prompt_context(scope)
-    assert "Orchestra / `Data/*` efficiency" in context
+    assert "HARD RULE" in context
     assert "reduce" in context
-    # The rule used to be phrased as "do not use raw unisdk.get_logs". That
-    # naming was dropped when raw UniSDK stopped being taught at all, so
-    # assert the behaviour the rule now states rather than a spelling of the
-    # thing it warns against.
-    assert "do not read another assistant's private contexts" in context
+    assert "never download a large table into Python".lower() in context.lower()
+    assert "do not peek into another assistant's private contexts" in context.lower()

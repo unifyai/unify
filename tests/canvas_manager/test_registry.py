@@ -6,8 +6,6 @@ to the actor, or appears without contexts, or without team routing. Each
 assertion here corresponds to one of those files.
 """
 
-import re
-
 import pytest
 
 from unify.canvas_manager.canvas_manager import (
@@ -16,7 +14,6 @@ from unify.canvas_manager.canvas_manager import (
     VIEWS_TABLE,
     CanvasManager,
 )
-from unify.canvas_manager.ops.build_ops import toolchain_available
 from unify.function_manager.primitives.registry import get_registry
 from unify.function_manager.primitives.scope import (
     VALID_MANAGER_ALIASES,
@@ -118,29 +115,38 @@ class TestContextRegistration:
         assert table in SHARED_SCOPED_TABLES
 
 
-class TestPromptExamples:
-    def test_examples_are_registered_for_the_alias(self):
-        examples = get_registry().prompt_examples(CANVAS_SCOPE)
-        assert examples
+class TestPromptCanvasBlock:
+    """The inline canvas block: kit reference + compressed call forms."""
 
-    def test_the_connected_app_example_shows_the_full_sequence(self):
-        examples = get_registry().prompt_examples(CANVAS_SCOPE)
-        # Fetch, store, schedule, bind. An example missing the schedule step
+    def test_the_block_is_rendered_for_the_canvas_scope(self):
+        context = get_registry().prompt_context(CANVAS_SCOPE)
+        assert "Canvas call forms" in context
+
+    def test_the_call_forms_show_the_full_connected_app_sequence(self):
+        from unify.function_manager.primitives.registry import (
+            canvas_kit_prompt_block,
+        )
+
+        block = canvas_kit_prompt_block()
+        # Fetch, store, schedule, bind. A form missing the schedule step
         # teaches a canvas that goes stale silently.
-        assert "primitives.integrations." in examples
-        assert "primitives.ingestion.submit" in examples
-        assert "primitives.tasks" in examples
-        assert "PrimitiveBinding" in examples
+        assert "primitives.integrations." in block
+        assert "primitives.ingestion.submit" in block
+        assert "primitives.tasks" in block
+        assert "PrimitiveBinding" in block
 
-    def test_examples_never_show_a_colour(self):
+    def test_the_block_never_shows_a_colour(self):
         from unify.canvas_manager.ops.build_ops import lint_source
+        from unify.function_manager.primitives.registry import (
+            canvas_kit_prompt_block,
+        )
 
-        examples = get_registry().prompt_examples(CANVAS_SCOPE)
-        # An example that would fail our own linter teaches the actor to write
+        block = canvas_kit_prompt_block()
+        # A block that would fail our own linter teaches the actor to write
         # code we then reject.
-        assert lint_source(examples) == [] or all(
+        assert lint_source(block) == [] or all(
             "not available at view time" in problem or "single module" in problem
-            for problem in lint_source(examples)
+            for problem in lint_source(block)
         )
 
 
@@ -153,7 +159,9 @@ class TestKitReference:
     """
 
     def test_the_digest_is_committed_and_documents_components(self):
-        from unify.actor.prompt_examples import get_canvas_kit_reference
+        from unify.function_manager.primitives.registry import (
+            get_canvas_kit_reference,
+        )
 
         digest = get_canvas_kit_reference()
         assert "# @unity/canvas-kit" in digest
@@ -166,45 +174,18 @@ class TestKitReference:
             assert name in digest
 
     def test_the_digest_reaches_the_prompt(self):
-        examples = get_registry().prompt_examples(CANVAS_SCOPE)
-        assert "@unity/canvas-kit" in examples
+        context = get_registry().prompt_context(CANVAS_SCOPE)
+        assert "@unity/canvas-kit" in context
         # The authoring-model preamble is the digest's distinctive text: seeing
-        # it proves the digest itself reached the prompt, not just an example
+        # it proves the digest itself reached the prompt, not just a note
         # that happens to name the kit.
-        assert "The kit carries no presentational vocabulary" in examples
-
-    def test_every_component_the_examples_use_is_documented(self):
-        import re
-
-        from unify.actor.prompt_examples import get_canvas_kit_reference
-
-        digest = get_canvas_kit_reference()
-        documented = set(re.findall(r"^### `<(\w+)>`", digest, re.MULTILINE))
-        assert documented
-
-        # Components named in the kit import lines of the examples. An example
-        # reaching for something the digest omits teaches the actor to use a
-        # component it has no way to discover, and one that no longer exists
-        # teaches it to write code that will not compile.
-        examples = get_registry().prompt_examples(CANVAS_SCOPE)
-        used: set = set()
-        for imports in re.findall(
-            r"import\s*\{([^}]*)\}\s*from\s*[\"']@unity/canvas-kit[\"']",
-            examples,
-        ):
-            for entry in imports.split(","):
-                name = entry.strip().removeprefix("type ").strip()
-                if name and name[0].isupper():
-                    used.add(name)
-
-        assert used, "no kit imports found in the canvas examples"
-        # Types and hooks are exported too and are not components; only compare
-        # the names the digest is responsible for.
-        assert used - documented <= {"CanvasViewProps", "CanvasRuntime"}
+        assert "The kit carries no presentational vocabulary" in context
 
     def test_the_digest_never_shows_a_colour(self):
-        from unify.actor.prompt_examples import get_canvas_kit_reference
         from unify.canvas_manager.ops.build_ops import lint_source
+        from unify.function_manager.primitives.registry import (
+            get_canvas_kit_reference,
+        )
 
         # The digest is prose the actor imitates, so a colour literal in it would
         # teach precisely what the linter then rejects.
@@ -213,50 +194,6 @@ class TestKitReference:
             for problem in lint_source(get_canvas_kit_reference())
             if "colour" in problem
         ] == []
-
-
-class TestExamplesCompile:
-    """Every TSX an example shows must survive the gate the actor will hit.
-
-    This is worth the toolchain dependency. When it was first written all three
-    examples failed: two were missing the component's closing brace and the third
-    left `canvas` implicitly `any`, which `strict` rejects. An example that cannot
-    compile does not merely fail to help — it teaches the actor a shape that is
-    guaranteed to bounce off the typechecker on its first attempt.
-    """
-
-    @staticmethod
-    def _tsx_blocks() -> list:
-        from unify.actor import prompt_examples
-
-        blocks = []
-        for name in sorted(dir(prompt_examples)):
-            if not name.startswith("get_primitives_canvas_"):
-                continue
-            text = getattr(prompt_examples, name)()
-            for block in re.findall(r'tsx="""(.*?)"""', text, re.DOTALL):
-                blocks.append((name, block))
-        return blocks
-
-    def test_there_are_examples_to_check(self):
-        # Guards the extraction above: a change to how examples embed TSX would
-        # otherwise turn this whole class into a silent no-op.
-        assert self._tsx_blocks()
-
-    @pytest.mark.skipif(
-        not toolchain_available(),
-        reason="needs the vendored canvas build toolchain",
-    )
-    def test_every_example_compiles(self):
-        from unify.canvas_manager.ops.build_ops import build_canvas
-
-        failures = []
-        for name, block in self._tsx_blocks():
-            report, _ = build_canvas(block)
-            if not report.ok:
-                failures.append(f"{name}: {report.failed_stage}: {report.diagnostics}")
-
-        assert not failures, "\n".join(failures)
 
 
 class TestDocstringContract:

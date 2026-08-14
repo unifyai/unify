@@ -516,23 +516,24 @@ class PythonExecutionSession:
         # Expose sandbox metadata to user code (best-effort; callers may ignore).
         self.global_state["__sandbox_id__"] = self.id
 
-        # Notification queue is injected dynamically by execute_code when it
-        # receives a _notification_up_q from the async tool loop:
-        # sandbox.global_state["__notification_up_q__"] = <asyncio.Queue>
-        #
-        # Provide a user-driven progress helper:
-        #   notify({"type": "...", ...})
-        # This helper is intentionally synchronous; it uses put_nowait.
-        # Notifications bubble up through the async tool loop to the outer handle.
-        def notify(payload: dict) -> None:
-            try:
-                q = self.global_state.get("__notification_up_q__")
-                if q is None:
-                    return
-                # Queue is expected to be an asyncio.Queue[dict]
-                q.put_nowait(payload)
-            except Exception:
-                return
+        # notify() is a backward-compatibility no-op shim. The queue-backed
+        # progress helper was retired in favor of the `send_notification`
+        # tool at the loop layer, but stored functions persisted in tenant
+        # DBs may still call notify(), so it must keep accepting any payload
+        # without raising. Remove only after confirming no stored function
+        # body in any tenant DB still calls notify(.
+        _notify_shim_logged = False
+
+        def notify(*args: Any, **kwargs: Any) -> None:
+            nonlocal _notify_shim_logged
+            if not _notify_shim_logged:
+                _notify_shim_logged = True
+                logger.debug(
+                    "notify() called in sandbox %s: it is a no-op shim; "
+                    "use the send_notification tool for progress updates",
+                    self.id,
+                )
+            return None
 
         self.global_state["notify"] = notify
 
@@ -983,7 +984,6 @@ class SessionExecutor:
         venv_id: int | None,
         primitives: Any = None,
         computer_primitives: Any = None,
-        notification_q: asyncio.Queue[dict] | None = None,
     ) -> Dict[str, Any]:
         import time as _se_time
         import logging as _se_logging
@@ -1035,27 +1035,12 @@ class SessionExecutor:
         async def _execute_in_python_session(
             sb: PythonExecutionSession,
         ) -> Dict[str, Any]:
-            notification_sentinel = object()
-            previous_notification_q = sb.global_state.get(
-                "__notification_up_q__",
-                notification_sentinel,
+            from unify.provider_proxy.session import (
+                scrub_platform_secrets_from_environ,
             )
-            if notification_q is not None:
-                sb.global_state["__notification_up_q__"] = notification_q
-            else:
-                sb.global_state.pop("__notification_up_q__", None)
-            try:
-                from unify.provider_proxy.session import (
-                    scrub_platform_secrets_from_environ,
-                )
 
-                with scrub_platform_secrets_from_environ():
-                    return await sb.execute(code, timeout=self._timeout)
-            finally:
-                if previous_notification_q is notification_sentinel:
-                    sb.global_state.pop("__notification_up_q__", None)
-                else:
-                    sb.global_state["__notification_up_q__"] = previous_notification_q
+            with scrub_platform_secrets_from_environ():
+                return await sb.execute(code, timeout=self._timeout)
 
         # ─── Python ────────────────────────────────────────────────────────
         if language == "python":

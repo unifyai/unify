@@ -378,6 +378,14 @@ def _response_format_for_rpc(response_format: Any) -> tuple[Any, Any]:
     return response_format, None
 
 
+# The RPC proxies below mirror their canonical docstrings verbatim so that
+# ``help(query_llm)`` / ``help(list_llms)`` / ``help(get_oauth_access_token)``
+# teach the same contract inside a venv session as in an in-process session
+# (this file ships standalone into venvs and cannot import unify). Canonical
+# sources: unify.common.reasoning (query_llm, list_llms) and
+# unify.common.runtime_oauth (get_oauth_access_token). Parity is enforced by
+# tests/function_manager/test_venv_runner_docstrings.py; edit the canonical
+# docstring first, then re-mirror here.
 async def query_llm(
     prompt: str,
     *,
@@ -389,7 +397,195 @@ async def query_llm(
     images: list[str | bytes] | None = None,
     **generate_kwargs: Any,
 ) -> Any:
-    """Proxy an LLM query to the parent Unity process."""
+    """Run a one-shot LLM query from generated Python code.
+
+    Use ``query_llm(...)`` when the code you are writing needs to process
+    unstructured meaning, not merely manipulate exact values. Treat UniLLM as a
+    first-class fuzzy processor inside a broader deterministic procedure:
+    Python handles retrieval, iteration, batching, grouping, date arithmetic,
+    API calls, validation, persistence, and side effects; ``query_llm(...)``
+    handles bounded unstructured-data work that would be brittle if implemented
+    as keyword matching or canned templates.
+
+    **Text and images.** ``query_llm`` takes a string ``prompt``. For screenshots
+    or other raster images, pass them through ``images=[...]`` (local path, PNG
+    bytes, or ``data:image/...`` URL). Images are scaled to the same
+    model-aware observation space as ``display()`` before the call.
+    Do not embed base64 in the prompt text itself.
+
+    Good uses
+    ---------
+    - Unstructured -> structured work: classify, extract, score, route, decide,
+      summarize into fields, or choose an action from text such as documents,
+      tickets, emails, transcripts, notes, lead records, or web-page text.
+    - Unstructured -> unstructured work: draft, respond, rewrite, synthesize,
+      explain, personalize, compress, or adapt human-facing text.
+    - Classifying emails, tickets, documents, notes, or leads into broad
+      categories based on meaning.
+    - Deciding whether a message needs a reply, follow-up, escalation, or
+      user review.
+    - Judging relevance, intent, priority, sentiment, ambiguity, or policy fit
+      from unstructured text.
+    - Applying a stable rubric inside a loop, then feeding structured results
+      back into deterministic Python control flow.
+
+    Prefer direct symbolic code instead
+    -----------------------------------
+    Do not spend an LLM call for substeps where exact logic is enough: direct
+    primitive calls, exact lookups, deterministic filtering, arithmetic, date
+    comparisons, dedupe, schema reshaping, and simple transformations should
+    stay in normal Python or use the relevant primitive directly. A generated
+    function can freely mix deterministic substeps and semantic substeps; use
+    ``query_llm(...)`` only where meaning-based judgment is doing real work.
+
+    Examples
+    --------
+    Minimal judgment returning text::
+
+        verdict = await query_llm(
+            "Does this email require a reply? Answer yes, no, or unsure.\\n"
+            f"Subject: {email['subject']}\\nBody: {email['body']}"
+        )
+
+    Structured output for downstream control flow::
+
+        from pydantic import BaseModel, Field
+
+        class EmailClassification(BaseModel):
+            category: str = Field(description="billing, scheduling, hiring, personal, or other")
+            needs_reply: bool
+            confidence: float = Field(ge=0.0, le=1.0)
+            rationale: str
+
+        EmailClassification.model_rebuild()
+
+        classification = await query_llm(
+            f"Classify this email for inbox triage.\\nSubject: {subject}\\nBody: {body}",
+            response_format=EmailClassification,
+        )
+        if classification.needs_reply and classification.confidence >= 0.8:
+            to_reply.append(email)
+
+    Structured triage plus draft generation::
+
+        from pydantic import BaseModel, Field
+
+        class EmailDraftDecision(BaseModel):
+            category: str
+            needs_reply: bool
+            draft_reply: str | None = Field(
+                description="Short human-reviewable draft, or null if no reply is needed"
+            )
+            confidence: float = Field(ge=0.0, le=1.0)
+            rationale: str
+
+        EmailDraftDecision.model_rebuild()
+
+        decision = await query_llm(
+            "Decide whether this email needs a reply. If it does, draft a concise reply "
+            "in the user's voice. Return null for draft_reply when no reply is needed.\\n"
+            f"Subject: {subject}\\nFrom: {sender}\\nBody: {body}",
+            response_format=EmailDraftDecision,
+            model="openai/gpt-5.4-mini@openrouter",
+        )
+
+    Custom rubric with ``system`` for consistent bulk classification::
+
+        system = (
+            "Classify messages using the user's existing labels. "
+            "Prefer 'needs_user_review' when the evidence is ambiguous."
+        )
+        decision = await query_llm(
+            prompt=email_text,
+            system=system,
+            response_format=EmailClassification,
+        )
+
+    Image understanding over a local image path::
+
+        answer = await query_llm(
+            "What text is visible in this screenshot?",
+            images=["/path/to/screenshot.png"],
+        )
+
+    Model and generation options
+    ----------------------------
+    By default this uses ``new_llm_client(model, async_client=True,
+    stateful=False, origin='CodeActActor.query_llm')`` and calls
+    ``generate(..., temperature=0.0)`` for stable judgments. The same default
+    multimodal client is used when ``images`` is provided. Override ``model``
+    only when the task has a real capability or cost reason. Raise
+    ``temperature`` only when creative synthesis is more useful than stable
+    classification. Pass advanced UniLLM generation options through
+    ``generate_kwargs``; keep ordinary actor-written code simple.
+
+    Anti-patterns
+    -------------
+    - Replacing exact deterministic substeps with ``query_llm(...)``.
+    - Using substring checks as the whole classifier for semantic tasks, e.g.
+      ``if "urgent" in subject.lower()`` for inbox triage. Exact lexical
+      signals can help pre-filter, but they are not semantic judgment.
+    - Replacing human-facing drafting, rewriting, or personalization with
+      label-specific canned prose or templates unless the user explicitly asked
+      for fixed deterministic templates.
+    - Calling ``query_llm(...)`` for every item in a large set before cheap
+      deterministic pre-filtering, sampling, or batching.
+
+    Cost and observability
+    ----------------------
+    This performs a billable UniLLM call. Because it is built on
+    ``new_llm_client``, normal UniLLM caching, logging, cost tracking, event
+    hooks, spending limits, and billing attribution apply. Keep prompts compact
+    and use structured outputs when Python needs to branch on the result.
+
+    ### Choosing A Model For `query_llm(...)`
+
+    Pass model overrides as UniLLM endpoint strings, e.g.
+    `model="openai/gpt-5.4-mini@openrouter"`.
+
+    Reach OpenAI models through `@openrouter`, as
+    `openai/<model-id>@openrouter`. There is no `@openai` provider; every
+    endpoint `list_llms()` reports is routable.
+
+    For durable or recurring stored functions, choose `model=` deliberately.
+    Do not silently inherit the default high-reasoning model for bounded,
+    repeated classification/routing/extraction work unless that capability
+    is genuinely needed.
+
+    Use current external evidence when the model choice matters. Start with
+    Artificial Analysis (https://artificialanalysis.ai/) because it is
+    especially useful for comparing model price, speed, latency, and
+    quality/cost tradeoffs across providers. Then supplement with:
+    - ARC Prize leaderboard: https://arcprize.org/leaderboard
+    - General web search for recent benchmark, pricing, latency, and
+      reliability information.
+
+    Do this research while authoring or storing the function, then bake the
+    selected endpoint into the function. Do not put benchmark browsing or
+    model shopping inside the hot path of a recurring task.
+
+    Use `list_llms()` to inspect the supported endpoint strings registered
+    in the current runtime. Use `list_llms("openrouter")` or another
+    provider name when you only need endpoints for one provider.
+
+    Practical defaults:
+    - Use cheap/fast models for bounded classification, routing, extraction,
+      confidence scoring, and yes/no decisions after deterministic
+      pre-filtering.
+    - Use a mid-tier model for short user-facing synthesis or draft wording
+      where quality matters but the task is still narrow.
+    - Use the default strong model for ambiguous, high-stakes, policy-heavy,
+      or poorly specified judgment, or as a fallback when cheaper models fail
+      validation.
+    - Prefer `temperature=0.0` and structured `response_format` for decisions
+      that downstream Python branches on.
+    - In stored functions, record the model-choice rationale in the docstring
+      or a short code comment.
+    - Pass screenshots, photos, or image paths through ``images=[...]`` when
+      the task needs image understanding. Omit ``model=`` to use the same
+      default multimodal endpoint as text queries, or set ``model=`` to a
+      specific UniLLM endpoint when you need a particular provider.
+    """
 
     rpc_response_format, response_model = _response_format_for_rpc(response_format)
     rpc_images = _images_for_rpc(images)
@@ -443,23 +639,104 @@ def _images_for_rpc(images: list[str | bytes] | None) -> list[str] | None:
 
 
 def list_llms(provider: str = None) -> list[str]:
-    """Return supported UniLLM endpoint strings from the parent Unity process."""
+    """Return supported UniLLM endpoint strings available in this runtime.
+
+    Endpoint strings use ``model@provider`` form, such as
+    ``"openai/gpt-5.4-mini@openrouter"``. Pass ``provider`` to filter to one
+    provider, e.g. ``list_llms("openrouter")``.
+
+    Use this helper when choosing a concrete ``model=`` value for
+    ``query_llm(...)``. Do not hardcode assumptions about which endpoints are
+    registered in the current deployment.
+    """
     return rpc_call_sync("runtime.list_llms", {"provider": provider})
 
 
 def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
     """
-    Return a current OAuth access token for a refresh-token backed provider.
+    Authorize provider REST calls from ``execute_code`` via the local proxy.
 
-    Custom virtual environments run in a child process whose environment can
-    be older than the parent Unity worker. This helper calls the parent process
-    over JSON-RPC so rotating OAuth access tokens are read from the current
-    assistant secret state instead of the child process's inherited env.
+    This does NOT return a raw provider access token. It returns a local
+    capability handle (the workspace proxy nonce) to place in the
+    ``Authorization: Bearer ...`` header. You must ALSO point your base URL at
+    the local proxy so the request is authorized and policy-enforced:
+
+    - Microsoft Graph: base URL ``os.environ["MICROSOFT_GRAPH_BASE"]`` (drop-in
+      for ``https://graph.microsoft.com/v1.0``).
+    - Google APIs: ``os.environ["GOOGLE_DRIVE_BASE"]`` (drop-in for
+      ``https://www.googleapis.com/drive/v3``) or ``GOOGLE_API_BASE`` for other
+      Google services.
+
+    The proxy swaps this handle for the real upstream token and enforces the
+    per-assistant file-access allowlist. Calling the provider hosts directly
+    (``graph.microsoft.com`` / ``www.googleapis.com``) with this handle will
+    fail: the sandbox holds no real token by design.
+
+    The proxy gives you the FULL provider REST API (list, search, read,
+    rename, move, upload, delete, ``$batch``, ...) but enforces the
+    file-access allowlist: files and folders the user has not permitted are
+    masked — absent from listings/search and not-found on direct access, and
+    writes into a non-permitted location are rejected. Treat masked items as
+    nonexistent. Provider SDKs work too — point the client's base/endpoint at
+    the proxy (e.g. msgraph's ``request_adapter.base_url``, googleapiclient's
+    ``client_options.api_endpoint``).
+
+    Parameters
+    ----------
+    provider:
+        Provider name or alias. Built-in aliases include ``"microsoft"``,
+        ``"graph"``, ``"google"``, ``"gmail"``, and ``"drive"``.
+    min_ttl_seconds:
+        Accepted for signature compatibility; token freshness is handled by the
+        proxy on each upstream call.
 
     Examples
     --------
-    ``token = get_oauth_access_token("microsoft")``
-    ``token = get_oauth_access_token("google")``
+    Multiple providers can be used in one sandbox; request each explicitly::
+
+        microsoft_token = get_oauth_access_token("microsoft")
+        google_token = get_oauth_access_token("google")
+
+    A raw HTTP call through the proxy::
+
+        import os, httpx
+        token = get_oauth_access_token("microsoft")
+        base = os.environ["MICROSOFT_GRAPH_BASE"]  # ~ https://graph.microsoft.com/v1.0
+        resp = httpx.get(
+            f"{base}/me/drive/root/children",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    Scope checks before calling
+    ---------------------------
+    When the provider has a granted-scopes secret (``GOOGLE_GRANTED_SCOPES``
+    / ``MICROSOFT_GRANTED_SCOPES``, space-separated raw OAuth scope strings,
+    not feature names), check the scope the specific API call requires
+    (from the provider's official docs/SDK) against it before calling:
+
+    - Google scopes are full URLs, e.g.
+      ``https://www.googleapis.com/auth/gmail.send``.
+    - Microsoft docs list short names (``Sites.Read.All``); the secret stores
+      them prefixed — search for
+      ``https://graph.microsoft.com/Sites.Read.All``. Only ``offline_access``
+      is stored bare.
+    - Secret missing entirely → proceed normally (expected for
+      admin-consented Microsoft enterprise tenants and self-managed tokens).
+      Scope present → proceed. Scope absent → do not attempt the call; tell
+      the user to reconnect the service from the Console Integrations tab
+      with the missing access.
+
+    Reuse in stored functions
+    -------------------------
+    Reusable OAuth integrations should call
+    ``get_oauth_access_token(provider)`` at runtime, each run; never store or
+    capture a concrete handle/token value inside a function implementation.
+
+    Anti-patterns
+    -------------
+    - Do not call ``graph.microsoft.com`` / ``www.googleapis.com`` directly; use
+      the proxy base URLs above.
+    - Do not print, log, return, or store this handle.
     """
     return rpc_call_sync(
         "runtime.get_oauth_access_token",

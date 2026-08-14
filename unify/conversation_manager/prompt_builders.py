@@ -1093,7 +1093,17 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "or call-side consent is NOT a substitute for the click. Until they "
             "click, I guide them to the row and never claim I am sending.",
             "After the click, I send the clue exactly once on that channel; if "
-            "I already sent it, I confirm instead of duplicating.",
+            "I already sent it in this conversation, I confirm instead of "
+            "duplicating.",
+            "A clue only counts as sent if I sent it in THIS conversation. When "
+            "the live progress block shows a reference-quiz reply step in "
+            "progress 'since' a timestamp that predates this conversation, that "
+            "clue is lost — the user came back later and no longer has it in "
+            "front of them. I re-send a fresh clue on that channel right away "
+            "(the tool is already unlocked for a dispatched step) instead of "
+            "telling them to find or reply to the old one, and I NEVER claim an "
+            "old clue is on its way. Likewise if the user says the clue never "
+            "arrived, I re-send immediately rather than insisting it was sent.",
             "Microsoft Teams is the exception: the Unify Teams bot is "
             "reply-only — it cannot open a conversation, so there is no "
             '"Trigger ... from T-W1N" row for it. The Teams step is instead '
@@ -1110,6 +1120,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
             "  - `integration_connected`: a new integration secret was saved.",
             "  - `step_skipped`: the user intentionally skipped one onboarding step.",
+            "  - `step_unskipped`: the user undid a skip — the step is pending "
+            "again; never keep calling it skipped.",
             "  - `onboarding_step_started`: the user clicked or resumed one onboarding checklist step.",
             "  - `reference_quiz_clue_requested`: the user clicked a reference-quiz trigger row; "
             "they are now expecting (polling for) the clue on that channel — I send it once if "
@@ -1153,9 +1165,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             'the matching "Trigger ... from T-W1N" row before I can send — '
             "my outbound tool stays unavailable until then, and a verbal ask "
             "does not unlock it. Once they have clicked, I send the clue once "
-            "with the matching comms tool; if I already sent after that click, "
-            "I confirm instead of duplicating. The backend marks the trigger "
-            "done once it detects my outbound transcript row.",
+            "with the matching comms tool; if I already sent after that click "
+            "in this conversation, I confirm instead of duplicating. The "
+            "backend marks the trigger done once it detects my outbound "
+            "transcript row.",
             "  D. Do not skip ahead to unrelated sections while an active step is still "
             "pending unless the live progress block lists a valid next step or the user "
             "explicitly asks to move on.",
@@ -1168,9 +1181,11 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "unlocked my outbound tool and they are polling for the clue. If they "
             "asked verbally on a call before clicking, that did NOT start the step: "
             "tell them to click the row in the Onboarding checklist (they can keep "
-            "the call open). If I have already sent a clue on this channel for this "
-            "step, I do NOT send another; I confirm it is on its way. I send a clue "
-            "now only if none has gone out yet after their click.",
+            "the call open). If I already sent a clue on this channel for this step "
+            "in THIS conversation, I do NOT send another; I confirm it is on its "
+            "way. A clue from an earlier session is lost, not pending — when the "
+            "only prior dispatch predates this conversation, or the user says "
+            "nothing arrived, I send a fresh clue now.",
             "  3. When I do send, use the supplied `tool_name` in this same LLM turn. "
             "For message channels, call the outbound comms tool directly; for call "
             "channels, start the call with the full spoken line in the required "

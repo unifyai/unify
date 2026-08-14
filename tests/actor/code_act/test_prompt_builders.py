@@ -89,7 +89,7 @@ def test_code_act_prompt_has_primary_execute_code_and_session_tools_and_no_legac
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_includes_diverse_examples_sessions_computer_primitives_and_mixed():
+def test_code_act_prompt_includes_computer_primitives_and_selection_contracts():
     actor = CodeActActor()
     try:
         prompt = build_code_act_prompt(
@@ -99,11 +99,7 @@ def test_code_act_prompt_includes_diverse_examples_sessions_computer_primitives_
     finally:
         pass
 
-    # Sessions examples (execute_code JSON blocks)
-    assert "Sessions & Multi-Language Execution" in prompt
-    assert '"language": "bash"' in prompt
-    assert '"language": "python"' in prompt
-    assert '"name": "list_sessions"' in prompt or "list_sessions" in prompt
+    assert "list_sessions" in prompt
 
     assert "Viewing Computer State" in prompt
     # Computer method documentation (from environment's get_prompt_context)
@@ -118,7 +114,12 @@ def test_code_act_prompt_includes_diverse_examples_sessions_computer_primitives_
     assert "immediate in-code composition" in prompt
     assert "neutral or uncertain" in prompt.lower()
     assert "default to returning the handle" in prompt.lower()
-    assert "execute_function vs execute_code decision" in prompt
+
+    # Handle-adoption contract stays inline. (call_kwargs exact typing is a
+    # mechanism fact asserted on the execute_function docstring instead.)
+    assert "### Tool Selection: `execute_function` vs `execute_code`" in prompt
+    assert "last expression" in prompt
+    assert "never consume a handle" in prompt
 
 
 @pytest.mark.timeout(30)
@@ -142,10 +143,23 @@ def test_code_act_prompt_includes_task_guidance_only_with_task_primitives():
         tools={},
     )
 
+    # The section is a compact contract stub; depth (task types, entrypoint
+    # conventions, binding resolution) lives in the platform/durable-tasks
+    # guidance entry behind the consult pointer.
     assert "Durable Scheduled And Triggered Tasks" in prompt_with_tasks
-    assert "`entrypoint=None`" in prompt_with_tasks
-    assert "primitives.tasks.execute(task_id=...)" in prompt_with_tasks
+    assert "primitives.tasks.update" in prompt_with_tasks
+    assert "live (armed)" in prompt_with_tasks
+    assert "status armed AND trigger bindings" in prompt_with_tasks
+    # When the primitive confirmed the fields, the actor must report them —
+    # never claim failure or uncertainty.
+    assert "claim failure or uncertainty" in prompt_with_tasks
+    # Consult pointer phrased to hit the platform/durable-tasks title.
+    assert "creating verifying arming and running" in prompt_with_tasks
     assert "Durable Scheduled And Triggered Tasks" not in prompt_without_tasks
+    # The prompt must not carry incident-specific workaround phrasing.
+    assert "loop to re-discover the" not in prompt_with_tasks
+    assert "person-like token" not in prompt_with_tasks
+    assert "Never fake" not in prompt_with_tasks
 
 
 @pytest.mark.timeout(30)
@@ -162,18 +176,30 @@ def test_code_act_prompt_teaches_refresh_token_oauth_helper():
         "def get_oauth_access_token(provider: str, *, "
         "min_ttl_seconds: int = 300) -> str"
     ) in prompt
-    assert 'get_oauth_access_token("microsoft")' in prompt
-    assert 'get_oauth_access_token("google")' in prompt
-    # The helper now returns a local proxy capability handle, not a raw token.
+    # The section is a contract stub — the handle semantics stay inline,
+    # the full procedure defers to help(get_oauth_access_token).
     assert "capability handle" in prompt
     assert "Do not print, log, return, or store this handle." in prompt
     assert "MICROSOFT_GRAPH_BASE" in prompt
+    assert "help(get_oauth_access_token)" in prompt
+
+    # ...while the docstring behind help() carries the full procedure the
+    # stub defers to.
+    import inspect as _inspect
+
+    from unify.common.runtime_oauth import get_oauth_access_token
+
+    doc = _inspect.getdoc(get_oauth_access_token) or ""
+    assert 'get_oauth_access_token("microsoft")' in doc
+    assert 'get_oauth_access_token("google")' in doc
+    assert "MICROSOFT_GRAPH_BASE" in doc
+    assert "GOOGLE_GRANTED_SCOPES" in doc
 
 
 @pytest.mark.timeout(30)
 def test_code_act_prompt_routes_comms_and_defers_method_docs_to_search():
     """The comms manager surfaces through the routing overview and the
-    catalogue discovery note; per-method docs are not inlined."""
+    discovery/introspection pointer; per-method docs are not inlined."""
     from unify.actor.environments.state_managers import StateManagerEnvironment
     from unify.function_manager.primitives import PrimitiveScope, Primitives
 
@@ -187,14 +213,26 @@ def test_code_act_prompt_routes_comms_and_defers_method_docs_to_search():
     )
 
     # Routing overview names the manager and teaches when to reach for it.
+    # (The overview is description + use-when only; per-manager examples do
+    # not render, with canvas as the one exception.)
     assert "primitives.comms" in prompt
     assert "Assistant-Owned Communication" in prompt
     assert "proactively contact people" in prompt
-    assert "Text Alice that the meeting moved" in prompt
+    assert "Text Alice that the meeting moved" not in prompt
 
-    # Non-core methods are discovered through the catalogue, not inlined.
-    assert "### Method Reference (core)" in prompt
+    # Method docs live behind search + introspection, not inline; the
+    # discovery/introspection bridge lives in the static Sandbox Environment
+    # table, not in a per-environment Method Discovery section.
+    assert "### Method Discovery & Introspection" not in prompt
+    assert "### Sandbox Environment" in prompt
+    assert "### Method Reference (core)" not in prompt
     assert "FunctionManager_search_functions" in prompt
+    assert "inspect.signature" in prompt
+    assert "do not guess signatures" in prompt
+    assert "help(primitives.<manager>.<method>)" in prompt
+    # Primitives are searchable — the prompt must never claim they are
+    # excluded from FunctionManager search.
+    assert "excluded from FunctionManager" not in prompt
     assert ".send_whatsapp" not in prompt
     assert ".send_teams_message" not in prompt
 
@@ -219,45 +257,162 @@ def test_incremental_execution_present_and_execution_rules_not_duplicated():
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_includes_platform_self_knowledge():
-    """The prompt teaches both authoritative self-knowledge resources (live
-    docs + baked source trees) and the confidentiality rules for the latter."""
+def test_code_act_prompt_platform_capabilities_index():
+    """Platform self-knowledge depth lives in builtin guidance; the prompt
+    carries a static capabilities index with one consult-path line per
+    guidance-backed or gated domain, rendered only when discovery tools
+    exist."""
     actor = CodeActActor()
     prompt = build_code_act_prompt(
         environments=_real_envs_mixed(),
         tools=dict(actor.get_tools("act")),
     )
 
-    assert "### Platform Self-Knowledge" in prompt
-    # Docs: live fetch, page index, markdown endpoints.
-    assert "https://docs.unify.ai/llms.txt" in prompt
-    assert "append `.md`" in prompt
-    # Source: the running runtime root is always listed (it is the package
-    # root of the imported unify code, wherever this test runs from).
-    import unify as unify_pkg
-    from pathlib import Path
+    assert "### Platform Self-Knowledge" not in prompt
+    assert "### Platform Capabilities Index" in prompt
+    # One consult-path line per guidance-backed or gated domain.
+    assert "answering questions about the Unify platform" in prompt
+    assert "integrating external apps credentials OAuth envelopes" in prompt
+    assert "help(get_oauth_access_token)" in prompt
+    assert "help(query_llm)" in prompt
+    assert "choosing between overlapping state managers" in prompt
+    assert "driving desktops and reading screens" in prompt
+    assert "unlock macOS user desktop" in prompt
+    # Durable-tasks depth lives in guidance — the index names the path.
+    assert "creating verifying arming and running" in prompt
+    assert "help(primitives.ingestion.submit)" in prompt
+    # Confidentiality one-liner stays inline.
+    assert "never reproduce their contents" in prompt
 
-    runtime_root = str(Path(unify_pkg.__file__).resolve().parent.parent)
-    assert runtime_root in prompt
-    assert "never be stale" in prompt
-    # Confidentiality rules.
-    assert "Never reproduce source files or verbatim code excerpts" in prompt
-    assert "`local` execution surface only" in prompt
-    assert "user-visible location" in prompt
+    # Without discovery tools, the index must not point at tools the
+    # assistant cannot call.
+    all_tools = dict(actor.get_tools("act"))
+    no_discovery = {
+        k: v
+        for k, v in all_tools.items()
+        if not str(k).startswith(
+            ("FunctionManager_", "GuidanceManager_", "KnowledgeManager_"),
+        )
+    }
+    prompt_no_discovery = build_code_act_prompt(
+        environments={},
+        tools=no_discovery,
+    )
+    assert "### Platform Capabilities Index" not in prompt_no_discovery
 
 
 @pytest.mark.timeout(30)
-def test_platform_self_knowledge_omits_absent_source_snapshots():
-    """Baked snapshot rows appear only when /opt/system-sources exists (hosted
-    image); on dev machines and self-host the table lists just the runtime."""
-    from pathlib import Path
+def test_external_and_oauth_sections_gate_independently():
+    """The two config gates (integration packages; workspace OAuth) are
+    independent, default to today's always-on behavior, and a gated-off
+    section keeps its capabilities-index line."""
+    actor = CodeActActor()
+    tools = dict(actor.get_tools("act"))
 
-    from unify.actor.prompt_builders import _build_system_self_knowledge
+    default_prompt = build_code_act_prompt(environments={}, tools=tools)
+    assert "### External App Integration" in default_prompt
+    assert "### OAuth Access Token Helper" in default_prompt
 
-    section = _build_system_self_knowledge()
-    for name in ("orchestra", "console", "unify-deploy", "docs"):
-        expected = Path("/opt/system-sources") / name
-        assert (f"`{expected}`" in section) == expected.is_dir()
+    no_integrations = build_code_act_prompt(
+        environments={},
+        tools=tools,
+        include_external_app_integration=False,
+    )
+    assert "### External App Integration" not in no_integrations
+    assert "### OAuth Access Token Helper" in no_integrations
+    assert "integrating external apps credentials OAuth envelopes" in no_integrations
+
+    no_oauth = build_code_act_prompt(
+        environments={},
+        tools=tools,
+        include_oauth_helper=False,
+    )
+    assert "### OAuth Access Token Helper" not in no_oauth
+    assert "### External App Integration" in no_oauth
+    assert "help(get_oauth_access_token)" in no_oauth
+
+
+@pytest.mark.timeout(30)
+def test_policy_contracts_have_a_guarded_destination():
+    """Every guarded contract has an explicit destination. The ten policy
+    contracts stay inline in the prompt (retrieval may miss and gates may
+    not fire); the two mechanism contracts are asserted at their docstring
+    destinations — `call_kwargs` exact typing in the `execute_function`
+    docstring (which feeds the prompt and the JSON schema), verbatim
+    identifier copying in the `TaskScheduler.ask`/`.update` docstrings
+    behind help()/FM search."""
+    actor = CodeActActor()
+    prompt = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=dict(actor.get_tools("act")),
+        discovery_first_policy=True,
+        include_external_app_integration=False,
+        include_oauth_helper=False,
+    )
+
+    # 1. Confirmation-before-external-send / consequential-action contract.
+    assert "confirmation for write, destructive, bulk-export, or sensitive" in prompt
+
+    # 2. User-desktop file-harvesting prohibition (2-line contract).
+    assert "primitives.computer.user_desktop.files" in prompt
+    assert "Never retrieve their file content" in prompt
+
+    # 3. Notification contract.
+    assert "send_notification" in prompt
+    assert "verifiably finished" in prompt
+
+    # 4. Tool-less final answer + Uncertainties section.
+    assert "tool-less assistant message" in prompt
+    assert "Uncertainties" in prompt
+
+    # 5. Data provenance — no model knowledge formatted as sourced data.
+    assert "never present model knowledge as sourced" in prompt
+    assert "never formatted as sourced records" in prompt
+
+    # 6. Verify-against-evidence.
+    assert "a step that ran is not a step that" in prompt
+
+    # 7. Proactive clarification.
+    assert "prefer asking over" in prompt
+
+    # 8. Handle-adoption / steering contract.
+    assert "structurally guarantees" in prompt
+    assert "last expression" in prompt
+    assert "never consume a handle" in prompt
+
+    # 9. Browser-session reuse (visible browser reattach, ~4 lines).
+    assert "reattach by" in prompt
+    assert "get_session" in prompt
+
+    # 10. Discovery-first CORRECT procedure.
+    assert "The CORRECT procedure:" in prompt
+    assert "first tool-calling assistant message" in prompt
+
+    # Mechanism destination A: call_kwargs exact typing lives in the
+    # execute_function docstring (identifier-literalism defense).
+    import inspect as _inspect
+
+    from unify.common.prompt_helpers import unwrap_tool_callable
+
+    execute_function = unwrap_tool_callable(
+        dict(actor.get_tools("act"))["execute_function"],
+    )
+    ef_doc = _inspect.getdoc(execute_function) or ""
+    assert "Values keep the callee's own" in ef_doc
+    assert '``{"max_results": 5}``' in ef_doc
+    assert '``{"max_results": "5"}``' in ef_doc
+    # The docstring renders into the prompt's Tools JSON block, so the
+    # contract still reaches the model inline.
+    assert "Values keep the callee's own" in prompt
+
+    # Mechanism destination B: verbatim identifier copying lives in the
+    # TaskScheduler docstrings surfaced by help() and FM search.
+    from unify.task_scheduler.task_scheduler import TaskScheduler
+
+    for method in (TaskScheduler.update, TaskScheduler.ask):
+        doc = _inspect.getdoc(method) or ""
+        assert "copy them verbatim into ``text``" in doc
+        assert "literal string" in doc
 
 
 @pytest.mark.timeout(30)
@@ -307,55 +462,51 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
         tools=dict(actor.get_tools("act")),
     )
 
-    assert "### Deterministic Code With LLM-Native Semantic Processing" in prompt
-    assert "LLM Query Helpers: `query_llm(...)` And `list_llms(...)`" in prompt
-    assert "billable UniLLM" in prompt
-    assert "competes with primitives or stored" in prompt
-    assert "fetch data through several" in prompt
-    assert "Deterministic substeps stay deterministic" in prompt
-    assert "LLMs are the fuzzy operator for unstructured data" in prompt
+    # The full query_llm teaching (good uses, anti-patterns, model choice)
+    # lives in query_llm.__doc__ behind help(); the prompt keeps a compact
+    # when-to-use block, folded into the Sandbox Environment section.
+    assert "### Deterministic Code With LLM-Native Semantic Processing" not in prompt
+    assert "### Sandbox Environment" in prompt
+    assert "async def query_llm(" in prompt
+    assert "def list_llms(provider: 'str | None' = None) -> 'list[str]'" in prompt
     assert "unstructured -> structured" in prompt
     assert "unstructured -> unstructured" in prompt
-    assert "draft, respond, rewrite, synthesize" in prompt
-    assert "If exact" in prompt
+    assert "draft, respond, rewrite" in prompt
     assert "keep it deterministic" in prompt
-    assert "Do not replace" in prompt
     assert "Semantic downgrades are bugs" in prompt
     assert "templates pretending" in prompt
-    assert "A comment that says" in prompt
-    assert "actually call `query_llm(...)`" in prompt
     assert "keyword ladders" in prompt
-    assert "reusable function with a semantic drafting step" in prompt
-    assert "keep the query_llm(...) call inside the" in prompt
-    assert "draft_replies_for_messages" in prompt
-    assert "Choosing A Model For `query_llm(...)`" in prompt
-    assert "Artificial Analysis (https://artificialanalysis.ai/)" in prompt
-    assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in prompt
-    assert "Use `list_llms()` to inspect" in prompt
-    assert "Supported UniLLM endpoints currently registered" not in prompt
-    assert "openai/gpt-5.4-mini@openrouter" in prompt
-    assert "Reach OpenAI models through `@openrouter`" in prompt
-    assert "Do not put benchmark browsing or" in prompt
+    assert "keep the query_llm(...) call" in prompt
+    assert "inside the stored function" in prompt
+    # The consult path replaces the inline model-selection tables.
+    assert "help(query_llm)" in prompt
+    assert "Choosing A Model For `query_llm(...)`" not in prompt
+    assert "Artificial Analysis (https://artificialanalysis.ai/)" not in prompt
+    assert "LLM Query Helpers: `query_llm(...)` And `list_llms(...)`" not in prompt
+
+    # ...while help(query_llm) still carries the full contract.
+    import inspect as _inspect
+
+    from unify.common.reasoning import query_llm
+
+    doc = _inspect.getdoc(query_llm) or ""
+    assert "Choosing A Model For `query_llm(...)`" in doc
+    assert "Artificial Analysis (https://artificialanalysis.ai/)" in doc
+    assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in doc
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_includes_reasoning_examples_and_antipatterns():
+def test_code_act_prompt_includes_compressed_reasoning_contracts():
+    """The semantic-vs-deterministic teaching renders as compact prose."""
     actor = CodeActActor()
     prompt = build_code_act_prompt(
         environments=_real_envs_mixed(),
         tools=dict(actor.get_tools("act")),
     )
 
-    assert "direct deterministic work should stay direct" in prompt
-    assert "broad semantic classification via substring rules" in prompt
-    assert "symbolic loop + semantic judgment + structured control flow" in prompt
-    assert "EmailClassification" in prompt
-    assert "response_format=EmailClassification" in prompt
-    assert (
-        "deterministic pre-filter, semantic reasoning only for the hard subset"
-        in prompt
-    )
-    assert 'model="openai/gpt-5.4-mini@openrouter"' in prompt
+    assert "count unread emails from Alice" in prompt
+    assert "do not call query_llm(...)" in prompt
+    assert "deterministic pre-filter" in prompt
 
 
 @pytest.mark.timeout(30)
@@ -389,7 +540,10 @@ def test_discovery_first_guidance_separates_search_from_execution_choice():
     )
 
     assert "Discovery index scope" in prompt
-    assert "deliberately excluded" in prompt
+    # Primitives are searchable now; only prompt-documented callables
+    # (computer methods, prompt-injected functions/guidance) stay out.
+    assert "the built-in `primitives.*` catalogue" in prompt
+    assert "they never appear in search" in prompt
     assert "Search is a discovery step" in prompt
     assert "not an execution decision." in prompt
     assert (
@@ -512,15 +666,18 @@ def test_computer_environment_prompt_context_from_registry():
 
     assert context  # Non-empty
     assert "primitives.computer" in context.lower()
-    # All dynamic methods should be documented
+    # All dynamic methods appear in the name index
     assert "navigate" in context
     assert "act" in context
     assert "observe" in context
     assert "query" in context
     assert "get_links" in context
     assert "get_content" in context
-    # Docstrings should include parameter documentation
-    assert "Parameters" in context
+    # The name index carries signatures + one-line summaries and points at
+    # help()/inspect.signature — full docstring dumps are gone.
+    assert "### Computer Method Reference (name index)" in context
+    assert "help(primitives.computer.desktop.<method>)" in context
+    assert "\nParameters\n" not in context and "  Parameters" not in context
     # Managed desktop layout anchors (full contract in dedicated test)
     assert "HOME=/Unity" in context
     assert "/Unity/Downloads" in context
@@ -585,11 +742,23 @@ def test_external_app_integration_present():
         tools=dict(actor.get_tools("act")),
     )
 
+    # The section is a compact contract stub — envelope shape and scope
+    # check stay operative inline; depth defers to the
+    # platform/integrations-envelopes guidance entry.
     assert "### External App Integration" in prompt
     assert "primitives.secrets.ask" in prompt
     assert "install_python_packages" in prompt
-    assert "Prefer Python SDKs over CLI tools" in prompt
     assert "the **Integrations** tab in the console" in prompt
+    # Result-envelope contract.
+    assert "`connect_required`" in prompt
+    assert "`missing_scope`" in prompt
+    assert "no custom retry/sleep" in prompt
+    # Scope-check operative contract.
+    assert "OAuth scope check" in prompt
+    assert "GOOGLE_GRANTED_SCOPES" in prompt
+    assert "do not attempt the call" in prompt
+    # Consult pointer to the enriched entry.
+    assert "integrating external apps credentials OAuth envelopes" in prompt
 
 
 @pytest.mark.timeout(30)

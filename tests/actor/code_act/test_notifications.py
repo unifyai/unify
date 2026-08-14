@@ -10,12 +10,12 @@ from unify.events.active_work import ACTIVE_WORK
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(60)
-async def test_execute_code_notifications_with_notification_queue():
+async def test_notify_is_a_silent_noop_in_bound_sandbox():
     """
-    Validate that user code can call notify({...}) from within the sandbox
-    when a _notification_up_q is provided (as the async tool loop does
-    automatically).  Lifecycle notifications (execution_started/finished)
-    were removed -- only user-emitted notifications should appear.
+    notify() is a backward-compatibility no-op shim: generated code calling
+    it (with any payload shape) must execute without error and must NOT
+    produce a notification on the _notification_up_q.  Progress updates now
+    go through the send_notification tool at the loop layer.
     """
     from unify.actor.execution import _CURRENT_SANDBOX
 
@@ -35,9 +35,12 @@ async def test_execute_code_notifications_with_notification_queue():
         tools = actor.get_tools("act")
         execute_code = tools["execute_code"]
 
-        _ = await execute_code(
-            "emit notifications",
-            "notify({'type': 'custom_progress', 'step': 1})\nprint('hi')",
+        result = await execute_code(
+            "call the notify shim with assorted payloads",
+            "notify({'type': 'custom_progress', 'step': 1})\n"
+            "notify('positional', extra=1)\n"
+            "notify()\n"
+            "print('hi')",
             language="python",
             state_mode="stateful",
             session_id=0,
@@ -45,13 +48,10 @@ async def test_execute_code_notifications_with_notification_queue():
             _notification_up_q=notification_q,
         )
 
-        custom = await asyncio.wait_for(notification_q.get(), timeout=30)
-        assert custom.get("type") == "custom_progress"
-        assert custom.get("step") == 1
-
+        assert result.error is None, f"notify() shim raised: {result.error}"
         assert (
             notification_q.empty()
-        ), f"Expected no more notifications but queue has {notification_q.qsize()} item(s)"
+        ), f"Expected no notifications but queue has {notification_q.qsize()} item(s)"
     finally:
         try:
             _CURRENT_SANDBOX.reset(token)
@@ -70,10 +70,10 @@ async def test_execute_code_notifications_with_notification_queue():
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(60)
-async def test_execute_code_notifications_with_notification_queue_in_named_stateful_session():
+async def test_notify_is_a_silent_noop_in_named_stateful_session():
     """
-    Validate that notify({...}) also surfaces from executor-managed named
-    stateful Python sessions, not just the bound sandbox session 0 path.
+    The notify() no-op shim also holds in executor-managed named stateful
+    Python sessions, not just the bound sandbox session 0 path.
     """
     from unify.actor.execution import _CURRENT_SANDBOX
 
@@ -93,8 +93,8 @@ async def test_execute_code_notifications_with_notification_queue_in_named_state
         tools = actor.get_tools("act")
         execute_code = tools["execute_code"]
 
-        _ = await execute_code(
-            "emit notifications from named session",
+        result = await execute_code(
+            "call the notify shim from a named session",
             "notify({'type': 'custom_progress', 'step': 1, 'message': 'named session'})\nprint('hi')",
             language="python",
             state_mode="stateful",
@@ -103,14 +103,10 @@ async def test_execute_code_notifications_with_notification_queue_in_named_state
             _notification_up_q=notification_q,
         )
 
-        custom = await asyncio.wait_for(notification_q.get(), timeout=5)
-        assert custom.get("type") == "custom_progress"
-        assert custom.get("step") == 1
-        assert custom.get("message") == "named session"
-
+        assert result.error is None, f"notify() shim raised: {result.error}"
         assert (
             notification_q.empty()
-        ), f"Expected no more notifications but queue has {notification_q.qsize()} item(s)"
+        ), f"Expected no notifications but queue has {notification_q.qsize()} item(s)"
     finally:
         try:
             _CURRENT_SANDBOX.reset(token)
@@ -267,7 +263,7 @@ async def test_execute_code_clears_active_work_after_exception_timeout_and_cance
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(60)
-async def test_execute_code_fallback_progress_and_semantic_notify_reset():
+async def test_execute_code_fallback_progress_and_notify_shim_noop():
     ACTIVE_WORK.clear()
 
     actor = CodeActActor()
@@ -290,18 +286,19 @@ async def test_execute_code_fallback_progress_and_semantic_notify_reset():
         assert "Still working" in fallback["message"]
         assert notification_q.empty()
 
+        # notify() is a no-op shim: it must neither raise nor enqueue
+        # anything, and (with work shorter than the fallback delay) the
+        # queue stays empty in the stateless path too.
         actor._active_work_fallback_initial_delay_s = 0.06
         semantic_q: asyncio.Queue[dict] = asyncio.Queue()
-        await execute_code(
-            "emit semantic progress before the fallback delay",
+        result = await execute_code(
+            "call the notify shim before the fallback delay",
             "import asyncio\nnotify({'type': 'custom_progress', 'message': 'halfway'})\nawait asyncio.sleep(0.04)",
             language="python",
             state_mode="stateless",
             _notification_up_q=semantic_q,
         )
-        semantic = await asyncio.wait_for(semantic_q.get(), timeout=1.0)
-        assert semantic["type"] == "custom_progress"
-        assert semantic["message"] == "halfway"
+        assert result.error is None, f"notify() shim raised: {result.error}"
         assert semantic_q.empty()
     finally:
         ACTIVE_WORK.clear()

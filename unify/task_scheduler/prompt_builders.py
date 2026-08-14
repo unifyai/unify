@@ -125,7 +125,7 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "(empty results, intentional skips, degraded fallbacks), log "
         "briefly via stdlib `logging` rather than silent returns. Keep "
         "progress notifications user-facing — diagnostics belong in "
-        "logging, not `notify()`.\n\n"
+        "logging, not user-facing notifications.\n\n"
         f"Activation reason: {reason.value}\n"
         f"Task id: {task.task_id}"
     )
@@ -175,6 +175,7 @@ def build_ask_prompt(
     filter_tasks_fname = tool_name(tools, "filter_tasks")
     search_tasks_fname = tool_name(tools, "search_tasks")
     reduce_fname = tool_name(tools, "reduce")
+    list_runs_fname = tool_name(tools, "list_task_runs")
     contact_ask_fname = tool_name(tools, "contactmanager")
     request_clar_fname = tool_name(tools, "request_clarification")
     catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
@@ -215,6 +216,19 @@ def build_ask_prompt(
         f"For ANY other semantic question over free-form text (e.g., fuzzy name/description meaning), ALWAYS use `{search_tasks_fname}`. Never try to approximate meaning with brittle substring filters.",
         f"Use `{filter_tasks_fname}` for exact/boolean logic over structured fields (ids, arming flag, priority, timestamps, exact name) or for narrow, constrained text checks.",
         f"For questions about how to communicate with a specific person/role (tone, formality, how to address them, what wording to use), ALWAYS call `{contact_ask_fname}` to retrieve that contact's communication preferences/response policy. Do not guess.",
+        *(
+            [
+                "",
+                "- Setup vs. what actually happened (pick the right table) -",
+                f"A task row is authored intent: its schedule, whether it is armed, what it is for. `{filter_tasks_fname}` and `{search_tasks_fname}` read that and nothing else. No amount of filtering there can say whether a task ever ran.",
+                f"Anything about running — did it run today, when did it last run, did it fail and why, what did it produce, when is it due next — is `{list_runs_fname}(task_id=…)`, newest first.",
+                f"So: 'when is my briefing scheduled for?' is the task row; 'did my briefing run this morning?' is `{list_runs_fname}`. Answer the second from the runs, never by reading the schedule and reasoning about what should have happened.",
+                f"A task can be armed and still not have run. Reporting a cadence when asked about a run is the failure mode this pair exists to prevent — say what the runs show, including when they show nothing.",
+                f"To diagnose a failure past its `error`, take that run's `run_key` and walk it with the task-run event tools.",
+            ]
+            if list_runs_fname
+            else []
+        ),
         "",
         "- Semantic search across tasks (ranked by cosine distance) -",
         f"Find tasks about onboarding in Q3: `{search_tasks_fname}(references={{'name': 'onboarding', 'description': 'Q3'}}, k=5)`",

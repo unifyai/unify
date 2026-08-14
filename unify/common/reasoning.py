@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import textwrap
 from typing import Any
 
 from pydantic import BaseModel
@@ -54,8 +53,7 @@ def get_llm_query_prompt_context() -> str:
         "normal sandbox helpers, not JSON tool calls.\n\n"
         f"```python\n{query_signature}\n{list_signature}\n```\n\n"
         f"{query_doc}\n\n"
-        f"{list_doc}\n\n"
-        f"{get_llm_model_selection_context()}"
+        f"{list_doc}"
     )
 
 
@@ -90,62 +88,21 @@ def list_llms(provider: str | None = None) -> list[str]:
     return [endpoint for endpoint in endpoints if endpoint.endswith(suffix)]
 
 
+_MODEL_SELECTION_HEADING = "### Choosing A Model For `query_llm(...)`"
+
+
 def get_llm_model_selection_context() -> str:
-    """Return model-selection guidance for sandbox LLM calls."""
+    """Return model-selection guidance for sandbox LLM calls.
 
-    guidance = textwrap.dedent(
-        """
-        ### Choosing A Model For `query_llm(...)`
-
-        Pass model overrides as UniLLM endpoint strings, e.g.
-        `model="openai/gpt-5.4-mini@openrouter"`.
-
-        Reach OpenAI models through `@openrouter`, as
-        `openai/<model-id>@openrouter`. There is no `@openai` provider; every
-        endpoint `list_llms()` reports is routable.
-
-        For durable or recurring stored functions, choose `model=` deliberately.
-        Do not silently inherit the default high-reasoning model for bounded,
-        repeated classification/routing/extraction work unless that capability
-        is genuinely needed.
-
-        Use current external evidence when the model choice matters. Start with
-        Artificial Analysis (https://artificialanalysis.ai/) because it is
-        especially useful for comparing model price, speed, latency, and
-        quality/cost tradeoffs across providers. Then supplement with:
-        - ARC Prize leaderboard: https://arcprize.org/leaderboard
-        - General web search for recent benchmark, pricing, latency, and
-          reliability information.
-
-        Do this research while authoring or storing the function, then bake the
-        selected endpoint into the function. Do not put benchmark browsing or
-        model shopping inside the hot path of a recurring task.
-
-        Use `list_llms()` to inspect the supported endpoint strings registered
-        in the current runtime. Use `list_llms("openrouter")` or another
-        provider name when you only need endpoints for one provider.
-
-        Practical defaults:
-        - Use cheap/fast models for bounded classification, routing, extraction,
-          confidence scoring, and yes/no decisions after deterministic
-          pre-filtering.
-        - Use a mid-tier model for short user-facing synthesis or draft wording
-          where quality matters but the task is still narrow.
-        - Use the default strong model for ambiguous, high-stakes, policy-heavy,
-          or poorly specified judgment, or as a fallback when cheaper models fail
-          validation.
-        - Prefer `temperature=0.0` and structured `response_format` for decisions
-          that downstream Python branches on.
-        - In stored functions, record the model-choice rationale in the docstring
-          or a short code comment.
-        - Pass screenshots, photos, or image paths through ``images=[...]`` when
-          the task needs image understanding. Omit ``model=`` to use the same
-          default multimodal endpoint as text queries, or set ``model=`` to a
-          specific UniLLM endpoint when you need a particular provider.
-        """,
-    ).strip()
-
-    return guidance
+    Docstring-derived: the guidance lives in ``query_llm.__doc__`` (its
+    "Choosing A Model" section) so ``help(query_llm)`` inside any sandbox —
+    including venv RPC proxies mirroring that docstring — teaches the same
+    contract the prompt does. This helper slices that section back out for
+    callers that want it standalone.
+    """
+    doc = inspect.getdoc(query_llm) or ""
+    idx = doc.find(_MODEL_SELECTION_HEADING)
+    return doc[idx:].strip() if idx >= 0 else ""
 
 
 async def query_llm(
@@ -300,6 +257,54 @@ async def query_llm(
     ``new_llm_client``, normal UniLLM caching, logging, cost tracking, event
     hooks, spending limits, and billing attribution apply. Keep prompts compact
     and use structured outputs when Python needs to branch on the result.
+
+    ### Choosing A Model For `query_llm(...)`
+
+    Pass model overrides as UniLLM endpoint strings, e.g.
+    `model="openai/gpt-5.4-mini@openrouter"`.
+
+    Reach OpenAI models through `@openrouter`, as
+    `openai/<model-id>@openrouter`. There is no `@openai` provider; every
+    endpoint `list_llms()` reports is routable.
+
+    For durable or recurring stored functions, choose `model=` deliberately.
+    Do not silently inherit the default high-reasoning model for bounded,
+    repeated classification/routing/extraction work unless that capability
+    is genuinely needed.
+
+    Use current external evidence when the model choice matters. Start with
+    Artificial Analysis (https://artificialanalysis.ai/) because it is
+    especially useful for comparing model price, speed, latency, and
+    quality/cost tradeoffs across providers. Then supplement with:
+    - ARC Prize leaderboard: https://arcprize.org/leaderboard
+    - General web search for recent benchmark, pricing, latency, and
+      reliability information.
+
+    Do this research while authoring or storing the function, then bake the
+    selected endpoint into the function. Do not put benchmark browsing or
+    model shopping inside the hot path of a recurring task.
+
+    Use `list_llms()` to inspect the supported endpoint strings registered
+    in the current runtime. Use `list_llms("openrouter")` or another
+    provider name when you only need endpoints for one provider.
+
+    Practical defaults:
+    - Use cheap/fast models for bounded classification, routing, extraction,
+      confidence scoring, and yes/no decisions after deterministic
+      pre-filtering.
+    - Use a mid-tier model for short user-facing synthesis or draft wording
+      where quality matters but the task is still narrow.
+    - Use the default strong model for ambiguous, high-stakes, policy-heavy,
+      or poorly specified judgment, or as a fallback when cheaper models fail
+      validation.
+    - Prefer `temperature=0.0` and structured `response_format` for decisions
+      that downstream Python branches on.
+    - In stored functions, record the model-choice rationale in the docstring
+      or a short code comment.
+    - Pass screenshots, photos, or image paths through ``images=[...]`` when
+      the task needs image understanding. Omit ``model=`` to use the same
+      default multimodal endpoint as text queries, or set ``model=`` to a
+      specific UniLLM endpoint when you need a particular provider.
     """
 
     client_config: dict[str, Any] = {
