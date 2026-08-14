@@ -912,7 +912,10 @@ def pytest_configure(config):
         "eval: mark a test as a fuzzy evaluation test for English language "
         "APIs. Selects the eval tier in discover_test_paths.py, and pins cache "
         "lookups to exact keying so a canonical hit cannot score a trajectory "
-        "recorded before the prompt changed.",
+        "recorded before the prompt changed. Distinct from llm_call, which "
+        "says only that a model is reached: eval asks whether the answer was "
+        "good, llm_call whether the call happens at all. The two are applied "
+        "independently and neither implies the other.",
     )
     config.addinivalue_line(
         "markers",
