@@ -121,6 +121,27 @@ def test_reset_notification_omits_trigger_ack_suffix() -> None:
     assert "Mandatory:" not in text
 
 
+def test_unskipped_notification_is_silent_state_correction() -> None:
+    """An undone skip corrects the brain's model without a user-facing turn.
+
+    Skips are narrated ("we'll leave that for now"), so the mirror event must
+    both stay silent and override the earlier transcript memory — otherwise
+    the brain keeps calling a pending step skipped.
+    """
+    event = CoordinatorOnboardingEvent(
+        subtype="step_unskipped",
+        message="User un-skipped the 'whatsapp-number' onboarding step.",
+        details={"step_id": "whatsapp-number"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "step_unskipped" in text
+    assert "`whatsapp-number`" in text
+    assert "Do NOT message the user" in text
+    assert "pending again" in text
+    assert "ignore any earlier transcript memory" in text
+    assert "Mandatory:" not in text
+
+
 def test_session_started_chat_notification_pending_scripted_delivery() -> None:
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_session_started",

@@ -1120,6 +1120,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
             "  - `integration_connected`: a new integration secret was saved.",
             "  - `step_skipped`: the user intentionally skipped one onboarding step.",
+            "  - `step_unskipped`: the user undid a skip — the step is pending "
+            "again; never keep calling it skipped.",
             "  - `onboarding_step_started`: the user clicked or resumed one onboarding checklist step.",
             "  - `reference_quiz_clue_requested`: the user clicked a reference-quiz trigger row; "
             "they are now expecting (polling for) the clue on that channel — I send it once if "
