@@ -952,8 +952,7 @@ def make_send_notification_tool(
 
     The returned function accepts ``_notification_up_q`` as a hidden parameter
     (injected by the async tool loop) so it participates in the standard
-    notification pipeline.  From the caller's perspective, the notification is
-    identical to one emitted by ``notify()`` inside ``execute_code``.
+    notification pipeline.
     """
 
     async def _send(

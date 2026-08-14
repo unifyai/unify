@@ -1817,7 +1817,7 @@ class ActorNotification(Event):
     """Event to forward a notification from an Actor handle.
 
     Notifications carry status updates emitted explicitly by the actor via
-    ``send_notification`` or ``notify()``.  The ``completed`` flag
+    ``send_notification``.  The ``completed`` flag
     distinguishes a completion announcement from an in-progress update so
     downstream consumers (e.g. the fast brain) can render them with
     unambiguous prefixes.

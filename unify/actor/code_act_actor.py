@@ -682,19 +682,16 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "When wrapping a procedure into a stored function, pay attention to "
     "points where the original code depended on the user being "
     "informed — especially states that block until the user takes an "
-    "external action. If the original trajectory included a step like "
-    '"notify the user about X, then wait for X to happen", the '
-    "`notify()` call must survive into the stored function. Stripping "
-    "it out creates a silent deadlock: the function blocks waiting for "
-    "a condition the user does not know about.\n\n"
-    "The general principle: a stored function inherits the execution "
-    "environment's `notify()` helper. Any state where "
-    "progress depends on external human action (approving an auth "
-    "prompt, granting a permission, confirming a destructive "
-    "operation) must include a `notify()` call *before* entering the "
-    "wait. Without it, the function waits indefinitely for something "
-    "only the user can provide, and the user has no idea they need "
-    "to act.\n\n"
+    "external action. Stored functions cannot emit user-facing "
+    "notifications mid-execution, so do not bake an indefinite wait on "
+    "external human action (approving an auth prompt, granting a "
+    "permission, confirming a destructive operation) into the function "
+    "body. Instead, have the function return early or raise with a "
+    "clear message describing what the user must do, so the calling "
+    "actor can inform the user (via the `send_notification` tool "
+    "between `execute_code` blocks) and resume afterwards. A silent "
+    "in-function wait is a deadlock: the function blocks on a "
+    "condition the user does not know about.\n\n"
     "### Durable task executor candidates\n\n"
     "A function intended to become a future TaskScheduler executor must "
     "preserve the observed live execution chain, not merely produce a "
@@ -716,7 +713,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "Soft failures (empty results, skipped branches, degraded fallbacks, "
     "status dicts that report problems without raising) are the common "
     "bug shape. Stored functions must leave a reconstructable trail with "
-    "the stdlib `logging` module — not via user-facing `notify()`. Use "
+    "the stdlib `logging` module — not via user-facing notifications. Use "
     "markers `PHASE`, `SKIP`, and `SOFT_FAIL` in the message text so "
     "Job/EventBus captures stay greppable, e.g. "
     "`logging.getLogger(__name__).info('PHASE load_rows count=%s', n)` "
@@ -3217,7 +3214,6 @@ class CodeActActor(BaseCodeActActor):
                     if _notification_up_q is not None
                     else None
                 )
-                sandbox_id = None
                 try:
                     from unify.manager_registry import ManagerRegistry
 
@@ -3263,17 +3259,6 @@ class CodeActActor(BaseCodeActActor):
                     _rs.venv_id,
                     _rs.session_id,
                 )
-                # Inject per-tool notification queue into bound sandbox so notify() works.
-                try:
-                    sb_for_notifs = _CURRENT_SANDBOX.get()
-                    sandbox_id = getattr(sb_for_notifs, "id", None)
-                    if notification_q is not None:
-                        sb_for_notifs.global_state["__notification_up_q__"] = (
-                            notification_q
-                        )
-                except Exception:
-                    pass
-
                 # Execute via SessionExecutor. Route primitives if available in current sandbox.
                 primitives = None
                 computer_primitives = self._computer_primitives
@@ -3302,7 +3287,6 @@ class CodeActActor(BaseCodeActActor):
                                 venv_id=venv_id,
                                 primitives=primitives,
                                 computer_primitives=computer_primitives,
-                                notification_q=notification_q,
                             )
                         except Exception as e:
                             exec_exc = e
@@ -4093,7 +4077,6 @@ class CodeActActor(BaseCodeActActor):
                         if _notification_up_q is not None
                         else None
                     )
-                    sandbox_id = None
                     _rs = self._resolve_session(
                         state_mode=state_mode,
                         language=str(language),
@@ -4106,17 +4089,6 @@ class CodeActActor(BaseCodeActActor):
                         _rs.venv_id,
                         _rs.session_id,
                     )
-                    # Inject per-tool notification queue into bound sandbox.
-                    try:
-                        sb_for_notifs = _CURRENT_SANDBOX.get()
-                        sandbox_id = getattr(sb_for_notifs, "id", None)
-                        if notification_q is not None:
-                            sb_for_notifs.global_state["__notification_up_q__"] = (
-                                notification_q
-                            )
-                    except Exception:
-                        pass
-
                     # Resolve primitives from current sandbox.
                     primitives = None
                     computer_primitives = self._computer_primitives
@@ -4225,7 +4197,6 @@ class CodeActActor(BaseCodeActActor):
                                         venv_id=resolved_venv_id,
                                         primitives=primitives,
                                         computer_primitives=computer_primitives,
-                                        notification_q=notification_q,
                                     )
                                     _ef_log.debug(
                                         f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
@@ -5314,9 +5285,6 @@ class CodeActActor(BaseCodeActActor):
             venv_pool=self._venv_pool,
             shell_pool=self._shell_pool,
         )
-        # Note: __notification_up_q__ is injected dynamically by execute_code
-        # when it receives a _notification_up_q from the async tool loop.
-
         token = _CURRENT_SANDBOX.set(sandbox)
         env_token = _CURRENT_ENVIRONMENTS.set(sandbox_envs)
         llm_profile_token = CURRENT_ACT_LLM_PROFILE.set(act_llm_profile)
