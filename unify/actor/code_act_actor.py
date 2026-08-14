@@ -5467,9 +5467,14 @@ class CodeActActor(BaseCodeActActor):
             )
 
         integration_summary = ""
+        has_integration_packages = False
         try:
             from unify.integration_status import enabled_summary_for_prompt
+            from unify.integration_status.discovery import (
+                discover_available_packages,
+            )
 
+            has_integration_packages = bool(discover_available_packages())
             integration_summary = enabled_summary_for_prompt()
         except Exception:
             integration_summary = ""
@@ -5480,6 +5485,18 @@ class CodeActActor(BaseCodeActActor):
             or None
         )
 
+        # Workspace-OAuth gate for the OAuth helper section — independent of
+        # the integration-packages gate: a workspace-email assistant with
+        # zero packages keeps the OAuth section. Cheap in-memory presence
+        # check; never forces a network sync.
+        has_workspace_oauth = False
+        try:
+            from unify.common.runtime_oauth import has_workspace_oauth_connection
+
+            has_workspace_oauth = has_workspace_oauth_connection()
+        except Exception:
+            has_workspace_oauth = False
+
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] building system prompt")
         system_prompt = build_code_act_prompt(
             environments=sandbox_envs,
@@ -5487,6 +5504,8 @@ class CodeActActor(BaseCodeActActor):
             can_store=effective_can_store,
             guidelines=effective_guidelines,
             discovery_first_policy=self.tool_policy is _USE_DEFAULT,
+            include_external_app_integration=has_integration_packages,
+            include_oauth_helper=has_workspace_oauth,
         )
         logger.debug(
             f"⏱️ [CodeActActor.act +{_act_ms()}] prompt built "
