@@ -8,6 +8,10 @@ Unit tests for utility functions in unify.common._async_tool.
 import asyncio
 import json
 import logging
+import os
+import re
+import stat
+import tempfile
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +24,11 @@ from unify.common._async_tool.utils import (
     maybe_await,
     try_parse_json,
 )
-from unify.common._async_tool.formatting import serialize_tool_content
+from unify.common._async_tool.formatting import (
+    TOOL_RESULT_TEXT_CHAR_LIMIT,
+    _truncate_tool_text,
+    serialize_tool_content,
+)
 from unify.logger import _MillisFormatter
 from unify.syntax_highlight import highlight_code_blocks
 
@@ -482,3 +490,81 @@ class TestSerializeToolContentPydanticModel:
         parsed = json.loads(result)
         assert parsed["name"] == "alice"
         assert parsed["value"] == 42
+
+
+# =============================================================================
+# _truncate_tool_text – spill-to-file on truncation
+# =============================================================================
+
+
+_SPILL_MARKER_RE = re.compile(
+    r"\.\.\.\[(\d+) characters omitted — full text saved to (.+?); "
+    r"readable from execute_code when running locally\]\.\.\.",
+)
+
+
+class TestTruncateToolTextSpill:
+    """On truncation the full original text is spilled to a tmp file named in
+    the omission marker; any spill failure falls back to the legacy marker."""
+
+    def test_over_limit_spills_full_text(self, tmp_path, monkeypatch):
+        """>limit input → marker names a file holding the exact full text,
+        the spill dir is 0700, and head/tail are preserved."""
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+        text = "".join(f"line {i}\n" for i in range(6_000))  # ~46k chars > 32k limit
+        assert len(text) > TOOL_RESULT_TEXT_CHAR_LIMIT
+
+        result = _truncate_tool_text(text)
+
+        match = _SPILL_MARKER_RE.search(result)
+        assert (
+            match is not None
+        ), f"Spill marker not found in: {result[15_800:16_400]!r}"
+        omitted, spill_path = int(match.group(1)), match.group(2)
+        assert omitted == len(text) - TOOL_RESULT_TEXT_CHAR_LIMIT
+
+        # File holds the exact full original text.
+        with open(spill_path, encoding="utf-8") as f:
+            assert f.read() == text
+
+        # Spill dir lives under the (patched) tempdir, named per-process, 0700.
+        spill_dir = os.path.dirname(spill_path)
+        assert os.path.dirname(spill_dir) == str(tmp_path)
+        assert os.path.basename(spill_dir) == f"unify-tool-results-{os.getpid()}"
+        assert stat.S_IMODE(os.stat(spill_dir).st_mode) == 0o700
+
+        # Head and tail are preserved around the marker.
+        head = TOOL_RESULT_TEXT_CHAR_LIMIT // 2
+        tail = TOOL_RESULT_TEXT_CHAR_LIMIT - head
+        assert result.startswith(text[:head])
+        assert result.endswith(text[-tail:])
+
+    def test_unwritable_dir_falls_back_to_legacy_marker(self, tmp_path, monkeypatch):
+        """Spill failure → exact legacy marker, result path unbroken."""
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("occupied")  # makedirs under a regular file fails
+        monkeypatch.setattr(
+            tempfile,
+            "gettempdir",
+            lambda: str(blocker / "nested"),
+        )
+        limit = TOOL_RESULT_TEXT_CHAR_LIMIT
+        text = "z" * (limit + 500)
+
+        result = _truncate_tool_text(text)
+
+        head, tail = limit // 2, limit - limit // 2
+        expected = (
+            f"{text[:head]}\n\n"
+            f"...[500 characters omitted from tool result]...\n\n"
+            f"{text[-tail:]}"
+        )
+        assert result == expected
+
+    def test_under_limit_creates_no_file(self, tmp_path, monkeypatch):
+        """Under-limit input is returned unchanged and nothing is spilled."""
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+        text = "short tool result"
+
+        assert _truncate_tool_text(text) == text
+        assert list(tmp_path.iterdir()) == []
