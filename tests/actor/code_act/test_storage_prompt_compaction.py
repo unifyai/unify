@@ -9,10 +9,18 @@ bounded and prompt-cache-friendly:
   drops the actor system prompt, collapses store-read results to entry
   counts (including results delivered via ``check_status_*``
   placeholders), and elides oversized tool output.
+* Prompt layout — the static storage doctrine precedes the volatile
+  trajectory in both the post-run and proactive loops, so every loop
+  shares a byte-identical cacheable prefix.
 """
 
+from unittest.mock import MagicMock, patch
+
 from unify.actor.code_act_actor import (
+    _STORAGE_WHAT_CAN_BE_STORED,
     _prepare_trajectory_for_storage_review,
+    _start_proactive_storage_loop,
+    _start_storage_check_loop,
 )
 
 # ---------------------------------------------------------------------------
@@ -221,3 +229,84 @@ def test_input_messages_are_not_mutated():
     messages = [{"role": "system", "content": big}]
     _prepare_trajectory_for_storage_review(messages)
     assert messages[0]["content"] == big
+
+
+# ---------------------------------------------------------------------------
+# Prompt layout: static doctrine before volatile trajectory
+# ---------------------------------------------------------------------------
+
+
+def _mock_actor():
+    actor = MagicMock()
+    actor.function_manager = MagicMock()
+    actor.guidance_manager = MagicMock()
+    return actor
+
+
+def _built_system_prompt(mock_new_client):
+    return mock_new_client.return_value.set_system_message.call_args[0][0]
+
+
+def test_storage_check_prompt_puts_doctrine_before_trajectory():
+    trajectory = [
+        {"role": "system", "content": "### Role\n" + "x" * 10_000},
+        {"role": "user", "content": "distinctive-user-request"},
+    ]
+    with (
+        patch(
+            "unify.actor.code_act_actor._build_storage_tools",
+            return_value=({}, [], ["- `some_tool`"]),
+        ),
+        patch("unify.actor.code_act_actor.new_llm_client") as mock_client,
+        patch("unify.actor.code_act_actor.start_async_tool_loop") as mock_loop,
+    ):
+        _start_storage_check_loop(
+            trajectory=trajectory,
+            ask_tools={},
+            actor=_mock_actor(),
+            original_result="all done",
+        )
+        prompt = _built_system_prompt(mock_client)
+        assert mock_loop.called
+
+    doctrine_at = prompt.index(_STORAGE_WHAT_CAN_BE_STORED[:40])
+    instructions_at = prompt.index("## Instructions")
+    trajectory_at = prompt.index("## Completed Trajectory")
+    assert doctrine_at < instructions_at < trajectory_at
+    # The trajectory embed is compacted: system prompt stubbed, compact JSON.
+    assert "x" * 100 not in prompt
+    assert "System prompt omitted" in prompt
+    assert "distinctive-user-request" in prompt
+    assert "## Completed Tools" in prompt
+    assert "`some_tool`" in prompt
+    assert prompt.index("## Final Result") > trajectory_at
+
+
+def test_proactive_storage_prompt_puts_doctrine_before_trajectory():
+    trajectory = [
+        {"role": "system", "content": "### Role\n" + "x" * 10_000},
+        {"role": "user", "content": "distinctive-user-request"},
+    ]
+    with (
+        patch(
+            "unify.actor.code_act_actor._build_storage_tools",
+            return_value=({}, [], []),
+        ),
+        patch("unify.actor.code_act_actor.new_llm_client") as mock_client,
+        patch("unify.actor.code_act_actor.start_async_tool_loop") as mock_loop,
+    ):
+        _start_proactive_storage_loop(
+            trajectory=trajectory,
+            ask_tools={},
+            actor=_mock_actor(),
+            request="store the fetch helper",
+        )
+        prompt = _built_system_prompt(mock_client)
+        assert mock_loop.called
+
+    doctrine_at = prompt.index(_STORAGE_WHAT_CAN_BE_STORED[:40])
+    request_at = prompt.index("## Storage Request")
+    trajectory_at = prompt.index("## Trajectory So Far")
+    assert doctrine_at < request_at < trajectory_at
+    assert "System prompt omitted" in prompt
+    assert "store the fetch helper" in prompt
