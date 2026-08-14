@@ -15,12 +15,16 @@ from fastapi import HTTPException
 from unify.gateway.credentials import CredentialStore
 from unify.settings import SETTINGS
 
+#: Every name here must be a field Orchestra's ``/admin/assistant`` accepts:
+#: one unknown name 422s the whole request, which ``_lookup_assistant``
+#: surfaces as 404 — silently downgrading every email-keyed lookup (BYOD
+#: token resolution included) to its caller's not-found path.
 ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
     "is_coordinator,is_multiplayer,organization_id,voice_id,voice_provider,first_name,"
-    "surname,deploy_env,desktop_mode,user_desktops,is_local,"
+    "surname,desktop_mode,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"
     "about,job_title,timezone"
