@@ -3263,7 +3263,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "none")
-        self.managed_desktop_status = payload.get("managed_desktop_status")
+        # Default to the current value, for the same reason as the Teams bot
+        # flag below: AssistantUpdateEvent does not carry this key at all, so
+        # reading it as absent-means-None turned every assistant update -- a
+        # rename, a voice change, a membership change, an OAuth re-auth -- into
+        # a silent revocation of the managed desktop. ``desktop_url`` survives
+        # the repopulate, so the result was a session claiming a desktop it was
+        # no longer entitled to use: the browser kept working off the URL while
+        # shell, python and file access refused.
+        self.managed_desktop_status = payload.get(
+            "managed_desktop_status",
+            getattr(self, "managed_desktop_status", None),
+        )
         self.user_desktops = payload.get("user_desktops") or []
         self.org_id: int | None = payload.get("org_id")
         self.org_name: str = payload.get("org_name", "")
@@ -3303,6 +3314,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
             assistant_slack_team_id=self.assistant_slack_team_id,
             assistant_has_ms_teams_bot=self.assistant_has_ms_teams_bot,
+            # Passed explicitly from the live session: omitting it let
+            # ``populate`` apply its own default and clear a tenant id adopted
+            # at runtime, which is exactly the failure the bot flag beside it
+            # was already patched for.
+            assistant_ms_teams_tenant_id=SESSION_DETAILS.assistant.ms_teams_tenant_id,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,
