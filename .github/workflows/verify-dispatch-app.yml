@@ -4,8 +4,14 @@ name: Verify the dispatch App
 # to unify-deploy, without triggering the self-host image build that a real
 # repository dispatch would start. Delete once the result is recorded.
 
+# Triggered by pushing this file rather than by workflow_dispatch: the
+# dispatch API only accepts workflows that already exist on the default
+# branch, and this one deliberately never reaches main.
 on:
-  workflow_dispatch:
+  push:
+    branches: [staging]
+    paths:
+    - '.github/workflows/verify-dispatch-app.yml'
 
 permissions:
   contents: read
