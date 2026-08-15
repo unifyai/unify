@@ -134,7 +134,18 @@ class CanvasViewRow(AuthoredRow):
 
 
 class CanvasViewRecord(CanvasViewRow):
-    """A stored canvas, as read back."""
+    """A stored canvas, as read back.
+
+    Extra keys are ignored rather than forbidden, which is the difference
+    between describing a write and describing a read. The row this validates
+    came back from Orchestra, so it also carries the authorship columns
+    Orchestra keeps on shared rows (``_user``, ``_assistant``, …). Inheriting
+    the write model's ``extra="forbid"`` made every read of a real stored row
+    raise, while the in-memory double — which returns records it never
+    re-validates — stayed green.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     canvas_id: Optional[int] = None
 

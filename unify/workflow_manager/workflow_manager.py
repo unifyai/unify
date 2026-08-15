@@ -839,15 +839,18 @@ class WorkflowManager(BaseWorkflowManager):
         self,
         slug: str,
     ) -> Dict[str, Dict[str, Any]]:
-        """Views this workflow has published, keyed by their ``custom_key``."""
-        try:
-            records = self._get_canvas_manager().list_views(
-                filter=f"managed_by == '{slug}'",
-                limit=200,
-            )
-        except Exception:
-            logger.exception("Could not read published canvases for %r", slug)
-            return {}
+        """Views this workflow has published, keyed by their ``custom_key``.
+
+        Deliberately not guarded. "I could not read what is published" and
+        "nothing is published" are opposite answers that this returning ``{}``
+        would make identical — and the caller responds to the second by
+        publishing, so a swallowed read error becomes a duplicate copy of every
+        view the workflow already owns, at new tokens, on each install.
+        """
+        records = self._get_canvas_manager().list_views(
+            filter=f"managed_by == '{slug}'",
+            limit=200,
+        )
         return {
             str(record.custom_key): record.model_dump()
             for record in records
@@ -877,9 +880,17 @@ class WorkflowManager(BaseWorkflowManager):
             return {}, {}
 
         manager = self._get_canvas_manager()
-        published = self._published_canvases(bundle.slug)
         report: Dict[str, Any] = {}
         failures: Dict[str, BaseException] = {}
+
+        try:
+            published = self._published_canvases(bundle.slug)
+        except Exception as exc:
+            # Reported rather than raised, so surfaces that already landed
+            # stay and the installation reports `partial` — the same channel a
+            # failed publish uses, and a repeat install retries exactly this.
+            logger.exception("Could not read published canvases for %r", bundle.slug)
+            return {}, {"canvas": exc}
 
         for source in bundle.canvas:
             key = f"{bundle.slug}/{source.custom_key}"
