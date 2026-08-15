@@ -1,0 +1,41 @@
+name: Verify the dispatch App
+
+# Temporary probe: proves unifyai-ci-dispatch can mint a token that may write
+# to unify-deploy, without triggering the self-host image build that a real
+# repository dispatch would start. Delete once the result is recorded.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Mint a token that can dispatch to unify-deploy
+      id: dispatch-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: '4606148'
+        private-key: ${{ secrets.CI_DISPATCH_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: unify-deploy
+
+    # A repository dispatch needs Contents: write, and the API reports what a
+    # token's owner may do rather than what the token itself was granted, so
+    # the only honest check is to perform a write and undo it.
+    - name: The minted token can write to unify-deploy
+      env:
+        GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+      run: |
+        set -euo pipefail
+        gh api repos/unifyai/unify-deploy --jq '"read  ok  " + .full_name'
+        probe="ci-dispatch-app-probe-${GITHUB_RUN_ID}"
+        sha=$(gh api repos/unifyai/unify-deploy/git/ref/heads/main --jq .object.sha)
+        gh api -X POST repos/unifyai/unify-deploy/git/refs \
+          -f "ref=refs/heads/${probe}" -f "sha=${sha}" --silent
+        echo "write ok  unifyai/unify-deploy (created ${probe})"
+        gh api -X DELETE "repos/unifyai/unify-deploy/git/refs/heads/${probe}" --silent
+        echo "cleaned up ${probe}"
