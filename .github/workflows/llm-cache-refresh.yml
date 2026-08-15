@@ -257,13 +257,26 @@ jobs:
         normalized=$(echo "$RAW_PATH" | tr '/ *' '___' | tr -cd '[:alnum:]_-' | cut -c1-80)
         echo "test_path_normalized=$normalized" >> "$GITHUB_OUTPUT"
 
+    # Mints an installation token that can read orchestra and nothing
+    # else, then revokes it when the job ends. 4606137 is the
+    # unifyai-ci-clone App, which holds Contents: Read only; an App id is
+    # not a secret.
+    - name: Mint a token that can read orchestra
+      id: clone-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: '4606137'
+        private-key: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: orchestra
+
     - name: Clone orchestra repo for local deployment
       uses: actions/checkout@v4
       with:
         repository: unifyai/orchestra
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: orchestra
-        token: ${{ secrets.CLONE_TOKEN }}
+        token: ${{ steps.clone-token.outputs.token }}
         fetch-depth: 1
 
     - name: Clone unisdk repo
@@ -272,7 +285,6 @@ jobs:
         repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: unisdk
-        token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
     - name: Clone unillm repo
@@ -281,7 +293,6 @@ jobs:
         repository: unifyai/unillm
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: unillm
-        token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud

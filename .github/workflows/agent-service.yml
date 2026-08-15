@@ -37,7 +37,6 @@ jobs:
         repository: unifyai/magnitude
         ref: main
         path: magnitude
-        token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
     - uses: actions/setup-node@v4
