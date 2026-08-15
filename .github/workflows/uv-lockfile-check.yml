@@ -76,7 +76,6 @@ jobs:
         # pushes targeting main must resolve against main siblings so the check
         # matches post-merge behavior on main.
         ref: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && 'main' || 'staging' }}
-        token: ${{ secrets.CLONE_TOKEN || github.token }}
 
     - name: Checkout unillm (sibling editable dep)
       uses: actions/checkout@v6
@@ -84,7 +83,6 @@ jobs:
         repository: unifyai/unillm
         path: unillm
         ref: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && 'main' || 'staging' }}
-        token: ${{ secrets.CLONE_TOKEN || github.token }}
 
     - name: Install uv
       # SHA-pinned per repo CodeQL policy (no unpinned 3rd-party actions)
