@@ -28,18 +28,28 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+    # A repository dispatch is a write on the target repository, so this uses
+    # unifyai-ci-dispatch (4606148) rather than the clone App: it is the one
+    # App that carries Contents: Write, and it is installed on unify-deploy
+    # alone, so that write cannot reach any other repository. An App id is not
+    # a secret. This step fails loudly when the key is absent, which is what
+    # the hand-rolled empty check here used to do.
+    - name: Mint a token that can dispatch to unify-deploy
+      id: dispatch-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: '4606148'
+        private-key: ${{ secrets.CI_DISPATCH_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: unify-deploy
+
     - name: Trigger unifyai/unify-deploy Publish self-host images
       env:
-        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
         UNITY_REF: ${{ github.ref_name }}
         UNITY_SHA: ${{ github.sha }}
       run: |
         set -euo pipefail
-        if [[ -z "${GH_TOKEN}" ]]; then
-          echo "::error::CLONE_TOKEN secret is not configured on unity."
-          echo "It must be a PAT that can dispatch workflows on unifyai/unify-deploy."
-          exit 1
-        fi
         gh api repos/unifyai/unify-deploy/dispatches \
           --method POST \
           --input - <<EOF
