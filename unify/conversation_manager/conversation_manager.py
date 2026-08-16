@@ -2367,13 +2367,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
         try:
             import unillm
 
-            is_voice = self.mode.is_voice
+            from unify.conversation_manager.events import billing_source
+
+            source, label = billing_source(
+                str(trace_meta.get("origin_event_name") or ""),
+                is_voice=self.mode.is_voice,
+            )
             unillm.set_billing_context(
                 assistant_id=SESSION_DETAILS.assistant.agent_id,
                 user_id=acting_user_id,
                 organization_id=SESSION_DETAILS.org_id,
-                source="call" if is_voice else "chat",
-                label="Voice reply" if is_voice else "Chat reply",
+                source=source,
+                label=label,
             )
         except (ImportError, Exception):
             pass
