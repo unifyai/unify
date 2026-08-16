@@ -67,7 +67,7 @@ class ConversationSettings(BaseSettings):
     IMPL: str = "real"
     COMMS_URL: str = Field(default="", validation_alias="UNIFY_COMMS_URL")
     ADAPTERS_URL: str = Field(default="", validation_alias="UNIFY_ADAPTERS_URL")
-    JOB_NAME: str = ""
+    JOB_NAME: str = Field(default="", validation_alias="UNITY_CONVERSATION_JOB_NAME")
     CONTACT_ID: str = "1"
     BLACKLIST_CHECKS_ENABLED: bool = False
     ASSISTANT_SESSION_GROUP: str = "infra.unify.ai"
@@ -82,11 +82,17 @@ class ConversationSettings(BaseSettings):
     LOCAL_COMMS_PUBLIC_URL: str = ""
     LOCAL_COMMS_PUBLIC_URL_FILE: str = "/runtime/call-tunnel-url"
     LOCAL_EMAIL_POLL_INTERVAL: float = 15.0
-    INGRESS_TRANSPORT: str = ""
-    OUTBOUND_TRANSPORT: str = ""
+    INGRESS_TRANSPORT: str = Field(
+        default="",
+        validation_alias="UNITY_CONVERSATION_INGRESS_TRANSPORT",
+    )
+    OUTBOUND_TRANSPORT: str = Field(
+        default="",
+        validation_alias="UNITY_CONVERSATION_OUTBOUND_TRANSPORT",
+    )
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_CONVERSATION_",
+        env_prefix="UNIFY_CONVERSATION_",
         case_sensitive=True,
         extra="ignore",
     )
