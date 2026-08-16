@@ -314,7 +314,7 @@ def _default_bundles() -> Optional[List[WorkflowBundle]]:
     """The curated bundles this environment ships, or None when it has none.
 
     Resolution order matches the runtime's: an explicit
-    ``UNITY_WORKFLOWS_DIR``, then the installed ``unify_deploy`` package.
+    ``UNIFY_WORKFLOWS_DIR``, then the installed ``unify_deploy`` package.
     ``None`` (as opposed to ``[]``) means "nothing to reconcile" — the seed
     ensures storage exists and stops, so an environment without the curated
     tree cannot empty a catalogue another environment seeded.

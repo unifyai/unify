@@ -53,7 +53,7 @@ class ManagedLocalStack:
 def _real_home() -> Path:
     """Return the developer home directory before Unity pytest HOME sandboxing."""
 
-    configured = os.getenv("UNITY_REAL_HOME", "").strip()
+    configured = os.getenv("UNIFY_REAL_HOME", "").strip()
     if configured:
         return Path(configured).expanduser()
     return Path.home()
@@ -89,7 +89,7 @@ def resolve_sibling_repo(name: str) -> Path:
     if name in {"unify-deploy", "unity-deploy"}:
         env_keys = [
             "UNIFY_DEPLOY_REPO_PATH",
-            "UNITY_DEPLOY_REPO_PATH",
+            "UNIFY_DEPLOY_REPO_PATH",
             *env_keys,
         ]
     for env_key in env_keys:
@@ -254,12 +254,12 @@ def _stack_subprocess_env() -> dict[str, str]:
     )
     # Legacy alias still read by some stack helpers.
     env.setdefault(
-        "UNITY_DEPLOY_REPO_PATH",
+        "UNIFY_DEPLOY_REPO_PATH",
         env["UNIFY_DEPLOY_REPO_PATH"],
     )
     env.setdefault("CONSOLE_REPO_PATH", str(resolve_sibling_repo("console")))
     env.setdefault("UNIFY_REPO_PATH", str(resolve_sibling_repo("unify")))
-    env.setdefault("UNITY_REPO_PATH", env["UNIFY_REPO_PATH"])
+    env.setdefault("UNIFY_REPO_PATH", env["UNIFY_REPO_PATH"])
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
     env.setdefault("ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS", "0")
     return env

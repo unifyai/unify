@@ -27,7 +27,7 @@ def _seed_module():
 def test_worker_command_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     """A worker that never exits must raise, not block forever."""
     module = _seed_module()
-    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_WORKER_TIMEOUT", "1")
+    monkeypatch.setenv("UNIFY_INTEGRATION_BOOTSTRAP_WORKER_TIMEOUT", "1")
 
     with pytest.raises(RuntimeError, match="timed out after 1s"):
         module._run_json_command(
@@ -38,7 +38,7 @@ def test_worker_command_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_timeout_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _seed_module()
-    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_WORKER_TIMEOUT", "7")
+    monkeypatch.setenv("UNIFY_INTEGRATION_BOOTSTRAP_WORKER_TIMEOUT", "7")
     seen: dict[str, float | None] = {}
 
     def fake_run(*_args: object, **kwargs: object):

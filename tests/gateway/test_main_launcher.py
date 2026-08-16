@@ -23,10 +23,10 @@ class TestArgParsing:
     ) -> None:
         """No flags, no env vars: defaults to 0.0.0.0:8080, info, no reload."""
         for var in (
-            "UNITY_GATEWAY_HOST",
-            "UNITY_GATEWAY_PORT",
-            "UNITY_GATEWAY_LOG_LEVEL",
-            "UNITY_GATEWAY_RELOAD",
+            "UNIFY_GATEWAY_HOST",
+            "UNIFY_GATEWAY_PORT",
+            "UNIFY_GATEWAY_LOG_LEVEL",
+            "UNIFY_GATEWAY_RELOAD",
         ):
             monkeypatch.delenv(var, raising=False)
 
@@ -43,10 +43,10 @@ class TestArgParsing:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("UNITY_GATEWAY_HOST", "127.0.0.1")
-        monkeypatch.setenv("UNITY_GATEWAY_PORT", "9000")
-        monkeypatch.setenv("UNITY_GATEWAY_LOG_LEVEL", "debug")
-        monkeypatch.setenv("UNITY_GATEWAY_RELOAD", "true")
+        monkeypatch.setenv("UNIFY_GATEWAY_HOST", "127.0.0.1")
+        monkeypatch.setenv("UNIFY_GATEWAY_PORT", "9000")
+        monkeypatch.setenv("UNIFY_GATEWAY_LOG_LEVEL", "debug")
+        monkeypatch.setenv("UNIFY_GATEWAY_RELOAD", "true")
 
         from unify.gateway import __main__ as launcher
 
@@ -61,7 +61,7 @@ class TestArgParsing:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("UNITY_GATEWAY_PORT", "9000")
+        monkeypatch.setenv("UNIFY_GATEWAY_PORT", "9000")
 
         from unify.gateway import __main__ as launcher
 
@@ -76,10 +76,10 @@ class TestMain:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         for var in (
-            "UNITY_GATEWAY_HOST",
-            "UNITY_GATEWAY_PORT",
-            "UNITY_GATEWAY_LOG_LEVEL",
-            "UNITY_GATEWAY_RELOAD",
+            "UNIFY_GATEWAY_HOST",
+            "UNIFY_GATEWAY_PORT",
+            "UNIFY_GATEWAY_LOG_LEVEL",
+            "UNIFY_GATEWAY_RELOAD",
         ):
             monkeypatch.delenv(var, raising=False)
 
@@ -101,7 +101,7 @@ class TestMain:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.delenv("UNITY_GATEWAY_RELOAD", raising=False)
+        monkeypatch.delenv("UNIFY_GATEWAY_RELOAD", raising=False)
 
         from unify.gateway import __main__ as launcher
 
@@ -328,7 +328,7 @@ class TestMain:
 
         assert exit_code == 0
         contents = env_file.read_text(encoding="utf-8")
-        assert "UNITY_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
+        assert "UNIFY_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
         assert "SLACK_SIGNING_SECRET=secret" in contents
 
     def test_smoke_checks_gateway_health(

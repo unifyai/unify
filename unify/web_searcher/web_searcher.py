@@ -128,7 +128,7 @@ class WebSearcher(BaseWebSearcher):
             parent_chat_context=_parent_chat_context,
             response_format=response_format,
             handle_cls=(
-                ReadOnlyAskGuardHandle if SETTINGS.UNITY_READONLY_ASK_GUARD else None
+                ReadOnlyAskGuardHandle if SETTINGS.UNIFY_READONLY_ASK_GUARD else None
             ),
             # A single ask fans out to several searches at once and they return
             # at different times, so letting each completion cancel the

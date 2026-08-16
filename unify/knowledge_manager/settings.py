@@ -2,7 +2,7 @@
 KnowledgeManager-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_KNOWLEDGE_.
+Environment variables use the prefix UNIFY_KNOWLEDGE_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,7 +23,7 @@ class KnowledgeSettings(BaseSettings):
     MODEL_MAX_INPUT_TOKENS: int = 128000
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_KNOWLEDGE_",
+        env_prefix="UNIFY_KNOWLEDGE_",
         case_sensitive=True,
         extra="ignore",
     )

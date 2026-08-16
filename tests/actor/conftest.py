@@ -33,7 +33,7 @@ def _force_simulated_web(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force WebSearcher to use the simulated implementation for actor tests."""
     from unify.settings import SETTINGS
 
-    monkeypatch.setenv("UNITY_WEB_IMPL", "simulated")
+    monkeypatch.setenv("UNIFY_WEB_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.web, "IMPL", "simulated", raising=False)
 
     ManagerRegistry.clear()

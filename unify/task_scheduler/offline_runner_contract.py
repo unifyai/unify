@@ -21,12 +21,12 @@ __all__ = [
 
 
 _PROVIDER_EVENT_OFFLINE_ENV_KEYS = (
-    "UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID",
-    "UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID",
-    "UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID",
-    "UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID",
-    "UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF",
-    "UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
+    "UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID",
+    "UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID",
+    "UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID",
+    "UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID",
+    "UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF",
+    "UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
 )
 
 
@@ -70,32 +70,32 @@ def build_offline_runner_env(
     request_text = _request_text(task_name=task_name, task_id=task_id)
 
     env: dict[str, str] = {
-        "UNITY_OFFLINE_RUN_KEY": run_key,
-        "UNITY_OFFLINE_TASK_ID": str(task_id),
-        "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(source_task_log_id),
-        "UNITY_OFFLINE_TASK_REVISION": str(revision or ""),
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": (
+        "UNIFY_OFFLINE_RUN_KEY": run_key,
+        "UNIFY_OFFLINE_TASK_ID": str(task_id),
+        "UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(source_task_log_id),
+        "UNIFY_OFFLINE_TASK_REVISION": str(revision or ""),
+        "UNIFY_OFFLINE_TASK_FUNCTION_ID": (
             str(int(entrypoint)) if entrypoint is not None else ""
         ),
-        "UNITY_OFFLINE_TASK_REQUEST": request_text,
-        "UNITY_OFFLINE_TASK_NAME": str(task_name or ""),
-        "UNITY_OFFLINE_TASK_WAKE": wake,
-        "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _iso_utc_or_empty(scheduled_for),
-        "UNITY_OFFLINE_TASK_SOURCE_REF": source_ref or "",
-        "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": source_medium or "",
-        "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
+        "UNIFY_OFFLINE_TASK_REQUEST": request_text,
+        "UNIFY_OFFLINE_TASK_NAME": str(task_name or ""),
+        "UNIFY_OFFLINE_TASK_WAKE": wake,
+        "UNIFY_OFFLINE_TASK_SCHEDULED_FOR": _iso_utc_or_empty(scheduled_for),
+        "UNIFY_OFFLINE_TASK_SOURCE_REF": source_ref or "",
+        "UNIFY_OFFLINE_TASK_SOURCE_MEDIUM": source_medium or "",
+        "UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
             str(source_contact_id) if source_contact_id is not None else ""
         ),
-        "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM": ("1" if requires_filesystem else "0"),
-        "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER": "1" if requires_computer else "0",
+        "UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM": ("1" if requires_filesystem else "0"),
+        "UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER": "1" if requires_computer else "0",
         "ASSISTANT_ID": str(assistant_id),
     }
     if source_contact_display_name:
-        env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] = str(
+        env["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] = str(
             source_contact_display_name,
         )
     if job_name:
-        env["UNITY_OFFLINE_TASK_JOB_NAME"] = str(job_name)
+        env["UNIFY_OFFLINE_TASK_JOB_NAME"] = str(job_name)
     if destination:
         env["TASK_DESTINATION"] = str(destination)
     if wake == "provider_event":
@@ -115,20 +115,20 @@ def build_offline_runner_env(
             )
         env.update(
             {
-                "UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID": str(
+                "UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID": str(
                     provider_event_operation_id,
                 ),
-                "UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID": str(provider_event_run_id),
-                "UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID": str(
+                "UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID": str(provider_event_run_id),
+                "UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID": str(
                     provider_event_binding_id,
                 ),
-                "UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID": str(
+                "UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID": str(
                     provider_event_receipt_id,
                 ),
-                "UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF": str(
+                "UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF": str(
                     provider_event_context_ref,
                 ),
-                "UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT": str(
+                "UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT": str(
                     provider_event_issued_at,
                 ),
             },

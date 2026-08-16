@@ -69,12 +69,12 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
                 "Admin key for local gateway admin routes",
             ),
             CredentialSpec(
-                "UNITY_GATEWAY_PUBLIC_URL",
+                "UNIFY_GATEWAY_PUBLIC_URL",
                 "Public HTTPS callback base URL",
                 required=False,
             ),
             CredentialSpec(
-                "UNITY_GATEWAY_LOCAL_INGRESS_URL",
+                "UNIFY_GATEWAY_LOCAL_INGRESS_URL",
                 "ConversationManager local ingress URL",
                 required=False,
             ),
@@ -85,7 +85,7 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
                 required=False,
             ),
             CredentialSpec(
-                "UNITY_GATEWAY_STORAGE_DIR",
+                "UNIFY_GATEWAY_STORAGE_DIR",
                 "Local attachment storage directory",
                 required=False,
             ),

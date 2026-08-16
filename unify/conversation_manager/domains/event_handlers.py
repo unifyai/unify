@@ -3518,7 +3518,7 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
     if (
         cm.is_coordinator
         and cm.coordinator_onboarding_active
-        and SETTINGS.UNITY_CONSOLE_UI
+        and SETTINGS.UNIFY_CONSOLE_UI
     ):
         cm._coordinator_state_checked_at = 0.0
         await cm._refresh_coordinator_onboarding_state()

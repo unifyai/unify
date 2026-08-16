@@ -36,7 +36,7 @@ from livekit import api
 _VOICE_AGENT_LOG_NAME = ".logs_voice_agent.txt"
 _CONNECTION_FILE = Path(".live_voice_connect.json")
 _READINESS_POLL_INTERVAL_SECONDS = 0.25
-_SANDBOX_LAUNCH_CWD_ENV = "UNITY_SANDBOX_LAUNCH_CWD"
+_SANDBOX_LAUNCH_CWD_ENV = "UNIFY_SANDBOX_LAUNCH_CWD"
 
 _PLAYGROUND_DIR = Path(__file__).resolve().parents[2] / ".livekit-playground"
 _PLAYGROUND_REPO = "https://github.com/livekit/agents-playground.git"

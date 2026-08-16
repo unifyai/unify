@@ -3459,7 +3459,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         backstop. Non-coordinator sessions and Console-less deployments
         skip it. Failures leave the previous values in place.
         """
-        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+        if not self.is_coordinator or not SETTINGS.UNIFY_CONSOLE_UI:
             return
         import time as _time
 
@@ -3517,7 +3517,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """PATCH ``pending_chat_intro`` on Orchestra and refresh the session cache."""
         from unify.settings import SETTINGS
 
-        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+        if not self.is_coordinator or not SETTINGS.UNIFY_CONSOLE_UI:
             return {
                 "status": "error",
                 "message": "Chat intro state can only be changed for the Coordinator.",
@@ -3564,7 +3564,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """PATCH ``onboarding_active`` on Orchestra and refresh the session cache."""
         from unify.settings import SETTINGS
 
-        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+        if not self.is_coordinator or not SETTINGS.UNIFY_CONSOLE_UI:
             return {
                 "status": "error",
                 "message": "Onboarding can only be toggled for the workspace Coordinator.",
@@ -3637,7 +3637,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """PATCH manual onboarding step completion on Orchestra."""
         from unify.settings import SETTINGS
 
-        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+        if not self.is_coordinator or not SETTINGS.UNIFY_CONSOLE_UI:
             return {
                 "status": "error",
                 "message": (

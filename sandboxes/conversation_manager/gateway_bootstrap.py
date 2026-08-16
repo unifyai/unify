@@ -24,7 +24,7 @@ LG = logging.getLogger("conversation_manager_sandbox")
 ProgressCallback = Callable[[str], None]
 
 _GATEWAY_HEALTH_PATH = "/health"
-# Port 8787 matches the CM's LOCAL_COMMS_PORT default (UNITY_CONVERSATION_LOCAL_COMMS_PORT).
+# Port 8787 matches the CM's LOCAL_COMMS_PORT default (UNIFY_CONVERSATION_LOCAL_COMMS_PORT).
 # Starting on this exact port means the CM's _local_comms_base_url() fallback resolves
 # correctly without needing UNITY_COMMS_URL to be set (which would be too late after
 # pydantic-settings has already instantiated SETTINGS at import time).
@@ -118,7 +118,7 @@ def try_start_gateway_direct(
             ok=False,
             summary=(
                 f"Port {port} is in use by an unrelated process. "
-                "Free that port or set UNITY_CONVERSATION_LOCAL_COMMS_PORT to override."
+                "Free that port or set UNIFY_CONVERSATION_LOCAL_COMMS_PORT to override."
             ),
         )
 
@@ -128,8 +128,8 @@ def try_start_gateway_direct(
 
     gateway_env = {
         **os.environ,
-        "UNITY_GATEWAY_HOST": "127.0.0.1",
-        "UNITY_GATEWAY_PORT": str(port),
+        "UNIFY_GATEWAY_HOST": "127.0.0.1",
+        "UNIFY_GATEWAY_PORT": str(port),
     }
 
     log_dir = repo_root / "logs" / "gateway"

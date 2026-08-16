@@ -90,7 +90,7 @@ repos:
     # Only meaningful where a canvas toolchain is installed; the actor's
     # authored TSX is typechecked against the digest's source of truth, so a
     # stale digest means the prompt teaches an API the compiler rejects.
-    entry: "sh -c 'if [ -n \"$UNITY_CANVAS_TOOLCHAIN_ROOT\" ] && [ -d \"$UNITY_CANVAS_TOOLCHAIN_ROOT\" ]; then .venv/bin/python scripts/generate_canvas_kit_api.py --check; else echo \"canvas toolchain not installed; skipping digest check\"; fi'"
+    entry: "sh -c 'if [ -n \"$UNIFY_CANVAS_TOOLCHAIN_ROOT\" ] && [ -d \"$UNIFY_CANVAS_TOOLCHAIN_ROOT\" ]; then .venv/bin/python scripts/generate_canvas_kit_api.py --check; else echo \"canvas toolchain not installed; skipping digest check\"; fi'"
     language: system
     pass_filenames: false
     files: ^(unify/canvas_manager/canvas_kit_api\.md|scripts/generate_canvas_kit_api\.py)$

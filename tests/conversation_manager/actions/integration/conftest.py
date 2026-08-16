@@ -32,9 +32,9 @@ def pytest_configure(config) -> None:
     """
     Configure environment variables for CodeActActor integration tests.
 
-    Note: parent CM tests' conftest sets UNITY_ACTOR_IMPL="simulated" and disables
+    Note: parent CM tests' conftest sets UNIFY_ACTOR_IMPL="simulated" and disables
     several optional managers. We inject CodeActActor directly, so we do NOT rely
-    on UNITY_ACTOR_IMPL, but we DO override manager enablement as needed.
+    on UNIFY_ACTOR_IMPL, but we DO override manager enablement as needed.
     """
     os.environ["UNIFY_PRETEST_CONTEXT_CREATE"] = "true"
     import tests.settings as test_settings_module
@@ -46,28 +46,28 @@ def pytest_configure(config) -> None:
 
     # These tests validate direct manager behavior (including fast-path tools),
     # so they need concrete manager implementations.
-    os.environ["UNITY_CONTACT_IMPL"] = "real"
-    os.environ["UNITY_TRANSCRIPT_IMPL"] = "real"
-    os.environ["UNITY_TASK_IMPL"] = "real"
-    os.environ["UNITY_FUNCTION_IMPL"] = "real"
+    os.environ["UNIFY_CONTACT_IMPL"] = "real"
+    os.environ["UNIFY_TRANSCRIPT_IMPL"] = "real"
+    os.environ["UNIFY_TASK_IMPL"] = "real"
+    os.environ["UNIFY_FUNCTION_IMPL"] = "real"
 
     # Enable FileManager for attachment/file flows.
-    os.environ["UNITY_FILE_ENABLED"] = "true"
+    os.environ["UNIFY_FILE_ENABLED"] = "true"
 
     # Keep KnowledgeManager disabled for determinism/performance in this suite.
-    os.environ["UNITY_KNOWLEDGE_ENABLED"] = "false"
+    os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "false"
 
     # Keep optional managers disabled for focus + determinism.
-    os.environ["UNITY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNITY_SECRET_ENABLED"] = "false"
-    os.environ["UNITY_SKILL_ENABLED"] = "false"
-    os.environ["UNITY_WEB_ENABLED"] = "false"
-    os.environ["UNITY_MEMORY_ENABLED"] = "false"
+    os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
+    os.environ["UNIFY_SECRET_ENABLED"] = "false"
+    os.environ["UNIFY_SKILL_ENABLED"] = "false"
+    os.environ["UNIFY_WEB_ENABLED"] = "false"
+    os.environ["UNIFY_MEMORY_ENABLED"] = "false"
 
     # Production actor/model defaults (openai/gpt-5.6-sol@openrouter) come from SETTINGS.
 
     # Ensure NEW marker comparisons are stable in tests.
-    os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
+    os.environ.setdefault("UNIFY_INCREMENTING_TIMESTAMPS", "true")
 
 
 @pytest.fixture(autouse=True)

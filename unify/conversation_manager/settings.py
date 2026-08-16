@@ -20,18 +20,18 @@ class ConversationSettings(BaseSettings):
         JOB_NAME: Job name for the ConversationManager session.
         CONTACT_ID: Default contact ID for simulated ConversationManager.
         FAST_BRAIN_MODEL: LLM model for the voice fast brain (TTS mode).
-            Override via UNITY_CONVERSATION_FAST_BRAIN_MODEL.
+            Override via UNIFY_CONVERSATION_FAST_BRAIN_MODEL.
         FAST_BRAIN_REASONING_EFFORT: Reasoning effort for voice fast-brain
             call sites (LiveKit voice, turn selection, opening greeting).
-            Override via UNITY_CONVERSATION_FAST_BRAIN_REASONING_EFFORT.
+            Override via UNIFY_CONVERSATION_FAST_BRAIN_REASONING_EFFORT.
         SLOW_BRAIN_MODEL: Shared ConversationManager slow-brain model. Empty
             falls back to the global shared model (UNIFY_MODEL / assistant
             default resolution). Override via
-            UNITY_CONVERSATION_SLOW_BRAIN_MODEL.
+            UNIFY_CONVERSATION_SLOW_BRAIN_MODEL.
         SLOW_BRAIN_REASONING_EFFORT: Reasoning effort paired with
             SLOW_BRAIN_MODEL when that setting is non-empty. Empty leaves
             call-site effort intact. Override via
-            UNITY_CONVERSATION_SLOW_BRAIN_REASONING_EFFORT.
+            UNIFY_CONVERSATION_SLOW_BRAIN_REASONING_EFFORT.
         FAST_BRAIN_CONTEXT_WINDOW: Maximum number of conversation items
             (utterances, notifications, etc.) the fast brain keeps in its
             rolling context window. Also used as the limit when hydrating

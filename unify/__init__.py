@@ -145,7 +145,7 @@ def init(
     # The workflow catalogue loads beside the integrations for the same
     # reason: filling the shelf (and reconciling installed workflows to
     # it) must not hold up the fast brain. No-op unless
-    # UNITY_WORKFLOWS_DIR is configured.
+    # UNIFY_WORKFLOWS_DIR is configured.
     with startup_timing(LOGGER, "unify.init.schedule_workflow_catalog"):
         try:
             from .workflow_manager.catalog import (

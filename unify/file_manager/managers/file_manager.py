@@ -2228,7 +2228,7 @@ class FileManager(BaseFileManager):
             parent_chat_context=_parent_chat_context,
             tool_policy=tool_policy_fn,
             handle_cls=(
-                ReadOnlyAskGuardHandle if SETTINGS.UNITY_READONLY_ASK_GUARD else None
+                ReadOnlyAskGuardHandle if SETTINGS.UNIFY_READONLY_ASK_GUARD else None
             ),
             response_format=response_format,
             clarification_queues=_clar_queues,

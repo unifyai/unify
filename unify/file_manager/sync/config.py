@@ -78,7 +78,7 @@ class SyncConfig:
         desktop_url = SESSION_DETAILS.assistant.desktop_url
         assistant_id = SESSION_DETAILS.assistant.agent_id
 
-        if os.environ.get("UNITY_DESKTOP_SHARED_MOUNT") == "1":
+        if os.environ.get("UNIFY_DESKTOP_SHARED_MOUNT") == "1":
             LOGGER.debug(
                 f"{ICONS['file_sync']} [FileSync] Shared desktop mount enabled, sync disabled",
             )

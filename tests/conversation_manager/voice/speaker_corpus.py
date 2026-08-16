@@ -76,11 +76,11 @@ _MIN_SPEAKERS = 4
 
 
 def _cache_dir() -> Path:
-    # ``UNITY_REAL_HOME`` is the pre-isolation home that tests/conftest.py
+    # ``UNIFY_REAL_HOME`` is the pre-isolation home that tests/conftest.py
     # records before pointing HOME at a temp dir. Preferring it keeps the
     # generated corpus in one place instead of re-rendering it into a fresh
     # temp home on every pytest session.
-    real_home = os.environ.get("UNITY_REAL_HOME")
+    real_home = os.environ.get("UNIFY_REAL_HOME")
     if real_home:
         root = Path(real_home) / ".cache"
     else:

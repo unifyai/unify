@@ -294,16 +294,16 @@ def _get_log_subdir() -> str:
     """Determine the log subdirectory for pytest logs.
 
     Returns a datetime-prefixed directory name for natural time-based ordering:
-        - UNITY_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_unity_dev_ttys042')
-        - Falls back to UNITY_TEST_SOCKET for legacy compatibility
+        - UNIFY_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_unity_dev_ttys042')
+        - Falls back to UNIFY_TEST_SOCKET for legacy compatibility
         - Derives terminal ID for direct pytest invocations (same as parallel_run.sh would)
     """
     # Prefer the datetime-prefixed log subdir if available
-    log_subdir = os.environ.get("UNITY_LOG_SUBDIR", "").strip()
+    log_subdir = os.environ.get("UNIFY_LOG_SUBDIR", "").strip()
     if log_subdir:
         return log_subdir
     # Fallback to socket name for backward compatibility
-    socket = os.environ.get("UNITY_TEST_SOCKET", "").strip()
+    socket = os.environ.get("UNIFY_TEST_SOCKET", "").strip()
     if socket:
         return socket
     # Derive terminal ID (same logic as _shell_common.sh) for direct pytest invocations
@@ -314,7 +314,7 @@ def _get_log_subdir() -> str:
 def _get_log_root(config_rootpath: Path) -> Path:
     """Determine the root directory for pytest logs.
 
-    Prefers UNITY_LOG_ROOT env var if set, allowing explicit worktree targeting.
+    Prefers UNIFY_LOG_ROOT env var if set, allowing explicit worktree targeting.
     Otherwise derives from this file's location, which correctly resolves to
     the worktree when running from one.
 
@@ -322,7 +322,7 @@ def _get_log_root(config_rootpath: Path) -> Path:
     would have logs written to the main repo instead of their worktree.
     """
     # Allow explicit override for flexibility
-    log_root = os.environ.get("UNITY_LOG_ROOT", "").strip()
+    log_root = os.environ.get("UNIFY_LOG_ROOT", "").strip()
     if log_root:
         return Path(log_root)
 
@@ -654,7 +654,7 @@ def _trace_test(request):
     header to all HTTP calls (httpx and aiohttp), allowing Orchestra traces
     to be correlated with specific test runs.
 
-    Enable/disable via UNITY_TEST_TRACING env var (default: true).
+    Enable/disable via UNIFY_TEST_TRACING env var (default: true).
     """
     try:
         from unify.common.test_tracing import trace_test

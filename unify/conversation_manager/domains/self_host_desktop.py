@@ -152,7 +152,7 @@ async def apply_managed_desktop_ready(
         file_sync_started,
     )
 
-    shared_desktop_mount = os.environ.get("UNITY_DESKTOP_SHARED_MOUNT") == "1"
+    shared_desktop_mount = os.environ.get("UNIFY_DESKTOP_SHARED_MOUNT") == "1"
     if file_sync_started:
         _t0 = time.perf_counter()
         await cm.event_broker.publish(
@@ -211,7 +211,7 @@ async def bootstrap_managed_desktop_on_startup(cm: ConversationManager) -> bool:
     if cm.vm_ready:
         if (
             not cm.file_sync_complete
-            and os.environ.get("UNITY_DESKTOP_SHARED_MOUNT") == "1"
+            and os.environ.get("UNIFY_DESKTOP_SHARED_MOUNT") == "1"
         ):
             cm.file_sync_complete = True
         return True

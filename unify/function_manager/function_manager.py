@@ -8046,7 +8046,7 @@ if __name__ == "__main__":
             from unify.provider_proxy.session import build_sandbox_env
 
             script_env = build_sandbox_env()
-            script_env["UNITY_RPC_SOCKET"] = str(socket_path)
+            script_env["UNIFY_RPC_SOCKET"] = str(socket_path)
             # Add the shell_runner.py as unity-primitive command
             # We create a wrapper script that invokes python with shell_runner.py
             wrapper_path = tmpdir_path / "unity-primitive"

@@ -18,13 +18,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def get_local_root() -> str:
     """Return the resolved local file root directory.
 
-    Uses ``SETTINGS.UNITY_LOCAL_ROOT`` when set, otherwise defaults to
+    Uses ``SETTINGS.UNIFY_LOCAL_ROOT`` when set, otherwise defaults to
     ``~/Unity/Local``.  All code that needs the local file root should
     call this function instead of hard-coding the path.
     """
     from unify.settings import SETTINGS
 
-    explicit = SETTINGS.UNITY_LOCAL_ROOT.strip()
+    explicit = SETTINGS.UNIFY_LOCAL_ROOT.strip()
     if explicit:
         return str(Path(explicit).expanduser().resolve())
     return str(Path.home() / "Unity" / "Local")

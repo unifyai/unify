@@ -195,22 +195,22 @@ def pytest_configure(config):
     # The brain tools route to these managers directly (ask_about_contacts,
     # update_contacts, query_past_transcripts), so they must be simulated
     # to avoid real LLM calls.
-    os.environ["UNITY_ACTOR_IMPL"] = "simulated"
-    os.environ["UNITY_ACTOR_SIMULATED_STEPS"] = "0"  # Allows pause+resume interactions
-    os.environ.setdefault("UNITY_CONTACT_IMPL", "simulated")
-    os.environ.setdefault("UNITY_TRANSCRIPT_IMPL", "simulated")
+    os.environ["UNIFY_ACTOR_IMPL"] = "simulated"
+    os.environ["UNIFY_ACTOR_SIMULATED_STEPS"] = "0"  # Allows pause+resume interactions
+    os.environ.setdefault("UNIFY_CONTACT_IMPL", "simulated")
+    os.environ.setdefault("UNIFY_TRANSCRIPT_IMPL", "simulated")
 
     # Disable optional managers not needed for conversation manager tests
-    os.environ["UNITY_MEMORY_ENABLED"] = "false"
-    os.environ["UNITY_KNOWLEDGE_ENABLED"] = "false"
-    os.environ["UNITY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNITY_SECRET_ENABLED"] = "false"
-    os.environ["UNITY_SKILL_ENABLED"] = "false"
-    os.environ["UNITY_WEB_ENABLED"] = "false"
-    os.environ["UNITY_FILE_ENABLED"] = "false"
+    os.environ["UNIFY_MEMORY_ENABLED"] = "false"
+    os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "false"
+    os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
+    os.environ["UNIFY_SECRET_ENABLED"] = "false"
+    os.environ["UNIFY_SKILL_ENABLED"] = "false"
+    os.environ["UNIFY_WEB_ENABLED"] = "false"
+    os.environ["UNIFY_FILE_ENABLED"] = "false"
 
     # Enable incrementing timestamps for **NEW** marker comparisons
-    os.environ["UNITY_INCREMENTING_TIMESTAMPS"] = "true"
+    os.environ["UNIFY_INCREMENTING_TIMESTAMPS"] = "true"
 
     # Mark as test mode
     os.environ["TEST"] = "true"
