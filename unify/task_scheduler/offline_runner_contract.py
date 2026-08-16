@@ -133,6 +133,15 @@ def build_offline_runner_env(
                 ),
             },
         )
+    # Transition: the process that builds this env and the process that reads
+    # it are different images, and they roll independently. An assistant image
+    # still carrying the pre-rename runner requires UNITY_OFFLINE_*, and
+    # _require_env raises rather than defaulting, so a skewed pair fails every
+    # offline task. Emit both names until the older image is gone.
+    for key in list(env):
+        if key.startswith("UNIFY_OFFLINE_"):
+            env[key.replace("UNIFY_", "UNITY_", 1)] = env[key]
+
     return env
 
 
