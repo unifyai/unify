@@ -59,8 +59,14 @@ class FileSettings(BaseSettings):
     # ``SETTINGS.GCP_PROJECT_ID`` + ``SETTINGS.ENV_SUFFIX``) instead of running
     # the in-process ``AttachmentIngestionPool``.  Completion events arrive
     # back on the per-assistant topic and are handled by ``CommsManager``.
-    PIPELINE_DISPATCH_ENABLED: bool = False
-    PIPELINE_ARTIFACT_BUCKET: str = ""
+    PIPELINE_DISPATCH_ENABLED: bool = Field(
+        default=False,
+        validation_alias="UNITY_FILE_PIPELINE_DISPATCH_ENABLED",
+    )
+    PIPELINE_ARTIFACT_BUCKET: str = Field(
+        default="",
+        validation_alias="UNITY_FILE_PIPELINE_ARTIFACT_BUCKET",
+    )
 
     # Plot API settings
     PLOT_API_ENDPOINT: str = "/logs/plot"
@@ -75,7 +81,7 @@ class FileSettings(BaseSettings):
     TABLE_VIEW_API_RETRY_BACKOFF: float = 1.0
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_FILE_",
+        env_prefix="UNIFY_FILE_",
         case_sensitive=True,
         extra="ignore",
     )
