@@ -151,7 +151,7 @@ has to keep covering for.
 ### Storage
 
 - All I/O runs through `TasksStore`.
-- Environment toggle `UNITY_TASK_LOCAL_VIEW_OFF` is a no-op in the current design (kept for compatibility with env configs).
+- Environment toggle `UNIFY_TASK_LOCAL_VIEW_OFF` is a no-op in the current design (kept for compatibility with env configs).
 
 
 ### Execution handle
@@ -206,7 +206,7 @@ f"children={len(kids['children'])} failed={len(failed)}"
 
 ### Common environment variables
 
-- `UNITY_TASK_SIM_ACTOR_DURATION`: default simulated actor duration (seconds).
+- `UNIFY_TASK_SIM_ACTOR_DURATION`: default simulated actor duration (seconds).
 
 
 ### Quick orientation for new contributors

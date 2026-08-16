@@ -34,7 +34,7 @@ _TRACER = None
 
 def _is_tracing_enabled() -> bool:
     """Check if test tracing is enabled via environment variable."""
-    return os.environ.get("UNITY_TEST_TRACING", "true").lower() in ("true", "1", "yes")
+    return os.environ.get("UNIFY_TEST_TRACING", "true").lower() in ("true", "1", "yes")
 
 
 def _initialize_tracer() -> None:

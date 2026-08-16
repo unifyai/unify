@@ -2,7 +2,7 @@
 ImageManager-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_IMAGE_.
+Environment variables use the prefix UNIFY_IMAGE_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,7 +18,7 @@ class ImageSettings(BaseSettings):
     IMPL: str = "real"
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_IMAGE_",
+        env_prefix="UNIFY_IMAGE_",
         case_sensitive=True,
         extra="ignore",
     )

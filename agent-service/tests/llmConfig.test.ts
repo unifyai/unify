@@ -16,9 +16,9 @@ function run(name: string, fn: () => void) {
   }
 }
 
-run("uses explicit UNITY_UNILLM_URL as the proxy base URL", () => {
+run("uses explicit UNIFY_UNILLM_URL as the proxy base URL", () => {
   const config = getLlmConfig({
-    UNITY_UNILLM_URL: "https://gateway.example.com/unillm/",
+    UNIFY_UNILLM_URL: "https://gateway.example.com/unillm/",
     UNIFY_KEY: "uk-test",
   });
 
@@ -30,16 +30,16 @@ run("uses explicit UNITY_UNILLM_URL as the proxy base URL", () => {
   });
 });
 
-run("derives the proxy URL from UNITY_COMMS_URL", () => {
+run("derives the proxy URL from UNIFY_COMMS_URL", () => {
   assert.strictEqual(
-    resolveUnillmBaseUrl({ UNITY_COMMS_URL: "https://comms.example.com/" }),
+    resolveUnillmBaseUrl({ UNIFY_COMMS_URL: "https://comms.example.com/" }),
     "https://comms.example.com/unillm",
   );
 });
 
-run("derives the proxy URL from UNITY_GATEWAY_URL", () => {
+run("derives the proxy URL from UNIFY_GATEWAY_URL", () => {
   assert.strictEqual(
-    resolveUnillmBaseUrl({ UNITY_GATEWAY_URL: "http://localhost:8080/" }),
+    resolveUnillmBaseUrl({ UNIFY_GATEWAY_URL: "http://localhost:8080/" }),
     "http://localhost:8080/unillm",
   );
 });
@@ -53,8 +53,8 @@ run("falls back to vision-capable default when no model override is set", () => 
 
 run("allows the agent-service model to be overridden without changing routing", () => {
   const config = getLlmConfig({
-    UNITY_UNILLM_URL: "https://gateway.example.com/unillm",
-    UNITY_AGENT_SERVICE_LLM_MODEL: "gpt-5.5@openai",
+    UNIFY_UNILLM_URL: "https://gateway.example.com/unillm",
+    UNIFY_AGENT_SERVICE_LLM_MODEL: "gpt-5.5@openai",
     UNIFY_KEY: "uk-test",
   });
 
@@ -64,7 +64,7 @@ run("allows the agent-service model to be overridden without changing routing", 
 
 run("ignores raw provider keys when a UniLLM proxy is configured", () => {
   const config = getLlmConfig({
-    UNITY_COMMS_URL: "https://comms.example.com",
+    UNIFY_COMMS_URL: "https://comms.example.com",
     UNIFY_KEY: "uk-test",
     [["ANTHROPIC", "API", "KEY"].join("_")]: "unused-anthropic-provider-credential",
     [["OPENAI", "API", "KEY"].join("_")]: "unused-openai-provider-credential",
@@ -89,7 +89,7 @@ run("fails closed when only raw provider keys are configured", () => {
 
 run("requires UNIFY_KEY for proxy authentication", () => {
   assert.throws(
-    () => getLlmConfig({ UNITY_UNILLM_URL: "https://gateway.example.com/unillm" }),
+    () => getLlmConfig({ UNIFY_UNILLM_URL: "https://gateway.example.com/unillm" }),
     /UNIFY_KEY is required/,
   );
 });

@@ -613,7 +613,7 @@ class SecretManager(BaseSecretManager):
     def _dotenv_path(self) -> str:
         """Return the path to the .env file used for local sync.
 
-        Honors UNITY_SECRET_DOTENV_PATH from SETTINGS; defaults to ".env" in CWD.
+        Honors UNIFY_SECRET_DOTENV_PATH from SETTINGS; defaults to ".env" in CWD.
         """
         import os as _os
 
@@ -888,7 +888,7 @@ class SecretManager(BaseSecretManager):
             tool_policy=self._default_ask_tool_policy,
             response_format=response_format,
             handle_cls=(
-                ReadOnlyAskGuardHandle if SETTINGS.UNITY_READONLY_ASK_GUARD else None
+                ReadOnlyAskGuardHandle if SETTINGS.UNIFY_READONLY_ASK_GUARD else None
             ),
             clarification_queues=_clar_queues,
             on_clarification_request=_on_clar_req,

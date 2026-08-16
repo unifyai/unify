@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-CURRENT_SOCKET="$UNITY_TMUX_SOCKET"
+CURRENT_SOCKET="$UNIFY_TMUX_SOCKET"
 
 QUIET=0
 SHOW_ALL=0

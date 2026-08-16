@@ -279,7 +279,7 @@ class ManagerRegistry:
         set os.environ after import won't affect SETTINGS values.
 
         The env var name is derived from the settings object's model_config
-        env_prefix (e.g., UNITY_CONTACT_ -> UNITY_CONTACT_IMPL).
+        env_prefix (e.g., UNIFY_CONTACT_ -> UNIFY_CONTACT_IMPL).
         """
         import os
 

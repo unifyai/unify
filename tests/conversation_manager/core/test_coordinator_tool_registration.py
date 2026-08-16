@@ -13,23 +13,23 @@ from unify.manager_registry import ManagerRegistry
 from unify.session_details import SESSION_DETAILS
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("SKIP_UNITY_TEST_INIT") == "1",
+    os.getenv("SKIP_UNIFY_TEST_INIT") == "1",
     reason="Requires full runtime context initialization.",
 )
 
 
 @pytest.fixture(autouse=True)
 def _ensure_context_base():
-    previous_impl = os.environ.get("UNITY_FUNCTION_IMPL")
+    previous_impl = os.environ.get("UNIFY_FUNCTION_IMPL")
     previous_base_context = getattr(ContextRegistry, "_base_context", None)
-    os.environ["UNITY_FUNCTION_IMPL"] = "simulated"
+    os.environ["UNIFY_FUNCTION_IMPL"] = "simulated"
     ManagerRegistry.clear()
     ContextRegistry.set_base_context("UnityTests/Coordinator")
     yield
     if previous_impl is None:
-        os.environ.pop("UNITY_FUNCTION_IMPL", None)
+        os.environ.pop("UNIFY_FUNCTION_IMPL", None)
     else:
-        os.environ["UNITY_FUNCTION_IMPL"] = previous_impl
+        os.environ["UNIFY_FUNCTION_IMPL"] = previous_impl
     ContextRegistry.clear()
     if previous_base_context:
         ContextRegistry.set_base_context(previous_base_context)

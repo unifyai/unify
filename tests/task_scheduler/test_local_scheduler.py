@@ -69,10 +69,10 @@ class TestLocalSchedulerSettings:
 
         # Clear all signal env vars first, then apply overrides.
         for name in (
-            "UNITY_LOCAL_SCHEDULER",
-            "UNITY_COMMS_URL",
-            "UNITY_CONVERSATION_LOCAL_COMMS_MODE",
-            "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED",
+            "UNIFY_LOCAL_SCHEDULER",
+            "UNIFY_COMMS_URL",
+            "UNIFY_CONVERSATION_LOCAL_COMMS_MODE",
+            "UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED",
         ):
             monkeypatch.delenv(name, raising=False)
         for name, value in env_overrides.items():
@@ -88,9 +88,9 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_LOCAL_SCHEDULER="true",
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="hosted",
+                UNIFY_LOCAL_SCHEDULER="true",
+                UNIFY_COMMS_URL="https://comms.example.com",
+                UNIFY_CONVERSATION_LOCAL_COMMS_MODE="hosted",
             )
             is True
         )
@@ -99,30 +99,30 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_LOCAL_SCHEDULER="false",
-                UNITY_COMMS_URL="",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="local",
+                UNIFY_LOCAL_SCHEDULER="false",
+                UNIFY_COMMS_URL="",
+                UNIFY_CONVERSATION_LOCAL_COMMS_MODE="local",
             )
             is False
         )
 
     @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "on"])
     def test_explicit_truthy_variants_recognised(self, monkeypatch, truthy):
-        assert self._derive(monkeypatch, UNITY_LOCAL_SCHEDULER=truthy) is True
+        assert self._derive(monkeypatch, UNIFY_LOCAL_SCHEDULER=truthy) is True
 
     def test_empty_comms_url_implies_local(self, monkeypatch):
-        assert self._derive(monkeypatch, UNITY_COMMS_URL="") is True
+        assert self._derive(monkeypatch, UNIFY_COMMS_URL="") is True
 
     def test_missing_comms_url_implies_local(self, monkeypatch):
-        # No UNITY_COMMS_URL set at all.
+        # No UNIFY_COMMS_URL set at all.
         assert self._derive(monkeypatch) is True
 
     def test_comms_url_set_with_hosted_comms_implies_hosted(self, monkeypatch):
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="hosted",
+                UNIFY_COMMS_URL="https://comms.example.com",
+                UNIFY_CONVERSATION_LOCAL_COMMS_MODE="hosted",
             )
             is False
         )
@@ -131,8 +131,8 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="local",
+                UNIFY_COMMS_URL="https://comms.example.com",
+                UNIFY_CONVERSATION_LOCAL_COMMS_MODE="local",
             )
             is True
         )
@@ -141,8 +141,8 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_ENABLED="true",
+                UNIFY_COMMS_URL="https://comms.example.com",
+                UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED="true",
             )
             is True
         )

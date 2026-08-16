@@ -240,7 +240,7 @@ def ensure_deploy_runtime_loaded() -> None:
     if not os.environ.get("_UNITY_STARTUP_HOOK_GROUP"):
         return
 
-    group = os.environ.get("_UNITY_RUNTIME_HOOK_GROUP", "unify.deploy_runtime")
+    group = os.environ.get("_UNIFY_RUNTIME_HOOK_GROUP", "unify.deploy_runtime")
     package_filter = os.environ.get("_UNITY_STARTUP_HOOK_PACKAGE")
 
     try:

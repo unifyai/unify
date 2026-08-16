@@ -71,7 +71,7 @@ def resolve_slow_brain_model() -> tuple[str, str | None]:
 
     Priority:
     1. Per-assistant slow brain (Orchestra / SESSION_DETAILS), including effort
-    2. ``UNITY_CONVERSATION_SLOW_BRAIN_MODEL`` when set (non-empty)
+    2. ``UNIFY_CONVERSATION_SLOW_BRAIN_MODEL`` when set (non-empty)
     3. The global shared model (``UNIFY_MODEL``)
 
     Independent of the actor ``default_model``. A returned effort of None means

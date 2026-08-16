@@ -87,8 +87,8 @@ logs/pytest/
 ```
 
 **Environment variables:**
-- `UNITY_LOG_SUBDIR`: The full datetime-prefixed log directory name (set by `parallel_run.sh`)
-- `UNITY_TEST_SOCKET`: The terminal socket name for tmux isolation (e.g., `unity_dev_ttys004`)
+- `UNIFY_LOG_SUBDIR`: The full datetime-prefixed log directory name (set by `parallel_run.sh`)
+- `UNIFY_TEST_SOCKET`: The terminal socket name for tmux isolation (e.g., `unity_dev_ttys004`)
 
 ### Cleanup (REQUIRED)
 - **ALWAYS** kill failed tmux sessions after extracting failure info from `logs/pytest/`.

@@ -1,7 +1,7 @@
 """Exhaustive memory dump for OOM diagnostics.
 
 Called when the memory watchdog triggers graceful shutdown.  Writes a
-comprehensive report to ``{UNITY_LOG_DIR}/oom_memory_dump.txt`` covering:
+comprehensive report to ``{UNIFY_LOG_DIR}/oom_memory_dump.txt`` covering:
 
 - Cgroup memory breakdown (RSS, cache, swap, kernel, …)
 - Per-process RSS/VmSize for every process in the container
@@ -298,7 +298,7 @@ def _dump_open_fds(out: io.StringIO) -> None:
 
 def _resolve_log_dir(log_dir: str | Path | None) -> Path:
     if log_dir is None:
-        log_dir = os.environ.get("UNITY_LOG_DIR", "").strip()
+        log_dir = os.environ.get("UNIFY_LOG_DIR", "").strip()
     if not log_dir:
         for fallback in ("/var/log/unity", "/tmp"):
             if os.path.isdir(fallback):
@@ -318,7 +318,7 @@ def write_memory_dump(
     Args:
         filename: Name of the dump file (e.g. ``oom_memory_dump.txt``
                   or ``startup_memory_dump.txt``).
-        log_dir: Directory to write to.  Falls back to UNITY_LOG_DIR,
+        log_dir: Directory to write to.  Falls back to UNIFY_LOG_DIR,
                  then /var/log/unity, then /tmp.
         header: First line of the dump.  Defaults to ``MEMORY DUMP``.
 

@@ -152,22 +152,22 @@ class ActorFactory:
         impl = "real"
 
         # State managers
-        os.environ["UNITY_CONTACT_IMPL"] = impl
-        os.environ["UNITY_TRANSCRIPT_IMPL"] = impl
-        os.environ["UNITY_TASK_IMPL"] = impl
-        os.environ["UNITY_KNOWLEDGE_IMPL"] = impl
-        os.environ["UNITY_GUIDANCE_IMPL"] = impl
-        os.environ["UNITY_SECRET_IMPL"] = impl
-        os.environ["UNITY_WEB_IMPL"] = impl
-        os.environ["UNITY_FILE_IMPL"] = impl
+        os.environ["UNIFY_CONTACT_IMPL"] = impl
+        os.environ["UNIFY_TRANSCRIPT_IMPL"] = impl
+        os.environ["UNIFY_TASK_IMPL"] = impl
+        os.environ["UNIFY_KNOWLEDGE_IMPL"] = impl
+        os.environ["UNIFY_GUIDANCE_IMPL"] = impl
+        os.environ["UNIFY_SECRET_IMPL"] = impl
+        os.environ["UNIFY_WEB_IMPL"] = impl
+        os.environ["UNIFY_FILE_IMPL"] = impl
 
         # Support managers commonly used by CM / primitives
-        os.environ["UNITY_DATA_IMPL"] = impl
-        os.environ["UNITY_FUNCTION_IMPL"] = impl
-        os.environ["UNITY_CONVERSATION_IMPL"] = impl
+        os.environ["UNIFY_DATA_IMPL"] = impl
+        os.environ["UNIFY_FUNCTION_IMPL"] = impl
+        os.environ["UNIFY_CONVERSATION_IMPL"] = impl
 
         # Memory is optional; keep it aligned so behavior is predictable.
-        os.environ["UNITY_MEMORY_IMPL"] = impl
+        os.environ["UNIFY_MEMORY_IMPL"] = impl
 
         # Config manager for per-company actor configuration.
-        os.environ["UNITY_CONFIG_IMPL"] = impl
+        os.environ["UNIFY_CONFIG_IMPL"] = impl

@@ -91,10 +91,10 @@ class TestLocalOfflineTriggerDispatch:
 
         assert captured["args"][-2:] == ("-m", "unify.task_scheduler.offline_runner")
         env = captured["env"]
-        assert env["UNITY_OFFLINE_TASK_WAKE"] == "triggered"
-        assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms_message"
-        assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
-        assert env["UNITY_OFFLINE_TASK_SOURCE_REF"]
+        assert env["UNIFY_OFFLINE_TASK_WAKE"] == "triggered"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms_message"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_REF"]
         assert result["success"] is True
         assert result["status"] == "spawned_local"
         assert result["wake"] == "triggered"

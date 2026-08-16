@@ -30,9 +30,9 @@ function run(name: string, fn: () => void) {
 }
 
 const MANAGED_ENV = {
-  UNITY_EGRESS_PROXY_SERVER: "http://gate.example.net:7777",
-  UNITY_EGRESS_PROXY_USERNAME: "acct-country-{region}-session-{session}",
-  UNITY_EGRESS_PROXY_PASSWORD: "s3cret", // pragma: allowlist secret - test fixture
+  UNIFY_EGRESS_PROXY_SERVER: "http://gate.example.net:7777",
+  UNIFY_EGRESS_PROXY_USERNAME: "acct-country-{region}-session-{session}",
+  UNIFY_EGRESS_PROXY_PASSWORD: "s3cret", // pragma: allowlist secret - test fixture
 };
 
 run("absent or direct policy leaves the session unchanged", () => {
@@ -190,7 +190,7 @@ run("the region placeholder is filled in either case", () => {
   // and receives cc-gb may ignore the geo-targeting rather than reject it.
   const resolved = resolveEgress(
     { mode: "region", region: "gb", sessionKey: "s1" },
-    { ...MANAGED_ENV, UNITY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}" },
+    { ...MANAGED_ENV, UNIFY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}" },
   );
   assert.equal(resolved.proxy?.username, "customer-acme-cc-GB-sessid-s1_gb");
 });
@@ -216,7 +216,7 @@ run("delimiter characters are stripped from the sticky handle", () => {
   // this reaches production.
   const resolved = resolveEgress(
     { mode: "region", region: "gb", sessionKey: "reader-one" },
-    { ...MANAGED_ENV, UNITY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}-sesstime-30" },
+    { ...MANAGED_ENV, UNIFY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}-sesstime-30" },
   );
   assert.equal(resolved.proxy?.username, "customer-acme-cc-GB-sessid-readerone_gb-sesstime-30");
   assert.ok(!resolved.proxy?.username?.includes("reader-one"));
@@ -231,10 +231,10 @@ run("only contracted regions are advertised", () => {
 // A dedicated-IP endpoint: the username is literal and the exit is a fixed
 // address, so the region cannot travel to the provider as a parameter.
 const DEDICATED_ENV = {
-  UNITY_EGRESS_PROXY_SERVER: "http://isp.example.net:8001",
-  UNITY_EGRESS_PROXY_USERNAME: "acct_fixed",
-  UNITY_EGRESS_PROXY_PASSWORD: "s3cret", // pragma: allowlist secret - test fixture
-  UNITY_EGRESS_PROXY_REGIONS: "gb",
+  UNIFY_EGRESS_PROXY_SERVER: "http://isp.example.net:8001",
+  UNIFY_EGRESS_PROXY_USERNAME: "acct_fixed",
+  UNIFY_EGRESS_PROXY_PASSWORD: "s3cret", // pragma: allowlist secret - test fixture
+  UNIFY_EGRESS_PROXY_REGIONS: "gb",
 };
 
 run("a dedicated endpoint serves its declared region with the username verbatim", () => {
@@ -262,7 +262,7 @@ run("a dedicated endpoint refuses a region it does not exit from", () => {
 run("a fixed exit of undeclared geography refuses every region", () => {
   // Without a declaration there is no way to know where the endpoint leaves
   // from, so claiming any particular region is a guess.
-  const { UNITY_EGRESS_PROXY_REGIONS: _omitted, ...undeclared } = DEDICATED_ENV;
+  const { UNIFY_EGRESS_PROXY_REGIONS: _omitted, ...undeclared } = DEDICATED_ENV;
   assert.throws(
     () => resolveEgress({ mode: "region", region: "gb" }, undeclared),
     (err: unknown) =>
@@ -280,7 +280,7 @@ run("a geo-targeted username needs no region declaration", () => {
 run("the region declaration tolerates spacing and case", () => {
   const resolved = resolveEgress(
     { mode: "region", region: "us" },
-    { ...DEDICATED_ENV, UNITY_EGRESS_PROXY_REGIONS: " GB , US " },
+    { ...DEDICATED_ENV, UNIFY_EGRESS_PROXY_REGIONS: " GB , US " },
   );
   assert.equal(resolved.contextOptions.locale, "en-US");
 });

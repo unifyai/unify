@@ -1,7 +1,7 @@
 """Local-disk implementation of the gateway ``Storage`` protocol.
 
 Used by the single-process self-hosted Unity. Backs gateway attachments
-to a workspace-relative directory (``UNITY_GATEWAY_STORAGE_DIR``, default
+to a workspace-relative directory (``UNIFY_GATEWAY_STORAGE_DIR``, default
 ``./.unity-gateway-storage``).
 
 When a ``public_base_url`` is configured, ``signed_url`` returns
@@ -21,7 +21,7 @@ from unify.gateway.storage.base import Storage, StorageError, StorageObject
 
 
 def _default_base_dir() -> Path:
-    raw = os.environ.get("UNITY_GATEWAY_STORAGE_DIR", "").strip()
+    raw = os.environ.get("UNIFY_GATEWAY_STORAGE_DIR", "").strip()
     return Path(raw) if raw else Path.cwd() / ".unity-gateway-storage"
 
 

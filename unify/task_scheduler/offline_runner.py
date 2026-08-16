@@ -171,27 +171,27 @@ def _ensure_desktop_env_for_resources(config: OfflineTaskConfig) -> None:
 def _load_provider_event_dispatch_from_env() -> ProviderEventDispatchRequest:
     """Construct one offline provider-event dispatch authorization from env."""
 
-    issued_at_raw = _require_env("UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT")
+    issued_at_raw = _require_env("UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT")
     try:
         issued_at = datetime.fromisoformat(issued_at_raw.replace("Z", "+00:00"))
     except ValueError as exc:
         raise RuntimeError(
-            "Invalid UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
+            "Invalid UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
         ) from exc
     if issued_at.tzinfo is None:
         issued_at = issued_at.replace(tzinfo=timezone.utc)
     return ProviderEventDispatchRequest(
-        operation_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"),
-        run_id=int(_require_env("UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID")),
-        run_key=_require_env("UNITY_OFFLINE_RUN_KEY"),
+        operation_id=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"),
+        run_id=int(_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID")),
+        run_key=_require_env("UNIFY_OFFLINE_RUN_KEY"),
         assistant_id=_require_env("ASSISTANT_ID"),
-        task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
-        binding_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"),
-        receipt_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"),
-        accepted_revision=_require_env("UNITY_OFFLINE_TASK_REVISION"),
+        task_id=int(_require_env("UNIFY_OFFLINE_TASK_ID")),
+        binding_id=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID"),
+        receipt_id=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"),
+        accepted_revision=_require_env("UNIFY_OFFLINE_TASK_REVISION"),
         wake="provider_event",
         delivery="offline",
-        event_context_ref=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"),
+        event_context_ref=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"),
         issued_at=issued_at,
     )
 
@@ -209,27 +209,27 @@ def _load_config_from_env() -> OfflineTaskConfig:
     # into ``run_key``, and a task with no authored ``task_revision`` (every
     # deployment-reconciled definition) projects its occurrences with "".
     # Requiring non-empty here boot-crashed each of those runs at dispatch.
-    revision = os.environ.get("UNITY_OFFLINE_TASK_REVISION", "").strip()
-    request = _require_env("UNITY_OFFLINE_TASK_REQUEST")
+    revision = os.environ.get("UNIFY_OFFLINE_TASK_REVISION", "").strip()
+    request = _require_env("UNIFY_OFFLINE_TASK_REQUEST")
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
-        run_key=_require_env("UNITY_OFFLINE_RUN_KEY"),
-        task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
-        function_id=_optional_int_env("UNITY_OFFLINE_TASK_FUNCTION_ID"),
+        run_key=_require_env("UNIFY_OFFLINE_RUN_KEY"),
+        task_id=int(_require_env("UNIFY_OFFLINE_TASK_ID")),
+        function_id=_optional_int_env("UNIFY_OFFLINE_TASK_FUNCTION_ID"),
         request=request,
         wake=Wake.normalize(
-            os.environ.get("UNITY_OFFLINE_TASK_WAKE", Wake.scheduled),
+            os.environ.get("UNIFY_OFFLINE_TASK_WAKE", Wake.scheduled),
         ),
-        source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
+        source_task_log_id=int(_require_env("UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
         revision=revision,
         destination=destination,
-        task_name=os.environ.get("UNITY_OFFLINE_TASK_NAME", ""),
-        scheduled_for=os.environ.get("UNITY_OFFLINE_TASK_SCHEDULED_FOR", ""),
-        source_ref=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_REF", ""),
-        source_medium=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_MEDIUM", ""),
-        source_contact_id=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID", ""),
-        requires_filesystem=_bool_env("UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"),
-        requires_computer=_bool_env("UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"),
+        task_name=os.environ.get("UNIFY_OFFLINE_TASK_NAME", ""),
+        scheduled_for=os.environ.get("UNIFY_OFFLINE_TASK_SCHEDULED_FOR", ""),
+        source_ref=os.environ.get("UNIFY_OFFLINE_TASK_SOURCE_REF", ""),
+        source_medium=os.environ.get("UNIFY_OFFLINE_TASK_SOURCE_MEDIUM", ""),
+        source_contact_id=os.environ.get("UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID", ""),
+        requires_filesystem=_bool_env("UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"),
+        requires_computer=_bool_env("UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"),
     )
 
 

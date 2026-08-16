@@ -30,7 +30,7 @@ class DrainInProgressError(RuntimeError):
 
 def _comms_base_url() -> str:
     return (
-        os.environ.get("UNITY_COMMS_URL")
+        os.environ.get("UNIFY_COMMS_URL")
         or os.environ.get("COMMS_URL")
         or os.environ.get("DROID_COMMS_URL")
         or ""

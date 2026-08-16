@@ -1011,7 +1011,7 @@ class TaskScheduler(BaseTaskScheduler):
             log_steps=_log_tool_steps,
             tool_policy=effective_tool_policy,
             handle_cls=(
-                ReadOnlyAskGuardHandle if SETTINGS.UNITY_READONLY_ASK_GUARD else None
+                ReadOnlyAskGuardHandle if SETTINGS.UNIFY_READONLY_ASK_GUARD else None
             ),
             response_format=response_format,
             clarification_queues=_clar_queues,
@@ -3721,7 +3721,7 @@ class TaskScheduler(BaseTaskScheduler):
             self._write_log_entries(logs=log_ids, entries=sync_meta)
 
     def _custom_task_sync_workers(self) -> int:
-        raw = (os.environ.get("UNITY_DEPLOY_TASK_SYNC_WORKERS") or "8").strip()
+        raw = (os.environ.get("UNIFY_DEPLOY_TASK_SYNC_WORKERS") or "8").strip()
         try:
             workers = int(raw)
         except ValueError:

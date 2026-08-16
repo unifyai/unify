@@ -27,7 +27,7 @@ def _force_simulated_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch ContactManager to simulated mode for deterministic comms routing."""
     from unify.settings import SETTINGS
 
-    monkeypatch.setenv("UNITY_CONTACT_IMPL", "simulated")
+    monkeypatch.setenv("UNIFY_CONTACT_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.contact, "IMPL", "simulated", raising=False)
     ManagerRegistry.clear()
 

@@ -59,7 +59,7 @@ def resolve_sandbox_llm_model(explicit: str | None = None) -> str:
     """Resolve the vision LLM model for agent-service and sandbox diagnostics."""
     if explicit and explicit.strip():
         return explicit.strip()
-    env_model = os.environ.get("UNITY_AGENT_SERVICE_LLM_MODEL", "").strip()
+    env_model = os.environ.get("UNIFY_AGENT_SERVICE_LLM_MODEL", "").strip()
     if env_model:
         return env_model
     return SETTINGS.UNIFY_MODEL
@@ -924,7 +924,7 @@ def main() -> None:
         help=(
             "Vision LLM for agent-service act() and sandbox diagnostics "
             "(e.g. minimax-v3@minimax, claude-4.6-sonnet@anthropic). "
-            "Defaults to UNITY_AGENT_SERVICE_LLM_MODEL, then UNIFY_MODEL."
+            "Defaults to UNIFY_AGENT_SERVICE_LLM_MODEL, then UNIFY_MODEL."
         ),
     )
     args = parser.parse_args()

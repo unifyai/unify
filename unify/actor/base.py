@@ -124,7 +124,7 @@ class BaseActor(ABC):
         # existing tool set (and LLM caches) byte-identical.
         #
         # Ask the one resolver, not the env var. The hosted deployment ships
-        # the catalogue inside the image and sets no UNITY_WORKFLOWS_DIR, so
+        # the catalogue inside the image and sets no UNIFY_WORKFLOWS_DIR, so
         # gating on the raw setting handed every deployed actor an empty
         # workflow tool set while installs (which use the resolver) worked:
         # planted tasks told the actor to read its settings with a tool it

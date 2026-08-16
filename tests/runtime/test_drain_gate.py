@@ -23,7 +23,7 @@ def _reset_cache():
 
 
 def test_is_admission_blocked_when_comms_reports_draining(monkeypatch):
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.example")
     monkeypatch.setenv("ASSISTANT_ID", "1406")
     monkeypatch.setenv("UNIFY_KEY", "test-key")
 
@@ -39,7 +39,7 @@ def test_is_admission_blocked_when_comms_reports_draining(monkeypatch):
 
 
 def test_refuse_if_draining_raises(monkeypatch):
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.example")
     monkeypatch.setenv("ASSISTANT_ID", "1406")
     monkeypatch.setenv("UNIFY_KEY", "test-key")
 
@@ -55,7 +55,7 @@ def test_refuse_if_draining_raises(monkeypatch):
 
 
 def test_not_blocked_when_draining_false(monkeypatch):
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.example")
     monkeypatch.setenv("ASSISTANT_ID", "1406")
     monkeypatch.setenv("UNIFY_KEY", "test-key")
 

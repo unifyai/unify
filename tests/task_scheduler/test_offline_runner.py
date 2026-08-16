@@ -5,13 +5,13 @@ import pytest
 
 def _seed_env(monkeypatch, *, wake="not_a_recognised_wake"):
     monkeypatch.setenv("ASSISTANT_ID", "42")
-    monkeypatch.setenv("UNITY_OFFLINE_RUN_KEY", "offline:scheduled:42:101:rev")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_FUNCTION_ID", "777")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUEST", "Send the daily summary email.")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_WAKE", wake)
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REVISION", "rev-123")
+    monkeypatch.setenv("UNIFY_OFFLINE_RUN_KEY", "offline:scheduled:42:101:rev")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_ID", "101")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_FUNCTION_ID", "777")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REQUEST", "Send the daily summary email.")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_WAKE", wake)
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REVISION", "rev-123")
     monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
 
@@ -139,10 +139,10 @@ def test_offline_runner_explicit_uses_activated_by_explicit(monkeypatch):
 
     _seed_env(monkeypatch, wake="explicit")
     monkeypatch.setenv(
-        "UNITY_OFFLINE_RUN_KEY",
+        "UNIFY_OFFLINE_RUN_KEY",
         "offline:explicit:42:101:rev:abc123",
     )
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_REF", "req-rest-1")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_SOURCE_REF", "req-rest-1")
     captured = {}
 
     class _FakeHandle:
@@ -271,7 +271,7 @@ def test_load_config_from_env_accepts_an_empty_revision(monkeypatch):
     from unify.task_scheduler import offline_runner
 
     _seed_env(monkeypatch, wake="scheduled")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REVISION", "")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REVISION", "")
 
     config = offline_runner._load_config_from_env()
 
@@ -279,13 +279,13 @@ def test_load_config_from_env_accepts_an_empty_revision(monkeypatch):
 
 
 def test_load_config_from_env_reads_resource_flags(monkeypatch):
-    """Resource knobs load from UNITY_OFFLINE_TASK_REQUIRES_* env vars."""
+    """Resource knobs load from UNIFY_OFFLINE_TASK_REQUIRES_* env vars."""
 
     from unify.task_scheduler import offline_runner
 
     _seed_env(monkeypatch, wake="scheduled")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM", "1")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUIRES_COMPUTER", "true")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM", "1")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER", "true")
 
     config = offline_runner._load_config_from_env()
 

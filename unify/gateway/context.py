@@ -35,12 +35,12 @@ def default_public_url_provider() -> StaticPublicUrlProvider:
     """Build the default URL provider from process environment."""
 
     comms_url = (
-        os.environ.get("UNITY_COMMS_URL")
+        os.environ.get("UNIFY_COMMS_URL")
         or os.environ.get("COMMS_URL")
         or "http://localhost:8001"
     )
     adapters_url = (
-        os.environ.get("UNITY_ADAPTERS_URL")
+        os.environ.get("UNIFY_ADAPTERS_URL")
         or os.environ.get("LOCAL_ADAPTERS_URL")
         or os.environ.get("ADAPTERS_URL")
         or comms_url
@@ -54,7 +54,7 @@ def default_public_url_provider() -> StaticPublicUrlProvider:
 def create_default_gateway_context() -> GatewayContext:
     """Create the stock local gateway dependency context."""
 
-    local_ingress_url = os.environ.get("UNITY_GATEWAY_LOCAL_INGRESS_URL", "").strip()
+    local_ingress_url = os.environ.get("UNIFY_GATEWAY_LOCAL_INGRESS_URL", "").strip()
     envelope_sink = (
         HttpEnvelopeSink(local_ingress_url)
         if local_ingress_url
@@ -62,7 +62,7 @@ def create_default_gateway_context() -> GatewayContext:
     )
     # HTTP base where another service serves the gateway storage directory
     # (Orchestra's /v0/storage/local route over the shared compose volume).
-    storage_public_url = os.environ.get("UNITY_GATEWAY_STORAGE_PUBLIC_URL", "").strip()
+    storage_public_url = os.environ.get("UNIFY_GATEWAY_STORAGE_PUBLIC_URL", "").strip()
     return GatewayContext(
         credentials=EnvCredentialStore(),
         storage=LocalDiskStorage(public_base_url=storage_public_url or None),

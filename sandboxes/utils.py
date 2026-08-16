@@ -2867,13 +2867,13 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
             return
 
         def _full_stack_source_is_active() -> bool:
-            if os.environ.get("UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA") == "1":
+            if os.environ.get("UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA") == "1":
                 return False
             state_file = (
                 Path(
                     os.environ.get(
                         "SELF_HOST_STATE_DIR",
-                        os.environ.get("UNITY_HOME", str(Path.home() / ".unity")),
+                        os.environ.get("UNIFY_HOME", str(Path.home() / ".unity")),
                     ),
                 )
                 / "full-stack-state.json"

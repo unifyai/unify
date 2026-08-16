@@ -2,7 +2,7 @@
 SecretManager-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_SECRET_.
+Environment variables use the prefix UNIFY_SECRET_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +22,7 @@ class SecretSettings(BaseSettings):
     DOTENV_PATH: str = ""
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_SECRET_",
+        env_prefix="UNIFY_SECRET_",
         case_sensitive=True,
         extra="ignore",
     )

@@ -16,7 +16,7 @@ import asyncio
 import websockets
 from unify.session_details import SESSION_DETAILS
 from unify.image_manager.utils import make_solid_png_base64
-from unify.logger import LOGGER as _UNITY_LOGGER
+from unify.logger import LOGGER as _UNIFY_LOGGER
 from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
 
 logger = logging.getLogger("websockets")
@@ -2093,7 +2093,7 @@ class MagnitudeBackend(ComputerBackend):
                             log_line[len(_MAG_DEBUG_PREFIX) :],
                         )
                     except Exception as e:
-                        _UNITY_LOGGER.warning(
+                        _UNIFY_LOGGER.warning(
                             f"[MagnitudeDebug] Failed to handle payload: {e}",
                         )
                     self._network_log_queue.task_done()
@@ -2105,7 +2105,7 @@ class MagnitudeBackend(ComputerBackend):
                         if event.get("__type") == "session:closed":
                             sid = event.get("sessionId", "")
                             reason = event.get("reason", "unknown")
-                            _UNITY_LOGGER.info(
+                            _UNIFY_LOGGER.info(
                                 f"[SessionClosed] id={sid} reason={reason}",
                             )
                             if self._on_session_closed:
@@ -2122,13 +2122,13 @@ class MagnitudeBackend(ComputerBackend):
                     self._log_buffer[self._current_processing_seq].append(log_line)
 
                 if self._current_capture_queue is None:
-                    _UNITY_LOGGER.info(log_line)
+                    _UNIFY_LOGGER.info(log_line)
 
                 self._network_log_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                _UNITY_LOGGER.error(f"[MagnitudeLogConsumerError] {e}")
+                _UNIFY_LOGGER.error(f"[MagnitudeLogConsumerError] {e}")
                 await asyncio.sleep(1)
 
     async def _process_commands(self):

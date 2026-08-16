@@ -2,7 +2,7 @@
 WebSearcher-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_WEB_.
+Environment variables use the prefix UNIFY_WEB_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +22,7 @@ class WebSettings(BaseSettings):
     TAVILY_API_KEY: str = ""
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_WEB_",
+        env_prefix="UNIFY_WEB_",
         case_sensitive=True,
         extra="ignore",
     )

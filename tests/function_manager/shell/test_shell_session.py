@@ -347,11 +347,11 @@ async def test_shell_session_custom_env_accessible():
     """Custom environment variables are accessible in commands."""
     session = ShellSession(
         language="bash",
-        env={"UNITY_TEST_VAR": "test_value_123"},
+        env={"UNIFY_TEST_VAR": "test_value_123"},
     )
     await session.start()
     try:
-        result = await session.execute("echo $UNITY_TEST_VAR")
+        result = await session.execute("echo $UNIFY_TEST_VAR")
         assert result.exit_code == 0
         assert "test_value_123" in result.stdout
     finally:
@@ -435,15 +435,15 @@ async def test_shell_session_state_persists_env_variables():
     await session.start()
     try:
         # Export an environment variable
-        await session.execute("export UNITY_PERSISTENT_VAR=persistent_value")
+        await session.execute("export UNIFY_PERSISTENT_VAR=persistent_value")
 
         # Read it back
-        result = await session.execute("echo $UNITY_PERSISTENT_VAR")
+        result = await session.execute("echo $UNIFY_PERSISTENT_VAR")
         assert result.exit_code == 0
         assert "persistent_value" in result.stdout
 
         # Verify it's actually exported (visible to subprocesses)
-        result = await session.execute("bash -c 'echo $UNITY_PERSISTENT_VAR'")
+        result = await session.execute("bash -c 'echo $UNIFY_PERSISTENT_VAR'")
         assert result.exit_code == 0
         assert "persistent_value" in result.stdout
     finally:

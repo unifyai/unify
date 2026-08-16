@@ -192,3 +192,61 @@ def test_a_bundle_with_no_canvas_does_nothing_at_all(manager):
     assert report == {}
     assert failures == {}
     assert _rows(canvas) == []
+
+
+def test_a_stored_row_validates_with_orchestra_s_own_columns():
+    """The record describes a read, and a read carries more than we wrote.
+
+    Orchestra keeps authorship columns on shared rows, so every row coming
+    back from `Canvas/Views` has them. Inheriting the write model's
+    `extra="forbid"` made validating a real row raise — invisible here until
+    now because the in-memory double hands back records it never re-validates.
+    """
+    from unify.canvas_manager.types.view import CanvasViewRecord
+
+    record = CanvasViewRecord.model_validate(
+        {
+            "token": "gFkarUfz6ocp",
+            "title": "Ledger",
+            "custom_key": "invoice_chaser/ledger",
+            "managed_by": "invoice_chaser",
+            "_user": "cli3t38uc0000s60k5zmgj8ez",
+            "_user_id": "cli3t38uc0000s60k5zmgj8ez",
+            "_assistant": "1406",
+            "_assistant_id": "1406",
+        },
+    )
+
+    assert record.token == "gFkarUfz6ocp"
+    assert record.custom_key == "invoice_chaser/ledger"
+
+
+def test_an_unreadable_published_set_publishes_nothing(manager, monkeypatch):
+    """ "Could not look" must not be answered the way "nothing there" is.
+
+    Treating a failed read as an empty one sends every view down the publish
+    branch, so a workflow that already owns three canvases gets three more at
+    new tokens — every install, silently.
+    """
+    workflows, canvas = manager
+    workflows._publish_canvases(_bundle("invoice_chaser", _view()), destination=None)
+    (before,) = _rows(canvas)
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("Orchestra said no")
+
+    monkeypatch.setattr(canvas, "list_views", _explode)
+
+    report, failures = workflows._publish_canvases(
+        _bundle("invoice_chaser", _view(tsx=VALID_TSX.replace("gap-4", "gap-6"))),
+        destination=None,
+    )
+
+    assert report == {}
+    assert "canvas" in failures
+
+    # Undone before reading back: the listing this test broke is also the one
+    # used to check it.
+    monkeypatch.undo()
+    (after,) = _rows(canvas)
+    assert after["token"] == before["token"]

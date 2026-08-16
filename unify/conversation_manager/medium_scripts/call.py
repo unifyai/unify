@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from importlib import resources
 
-os.environ["UNITY_TERMINAL_LOG"] = "true"
+os.environ["UNIFY_TERMINAL_LOG"] = "true"
 
 from dotenv import load_dotenv
 
@@ -2069,7 +2069,7 @@ async def entrypoint(ctx: agents.JobContext):
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_multiplayer=SESSION_DETAILS.is_multiplayer,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
-        console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
+        console_ui_present=SETTINGS.UNIFY_CONSOLE_UI,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
@@ -4214,7 +4214,7 @@ async def entrypoint(ctx: agents.JobContext):
     # which sounds odd when no action has been requested yet.  The note only
     # matters for subsequent turns where the user might ask for something
     # that requires initialized managers.
-    if not os.environ.get("UNITY_CM_INITIALIZED"):
+    if not os.environ.get("UNIFY_CM_INITIALIZED"):
         _init_note = (
             "[system] You have just started up and your systems are still "
             "syncing — loading your files, tools, and any conversation "

@@ -45,33 +45,33 @@ class TestBuildOfflineRunnerEnv:
     def test_required_env_vars_present(self):
         env = self._make_env()
         required = {
-            "UNITY_OFFLINE_RUN_KEY",
-            "UNITY_OFFLINE_TASK_ID",
-            "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
-            "UNITY_OFFLINE_TASK_REVISION",
-            "UNITY_OFFLINE_TASK_FUNCTION_ID",
-            "UNITY_OFFLINE_TASK_REQUEST",
-            "UNITY_OFFLINE_TASK_NAME",
-            "UNITY_OFFLINE_TASK_WAKE",
-            "UNITY_OFFLINE_TASK_SCHEDULED_FOR",
-            "UNITY_OFFLINE_TASK_SOURCE_REF",
-            "UNITY_OFFLINE_TASK_SOURCE_MEDIUM",
-            "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID",
-            "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM",
-            "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER",
+            "UNIFY_OFFLINE_RUN_KEY",
+            "UNIFY_OFFLINE_TASK_ID",
+            "UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
+            "UNIFY_OFFLINE_TASK_REVISION",
+            "UNIFY_OFFLINE_TASK_FUNCTION_ID",
+            "UNIFY_OFFLINE_TASK_REQUEST",
+            "UNIFY_OFFLINE_TASK_NAME",
+            "UNIFY_OFFLINE_TASK_WAKE",
+            "UNIFY_OFFLINE_TASK_SCHEDULED_FOR",
+            "UNIFY_OFFLINE_TASK_SOURCE_REF",
+            "UNIFY_OFFLINE_TASK_SOURCE_MEDIUM",
+            "UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID",
+            "UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM",
+            "UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER",
             "ASSISTANT_ID",
         }
         assert required - set(env.keys()) == set()
 
     def test_resource_flags_default_to_zero(self):
         env = self._make_env()
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "0"
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "0"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "0"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "0"
 
     def test_resource_flags_emit_one_when_true(self):
         env = self._make_env(requires_filesystem=True, requires_computer=True)
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
     def test_eventbus_not_forced_off(self):
         """Offline runners inherit EventBus settings from the full pod env."""
@@ -81,16 +81,16 @@ class TestBuildOfflineRunnerEnv:
 
     def test_function_id_blank_without_entrypoint(self):
         env = self._make_env(entrypoint=None)
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
+        assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == ""
 
     def test_function_id_serialised_with_entrypoint(self):
         env = self._make_env(entrypoint=42)
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
+        assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
     def test_function_id_zero_is_preserved(self):
         """Entrypoint 0 is a valid symbolic id and must not be treated as missing."""
         env = self._make_env(entrypoint=0)
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "0"
+        assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == "0"
 
     def test_destination_omitted_without_destination(self):
         env = self._make_env()
@@ -104,47 +104,47 @@ class TestBuildOfflineRunnerEnv:
         # A display label only: the scheduler-managed lane reads the
         # authored description from the definition, never from the env.
         env = self._make_env(task_name="Just the name")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Just the name"
+        assert env["UNIFY_OFFLINE_TASK_REQUEST"] == "Just the name"
 
     def test_request_text_synthesised_when_name_empty(self):
         env = self._make_env(task_name="")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Execute task 101"
+        assert env["UNIFY_OFFLINE_TASK_REQUEST"] == "Execute task 101"
 
     def test_scheduled_for_normalised_to_utc(self):
         env = self._make_env(scheduled_for="2030-04-10T11:00:00+02:00")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["UNIFY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_z_suffix_normalised(self):
         env = self._make_env(scheduled_for="2030-04-10T09:00:00Z")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["UNIFY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_naive_treated_as_utc(self):
         env = self._make_env(
             scheduled_for=datetime(2030, 4, 10, 9, 0, 0),  # naive
         )
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["UNIFY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_none_serialises_to_empty_string(self):
         env = self._make_env(scheduled_for=None)
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == ""
+        assert env["UNIFY_OFFLINE_TASK_SCHEDULED_FOR"] == ""
 
     def test_display_name_only_when_provided(self):
         env_with = self._make_env(source_contact_display_name="Alice")
         env_without = self._make_env(source_contact_display_name=None)
-        assert env_with["UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice"
-        assert "UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME" not in env_without
+        assert env_with["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice"
+        assert "UNIFY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME" not in env_without
 
     def test_job_name_only_when_provided(self):
         env_with = self._make_env(job_name="unity-offline-abc")
         env_without = self._make_env(job_name="")
-        assert env_with["UNITY_OFFLINE_TASK_JOB_NAME"] == "unity-offline-abc"
-        assert "UNITY_OFFLINE_TASK_JOB_NAME" not in env_without
+        assert env_with["UNIFY_OFFLINE_TASK_JOB_NAME"] == "unity-offline-abc"
+        assert "UNIFY_OFFLINE_TASK_JOB_NAME" not in env_without
 
     def test_contact_id_str_or_int_both_serialised(self):
         env_int = self._make_env(source_contact_id=77)
         env_str = self._make_env(source_contact_id="77")
-        assert env_int["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
-        assert env_str["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
+        assert env_int["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
+        assert env_str["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
 
     def test_provider_event_env_requires_dispatch_fields(self):
         with pytest.raises(ValueError, match="provider_event offline runs require"):
@@ -160,15 +160,15 @@ class TestBuildOfflineRunnerEnv:
             provider_event_context_ref="blob://binding-1/receipt-1",
             provider_event_issued_at="2030-04-10T09:00:00+00:00",
         )
-        assert env["UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"] == "op-1"
-        assert env["UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID"] == "42"
-        assert env["UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"] == "binding-1"
-        assert env["UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"] == "receipt-1"
+        assert env["UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"] == "op-1"
+        assert env["UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID"] == "42"
+        assert env["UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID"] == "binding-1"
+        assert env["UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"] == "receipt-1"
         assert (
-            env["UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"]
+            env["UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"]
             == "blob://binding-1/receipt-1"
         )
-        assert env["UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT"] == (
+        assert env["UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT"] == (
             "2030-04-10T09:00:00+00:00"
         )
 
@@ -396,27 +396,27 @@ def _original_communication_env_builder(
         return req.scheduled_for.astimezone(timezone.utc).isoformat()
 
     return {
-        "UNITY_OFFLINE_RUN_KEY": run_key,
-        "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
-        "UNITY_OFFLINE_TASK_ID": str(request.task_id),
-        "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
-        "UNITY_OFFLINE_TASK_REVISION": request.revision,
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
-        "UNITY_OFFLINE_TASK_REQUEST": task_request,
-        "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
-        "UNITY_OFFLINE_TASK_WAKE": request.wake,
-        "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
-        "UNITY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
-        "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": (
+        "UNIFY_OFFLINE_RUN_KEY": run_key,
+        "UNIFY_OFFLINE_TASK_JOB_NAME": job_name,
+        "UNIFY_OFFLINE_TASK_ID": str(request.task_id),
+        "UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
+        "UNIFY_OFFLINE_TASK_REVISION": request.revision,
+        "UNIFY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
+        "UNIFY_OFFLINE_TASK_REQUEST": task_request,
+        "UNIFY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
+        "UNIFY_OFFLINE_TASK_WAKE": request.wake,
+        "UNIFY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
+        "UNIFY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
+        "UNIFY_OFFLINE_TASK_SOURCE_MEDIUM": (
             request.source_medium or str(activation.get("trigger_medium") or "")
         ),
-        "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
+        "UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
             str(request.source_contact_id)
             if request.source_contact_id is not None
             else ""
         ),
-        "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM": "0",
-        "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER": "0",
+        "UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM": "0",
+        "UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER": "0",
         "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
         "ASSISTANT_ID": str(assistant_data.get("assistant_id") or request.assistant_id),
         "ASSISTANT_FIRST_NAME": str(assistant_data.get("assistant_first_name") or ""),
@@ -655,7 +655,7 @@ class TestCommunicationEnvBuilderEquivalence:
             job_name="j",
         )
         assert new == old
-        assert old["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
+        assert old["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
     def test_missing_assistant_identity_envs_match(self):
         request, activation, _ = self._scenario()

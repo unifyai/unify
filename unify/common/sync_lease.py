@@ -60,7 +60,7 @@ def _default_wait_seconds() -> float:
     override = _WAIT_SECONDS.get()
     if override is not None:
         return float(override)
-    raw = os.environ.get("UNITY_SYNC_LEASE_WAIT_SECONDS")
+    raw = os.environ.get("UNIFY_SYNC_LEASE_WAIT_SECONDS")
     if raw is not None and raw.strip() != "":
         return float(raw)
     return DEFAULT_WAIT_SECONDS

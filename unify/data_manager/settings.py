@@ -26,7 +26,7 @@ class DataSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_DATA_",
+        env_prefix="UNIFY_DATA_",
         case_sensitive=True,
         extra="ignore",
     )

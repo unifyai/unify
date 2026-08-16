@@ -7,7 +7,7 @@
 # Voice keys (Deepgram + Cartesia) are prompted by default — voice is core.
 #
 # Usage:
-#   UNITY_REPO=/path/to/unity ./scripts/prompt_byok_keys.sh
+#   UNIFY_REPO=/path/to/unity ./scripts/prompt_byok_keys.sh
 #   ./scripts/prompt_byok_keys.sh --non-interactive   # skip prompts (CI)
 #
 set -euo pipefail
@@ -21,12 +21,12 @@ _looks_like_unify_repo() {
 
 resolve_unity_repo() {
   local candidate=""
-  if [[ -n "${UNITY_REPO:-}" && -d "$UNITY_REPO" ]]; then
-    printf '%s' "$UNITY_REPO"
+  if [[ -n "${UNIFY_REPO:-}" && -d "$UNIFY_REPO" ]]; then
+    printf '%s' "$UNIFY_REPO"
     return 0
   fi
-  if [[ -n "${UNITY_REPO_PATH:-}" && -d "$UNITY_REPO_PATH" ]]; then
-    printf '%s' "$UNITY_REPO_PATH"
+  if [[ -n "${UNIFY_REPO_PATH:-}" && -d "$UNIFY_REPO_PATH" ]]; then
+    printf '%s' "$UNIFY_REPO_PATH"
     return 0
   fi
   candidate="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -49,15 +49,15 @@ resolve_unity_repo() {
       return 0
     fi
   fi
-  printf '%s' "${UNITY_HOME:-$HOME/.unity}/unify"
+  printf '%s' "${UNIFY_HOME:-$HOME/.unity}/unify"
 }
 
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="$(resolve_unity_repo)"
-if _looks_like_unify_repo "$UNITY_REPO"; then
-  UNITY_HOME="$(cd "$UNITY_REPO/.." && pwd -P)"
+UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+UNIFY_REPO="$(resolve_unity_repo)"
+if _looks_like_unify_repo "$UNIFY_REPO"; then
+  UNIFY_HOME="$(cd "$UNIFY_REPO/.." && pwd -P)"
 fi
-ENV_FILE="${UNITY_ENV_FILE:-$UNITY_REPO/.env}"
+ENV_FILE="${UNIFY_ENV_FILE:-$UNIFY_REPO/.env}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -239,8 +239,8 @@ sync_anticaptcha_keys() {
   local key=""
   if has_env_value ANTICAPTCHA_KEY; then
     key="$(read_env_value ANTICAPTCHA_KEY)"
-  elif has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
-    key="$(read_env_value UNITY_ACTOR_ANTICAPTCHA_KEY)"
+  elif has_env_value UNIFY_ACTOR_ANTICAPTCHA_KEY; then
+    key="$(read_env_value UNIFY_ACTOR_ANTICAPTCHA_KEY)"
   fi
   if [[ -z "$key" ]]; then
     return 0
@@ -249,15 +249,15 @@ sync_anticaptcha_keys() {
     upsert_env "ANTICAPTCHA_KEY" "$key"
     log_success "Mirrored ANTICAPTCHA_KEY for agent-service"
   fi
-  if ! has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
-    upsert_env "UNITY_ACTOR_ANTICAPTCHA_KEY" "$key"
-    log_success "Mirrored UNITY_ACTOR_ANTICAPTCHA_KEY for Unity CM"
+  if ! has_env_value UNIFY_ACTOR_ANTICAPTCHA_KEY; then
+    upsert_env "UNIFY_ACTOR_ANTICAPTCHA_KEY" "$key"
+    log_success "Mirrored UNIFY_ACTOR_ANTICAPTCHA_KEY for Unity CM"
   fi
 }
 
 prompt_anticaptcha_key() {
   sync_anticaptcha_keys
-  if has_env_value ANTICAPTCHA_KEY || has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+  if has_env_value ANTICAPTCHA_KEY || has_env_value UNIFY_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha key already set"
     sync_anticaptcha_keys
     return 0
@@ -286,8 +286,8 @@ prompt_anticaptcha_key() {
   fi
 
   upsert_env "ANTICAPTCHA_KEY" "$value"
-  upsert_env "UNITY_ACTOR_ANTICAPTCHA_KEY" "$value"
-  log_success "Wrote ANTICAPTCHA_KEY + UNITY_ACTOR_ANTICAPTCHA_KEY to $ENV_FILE"
+  upsert_env "UNIFY_ACTOR_ANTICAPTCHA_KEY" "$value"
+  log_success "Wrote ANTICAPTCHA_KEY + UNIFY_ACTOR_ANTICAPTCHA_KEY to $ENV_FILE"
 }
 
 prompt_research_and_computer() {
@@ -299,25 +299,25 @@ prompt_research_and_computer() {
 
   prompt_secret \
     "Web search — Tavily API key" \
-    "UNITY_WEB_TAVILY_API_KEY" \
+    "UNIFY_WEB_TAVILY_API_KEY" \
     "Lets Twin search the web while researching. Free tier: https://tavily.com"
 
-  if has_env_value UNITY_WEB_TAVILY_API_KEY && ! has_env_value UNITY_WEB_ENABLED; then
-    upsert_env "UNITY_WEB_ENABLED" "true"
-    log_success "Set UNITY_WEB_ENABLED=true (web search on)"
-  elif has_env_value UNITY_WEB_TAVILY_API_KEY; then
-    log_success "UNITY_WEB_ENABLED already set"
+  if has_env_value UNIFY_WEB_TAVILY_API_KEY && ! has_env_value UNIFY_WEB_ENABLED; then
+    upsert_env "UNIFY_WEB_ENABLED" "true"
+    log_success "Set UNIFY_WEB_ENABLED=true (web search on)"
+  elif has_env_value UNIFY_WEB_TAVILY_API_KEY; then
+    log_success "UNIFY_WEB_ENABLED already set"
   fi
 
   prompt_anticaptcha_key
 
   echo ""
-  if has_env_value UNITY_WEB_TAVILY_API_KEY; then
+  if has_env_value UNIFY_WEB_TAVILY_API_KEY; then
     log_success "Web search (Tavily) configured"
   else
     log_warn "Web search skipped — Coordinator research tools stay disabled"
   fi
-  if has_env_value ANTICAPTCHA_KEY || has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+  if has_env_value ANTICAPTCHA_KEY || has_env_value UNIFY_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha configured for computer automation"
   else
     log_info "AntiCaptcha not set (optional until computer use)"
@@ -400,11 +400,11 @@ ensure_local_comms_defaults() {
   # agent-service (supervisord) and other tooling read a single source of truth.
   # localhost is rewritten to host.docker.internal when passed into Docker.
   local url="http://localhost:8787"
-  if ! has_env_value UNITY_GATEWAY_URL; then
-    upsert_env "UNITY_GATEWAY_URL" "$url"
+  if ! has_env_value UNIFY_GATEWAY_URL; then
+    upsert_env "UNIFY_GATEWAY_URL" "$url"
   fi
-  if ! has_env_value UNITY_COMMS_URL; then
-    upsert_env "UNITY_COMMS_URL" "$url"
+  if ! has_env_value UNIFY_COMMS_URL; then
+    upsert_env "UNIFY_COMMS_URL" "$url"
   fi
 }
 
@@ -412,7 +412,7 @@ import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
     CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER VOICE_ID UNIFY_MODEL \
-    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
+    UNIFY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
     TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN ASSISTANT_NUMBER ORCHESTRA_ADMIN_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
@@ -424,7 +424,7 @@ import_shell_env_keys() {
 }
 
 mark_byok_configured() {
-  upsert_env "UNITY_BYOK_CONFIGURED" "1"
+  upsert_env "UNIFY_BYOK_CONFIGURED" "1"
 }
 
 prompt_outbound_comms() {
@@ -518,15 +518,15 @@ run_non_interactive_byok() {
 }
 
 compose_install_mode() {
-  [[ "${UNITY_COMPOSE_INSTALL:-0}" == "1" && -f "$ENV_FILE" ]]
+  [[ "${UNIFY_COMPOSE_INSTALL:-0}" == "1" && -f "$ENV_FILE" ]]
 }
 
 main() {
-  if ! _looks_like_unity_repo "$UNITY_REPO"; then
+  if ! _looks_like_unity_repo "$UNIFY_REPO"; then
     if compose_install_mode; then
       log_info "Compose install — configuring $ENV_FILE"
     else
-      log_warn "Unity repo not found at $UNITY_REPO — skipping BYOK prompts"
+      log_warn "Unity repo not found at $UNIFY_REPO — skipping BYOK prompts"
       exit 0
     fi
   fi
@@ -536,14 +536,14 @@ main() {
     exit 0
   fi
 
-  if [[ "${UNITY_BYOK_FORCE:-0}" != "1" ]] && has_env_value UNITY_BYOK_CONFIGURED; then
+  if [[ "${UNIFY_BYOK_FORCE:-0}" != "1" ]] && has_env_value UNIFY_BYOK_CONFIGURED; then
     import_shell_env_keys
     ensure_sdk_logging_defaults
     ensure_local_comms_defaults
     ensure_default_chat_model
     sync_anticaptcha_keys
     log_success "BYOK already configured in $ENV_FILE — skipping wizard"
-    log_info "Set UNITY_BYOK_FORCE=1 to run the wizard again"
+    log_info "Set UNIFY_BYOK_FORCE=1 to run the wizard again"
     exit 0
   fi
 

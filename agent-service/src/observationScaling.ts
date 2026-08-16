@@ -102,7 +102,7 @@ function resolveMaxEdge(model: string, provider: string): number {
   if (policy.modelObservationMaxEdge[normalized] !== undefined) {
     return policy.modelObservationMaxEdge[normalized];
   }
-  const envOverride = process.env.UNITY_OBSERVATION_MAX_EDGE?.trim();
+  const envOverride = process.env.UNIFY_OBSERVATION_MAX_EDGE?.trim();
   if (envOverride) {
     const parsed = Number(envOverride);
     if (Number.isFinite(parsed) && parsed > 0) {
