@@ -32,10 +32,10 @@ class _NoopEventBus:
 
 @pytest.fixture(autouse=True)
 def _reset_runtime_context() -> None:
-    previous_impl = os.environ.get("UNITY_FUNCTION_IMPL")
+    previous_impl = os.environ.get("UNIFY_FUNCTION_IMPL")
     previous_base_context = getattr(ContextRegistry, "_base_context", None)
     previous_event_bus = manager_event_logging.EVENT_BUS
-    os.environ["UNITY_FUNCTION_IMPL"] = "simulated"
+    os.environ["UNIFY_FUNCTION_IMPL"] = "simulated"
     SESSION_DETAILS.reset()
     ContextRegistry.clear()
     ContextRegistry.set_base_context("UnityTests/CoordinatorCodeAct")
@@ -43,9 +43,9 @@ def _reset_runtime_context() -> None:
     manager_event_logging.EVENT_BUS = _NoopEventBus()
     yield
     if previous_impl is None:
-        os.environ.pop("UNITY_FUNCTION_IMPL", None)
+        os.environ.pop("UNIFY_FUNCTION_IMPL", None)
     else:
-        os.environ["UNITY_FUNCTION_IMPL"] = previous_impl
+        os.environ["UNIFY_FUNCTION_IMPL"] = previous_impl
     SESSION_DETAILS.reset()
     ContextRegistry.clear()
     if previous_base_context:

@@ -80,5 +80,5 @@ Troubleshooting
 ---------------
 * Voice mode needs `DEEPGRAM_API_KEY` and `CARTESIA_API_KEY`.
 * Backend access needs `UNIFY_KEY` / `ORCHESTRA_URL`.
-* Optional: `UNITY_KNOWLEDGE_IMPL` selects real vs simulated KnowledgeManager
+* Optional: `UNIFY_KNOWLEDGE_IMPL` selects real vs simulated KnowledgeManager
   via the manager registry (same as other sandboxes).

@@ -46,7 +46,7 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
 		sys.path.insert(0, os.getcwd())
 		import unisdk
 		# Activate the test project before setting context
-		project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
+		project_name = os.environ.get("UNIFY_TEST_PROJECT_NAME", "UnityTests")
 		unisdk.activate(project_name, overwrite=False)
 		# Set test-specific context before creating WebSearcher to avoid races
 		test_ctx = os.environ.get("_TEST_CONTEXT")

@@ -20,7 +20,7 @@ Usage from shell scripts:
     unity-primitive files --list-methods
 
 Protocol:
-    The CLI connects to a Unix domain socket (path in UNITY_RPC_SOCKET env var)
+    The CLI connects to a Unix domain socket (path in UNIFY_RPC_SOCKET env var)
     and sends JSON-RPC requests. The parent process handles these requests and
     sends back JSON responses.
 
@@ -277,10 +277,10 @@ def cmd_call_method(
 def main() -> int:
     """Main entry point for the CLI."""
     # Get socket path from environment
-    socket_path = os.environ.get("UNITY_RPC_SOCKET")
+    socket_path = os.environ.get("UNIFY_RPC_SOCKET")
     if not socket_path:
         print(
-            "Error: UNITY_RPC_SOCKET environment variable not set.\n"
+            "Error: UNIFY_RPC_SOCKET environment variable not set.\n"
             "This command should be run from within a Unity shell function.",
             file=sys.stderr,
         )

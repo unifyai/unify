@@ -2,7 +2,7 @@
 TranscriptManager-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_TRANSCRIPT_.
+Environment variables use the prefix UNIFY_TRANSCRIPT_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,7 +18,7 @@ class TranscriptSettings(BaseSettings):
     IMPL: str = "real"
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_TRANSCRIPT_",
+        env_prefix="UNIFY_TRANSCRIPT_",
         case_sensitive=True,
         extra="ignore",
     )

@@ -69,23 +69,23 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
                 "Admin key for local gateway admin routes",
             ),
             CredentialSpec(
-                "UNITY_GATEWAY_PUBLIC_URL",
+                "UNIFY_GATEWAY_PUBLIC_URL",
                 "Public HTTPS callback base URL",
                 required=False,
             ),
             CredentialSpec(
-                "UNITY_GATEWAY_LOCAL_INGRESS_URL",
+                "UNIFY_GATEWAY_LOCAL_INGRESS_URL",
                 "ConversationManager local ingress URL",
                 required=False,
             ),
-            CredentialSpec("UNITY_COMMS_URL", "Gateway comms base URL", required=False),
+            CredentialSpec("UNIFY_COMMS_URL", "Gateway comms base URL", required=False),
             CredentialSpec(
-                "UNITY_ADAPTERS_URL",
+                "UNIFY_ADAPTERS_URL",
                 "Gateway adapters base URL",
                 required=False,
             ),
             CredentialSpec(
-                "UNITY_GATEWAY_STORAGE_DIR",
+                "UNIFY_GATEWAY_STORAGE_DIR",
                 "Local attachment storage directory",
                 required=False,
             ),
@@ -441,8 +441,8 @@ def public_url_provider_from_base(
     if single_url:
         return StaticPublicUrlProvider(comms_base_url=base, adapters_base_url=base)
     return StaticPublicUrlProvider(
-        comms_base_url=os.environ.get("UNITY_COMMS_URL", base).rstrip("/"),
-        adapters_base_url=os.environ.get("UNITY_ADAPTERS_URL", base).rstrip("/"),
+        comms_base_url=os.environ.get("UNIFY_COMMS_URL", base).rstrip("/"),
+        adapters_base_url=os.environ.get("UNIFY_ADAPTERS_URL", base).rstrip("/"),
     )
 
 

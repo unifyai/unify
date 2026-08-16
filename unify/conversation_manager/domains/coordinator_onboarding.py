@@ -890,7 +890,7 @@ async def _handle_coordinator_onboarding_event(
     # events narrate is not visible to the user, so we drop them entirely —
     # no notification, no LLM run — rather than nudge them toward UI steps
     # they cannot see.
-    if not SETTINGS.UNITY_CONSOLE_UI:
+    if not SETTINGS.UNIFY_CONSOLE_UI:
         return False
     if not cm.coordinator_onboarding_active:
         return False

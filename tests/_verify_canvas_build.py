@@ -4,7 +4,7 @@ Runs in seconds and needs no LLM, no backend and no browser, so it is the fast
 feedback loop while working on the build pipeline. Deleted once the pipeline is
 stable; the durable coverage lives in tests/canvas_manager/test_build_ops.py.
 
-    UNITY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain \
+    UNIFY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain \
         .venv/bin/python tests/_verify_canvas_build.py
 """
 

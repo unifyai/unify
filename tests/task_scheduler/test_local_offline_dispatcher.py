@@ -77,12 +77,12 @@ class TestBuildLocalOfflineRunnerEnv:
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
 
         required = {
-            "UNITY_OFFLINE_RUN_KEY",
-            "UNITY_OFFLINE_TASK_ID",
-            "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
-            "UNITY_OFFLINE_TASK_REVISION",
-            "UNITY_OFFLINE_TASK_REQUEST",
-            "UNITY_OFFLINE_TASK_WAKE",
+            "UNIFY_OFFLINE_RUN_KEY",
+            "UNIFY_OFFLINE_TASK_ID",
+            "UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
+            "UNIFY_OFFLINE_TASK_REVISION",
+            "UNIFY_OFFLINE_TASK_REQUEST",
+            "UNIFY_OFFLINE_TASK_WAKE",
             "ASSISTANT_ID",
         }
         missing = required - set(env.keys())
@@ -93,25 +93,25 @@ class TestBuildLocalOfflineRunnerEnv:
         # lane fetches the authored description from the definition itself.
         snap = _make_snapshot(task_name="The Name")
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The Name"
+        assert env["UNIFY_OFFLINE_TASK_REQUEST"] == "The Name"
 
         snap = _make_snapshot(task_name="")
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == f"Execute task {snap.task_id}"
+        assert env["UNIFY_OFFLINE_TASK_REQUEST"] == f"Execute task {snap.task_id}"
 
     def test_function_id_omitted_when_no_entrypoint(self):
         env = od._build_local_offline_runner_env(
             _make_snapshot(entrypoint=None),
             wake=Wake.scheduled.value,
         )
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
+        assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == ""
 
     def test_function_id_serialised_when_entrypoint(self):
         env = od._build_local_offline_runner_env(
             _make_snapshot(entrypoint=42),
             wake=Wake.scheduled.value,
         )
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
+        assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
     def test_eventbus_not_forced_off(self):
         env = od._build_local_offline_runner_env(
@@ -124,7 +124,7 @@ class TestBuildLocalOfflineRunnerEnv:
     def test_trigger_medium_propagates_for_triggered_dispatch(self):
         snap = _make_snapshot(trigger_medium="email", delivery=Delivery.offline.value)
         env = od._build_local_offline_runner_env(snap, wake=Wake.triggered.value)
-        assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "email"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_MEDIUM"] == "email"
 
     def test_explicit_trigger_override_wins_over_snapshot_medium(self):
         snap = _make_snapshot(trigger_medium="email")
@@ -133,7 +133,7 @@ class TestBuildLocalOfflineRunnerEnv:
             wake=Wake.triggered.value,
             source_medium="sms",
         )
-        assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms"
 
     def test_explicit_contact_id_set(self):
         env = od._build_local_offline_runner_env(
@@ -141,7 +141,7 @@ class TestBuildLocalOfflineRunnerEnv:
             wake=Wake.triggered.value,
             source_contact_id=123,
         )
-        assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
 
     def test_explicit_display_name_emitted(self):
         env = od._build_local_offline_runner_env(
@@ -149,18 +149,18 @@ class TestBuildLocalOfflineRunnerEnv:
             wake=Wake.triggered.value,
             source_contact_display_name="Alice Example",
         )
-        assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice Example"
+        assert env["UNIFY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice Example"
 
     def test_scheduled_for_normalised_to_utc(self):
         snap = _make_snapshot(next_due_at="2030-04-10T11:00:00+02:00")
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["UNIFY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_resource_flags_propagate_from_snapshot(self):
         snap = _make_snapshot()
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "0"
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "0"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "0"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "0"
 
         snap = TaskExecutionSnapshot(
             run_key="offline:scheduled:42:7:rev-1:once",
@@ -176,8 +176,8 @@ class TestBuildLocalOfflineRunnerEnv:
             requires_computer=True,
         )
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
-        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
+        assert env["UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
 
 class TestBuildLocalOfflineRunKey:
@@ -238,8 +238,8 @@ class TestDispatch:
                 "-m",
                 "unify.task_scheduler.offline_runner",
             )
-            assert captured["env"]["UNITY_OFFLINE_RUN_KEY"]
-            assert captured["env"]["UNITY_OFFLINE_TASK_WAKE"] == Wake.scheduled.value
+            assert captured["env"]["UNIFY_OFFLINE_RUN_KEY"]
+            assert captured["env"]["UNIFY_OFFLINE_TASK_WAKE"] == Wake.scheduled.value
             assert "PATH" in captured["env"]
         finally:
             await dispatcher.stop()
@@ -296,7 +296,7 @@ class TestDispatch:
                 _make_snapshot(trigger_medium="sms"),
                 wake=Wake.triggered.value,
             )
-            assert captured["env"]["UNITY_OFFLINE_TASK_WAKE"] == Wake.triggered.value
+            assert captured["env"]["UNIFY_OFFLINE_TASK_WAKE"] == Wake.triggered.value
         finally:
             await dispatcher.stop()
 

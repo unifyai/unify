@@ -235,9 +235,9 @@ async def run_conversation_manager(
     # Honour an explicit inactivity-timeout override so local dev (where
     # there is no orchestrator to spin a fresh container back up once
     # this one exits) can keep the process alive long enough for a
-    # human-paced session.  ``UNITY_INACTIVITY_TIMEOUT_SECONDS=0``
+    # human-paced session.  ``UNIFY_INACTIVITY_TIMEOUT_SECONDS=0``
     # disables the inactivity shutdown entirely.
-    _inactivity_override = os.environ.get("UNITY_INACTIVITY_TIMEOUT_SECONDS")
+    _inactivity_override = os.environ.get("UNIFY_INACTIVITY_TIMEOUT_SECONDS")
     if _inactivity_override:
         try:
             override_seconds = int(_inactivity_override)
@@ -248,13 +248,13 @@ async def run_conversation_manager(
                 cm.inactivity_timeout = float("inf")
                 LOGGER.info(
                     f"{ICONS['lifecycle']} Inactivity shutdown disabled "
-                    "via UNITY_INACTIVITY_TIMEOUT_SECONDS=0",
+                    "via UNIFY_INACTIVITY_TIMEOUT_SECONDS=0",
                 )
             else:
                 cm.inactivity_timeout = override_seconds
                 LOGGER.info(
                     f"{ICONS['lifecycle']} Inactivity timeout overridden to "
-                    f"{override_seconds}s via UNITY_INACTIVITY_TIMEOUT_SECONDS",
+                    f"{override_seconds}s via UNIFY_INACTIVITY_TIMEOUT_SECONDS",
                 )
 
     # Apply test mocks if requested

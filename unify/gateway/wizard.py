@@ -168,7 +168,7 @@ def run_interactive_setup(
 
     if any(setup.public_https_required for setup in setups):
         current_public_url = public_url or _credential_value(
-            "UNITY_GATEWAY_PUBLIC_URL",
+            "UNIFY_GATEWAY_PUBLIC_URL",
             env.values,
         )
         if current_public_url:
@@ -186,7 +186,7 @@ def run_interactive_setup(
             emit(message)
             if not ok:
                 return 1
-            updates["UNITY_GATEWAY_PUBLIC_URL"] = selected_public_url.rstrip("/")
+            updates["UNIFY_GATEWAY_PUBLIC_URL"] = selected_public_url.rstrip("/")
 
     for setup in setups:
         emit("")
@@ -226,7 +226,7 @@ def run_interactive_setup(
 
     emit("")
     emit("Next steps:")
-    emit("  python -m unify.gateway urls --public-url $UNITY_GATEWAY_PUBLIC_URL")
+    emit("  python -m unify.gateway urls --public-url $UNIFY_GATEWAY_PUBLIC_URL")
     emit("  python -m unify.gateway doctor --check-credentials")
     emit("  python -m unify.gateway smoke --base-url http://127.0.0.1:8001")
     return 0

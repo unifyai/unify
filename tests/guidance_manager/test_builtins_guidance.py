@@ -48,7 +48,7 @@ _ENTRIES = {
 def builtins_test_project(monkeypatch):
     """Point the builtins project at a unique per-test name and clean it up."""
     name = f"BuiltinsTest-{uuid.uuid4().hex[:10]}"
-    monkeypatch.setattr(SETTINGS, "UNITY_BUILTINS_PROJECT", name)
+    monkeypatch.setattr(SETTINGS, "UNIFY_BUILTINS_PROJECT", name)
     yield name
     try:
         unisdk.delete_project(name)

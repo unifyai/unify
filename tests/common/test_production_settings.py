@@ -2,7 +2,7 @@
 Tests for ProductionSettings LLM provider validation.
 
 Verifies that unify.init() hard-fails when LLM provider credentials are missing
-and UNITY_VALIDATE_LLM_PROVIDERS is enabled (the default).
+and UNIFY_VALIDATE_LLM_PROVIDERS is enabled (the default).
 """
 
 import pytest
@@ -24,7 +24,7 @@ class TestLLMProviderValidation:
         """Validation raises RuntimeError when no credentials are set."""
         monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
@@ -39,7 +39,7 @@ class TestLLMProviderValidation:
     def test_validation_passes_when_one_credential_provided(self):
         """Validation succeeds when at least one credential is set."""
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="sk-ant-test",
             DEEPSEEK_API_KEY="",
@@ -51,7 +51,7 @@ class TestLLMProviderValidation:
         """OpenAI chat models route via OpenRouter, so its key grants no access."""
         monkeypatch.delenv("UNILLM_LLM_GATEWAY_URL", raising=False)
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="sk-test",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
@@ -63,7 +63,7 @@ class TestLLMProviderValidation:
     def test_validation_passes_when_openrouter_credential_provided(self):
         """Validation accepts OpenRouter for *@openrouter platform defaults."""
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
@@ -74,7 +74,7 @@ class TestLLMProviderValidation:
     def test_validation_passes_when_deepseek_credential_provided(self):
         """Validation accepts the default model provider credential."""
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="sk-test",
@@ -85,7 +85,7 @@ class TestLLMProviderValidation:
     def test_validation_passes_when_all_credentials_provided(self):
         """Validation succeeds when all credentials are set."""
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="sk-test-openai",
             ANTHROPIC_API_KEY="sk-ant-test",
             DEEPSEEK_API_KEY="",
@@ -95,9 +95,9 @@ class TestLLMProviderValidation:
         settings.validate_llm_providers()
 
     def test_validation_skipped_when_disabled(self):
-        """Validation is skipped when UNITY_VALIDATE_LLM_PROVIDERS=False."""
+        """Validation is skipped when UNIFY_VALIDATE_LLM_PROVIDERS=False."""
         settings = ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=False,
+            UNIFY_VALIDATE_LLM_PROVIDERS=False,
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
@@ -107,9 +107,9 @@ class TestLLMProviderValidation:
         settings.validate_llm_providers()
 
     def test_validation_enabled_by_default(self):
-        """UNITY_VALIDATE_LLM_PROVIDERS defaults to True in code."""
+        """UNIFY_VALIDATE_LLM_PROVIDERS defaults to True in code."""
         # Verify the class-level default is True (env vars may override at runtime)
-        field_info = ProductionSettings.model_fields["UNITY_VALIDATE_LLM_PROVIDERS"]
+        field_info = ProductionSettings.model_fields["UNIFY_VALIDATE_LLM_PROVIDERS"]
         assert field_info.default is True
 
 
@@ -119,7 +119,7 @@ class TestBrokeredProviderValidation:
     @staticmethod
     def _keyless_settings() -> ProductionSettings:
         return ProductionSettings(
-            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            UNIFY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",

@@ -2,7 +2,7 @@
 Actor-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_ACTOR_.
+Environment variables use the prefix UNIFY_ACTOR_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +22,7 @@ class ActorSettings(BaseSettings):
     ANTICAPTCHA_KEY: str = ""
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_ACTOR_",
+        env_prefix="UNIFY_ACTOR_",
         case_sensitive=True,
         extra="ignore",
     )

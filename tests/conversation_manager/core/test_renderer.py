@@ -1788,7 +1788,7 @@ class TestParticipantTimezones:
     def test_current_time_is_stable_across_repeated_renders(self):
         """Repeated reads within a run must not drift.
 
-        ``UNITY_INCREMENTING_TIMESTAMPS`` advances the stub by microseconds so
+        ``UNIFY_INCREMENTING_TIMESTAMPS`` advances the stub by microseconds so
         **NEW** markers order correctly; at minute precision that must still
         render one identical string, or a single prompt disagrees with itself.
         """

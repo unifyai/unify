@@ -288,13 +288,13 @@ def test_main_skips_superseded_activation(monkeypatch):
     from unify.task_scheduler import offline_runner
 
     monkeypatch.setenv("ASSISTANT_ID", "1406")
-    monkeypatch.setenv("UNITY_OFFLINE_RUN_KEY", "offline:scheduled:1406:10:rev")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "10")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_FUNCTION_ID", "777")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUEST", "run tick")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_WAKE", "scheduled")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_REVISION", "rev")
+    monkeypatch.setenv("UNIFY_OFFLINE_RUN_KEY", "offline:scheduled:1406:10:rev")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_ID", "10")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_FUNCTION_ID", "777")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REQUEST", "run tick")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_WAKE", "scheduled")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_REVISION", "rev")
     monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
 

@@ -97,7 +97,7 @@ def _resolve_max_edge(model: str, provider: str) -> int:
     if normalized in model_overrides:
         return model_overrides[normalized]
 
-    env_override = os.environ.get("UNITY_OBSERVATION_MAX_EDGE", "").strip()
+    env_override = os.environ.get("UNIFY_OBSERVATION_MAX_EDGE", "").strip()
     if env_override:
         try:
             parsed = int(env_override)

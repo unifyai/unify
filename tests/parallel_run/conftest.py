@@ -355,21 +355,21 @@ class ParallelRunner:
         # Ensure UTF-8 locale for proper emoji handling in tmux session names
         run_env["LC_ALL"] = "en_US.UTF-8"
         run_env["LANG"] = "en_US.UTF-8"
-        # Clear UNITY_LOG_SUBDIR so the nested script derives its own datetime-prefixed subdir
+        # Clear UNIFY_LOG_SUBDIR so the nested script derives its own datetime-prefixed subdir
         # (otherwise it inherits the outer parallel_run.sh's log subdir)
-        run_env.pop("UNITY_LOG_SUBDIR", None)
+        run_env.pop("UNIFY_LOG_SUBDIR", None)
         # Use a consistent socket name for all runs within this runner instance
         # This enables collision detection between sequential runs in the same test
-        run_env["UNITY_TEST_SOCKET"] = self._socket_name
+        run_env["UNIFY_TEST_SOCKET"] = self._socket_name
         # Skip the heavyweight shared project preparation for nested parallel_run.sh calls.
         # The fixture tests don't need the real UnityTests project, and the outer test runner
         # has already prepared it. This dramatically speeds up nested invocations.
-        run_env["UNITY_SKIP_SHARED_PROJECT_PREP"] = "1"
+        run_env["UNIFY_SKIP_SHARED_PROJECT_PREP"] = "1"
         if env:
             run_env.update(env)
 
         # Determine the actual socket name (user override takes precedence)
-        actual_socket = run_env.get("UNITY_TEST_SOCKET", self._socket_name)
+        actual_socket = run_env.get("UNIFY_TEST_SOCKET", self._socket_name)
 
         # Record existing sessions (log subdir will be parsed from script output)
         existing_sessions = {(s.socket, s.name) for s in list_tmux_sessions()}

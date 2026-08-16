@@ -537,7 +537,7 @@ def test_a_missing_tree_never_reads_as_an_empty_shelf(tmp_path: Path, monkeypatc
 
     ``load_catalog`` answers ``[]`` for a root that does not exist, and ``[]``
     to the seeder means *delete every published workflow*. A mispointed
-    ``UNITY_WORKFLOWS_DIR``, or an image built without the curated tree, would
+    ``UNIFY_WORKFLOWS_DIR``, or an image built without the curated tree, would
     therefore wipe the shelf for everyone — and the wipe is indistinguishable
     from a deliberate one.
     """
@@ -546,7 +546,7 @@ def test_a_missing_tree_never_reads_as_an_empty_shelf(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(
         SETTINGS,
-        "UNITY_WORKFLOWS_DIR",
+        "UNIFY_WORKFLOWS_DIR",
         str(tmp_path / "not-here"),
         raising=False,
     )
@@ -572,7 +572,7 @@ def test_a_malformed_bundle_raises_rather_than_reading_as_no_shelf(
     view_dir.mkdir(parents=True)
     (view_dir / "view.json").write_text(json.dumps({"title": "Orphan"}) + "\n")
 
-    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(SETTINGS, "UNIFY_WORKFLOWS_DIR", str(tmp_path), raising=False)
     with pytest.raises(ValueError, match="no view.tsx"):
         builtins_catalog._default_bundles()
 
@@ -599,7 +599,7 @@ def test_the_shelf_has_one_resolution_not_two(tmp_path: Path, monkeypatch):
     """Console showed six workflows; every install said the shelf was empty.
 
     The seeder fell back to the installed unify_deploy package when
-    UNITY_WORKFLOWS_DIR was unset. The runtime registry did not — it just
+    UNIFY_WORKFLOWS_DIR was unset. The runtime registry did not — it just
     returned None. So a deployment with the package installed and no env var
     published six workflows to the catalogue Console renders, while the
     assistant that has to install them registered none, and every install
@@ -616,7 +616,7 @@ def test_the_shelf_has_one_resolution_not_two(tmp_path: Path, monkeypatch):
     )
 
     _write_bundle(tmp_path)
-    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(SETTINGS, "UNIFY_WORKFLOWS_DIR", str(tmp_path), raising=False)
 
     # Both reach the same tree, because both ask the same question.
     assert resolve_catalogue_root() == tmp_path
@@ -647,7 +647,7 @@ def test_the_install_path_sees_the_bundles_boot_loaded(tmp_path: Path, monkeypat
     from unify.workflow_manager.catalog import bootstrap_workflow_catalog
 
     _write_bundle(tmp_path)
-    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(SETTINGS, "UNIFY_WORKFLOWS_DIR", str(tmp_path), raising=False)
 
     booted = bootstrap_workflow_catalog()
     assert booted is not None
@@ -681,7 +681,7 @@ def test_a_path_from_another_image_never_empties_the_shelf(tmp_path: Path, monke
 
     monkeypatch.setattr(
         SETTINGS,
-        "UNITY_WORKFLOWS_DIR",
+        "UNIFY_WORKFLOWS_DIR",
         "/app/unify_deploy/assistant_deployments/workflows",
         raising=False,
     )
@@ -711,7 +711,7 @@ def test_nothing_resolves_the_catalogue_behind_the_resolver(
     """Three places decided where the shelf was, and disagreed in turn.
 
     First the seeder and the runtime registry disagreed when
-    UNITY_WORKFLOWS_DIR was unset. Then the scheduler that decides whether
+    UNIFY_WORKFLOWS_DIR was unset. Then the scheduler that decides whether
     the bootstrap runs at all was found reading the env var directly and
     returning early when it was empty — so a deployment that ships the
     catalogue inside the image and sets no env var never loaded the shelf,
@@ -731,7 +731,7 @@ def test_nothing_resolves_the_catalogue_behind_the_resolver(
         if inspect.isfunction(obj) and obj.__module__ == catalog_module.__name__
         # The read itself, not the name: the comments explaining this
         # history mention the setting and must not count as reading it.
-        and "SETTINGS.UNITY_WORKFLOWS_DIR" in inspect.getsource(obj)
+        and "SETTINGS.UNIFY_WORKFLOWS_DIR" in inspect.getsource(obj)
     ]
     assert readers == ["resolve_catalogue_root"], (
         f"only resolve_catalogue_root may read the setting; also read by: "
@@ -754,7 +754,7 @@ def test_the_bootstrap_is_scheduled_when_the_image_ships_the_shelf(
     packaged.mkdir(parents=True)
     _write_bundle(packaged)
 
-    monkeypatch.setattr(SETTINGS, "UNITY_WORKFLOWS_DIR", "", raising=False)
+    monkeypatch.setattr(SETTINGS, "UNIFY_WORKFLOWS_DIR", "", raising=False)
     module = types.ModuleType("unify_deploy.assistant_deployments.workflows")
     module.workflows_root = lambda: packaged  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "unify_deploy", types.ModuleType("unify_deploy"))

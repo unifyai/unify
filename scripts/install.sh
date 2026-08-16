@@ -42,8 +42,8 @@ log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1" >&2; }
 
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="${UNITY_REPO:-$UNITY_HOME/unity}"
+UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+UNIFY_REPO="${UNIFY_REPO:-$UNIFY_HOME/unity}"
 BRANCH="${BRANCH:-staging}"
 SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
 CREATE_CLI=true
@@ -56,7 +56,7 @@ HOSTED_ORCHESTRA_URL="${HOSTED_ORCHESTRA_URL:-https://api.unify.ai/v0}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --dir) UNITY_HOME="$2"; UNITY_REPO="$UNITY_HOME/unity"; shift 2 ;;
+        --dir) UNIFY_HOME="$2"; UNIFY_REPO="$UNIFY_HOME/unity"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
         --no-cli) CREATE_CLI=false; shift ;;
         --skip-deps) CHECK_DEPS=false; shift ;;
@@ -98,19 +98,19 @@ ensure_prereqs() {
 # Clone (or update) the unify checkout. unify / unillm are cloned separately as
 # editable sibling checkouts (see clone_or_update_sibling): unify's
 # pyproject.toml references them via local relative paths (../unisdk, ../unillm),
-# so they must sit alongside the unify checkout under $UNITY_HOME.
+# so they must sit alongside the unify checkout under $UNIFY_HOME.
 # ----------------------------------------------------------------------------
 clone_or_update_unity() {
-    mkdir -p "$UNITY_HOME"
-    if [ -d "$UNITY_REPO/.git" ]; then
-        log_info "Updating unify checkout at $UNITY_REPO..."
-        git -C "$UNITY_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
-        git -C "$UNITY_REPO" checkout "$BRANCH" 2>/dev/null || true
-        git -C "$UNITY_REPO" pull --rebase 2>/dev/null || true
+    mkdir -p "$UNIFY_HOME"
+    if [ -d "$UNIFY_REPO/.git" ]; then
+        log_info "Updating unify checkout at $UNIFY_REPO..."
+        git -C "$UNIFY_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
+        git -C "$UNIFY_REPO" checkout "$BRANCH" 2>/dev/null || true
+        git -C "$UNIFY_REPO" pull --rebase 2>/dev/null || true
     else
-        log_info "Cloning unify ($BRANCH) into $UNITY_REPO..."
+        log_info "Cloning unify ($BRANCH) into $UNIFY_REPO..."
         git clone --depth "$SHALLOW_CLONE_DEPTH" --branch "$BRANCH" \
-            "$REPO_BASE/unify.git" "$UNITY_REPO"
+            "$REPO_BASE/unify.git" "$UNIFY_REPO"
     fi
     log_success "unify checkout ready"
 }
@@ -118,12 +118,12 @@ clone_or_update_unity() {
 # ----------------------------------------------------------------------------
 # Clone (or update) a first-party SDK (unisdk / unillm) as a sibling of the unify
 # checkout. unify (and unillm) resolve these via editable relative paths, so
-# they live at $UNITY_HOME/<name> == ../<name> relative to the unify repo. Falls
+# they live at $UNIFY_HOME/<name> == ../<name> relative to the unify repo. Falls
 # back to the main branch when the requested branch is absent in the SDK repo.
 # ----------------------------------------------------------------------------
 clone_or_update_sibling() {
     local name="$1"
-    local dir="$UNITY_HOME/$name"
+    local dir="$UNIFY_HOME/$name"
     if [ -d "$dir/.git" ]; then
         log_info "Updating $name checkout at $dir..."
         git -C "$dir" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
@@ -141,7 +141,7 @@ clone_or_update_sibling() {
 
 uv_sync() {
     log_info "Syncing Python dependencies (uv)..."
-    (cd "$UNITY_REPO" && uv sync --all-groups)
+    (cd "$UNIFY_REPO" && uv sync --all-groups)
     log_success "Dependencies synced"
 }
 
@@ -150,7 +150,7 @@ uv_sync() {
 # local file references in agent-service/package.json.
 # ----------------------------------------------------------------------------
 clone_or_update_magnitude() {
-    local magnitude_dir="$UNITY_REPO/magnitude"
+    local magnitude_dir="$UNIFY_REPO/magnitude"
     local magnitude_branch="main"
     if [ -d "$magnitude_dir/.git" ]; then
         log_info "Updating magnitude checkout at $magnitude_dir..."
@@ -172,8 +172,8 @@ clone_or_update_magnitude() {
 # Install agent-service Node dependencies (requires magnitude to be present).
 # ----------------------------------------------------------------------------
 install_agent_service() {
-    local agent_service_dir="$UNITY_REPO/agent-service"
-    local magnitude_dir="$UNITY_REPO/magnitude"
+    local agent_service_dir="$UNIFY_REPO/agent-service"
+    local magnitude_dir="$UNIFY_REPO/magnitude"
     if [ ! -d "$agent_service_dir" ]; then
         log_warn "agent-service directory not found — skipping npm install"
         return 0
@@ -220,15 +220,15 @@ install_agent_service() {
 }
 
 scaffold_env() {
-    if [ ! -f "$UNITY_REPO/.env" ] && [ -f "$UNITY_REPO/.env.example" ]; then
-        cp "$UNITY_REPO/.env.example" "$UNITY_REPO/.env"
-        log_success "Created $UNITY_REPO/.env"
+    if [ ! -f "$UNIFY_REPO/.env" ] && [ -f "$UNIFY_REPO/.env.example" ]; then
+        cp "$UNIFY_REPO/.env.example" "$UNIFY_REPO/.env"
+        log_success "Created $UNIFY_REPO/.env"
     fi
 }
 
 upsert_env() {
     local key="$1" val="$2"
-    python3 - "$UNITY_REPO/.env" "$key" "$val" <<'PY'
+    python3 - "$UNIFY_REPO/.env" "$key" "$val" <<'PY'
 import re, sys
 from pathlib import Path
 path, key, val = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -249,8 +249,8 @@ PY
 
 env_value() {
     local key="$1"
-    [ -f "$UNITY_REPO/.env" ] || return 0
-    grep -E "^${key}=" "$UNITY_REPO/.env" | head -1 | cut -d= -f2- | tr -d '"' || true
+    [ -f "$UNIFY_REPO/.env" ] || return 0
+    grep -E "^${key}=" "$UNIFY_REPO/.env" | head -1 | cut -d= -f2- | tr -d '"' || true
 }
 
 # ----------------------------------------------------------------------------
@@ -265,7 +265,7 @@ configure_env() {
 
     # The local install has no Console front-end; suppress Console-UI knowledge
     # and onboarding prompts in the ConversationManager.
-    upsert_env "UNITY_CONSOLE_UI" "false"
+    upsert_env "UNIFY_CONSOLE_UI" "false"
 
     if [ "$NON_INTERACTIVE" = "true" ]; then
         [ -n "${UNIFY_KEY:-}" ] && upsert_env "UNIFY_KEY" "$UNIFY_KEY"
@@ -289,11 +289,11 @@ configure_env() {
     fi
 
     # LLM / voice / research BYOK keys.
-    if [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
-        UNITY_REPO="$UNITY_REPO" NON_INTERACTIVE="$NON_INTERACTIVE" \
-            bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+    if [ -x "$UNIFY_REPO/scripts/prompt_byok_keys.sh" ]; then
+        UNIFY_REPO="$UNIFY_REPO" NON_INTERACTIVE="$NON_INTERACTIVE" \
+            bash "$UNIFY_REPO/scripts/prompt_byok_keys.sh" || true
     fi
-    log_success "Configuration written to $UNITY_REPO/.env"
+    log_success "Configuration written to $UNIFY_REPO/.env"
 }
 
 # ----------------------------------------------------------------------------
@@ -309,35 +309,35 @@ create_cli() {
 # Unify CLI shim — runs the local agent runtime against the hosted backend.
 # Generated by install.sh; safe to edit.
 set -e
-UNITY_HOME="${UNITY_HOME}"
-UNITY_REPO="${UNITY_REPO}"
-export UNITY_HOME
+UNIFY_HOME="${UNIFY_HOME}"
+UNIFY_REPO="${UNIFY_REPO}"
+export UNIFY_HOME
 
-if [ ! -d "\$UNITY_REPO" ]; then
-    echo "Unify is not installed at \$UNITY_REPO. Re-run install.sh or set UNITY_HOME." >&2
+if [ ! -d "\$UNIFY_REPO" ]; then
+    echo "Unify is not installed at \$UNIFY_REPO. Re-run install.sh or set UNIFY_HOME." >&2
     exit 1
 fi
 
-PY="\$UNITY_REPO/.venv/bin/python"
+PY="\$UNIFY_REPO/.venv/bin/python"
 [ -x "\$PY" ] || PY="python3"
 
 case "\${1:-}" in
     ""|chat|sandbox)
         # Interactive local chat with the full ConversationManager.
         shift || true
-        cd "\$UNITY_REPO"
+        cd "\$UNIFY_REPO"
         exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
     serve|run)
         # Headless: start the ConversationManager + gateway against hosted Orchestra.
         shift || true
-        exec bash "\$UNITY_REPO/scripts/local.sh" start --full "\$@"
+        exec bash "\$UNIFY_REPO/scripts/local.sh" start --full "\$@"
         ;;
     stop|down)
-        exec bash "\$UNITY_REPO/scripts/local.sh" stop
+        exec bash "\$UNIFY_REPO/scripts/local.sh" stop
         ;;
     status)
-        exec bash "\$UNITY_REPO/scripts/local.sh" status
+        exec bash "\$UNIFY_REPO/scripts/local.sh" status
         ;;
     logs|tail)
         LOG_FILE="/tmp/unity-local.log"
@@ -346,31 +346,31 @@ case "\${1:-}" in
         exec tail -F "\$LOG_FILE"
         ;;
     doctor)
-        exec bash "\$UNITY_REPO/scripts/local.sh" gateway-doctor
+        exec bash "\$UNIFY_REPO/scripts/local.sh" gateway-doctor
         ;;
     setup|reconfigure)
-        exec bash "\$UNITY_REPO/scripts/install.sh" --reconfigure
+        exec bash "\$UNIFY_REPO/scripts/install.sh" --reconfigure
         ;;
     update|pull)
         echo "Updating unify checkout..."
-        git -C "\$UNITY_REPO" pull --rebase || true
+        git -C "\$UNIFY_REPO" pull --rebase || true
         for sib in unisdk unillm; do
-            if [ -d "\$UNITY_HOME/\$sib/.git" ]; then
+            if [ -d "\$UNIFY_HOME/\$sib/.git" ]; then
                 echo "Updating \$sib checkout..."
-                git -C "\$UNITY_HOME/\$sib" pull --rebase || true
+                git -C "\$UNIFY_HOME/\$sib" pull --rebase || true
             fi
         done
-        (cd "\$UNITY_REPO" && uv sync --all-groups)
-        MAGNITUDE_DIR="\$UNITY_REPO/magnitude"
+        (cd "\$UNIFY_REPO" && uv sync --all-groups)
+        MAGNITUDE_DIR="\$UNIFY_REPO/magnitude"
         if [ -d "\$MAGNITUDE_DIR/.git" ]; then
             echo "Updating magnitude checkout (main)..."
             git -C "\$MAGNITUDE_DIR" fetch --depth 1 origin main 2>/dev/null || true
             git -C "\$MAGNITUDE_DIR" checkout main 2>/dev/null || true
             git -C "\$MAGNITUDE_DIR" pull --rebase || true
         fi
-        if command -v npm >/dev/null 2>&1 && [ -d "\$UNITY_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
+        if command -v npm >/dev/null 2>&1 && [ -d "\$UNIFY_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
             echo "Refreshing agent-service dependencies..."
-            (cd "\$UNITY_REPO/agent-service" && npm ci --silent) || true
+            (cd "\$UNIFY_REPO/agent-service" && npm ci --silent) || true
         fi
         ;;
     help|--help|-h)
@@ -387,7 +387,7 @@ USAGE
         ;;
     *)
         # Forward unknown args to the sandbox.
-        cd "\$UNITY_REPO"
+        cd "\$UNIFY_REPO"
         exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
 esac
@@ -426,7 +426,7 @@ print_done() {
     echo "  unify serve      Run headless (CM + gateway)"
     echo "  unify help       Command reference"
     echo ""
-    echo "Keys live in $UNITY_REPO/.env — edit and re-run 'unify setup' any time."
+    echo "Keys live in $UNIFY_REPO/.env — edit and re-run 'unify setup' any time."
     echo "Manage your assistant and account at https://console.unify.ai"
     echo ""
 }

@@ -38,13 +38,13 @@ Common options:
 Export the resulting URL:
 
 ```bash
-export UNITY_GATEWAY_PUBLIC_URL=https://your-public-callback.example
+export UNIFY_GATEWAY_PUBLIC_URL=https://your-public-callback.example
 ```
 
 Then print provider URLs:
 
 ```bash
-python -m unity.gateway urls --public-url "$UNITY_GATEWAY_PUBLIC_URL"
+python -m unity.gateway urls --public-url "$UNIFY_GATEWAY_PUBLIC_URL"
 ```
 
 ## Setup, Doctor, and Smoke
@@ -66,7 +66,7 @@ python -m unity.gateway setup --channels all --non-interactive --env-file .env
 Print setup guidance and credential placeholders:
 
 ```bash
-python -m unity.gateway setup --channels twilio slack google --public-url "$UNITY_GATEWAY_PUBLIC_URL"
+python -m unity.gateway setup --channels twilio slack google --public-url "$UNIFY_GATEWAY_PUBLIC_URL"
 ```
 
 Append missing credential placeholders to a local env file:
@@ -78,14 +78,14 @@ python -m unity.gateway setup --channels twilio --write-env --env-file .env
 Validate URL shape and selected channel credentials:
 
 ```bash
-python -m unity.gateway doctor --channels twilio slack --public-url "$UNITY_GATEWAY_PUBLIC_URL" --check-credentials --env-file .env
+python -m unity.gateway doctor --channels twilio slack --public-url "$UNIFY_GATEWAY_PUBLIC_URL" --check-credentials --env-file .env
 python -m unity.gateway doctor --channels all --check-credentials --fix --env-file .env
 ```
 
 Check the local gateway process:
 
 ```bash
-python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --public-url "$UNITY_GATEWAY_PUBLIC_URL"
+python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --public-url "$UNIFY_GATEWAY_PUBLIC_URL"
 ```
 
 `doctor --fix` only performs safe local file repairs, currently appending missing

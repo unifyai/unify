@@ -34,7 +34,7 @@ os.environ["USER_ID"] = "default"
 # live-voice path would raise without a LiveKit server, so keep it unset.
 os.environ["LIVEKIT_URL"] = ""
 os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "flow_test_job")
-os.environ.setdefault("UNITY_INACTIVITY_TIMEOUT_SECONDS", "0")
+os.environ.setdefault("UNIFY_INACTIVITY_TIMEOUT_SECONDS", "0")
 # A realistic boss/owner profile rather than placeholder stubs, so contact- and
 # transcript-grounded flows read like a real user's data.
 os.environ.setdefault("USER_FIRST_NAME", "Alex")
@@ -42,20 +42,20 @@ os.environ.setdefault("USER_SURNAME", "Rivera")
 os.environ.setdefault("USER_EMAIL", "alex.rivera@example.com")
 os.environ.setdefault("USER_NUMBER", "+14155550142")
 os.environ.setdefault("TEST", "true")
-os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
+os.environ.setdefault("UNIFY_INCREMENTING_TIMESTAMPS", "true")
 os.environ.setdefault("UNIFY_PRETEST_CONTEXT_CREATE", "true")
-os.environ.setdefault("UNITY_MEMORY_ENABLED", "false")
-os.environ.setdefault("UNITY_GUIDANCE_ENABLED", "false")
+os.environ.setdefault("UNIFY_MEMORY_ENABLED", "false")
+os.environ.setdefault("UNIFY_GUIDANCE_ENABLED", "false")
 # The state-manager combo flow exercises secrets.* end-to-end.
-os.environ.setdefault("UNITY_SECRET_ENABLED", "true")
-os.environ.setdefault("UNITY_SKILL_ENABLED", "false")
-os.environ.setdefault("UNITY_WEB_ENABLED", "false")
+os.environ.setdefault("UNIFY_SECRET_ENABLED", "true")
+os.environ.setdefault("UNIFY_SKILL_ENABLED", "false")
+os.environ.setdefault("UNIFY_WEB_ENABLED", "false")
 # Flow tests run against local Orchestra only; hosted Comms URLs in .env would
 # disable the in-process task scheduler and route outbound comms elsewhere.
-os.environ["UNITY_COMMS_URL"] = ""
-os.environ["UNITY_LOCAL_SCHEDULER"] = "true"
-os.environ["UNITY_KNOWLEDGE_ENABLED"] = "true"
-os.environ["UNITY_FILE_ENABLED"] = "true"
+os.environ["UNIFY_COMMS_URL"] = ""
+os.environ["UNIFY_LOCAL_SCHEDULER"] = "true"
+os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "true"
+os.environ["UNIFY_FILE_ENABLED"] = "true"
 # Route inbound through the real CommsManager + in-memory ingress transport and
 # capture outbound on the in-memory outbound transport, so flow turns exercise
 # the same envelope -> dispatch_inbound_envelope normalization as production
@@ -232,7 +232,7 @@ async def flow_harness(request: pytest.FixtureRequest) -> FlowHarness:
     # sequential pytest workers that share in-process CM globals.
     serialize = (
         contextlib.nullcontext()
-        if os.environ.get("UNITY_TMUX_SESSION_ID")
+        if os.environ.get("UNIFY_TMUX_SESSION_ID")
         else scenario_file_lock("flow_harness_cm")
     )
 

@@ -191,7 +191,7 @@ def _workspace_admin_subject(credentials: CredentialStore) -> str:
 
 def is_twin_alias_address(address: str | None) -> bool:
     """Whether an address lives on the multiplayer twin alias domain."""
-    domain = (SETTINGS.UNITY_TWIN_ALIAS_EMAIL_DOMAIN or "").strip().lower()
+    domain = (SETTINGS.UNIFY_TWIN_ALIAS_EMAIL_DOMAIN or "").strip().lower()
     if not domain or not address:
         return False
     return address.strip().lower().endswith(f"@{domain}")
@@ -205,7 +205,7 @@ def _delegation_subject(sender_email: str) -> str:
     targets that mailbox while the From header keeps the alias.
     """
     if is_twin_alias_address(sender_email):
-        return SETTINGS.UNITY_TWIN_ALIAS_MAILBOX
+        return SETTINGS.UNIFY_TWIN_ALIAS_MAILBOX
     return sender_email
 
 

@@ -27,7 +27,7 @@ source "$SCRIPT_DIR/_parse_args.sh"
 # This setting is inherited by all child processes (tmux sessions, pytest).
 ulimit -n 8192 2>/dev/null || true
 
-TMUX_SOCKET="$UNITY_TMUX_SOCKET"
+TMUX_SOCKET="$UNIFY_TMUX_SOCKET"
 
 # ---- Log directory naming ----
 # Log subdirectories use a datetime-prefixed format for natural time-based
@@ -41,7 +41,7 @@ _derive_log_subdir() {
 }
 
 # Generate log subdir once at script start (stable for this run)
-LOG_SUBDIR="${UNITY_LOG_SUBDIR:-$(_derive_log_subdir "$TMUX_SOCKET")}"
+LOG_SUBDIR="${UNIFY_LOG_SUBDIR:-$(_derive_log_subdir "$TMUX_SOCKET")}"
 
 # Wrapper for all tmux commands to use our isolated socket
 # LC_ALL=en_US.UTF-8 ensures Unicode emojis work in session names
@@ -226,12 +226,12 @@ fi
 unset _parse_result
 
 # Per-session hang guard: in CI, default to 30 minutes per tmux session
-# unless the caller passed --session-timeout (or UNITY_TEST_SESSION_TIMEOUT).
+# unless the caller passed --session-timeout (or UNIFY_TEST_SESSION_TIMEOUT).
 # Whole-run --timeout alone lets one hung session burn the entire job budget
 # (seen as exit 2 after 7200s with 1–2 sessions still on "r ⏳").
 if (( SESSION_TIMEOUT == 0 )); then
-  if [[ -n "${UNITY_TEST_SESSION_TIMEOUT:-}" && "${UNITY_TEST_SESSION_TIMEOUT}" =~ ^[0-9]+$ && "${UNITY_TEST_SESSION_TIMEOUT}" -ge 1 ]]; then
-    SESSION_TIMEOUT="${UNITY_TEST_SESSION_TIMEOUT}"
+  if [[ -n "${UNIFY_TEST_SESSION_TIMEOUT:-}" && "${UNIFY_TEST_SESSION_TIMEOUT}" =~ ^[0-9]+$ && "${UNIFY_TEST_SESSION_TIMEOUT}" -ge 1 ]]; then
+    SESSION_TIMEOUT="${UNIFY_TEST_SESSION_TIMEOUT}"
   elif [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
     SESSION_TIMEOUT=1800
   fi
@@ -334,7 +334,7 @@ _local_orchestra_script="$_orchestra_repo_path/scripts/local.sh"
 unset _git_common_dir _main_repo_git _orchestra_search_base
 
 _full_stack_state_file() {
-  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 _port_is_listening() {
@@ -420,7 +420,7 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     export COMPOSIO_WEBHOOK_SECRET="${COMPOSIO_WEBHOOK_SECRET:-test-composio-webhook-secret}"
     export PROVIDER_TRIGGER_CATALOG_ENVIRONMENT="${PROVIDER_TRIGGER_CATALOG_ENVIRONMENT:-selfhost}"
     export TRIGGER_EVENT_WRAPPING_MASTER_KEY="${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-test-master-key-material}"
-    export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${UNITY_HOME:-$HOME/.unity}/provider-event-blobs}"
+    export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${UNIFY_HOME:-$HOME/.unity}/provider-event-blobs}"
     mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
 
     # Check if local orchestra is already running
@@ -443,7 +443,7 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
       fi
 
       if [[ "$_needs_restart" == "true" ]]; then
-        if _full_stack_source_is_active && [[ "${UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
+        if _full_stack_source_is_active && [[ "${UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
           echo "Full local stack detected: reusing existing Orchestra instead of purging/restarting it."
           _create_orchestra_log_symlinks
           export ORCHESTRA_URL="$_local_url"
@@ -483,8 +483,8 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
       unset _config_file _needs_restart _current_otel_dir
     else
       # Not running - need to start it
-      if _full_stack_source_is_active && [[ "${UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
-        _deploy_repo="${UNIFY_DEPLOY_REPO_PATH:-${UNITY_DEPLOY_REPO_PATH:-$REPO_ROOT/../unify-deploy}}"
+      if _full_stack_source_is_active && [[ "${UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
+        _deploy_repo="${UNIFY_DEPLOY_REPO_PATH:-${UNIFY_DEPLOY_REPO_PATH:-$REPO_ROOT/../unify-deploy}}"
         _stack_script="$_deploy_repo/selfhost/stack.sh"
         echo "Error: Full local stack is active but Orchestra is not responding at http://127.0.0.1:8000/v0." >&2
         if [[ -x "$_stack_script" ]]; then
@@ -493,7 +493,7 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
         else
           echo "  Start or repair the stack with unify-deploy/selfhost/stack.sh." >&2
         fi
-        echo "  To run an isolated test Orchestra anyway: UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA=1" >&2
+        echo "  To run an isolated test Orchestra anyway: UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA=1" >&2
         unset _deploy_repo _stack_script
         exit 1
       else
@@ -576,13 +576,13 @@ unset _orchestra_repo_path _local_orchestra_script
 # ---------------------------------------------------------------------------
 # Communication Service URL Setup
 # ---------------------------------------------------------------------------
-# UNITY_COMMS_URL must be set via .env or environment for real-comms tests.
+# UNIFY_COMMS_URL must be set via .env or environment for real-comms tests.
 # CI sets this in .github/workflows/tests.yml; local developers set it in .env.
 # Tests that use simulated comms (the default) do not require this.
-if [[ -n "${UNITY_COMMS_URL:-}" ]]; then
-  echo "Using communication service: $UNITY_COMMS_URL"
+if [[ -n "${UNIFY_COMMS_URL:-}" ]]; then
+  echo "Using communication service: $UNIFY_COMMS_URL"
 else
-  echo "UNITY_COMMS_URL not set (simulated comms only — real-comms tests will be skipped)"
+  echo "UNIFY_COMMS_URL not set (simulated comms only — real-comms tests will be skipped)"
 fi
 
 # Build pytest marker filter based on flags
@@ -694,10 +694,10 @@ build_env_exports() {
   local exports=""
 
   # Always export the socket name for tmux isolation
-  exports="$exports UNITY_TEST_SOCKET=$TMUX_SOCKET"
+  exports="$exports UNIFY_TEST_SOCKET=$TMUX_SOCKET"
 
   # Export the log subdir for datetime-prefixed log directory naming
-  exports="$exports UNITY_LOG_SUBDIR=$LOG_SUBDIR"
+  exports="$exports UNIFY_LOG_SUBDIR=$LOG_SUBDIR"
 
   # ---------------------------------------------------------------------------
   # OpenTelemetry Configuration for Cross-Repo Full-Stack Traces
@@ -710,8 +710,8 @@ build_env_exports() {
   local otel_log_dir="$REPO_ROOT/logs/all"
 
   # Enable OTEL master switches (unless explicitly disabled via --env)
-  if ! is_var_in_env_overrides "UNITY_OTEL"; then
-    exports="$exports UNITY_OTEL=true"
+  if ! is_var_in_env_overrides "UNIFY_OTEL"; then
+    exports="$exports UNIFY_OTEL=true"
   fi
   if ! is_var_in_env_overrides "UNISDK_OTEL"; then
     exports="$exports UNISDK_OTEL=true"
@@ -722,8 +722,8 @@ build_env_exports() {
 
   # Point all repos to the unified OTEL log directory (unless explicitly set via --env)
   # All repos write {trace_id}.jsonl files; shared directory = unified traces
-  if ! is_var_in_env_overrides "UNITY_OTEL_LOG_DIR"; then
-    exports="$exports UNITY_OTEL_LOG_DIR=$otel_log_dir"
+  if ! is_var_in_env_overrides "UNIFY_OTEL_LOG_DIR"; then
+    exports="$exports UNIFY_OTEL_LOG_DIR=$otel_log_dir"
   fi
   if ! is_var_in_env_overrides "UNISDK_OTEL_LOG_DIR"; then
     exports="$exports UNISDK_OTEL_LOG_DIR=$otel_log_dir"
@@ -898,12 +898,12 @@ fi
 # ---------------------------------------------------------------------------
 # Prepare the shared project (unless using random projects mode or skipped)
 # ---------------------------------------------------------------------------
-# UNITY_SKIP_SHARED_PROJECT_PREP: When set, skip the heavyweight project
+# UNIFY_SKIP_SHARED_PROJECT_PREP: When set, skip the heavyweight project
 # preparation entirely. Useful for:
 # - Nested parallel_run.sh calls inside tests (the outer call already prepared)
 # - Running fixture tests that don't need the real UnityTests project
-if [[ -n "${UNITY_SKIP_SHARED_PROJECT_PREP:-}" ]]; then
-  echo "Skipping shared project preparation (UNITY_SKIP_SHARED_PROJECT_PREP set)..."
+if [[ -n "${UNIFY_SKIP_SHARED_PROJECT_PREP:-}" ]]; then
+  echo "Skipping shared project preparation (UNIFY_SKIP_SHARED_PROJECT_PREP set)..."
 elif is_random_projects_mode; then
   echo "Random projects mode detected; skipping shared project preparation..."
 else
@@ -969,7 +969,7 @@ run_cmd() {
     env_exports="$env_exports UNIFY_SKIP_SESSION_SETUP=True"
     env_exports="$env_exports; unset UNIFY_TESTS_DELETE_PROJ_ON_START UNIFY_TESTS_DELETE_PROJ_ON_EXIT"
   fi
-  # Append user-provided --env overrides (includes UNITY_TEST_SOCKET for log scoping)
+  # Append user-provided --env overrides (includes UNIFY_TEST_SOCKET for log scoping)
   # Uses a separate `export` statement because in shared-project mode env_exports
   # ends with `; unset ...` and bare NAME=VALUE pairs would be swallowed by unset.
   local user_overrides
@@ -1016,13 +1016,13 @@ run_cmd() {
   # Build inner command with socket name directly interpolated (not via env var)
   # This ensures tmux commands target the correct isolated server
   # Note: LC_ALL=en_US.UTF-8 is required for Unicode emoji support in tmux session names
-  # Note: Log paths are now auto-derived by conftest.py using UNITY_TEST_SOCKET + semantic naming
+  # Note: Log paths are now auto-derived by conftest.py using UNIFY_TEST_SOCKET + semantic naming
   # Inner command runs inside tmux session after pytest completes.
   # The rename-session uses "|| true" to gracefully handle race conditions
   # where multiple sessions complete simultaneously or external agents interfere.
-  # The session ID is captured BEFORE pytest runs and exported as UNITY_TMUX_SESSION_ID
+  # The session ID is captured BEFORE pytest runs and exported as UNIFY_TMUX_SESSION_ID
   # so pytest's conftest.py can write cache stats to a known temp file location.
-  inner=$(printf '%s; export UNITY_TMUX_SESSION_ID=$(LC_ALL=en_US.UTF-8 tmux -L %q display-message -p -t "$TMUX_PANE" "#{session_id}"); cd %q && %s; status=$?; sname=$(LC_ALL=en_US.UTF-8 tmux -L %q display-message -p -t "$TMUX_PANE" "#{session_name}"); base="$sname"; case "$sname" in "p ✅ "*) base="${sname#p ✅ }" ;; "f ❌ "*) base="${sname#f ❌ }" ;; "r ⏳ "*) base="${sname#r ⏳ }" ;; esac; if [ $status -eq 0 ]; then pfx="p ✅"; else pfx="f ❌"; fi; LC_ALL=en_US.UTF-8 tmux -L %q rename-session -t "$sname" "$pfx $base" 2>/dev/null || true; if [ $status -eq 0 ]; then (sleep 10; LC_ALL=en_US.UTF-8 tmux -L %q kill-session -t "$UNITY_TMUX_SESSION_ID" 2>/dev/null; if ! LC_ALL=en_US.UTF-8 tmux -L %q ls >/dev/null 2>&1; then LC_ALL=en_US.UTF-8 tmux -L %q kill-server 2>/dev/null || true; fi) >/dev/null 2>&1 & disown; echo "All tests passed. This tmux session will close in 10s..."; fi; echo; echo "pytest exited with code: $status"; echo "(You are now in a shell. Press Ctrl-D to close this window.)"; exec bash -l' "$env_exports" "$TMUX_SOCKET" "$REPO_ROOT" "$pytest_cmd" "$TMUX_SOCKET" "$TMUX_SOCKET" "$TMUX_SOCKET" "$TMUX_SOCKET" "$TMUX_SOCKET")
+  inner=$(printf '%s; export UNIFY_TMUX_SESSION_ID=$(LC_ALL=en_US.UTF-8 tmux -L %q display-message -p -t "$TMUX_PANE" "#{session_id}"); cd %q && %s; status=$?; sname=$(LC_ALL=en_US.UTF-8 tmux -L %q display-message -p -t "$TMUX_PANE" "#{session_name}"); base="$sname"; case "$sname" in "p ✅ "*) base="${sname#p ✅ }" ;; "f ❌ "*) base="${sname#f ❌ }" ;; "r ⏳ "*) base="${sname#r ⏳ }" ;; esac; if [ $status -eq 0 ]; then pfx="p ✅"; else pfx="f ❌"; fi; LC_ALL=en_US.UTF-8 tmux -L %q rename-session -t "$sname" "$pfx $base" 2>/dev/null || true; if [ $status -eq 0 ]; then (sleep 10; LC_ALL=en_US.UTF-8 tmux -L %q kill-session -t "$UNIFY_TMUX_SESSION_ID" 2>/dev/null; if ! LC_ALL=en_US.UTF-8 tmux -L %q ls >/dev/null 2>&1; then LC_ALL=en_US.UTF-8 tmux -L %q kill-server 2>/dev/null || true; fi) >/dev/null 2>&1 & disown; echo "All tests passed. This tmux session will close in 10s..."; fi; echo; echo "pytest exited with code: $status"; echo "(You are now in a shell. Press Ctrl-D to close this window.)"; exec bash -l' "$env_exports" "$TMUX_SOCKET" "$REPO_ROOT" "$pytest_cmd" "$TMUX_SOCKET" "$TMUX_SOCKET" "$TMUX_SOCKET" "$TMUX_SOCKET" "$TMUX_SOCKET")
   printf 'bash -c %q' "$inner"
 }
 

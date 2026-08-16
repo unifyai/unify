@@ -92,7 +92,7 @@ spec:
           value: production
         - name: DEPLOY_ENV
           value: production
-        - name: UNITY_COMMS_URL
+        - name: UNIFY_COMMS_URL
           value: "https://unity-comms-app-262420637606.us-central1.run.app"
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"

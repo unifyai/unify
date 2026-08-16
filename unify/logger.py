@@ -5,26 +5,26 @@ unify/logger.py
 Unity's runtime logging and OpenTelemetry tracing configuration.
 
 File-based logging:
-    When UNITY_LOG_DIR is set (via env var or configure_log_dir()),
+    When UNIFY_LOG_DIR is set (via env var or configure_log_dir()),
     Unity's LOGGER output is written to two files:
-      - {UNITY_LOG_DIR}/unity.log           (DEBUG + INFO)
-      - {UNITY_LOG_DIR}/unity_info_only.log (INFO only)
+      - {UNIFY_LOG_DIR}/unity.log           (DEBUG + INFO)
+      - {UNIFY_LOG_DIR}/unity_info_only.log (INFO only)
     This captures async tool loop events, manager operations, etc.
 
 OpenTelemetry tracing:
-    When UNITY_OTEL is enabled, manager operations and async tool loops
+    When UNIFY_OTEL is enabled, manager operations and async tool loops
     create OTel spans that propagate trace context to downstream libraries.
 
-    - UNITY_OTEL: Master switch (default: false)
-    - UNITY_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
-    - UNITY_OTEL_LOG_DIR: Directory for file-based span export (optional)
+    - UNIFY_OTEL: Master switch (default: false)
+    - UNIFY_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
+    - UNIFY_OTEL_LOG_DIR: Directory for file-based span export (optional)
 
     Unity acts as the root TracerProvider when enabled. Child libraries
     (unillm, unify) will detect the existing provider and create child spans.
 
 File-based span export:
-    When UNITY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
-    by trace_id: {UNITY_OTEL_LOG_DIR}/{trace_id}.jsonl
+    When UNIFY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
+    by trace_id: {UNIFY_OTEL_LOG_DIR}/{trace_id}.jsonl
 
     This enables full-stack trace correlation across processes. Orchestra
     (running in a separate FastAPI process) receives the traceparent header
@@ -133,9 +133,9 @@ _LOG_DIR: Optional[Path] = None
 # OpenTelemetry Setup
 # ─────────────────────────────────────────────────────────────────────────────
 
-_OTEL_ENABLED = SETTINGS.UNITY_OTEL
-_OTEL_ENDPOINT = SETTINGS.UNITY_OTEL_ENDPOINT
-_OTEL_LOG_DIR = SETTINGS.UNITY_OTEL_LOG_DIR
+_OTEL_ENABLED = SETTINGS.UNIFY_OTEL
+_OTEL_ENDPOINT = SETTINGS.UNIFY_OTEL_ENDPOINT
+_OTEL_LOG_DIR = SETTINGS.UNIFY_OTEL_LOG_DIR
 _OTEL_INITIALIZED = False
 _TRACER = None
 
@@ -243,7 +243,7 @@ def _setup_otel() -> None:
     Child libraries (unillm, unify) will detect the existing provider
     and use it to create child spans in the same trace.
 
-    When UNITY_OTEL_LOG_DIR is set, spans are also written to JSONL files
+    When UNIFY_OTEL_LOG_DIR is set, spans are also written to JSONL files
     keyed by trace_id for full-stack trace correlation.
     """
     global _OTEL_INITIALIZED, _TRACER
@@ -419,7 +419,7 @@ def get_otel_log_dir() -> Optional[Path]:
     """Get the OTel span log directory, if configured.
 
     Returns:
-        Path to the UNITY_OTEL_LOG_DIR, or None if not configured.
+        Path to the UNIFY_OTEL_LOG_DIR, or None if not configured.
     """
     if not _OTEL_LOG_DIR:
         return None
@@ -472,12 +472,12 @@ class _MillisFormatter(logging.Formatter):
 
 LOGGER.setLevel(logging.DEBUG)
 
-if SETTINGS.UNITY_TERMINAL_LOG:
+if SETTINGS.UNIFY_TERMINAL_LOG:
     import sys
 
     _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(_MillisFormatter(stream=sys.stdout))
-    _handler.setLevel(getattr(logging, SETTINGS.UNITY_TERMINAL_LOG_LEVEL, logging.INFO))
+    _handler.setLevel(getattr(logging, SETTINGS.UNIFY_TERMINAL_LOG_LEVEL, logging.INFO))
 
     _already_configured = any(
         isinstance(h, logging.StreamHandler) and getattr(h, "_unity_terminal", False)
@@ -607,12 +607,12 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
     This captures async tool loop events, manager operations, hierarchical
     session logs, and any other code using LOGGER.
 
-    Call this after setting UNITY_LOG_DIR if the env var was set
+    Call this after setting UNIFY_LOG_DIR if the env var was set
     after this module was imported.
 
     Args:
         log_dir: Explicit log directory path. If None, reads from
-                 UNITY_LOG_DIR env var (or SETTINGS.UNITY_LOG_DIR).
+                 UNIFY_LOG_DIR env var (or SETTINGS.UNIFY_LOG_DIR).
 
     Returns:
         The configured log directory Path, or None if disabled.
@@ -634,10 +634,10 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
 
     # Determine log directory
     if log_dir is not None:
-        os.environ["UNITY_LOG_DIR"] = log_dir
+        os.environ["UNIFY_LOG_DIR"] = log_dir
         dir_path = log_dir
     else:
-        dir_path = os.environ.get("UNITY_LOG_DIR", "").strip() or SETTINGS.UNITY_LOG_DIR
+        dir_path = os.environ.get("UNIFY_LOG_DIR", "").strip() or SETTINGS.UNIFY_LOG_DIR
 
     if not dir_path:
         return None
@@ -682,6 +682,6 @@ def get_log_dir() -> Optional[Path]:
     return _LOG_DIR
 
 
-# Auto-configure from settings on module load (if UNITY_LOG_DIR is set)
-if SETTINGS.UNITY_LOG_DIR:
-    configure_log_dir(SETTINGS.UNITY_LOG_DIR)
+# Auto-configure from settings on module load (if UNIFY_LOG_DIR is set)
+if SETTINGS.UNIFY_LOG_DIR:
+    configure_log_dir(SETTINGS.UNIFY_LOG_DIR)

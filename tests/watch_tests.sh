@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-TMUX_SOCKET="$UNITY_TMUX_SOCKET"
+TMUX_SOCKET="$UNIFY_TMUX_SOCKET"
 
 WATCH_ALL=0
 EXPLICIT_SOCKET=""
@@ -64,7 +64,7 @@ fi
 
 if (( WATCH_ALL )); then
   # Watch all unity sockets that have active sessions
-  if [[ -z "$UNITY_TIMEOUT_CMD" ]]; then
+  if [[ -z "$UNIFY_TIMEOUT_CMD" ]]; then
     echo "Warning: 'timeout' command not found. Dead sockets may cause slow refreshes." >&2
     echo "Install coreutils: brew install coreutils (macOS) or apt install coreutils (Linux)" >&2
     sleep 2
@@ -76,7 +76,7 @@ if (( WATCH_ALL )); then
     for sock in /tmp/tmux-\$(id -u)/unity*; do
       [ -e \"\$sock\" ] || continue
       name=\$(basename \"\$sock\")
-      sessions=\$(${UNITY_TIMEOUT_CMD} tmux -L \"\$name\" ls 2>/dev/null)
+      sessions=\$(${UNIFY_TIMEOUT_CMD} tmux -L \"\$name\" ls 2>/dev/null)
       [ -z \"\$sessions\" ] && continue
       found=1
       echo \"=== \$name ===\"

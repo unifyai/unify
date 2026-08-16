@@ -2,7 +2,7 @@
 FunctionManager-specific settings.
 
 These settings are composed into the global ProductionSettings.
-Environment variables use the prefix UNITY_FUNCTION_.
+Environment variables use the prefix UNIFY_FUNCTION_.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,7 +18,7 @@ class FunctionSettings(BaseSettings):
     IMPL: str = "real"
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_FUNCTION_",
+        env_prefix="UNIFY_FUNCTION_",
         case_sensitive=True,
         extra="ignore",
     )

@@ -114,8 +114,8 @@ function debugLog(line: string): void {
 //
 // Workspace root for file operations, command execution, and browser downloads.
 // Matches Unity's get_local_root() default of ~/Unity/Local.
-// Override via UNITY_LOCAL_ROOT env var.
-const LOCAL_ROOT = process.env.UNITY_LOCAL_ROOT || path.join(os.homedir(), 'Unity', 'Local');
+// Override via UNIFY_LOCAL_ROOT env var.
+const LOCAL_ROOT = process.env.UNIFY_LOCAL_ROOT || path.join(os.homedir(), 'Unity', 'Local');
 try { fs.mkdirSync(LOCAL_ROOT, { recursive: true }); } catch (_e) { /* ignore */ }
 const DEFAULT_EXEC_TIMEOUT = 60 * 60 * 1000; // 1 hour
 

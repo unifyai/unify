@@ -1,7 +1,7 @@
 """Shared addressing and seeding state for the global builtins project.
 
 The builtins project is a public-read Unify project (setting
-``UNITY_BUILTINS_PROJECT``, default ``"Builtins"``) owned by the platform
+``UNIFY_BUILTINS_PROJECT``, default ``"Builtins"``) owned by the platform
 admin account. It stores exactly one platform-wide copy of fixed catalogue
 data — builtin function primitives and builtin guidance — that every
 deployment reads but never writes.
@@ -27,7 +27,7 @@ def builtins_project() -> str:
     """Return the configured name of the public builtins catalogue project."""
     from unify.settings import SETTINGS
 
-    return SETTINGS.UNITY_BUILTINS_PROJECT
+    return SETTINGS.UNIFY_BUILTINS_PROJECT
 
 
 def ensure_builtins_project(project: str) -> None:

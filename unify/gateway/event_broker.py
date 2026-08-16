@@ -90,7 +90,7 @@ class EventBroker(Protocol):
       tests, single-process self-hosted Unity, and offline runs.
     * ``PubSubEventBroker`` -- planned; wraps Google Cloud Pub/Sub for
       hosted multi-tenant deployments. Will land behind a
-      ``UNITY_EVENT_BROKER=pubsub`` selector in a dedicated PR so its
+      ``UNIFY_EVENT_BROKER=pubsub`` selector in a dedicated PR so its
       threading model can be exercised in isolation.
 
     Backends may add a Redis Streams variant later; the ``execute_command``

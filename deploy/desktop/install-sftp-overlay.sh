@@ -28,8 +28,8 @@ chmod 700 /Unity/.ssh
 chmod 755 /Unity/Local
 
 cat >/Unity/.bashrc <<'BASHRC'
-if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
-    export UNITY_SHELL_INIT=1
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNIFY_SHELL_INIT" ]]; then
+    export UNIFY_SHELL_INIT=1
     cd /Unity
 fi
 BASHRC

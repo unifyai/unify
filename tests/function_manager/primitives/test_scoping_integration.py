@@ -36,9 +36,9 @@ from tests.helpers import _handle_project
 def scoped_function_manager_factory():
     """Factory that creates FunctionManager with specific scope."""
     managers = []
-    previous_impl = os.environ.get("UNITY_FUNCTION_IMPL")
+    previous_impl = os.environ.get("UNIFY_FUNCTION_IMPL")
     previous_base_context = getattr(ContextRegistry, "_base_context", None)
-    os.environ["UNITY_FUNCTION_IMPL"] = "simulated"
+    os.environ["UNIFY_FUNCTION_IMPL"] = "simulated"
     ContextRegistry.set_base_context("UnityTests/PrimitiveScope")
 
     def _create(scope: PrimitiveScope):
@@ -59,9 +59,9 @@ def scoped_function_manager_factory():
         except Exception:
             pass
     if previous_impl is None:
-        os.environ.pop("UNITY_FUNCTION_IMPL", None)
+        os.environ.pop("UNIFY_FUNCTION_IMPL", None)
     else:
-        os.environ["UNITY_FUNCTION_IMPL"] = previous_impl
+        os.environ["UNIFY_FUNCTION_IMPL"] = previous_impl
     ContextRegistry.clear()
     if previous_base_context:
         ContextRegistry.set_base_context(previous_base_context)

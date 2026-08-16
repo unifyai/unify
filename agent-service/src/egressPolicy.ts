@@ -29,25 +29,25 @@
 export interface EgressEnv {
   [key: string]: string | undefined;
   /** Proxy endpoint for managed regions, e.g. `http://gate.provider.com:7777`. */
-  UNITY_EGRESS_PROXY_SERVER?: string;
+  UNIFY_EGRESS_PROXY_SERVER?: string;
   /**
    * Username template. Residential providers encode both the geography and
    * the sticky-session handle in the username, so `{region}` and `{session}`
    * are substituted here rather than the caller ever seeing a credential.
    *
    * A dedicated-IP endpoint has neither: the username is literal, the exit is
-   * whatever address the endpoint owns, and `UNITY_EGRESS_PROXY_REGIONS` below
+   * whatever address the endpoint owns, and `UNIFY_EGRESS_PROXY_REGIONS` below
    * is what states where that is.
    */
-  UNITY_EGRESS_PROXY_USERNAME?: string;
-  UNITY_EGRESS_PROXY_PASSWORD?: string;
+  UNIFY_EGRESS_PROXY_USERNAME?: string;
+  UNIFY_EGRESS_PROXY_PASSWORD?: string;
   /**
    * Regions the configured endpoint actually exits from, comma-separated.
    *
    * Required when the username carries no `{region}` placeholder — see
    * `assertRegionServable`.
    */
-  UNITY_EGRESS_PROXY_REGIONS?: string;
+  UNIFY_EGRESS_PROXY_REGIONS?: string;
 }
 
 export interface ProxyConfig {
@@ -192,14 +192,14 @@ function usernameIsGeoTargeted(template: string): boolean {
  */
 function assertRegionServable(env: EgressEnv, template: string, region: string): void {
   if (usernameIsGeoTargeted(template)) return;
-  const declared = (env.UNITY_EGRESS_PROXY_REGIONS || '')
+  const declared = (env.UNIFY_EGRESS_PROXY_REGIONS || '')
     .split(',')
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   if (!declared.length) {
     throw new EgressPolicyError(
       'managed egress username carries no {region} placeholder, so the exit is fixed; ' +
-        'set UNITY_EGRESS_PROXY_REGIONS to the regions it serves. Refusing to claim ' +
+        'set UNIFY_EGRESS_PROXY_REGIONS to the regions it serves. Refusing to claim ' +
         `region ${r_safe(region)} on an endpoint of unknown geography`,
     );
   }
@@ -281,21 +281,21 @@ export function resolveEgress(
         `unsupported egress region ${r_safe(region)}; supported: ${supportedRegions().join(', ')}`,
       );
     }
-    const server = (env.UNITY_EGRESS_PROXY_SERVER || '').trim();
+    const server = (env.UNIFY_EGRESS_PROXY_SERVER || '').trim();
     if (!server) {
       throw new EgressPolicyError(
-        'no managed egress provider configured (UNITY_EGRESS_PROXY_SERVER); ' +
+        'no managed egress provider configured (UNIFY_EGRESS_PROXY_SERVER); ' +
           'refusing to fall back to direct egress',
       );
     }
-    const usernameTemplate = (env.UNITY_EGRESS_PROXY_USERNAME || '').trim();
+    const usernameTemplate = (env.UNIFY_EGRESS_PROXY_USERNAME || '').trim();
     assertRegionServable(env, usernameTemplate, region);
     proxy = {
       server,
       username: usernameTemplate
         ? renderUsername(usernameTemplate, region, sessionKeyFor(policy, region))
         : undefined,
-      password: env.UNITY_EGRESS_PROXY_PASSWORD || undefined,
+      password: env.UNIFY_EGRESS_PROXY_PASSWORD || undefined,
     };
   }
 

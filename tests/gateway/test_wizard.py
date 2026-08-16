@@ -78,7 +78,7 @@ def test_interactive_setup_writes_selected_values(tmp_path) -> None:
 
     assert exit_code == 0
     contents = env_file.read_text(encoding="utf-8")
-    assert "UNITY_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
+    assert "UNIFY_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
     assert "SLACK_SIGNING_SECRET=secret" in contents
     assert "ORCHESTRA_ADMIN_KEY=admin" in contents
     assert "Unity gateway local setup wizard" in output.getvalue()

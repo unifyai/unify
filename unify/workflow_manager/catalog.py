@@ -283,7 +283,7 @@ def resolve_catalogue_root() -> Optional[Path]:
 
     One resolution, used by everything that needs the shelf. It used to be
     written twice: the seeder fell back to the installed ``unify_deploy``
-    package when ``UNITY_WORKFLOWS_DIR`` was unset, and the runtime registry
+    package when ``UNIFY_WORKFLOWS_DIR`` was unset, and the runtime registry
     returned None instead. So a deployment with the package installed and no
     env var published six workflows to the catalogue Console renders, while
     the assistant that has to install them registered none — the shelf was
@@ -302,7 +302,7 @@ def resolve_catalogue_root() -> Optional[Path]:
         except ImportError:
             return None
 
-    configured = (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip()
+    configured = (SETTINGS.UNIFY_WORKFLOWS_DIR or "").strip()
     if configured:
         root = Path(configured)
         if root.is_dir():
@@ -343,7 +343,7 @@ def bootstrap_workflow_catalog(
 
     The production caller: run after ``ContextRegistry.setup`` so manager
     constructions can resolve their contexts. Resolves the catalogue root
-    from ``UNITY_WORKFLOWS_DIR`` when not given; with no root configured
+    from ``UNIFY_WORKFLOWS_DIR`` when not given; with no root configured
     there is no catalogue and nothing is built.
 
     Per-bundle failures are isolated: a malformed bundle is logged and
@@ -430,7 +430,7 @@ def schedule_bootstrap_workflow_catalog() -> None:
 
     # Ask the one resolver, not the env var.
     #
-    # This gate used to read UNITY_WORKFLOWS_DIR directly and return when it
+    # This gate used to read UNIFY_WORKFLOWS_DIR directly and return when it
     # was empty — so a deployment that ships the catalogue inside the image
     # and sets no env var never scheduled the bootstrap at all. Nothing was
     # logged, because nothing ran: the shelf was simply never loaded, and

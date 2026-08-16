@@ -931,7 +931,7 @@ def _dispatch_offline_explicit_candidate(
     comms_url = (SETTINGS.conversation.COMMS_URL or "").rstrip("/")
     unify_key = SESSION_DETAILS.unify_key
     if not comms_url:
-        raise RuntimeError("UNITY_COMMS_URL is not configured")
+        raise RuntimeError("UNIFY_COMMS_URL is not configured")
     if not unify_key:
         raise RuntimeError("UNIFY_KEY is not configured")
     assistant_id = candidate.assistant_id or (_current_task_assistant_id() or "")
@@ -1220,7 +1220,7 @@ def _dispatch_offline_trigger_candidate(
     # verifies it against the assistant's session (no platform admin key).
     unify_key = SESSION_DETAILS.unify_key
     if not comms_url:
-        raise RuntimeError("UNITY_COMMS_URL is not configured")
+        raise RuntimeError("UNIFY_COMMS_URL is not configured")
     if not unify_key:
         raise RuntimeError("UNIFY_KEY is not configured")
     assistant_id = candidate.assistant_id or (_current_task_assistant_id() or "")

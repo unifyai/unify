@@ -5,7 +5,7 @@ clean and bundles clean, then throws on mount. Neither tsc nor esbuild can see
 that class of bug, and it is the entire reason the render is a hard gate rather
 than advisory.
 
-    UNITY_CANVAS_TOOLCHAIN_ROOT=... UNITY_CANVAS_HOST_ROOT=... \
+    UNIFY_CANVAS_TOOLCHAIN_ROOT=... UNIFY_CANVAS_HOST_ROOT=... \
         .venv/bin/python tests/_verify_canvas_render.py
 """
 

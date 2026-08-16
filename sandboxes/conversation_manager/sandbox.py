@@ -381,8 +381,8 @@ async def _main_async() -> None:
         help="(CodeAct) auto-print execution trace after each code turn (REPL only)",
     )
     args = parser.parse_args()
-    os.environ.setdefault("UNITY_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
-    os.environ.setdefault("UNITY_TERMINAL_LOG", "false")
+    os.environ.setdefault("UNIFY_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
+    os.environ.setdefault("UNIFY_TERMINAL_LOG", "false")
     os.environ.setdefault("UNILLM_TERMINAL_LOG", "false")
     unillm_log_dir = _enable_unillm_boundary_logging()
 

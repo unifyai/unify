@@ -27,11 +27,11 @@ def _expected_first_sms_body(content: str) -> str:
 
 def _seed_offline_env(monkeypatch):
     monkeypatch.setenv(
-        "UNITY_OFFLINE_RUN_KEY",
+        "UNIFY_OFFLINE_RUN_KEY",
         "offline:scheduled:42:101:rev:once",
     )
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_ID", "101")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
     monkeypatch.setattr(offline_support, "_OPERATION_COUNTER", 0)
     monkeypatch.setattr(offline_support.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(offline_support.SESSION_DETAILS.assistant, "contact_id", 0)
@@ -831,7 +831,7 @@ async def test_make_whatsapp_call_live_hosted_does_not_probe(monkeypatch):
         "WHATSAPP_CALL_PERMISSION_PROBE_ENABLED",
         "ORCHESTRA_URL",
         "COMMUNICATION_URL",
-        "UNITY_COMMS_URL",
+        "UNIFY_COMMS_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)

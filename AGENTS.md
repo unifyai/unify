@@ -590,8 +590,8 @@ logs/pytest/
 ```
 
 **Environment variables:**
-- `UNITY_LOG_SUBDIR`: The full datetime-prefixed log directory name (set by `parallel_run.sh`)
-- `UNITY_TEST_SOCKET`: The terminal socket name for tmux isolation (e.g., `unity_dev_ttys004`)
+- `UNIFY_LOG_SUBDIR`: The full datetime-prefixed log directory name (set by `parallel_run.sh`)
+- `UNIFY_TEST_SOCKET`: The terminal socket name for tmux isolation (e.g., `unity_dev_ttys004`)
 
 ### Cleanup (REQUIRED)
 - **ALWAYS** kill failed tmux sessions after extracting failure info from `logs/pytest/`.
@@ -1129,7 +1129,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### WorkflowManager
 - **Role**: Catalogue of installable **workflows** — hand-curated, versioned packages that set an assistant up for a recurring job in one install (procedures, claims, functions and a recurring task, planted together). Owner of install state and settings, nothing else.
-- **Scope**: `list_workflows`, `get_workflow`, `install_workflow`, `uninstall_workflow`, `get_installation_params` as first-class `WorkflowManager_*` JSON tool calls — **not** primitives. Installing fans out each surface's existing `sync_custom`; there is no second content store and no second reconcile loop. `reconcile_installed` and `execute_requests` are upkeep, deliberately **not** tools (boot/ops, and a single-slug update is `install_workflow` re-run). Tools enter the actor's schema only when a catalogue is configured (`UNITY_WORKFLOWS_DIR`), so deployments without a shelf keep byte-identical tool schemas and LLM caches.
+- **Scope**: `list_workflows`, `get_workflow`, `install_workflow`, `uninstall_workflow`, `get_installation_params` as first-class `WorkflowManager_*` JSON tool calls — **not** primitives. Installing fans out each surface's existing `sync_custom`; there is no second content store and no second reconcile loop. `reconcile_installed` and `execute_requests` are upkeep, deliberately **not** tools (boot/ops, and a single-slug update is `install_workflow` re-run). Tools enter the actor's schema only when a catalogue is configured (`UNIFY_WORKFLOWS_DIR`), so deployments without a shelf keep byte-identical tool schemas and LLM caches.
 - **Negative scope**: **has no runtime.** No executions, no steering handle, no run-now, no run history — that all belongs to the tasks it plants (`TaskScheduler`). "Run the workflow now" resolves to triggering its task. It also does not own connections (declared as requirements, resolved against the integrations layer), does not author bundles (git-only, curated in unify-deploy), and never pre-seeds contacts, transcripts or blacklist entries.
 - **Requirements gate arming, never planting**: an install with an unmet requirement still plants everything and returns `connect_required`; the planted tasks stay disarmed until the connection lands, and a repeat install arms them.
 - **Shelf vs installation**: the catalogue listing and each artifact's published copy are platform data in the public-read `Builtins` project (`Workflows/Catalog`, `Workflows/Content`), admin-seeded and hash-guarded. Everything per-assistant — installations, params, planted rows, requested changes (`Workflows/Requests`) — lives in the assistant's own contexts.
@@ -2073,7 +2073,7 @@ check the logs to investigate"*, the logs almost always already exist on disk. D
 ## 1. Central source of truth: `$UNIFY_REPO_PATH/logs/`
 
 Default `~/unify/logs/`. Stack scripts may still export the legacy alias
-`UNITY_REPO_PATH`; both refer to the same checkout. A local deployment aggregates
+`UNIFY_REPO_PATH`; both refer to the same checkout. A local deployment aggregates
 **every** repo's logs here — including Orchestra, which runs as a separate process.
 The exact paths are set in `unify-deploy/selfhost/self_host_env.sh` (search
 `*_LOG_DIR`); confirm the live values with `stack.sh status`.
@@ -2083,7 +2083,7 @@ The exact paths are set in `unify-deploy/selfhost/self_host_env.sh` (search
 | `logs/unillm/` | `UNILLM_LOG_DIR` | Raw LLM request/response, one `.txt` per call — system/user prompts, tool args, `reasoning_content`, model. This is **"what the model actually produced"**. |
 | `logs/unisdk/` | `UNISDK_LOG_DIR` | UniSDK ↔ Orchestra HTTP traces (JSON per request). |
 | `logs/orchestra/` | `ORCHESTRA_LOG_DIR` | Orchestra server-side per-request traces. |
-| `logs/unify/` | `UNITY_LOG_DIR` | Unify runtime file logs (env var name is legacy). |
+| `logs/unify/` | `UNIFY_LOG_DIR` | Unify runtime file logs (env var name is legacy). |
 | `logs/all/` | `*_OTEL_LOG_DIR` | **Combined cross-repo OTel traces** — one `{trace_id}.jsonl` per request, with unify + unisdk + unillm (+ orchestra) spans stacked together. Use this for the end-to-end story of a single request. |
 | `logs/pytest/`, `logs/ci/` | — | Test runs / downloaded-CI logs. |
 
@@ -2510,7 +2510,7 @@ project IDs `unity-assistant-vms` & `responsive-city-458413-a2`, all service-acc
 - Desktop pool: Ubuntu migrated to `droid-pool-ubuntu-*` (image family `droid-pool-ubuntu-vm`); **Windows still `unity-pool-windows-*`**.
 - Archive bucket: `droid-assistant-archives` (live); `unity-assistant-archives` is legacy rollback.
 - Data buckets (recordings/logs/artifacts) and ~84% of Pub/Sub topics/subs are still `unity-*`.
-- CI: GitHub org secrets are still `UNITY_ADAPTERS_URL`/`UNITY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
+- CI: GitHub org secrets are still `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
 - Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels.
 
 When something infra-related "doesn't exist" or 404s/401s, suspect a legacy resource-name mismatch

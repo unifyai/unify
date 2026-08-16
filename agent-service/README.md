@@ -46,13 +46,13 @@ This Node.js service acts as an HTTP wrapper for the Magnitude `BrowserAgent`, a
     # agent-service/.env
     ORCHESTRA_URL="..."
     UNIFY_KEY="..."
-    # Hosted deploys usually provide UNITY_COMMS_URL; local gateway runs can
-    # provide UNITY_GATEWAY_URL; use UNITY_UNILLM_URL to point at a specific
+    # Hosted deploys usually provide UNIFY_COMMS_URL; local gateway runs can
+    # provide UNIFY_GATEWAY_URL; use UNIFY_UNILLM_URL to point at a specific
     # OpenAI-compatible UniLLM base URL directly.
-    UNITY_COMMS_URL="..."
-    # UNITY_GATEWAY_URL="http://localhost:8080"
-    # UNITY_UNILLM_URL="http://localhost:8080/unillm"
-    # UNITY_AGENT_SERVICE_LLM_MODEL="claude-4.6-sonnet@anthropic"
+    UNIFY_COMMS_URL="..."
+    # UNIFY_GATEWAY_URL="http://localhost:8080"
+    # UNIFY_UNILLM_URL="http://localhost:8080/unillm"
+    # UNIFY_AGENT_SERVICE_LLM_MODEL="claude-4.6-sonnet@anthropic"
     # Optional - enables POST /captcha/solve to delegate reCAPTCHA v2
     # challenges to the AntiCaptcha worker pool.  Sign up at
     # https://anti-captcha.com, deposit ~$5 (covers ~10k v2 solves), and
@@ -63,15 +63,15 @@ This Node.js service acts as an HTTP wrapper for the Magnitude `BrowserAgent`, a
     # traffic leaves from (see "Egress policy" below). Unset, only
     # egress.mode "direct" and "byo" are available; "region" is refused
     # rather than silently egressing from the host.
-    UNITY_EGRESS_PROXY_SERVER="http://gate.provider.example:7777"
+    UNIFY_EGRESS_PROXY_SERVER="http://gate.provider.example:7777"
     # {region} / {REGION} (lower / upper case) and {session} are substituted;
     # residential providers encode geography and sticky-session handles in the
     # username. Match the provider's expected case — one that wants cc-GB and
     # receives cc-gb may ignore the geo-targeting rather than reject it.
     # Oxylabs, for example:
     #   customer-<account>-cc-{REGION}-sessid-{session}-sesstime-30
-    UNITY_EGRESS_PROXY_USERNAME="account-country-{REGION}-session-{session}"
-    UNITY_EGRESS_PROXY_PASSWORD="..."
+    UNIFY_EGRESS_PROXY_USERNAME="account-country-{REGION}-session-{session}"
+    UNIFY_EGRESS_PROXY_PASSWORD="..."
     ```
 
 ## Egress policy

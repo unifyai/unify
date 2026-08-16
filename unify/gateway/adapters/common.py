@@ -181,7 +181,7 @@ def is_shared_coordinator_email(email_address: str | None) -> bool:
         return False
     return (
         email_address.strip().lower()
-        == SETTINGS.UNITY_COORDINATOR_EMAIL_ADDRESS.strip().lower()
+        == SETTINGS.UNIFY_COORDINATOR_EMAIL_ADDRESS.strip().lower()
     )
 
 

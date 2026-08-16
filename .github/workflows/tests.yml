@@ -514,13 +514,13 @@ jobs:
           ORCHESTRA_BRANCH="$REPO_VAR_BRANCH"
           echo "Orchestra branch from repo variable: $ORCHESTRA_BRANCH" >&2
         else
-          UNITY_BRANCH="${{ github.ref_name }}"
-          if [[ "$UNITY_BRANCH" == "main" ]]; then
+          UNIFY_BRANCH="${{ github.ref_name }}"
+          if [[ "$UNIFY_BRANCH" == "main" ]]; then
             ORCHESTRA_BRANCH="main"
           else
             ORCHESTRA_BRANCH="staging"
           fi
-          echo "Orchestra branch auto-detected: $ORCHESTRA_BRANCH (unity on '$UNITY_BRANCH')" >&2
+          echo "Orchestra branch auto-detected: $ORCHESTRA_BRANCH (unity on '$UNIFY_BRANCH')" >&2
         fi
 
         # Parse env_file_content for project management flags only
@@ -776,8 +776,8 @@ jobs:
       # through OpenRouter, so the CI-local Orchestra needs this key too.
       ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
-      # Communication service URL (org secret is still named UNITY_COMMS_URL)
-      UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
+      # Communication service URL (org secret is still named UNIFY_COMMS_URL)
+      UNIFY_COMMS_URL: ${{ secrets.UNIFY_COMMS_URL }}
       # Orchestra GCP configuration (set by google-github-actions/auth step)
       # GOOGLE_APPLICATION_CREDENTIALS is set automatically by the google-github-actions/auth action
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}

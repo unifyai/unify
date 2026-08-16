@@ -18,7 +18,7 @@ import signal
 import sys
 import threading
 
-os.environ["UNITY_TERMINAL_LOG"] = "true"
+os.environ["UNIFY_TERMINAL_LOG"] = "true"
 
 from dotenv import load_dotenv
 
@@ -152,7 +152,7 @@ def main() -> None:
 
     clear_worker_signal_files()
 
-    log_level = os.environ.get("UNITY_VOICE_WORKER_LOG_LEVEL", "INFO")
+    log_level = os.environ.get("UNIFY_VOICE_WORKER_LOG_LEVEL", "INFO")
     opts = agents.WorkerOptions(
         entrypoint_fnc=entrypoint,
         agent_name=agent_name,
