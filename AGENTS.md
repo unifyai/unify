@@ -1466,6 +1466,25 @@ Forbidden unless explicitly approved by the user as a staging bypass:
 
 If a PR is already targeting `main`/`master` from a non-`staging` branch, stop before merging, disable auto-merge if it is enabled, and retarget/recreate the PR against `staging`.
 
+### Exception: `unifyai/global-agent-rules` has no `staging`
+
+That repo retired its `staging` branch (`e9d3e9c`, "Drop the branch that was
+standing in for a check"). Its default and only branch is `main`, which is
+unprotected. Commit shared-rule edits directly to `main`; staging-first does
+not apply.
+
+A stale clone still shows `origin/staging`, because a plain `git fetch` does
+not remove remote-tracking refs for deleted branches — and pushing that branch
+**recreates it on the remote** from stale content, while the usual "am I in
+sync?" check compares against the dead ref and cheerfully reports `0 0`. Run
+`git fetch --prune` (or `git ls-remote --heads origin`) before trusting any
+branch state there.
+
+After changing a rule, every consuming repo needs its submodule pointer bumped
+and `AGENTS.md` regenerated with
+`python3 .agents/global-rules/build_agents_md.py` — a pre-commit hook enforces
+freshness.
+
 ## Rule: Agent PR Approval (`magic-marty`)
 
 `unifyai/*` repos enforce branch protection: every PR to `main` or `staging`
@@ -1583,16 +1602,22 @@ gh pr create --base main --head staging \
   --body "Release PR from staging to main."
 gh pr merge <number> --auto --merge
 
-# 2. Approve as magic-marty (different reviewer than author)
-gh auth switch --user magic-marty
-gh pr review <number> --repo unifyai/<repo> --approve \
-  -b "Release approval: staging CI green."
+# 2. Approve as magic-marty, with a token scoped to this one command
+GH_TOKEN=$(gh auth token --user magic-marty) \
+  gh pr review <number> --repo unifyai/<repo> --approve \
+    -b "Release approval: staging CI green."
 
-# 3. Merge as author — auto-merge completes once CI + approval land
-gh auth switch --user "$AUTHOR"
+# 3. Merge as author — auth was never switched, so this is already the author
 gh pr view <number> --repo unifyai/<repo> \
   --json mergeStateStatus,reviewDecision
 ```
+
+**Scope the token; do not `gh auth switch`.** The switch is global machine
+state, so while it is active any *other* session on the machine authors under
+`magic-marty` — and several sessions routinely run in parallel across
+worktrees. A `GH_TOKEN=...` prefix applies to the single command and cannot
+leak into anyone else's work, and it removes the "always switch back" step
+that is the failure mode when a run dies midway.
 
 If auto-merge does not fire, merge explicitly as the author:
 
@@ -1604,8 +1629,14 @@ gh pr merge <number> --repo unifyai/<repo> --merge
 
 - **Never self-approve.** The author account must not `gh pr review --approve` on a PR
   it authored.
-- **Always switch back.** After approving as `magic-marty`, run
-  `gh auth switch --user "$AUTHOR"` before any further git/gh work.
+- **Scope the reviewer token to the approval command** rather than switching
+  auth globally (see above). Nothing then needs switching back.
+- **Approvals are perishable.** `dismiss_stale_reviews_on_push` is on
+  estate-wide, so any commit landing after an approval silently dismisses it.
+  A PR then sits green-but-`BLOCKED`, which looks exactly like a slow check.
+  On a branch several sessions push to, wait for the head to be quiet before
+  approving at all, and re-read `reviewDecision` rather than trusting that an
+  earlier approval still stands.
 - **Verify base/head** before approving or merging (see Staging-First Promotion).
 - **Approval is `magic-marty`; merge is the author.** If `magic-marty` cannot
   merge (e.g. unverified email), that is expected — only the approval must
@@ -1866,6 +1897,39 @@ condition alone a fix.
 In both cases: do not force-merge, disable the ruleset, or bypass the check
 to route around this — the real fix satisfies the gate on its own terms.
 
+## A gate that tests live infra races its own deploy
+
+Where the gate exercises a deployed stack rather than the checkout, pushing a
+fix does **not** mean the fix is under test. The `pull_request` run starts in
+about ninety seconds; the Cloud Build deploy that ships the change to staging
+takes minutes. Three unify-deploy gate runs on 2026-08-15/16 tested an image
+that predated the commit under test, twice sending the investigation after
+phantom regressions in a diff that was never running.
+
+Before reading a live-infra gate result as a verdict on the change, confirm
+the deploy landed first — the PR's own checks carry it (for unify-deploy,
+`unity-deploy-staging (responsive-city-458413-a2)`). A red gate whose deploy
+finished *after* the run started is not evidence about the change.
+
+## `repository_dispatch` runs the DEFAULT branch's workflow
+
+Not the ref in the payload, and not the branch that sent it. A dispatch-
+triggered workflow therefore keeps executing `main`'s copy of itself no matter
+what staging says, so a fix to one does nothing until it is promoted — and the
+breakage is entirely invisible from staging, where the push-triggered path
+passes. unify's self-host image publish failed on every dispatch for a day
+this way while staging looked green.
+
+When a dispatch-triggered workflow misbehaves, read the *default branch's*
+copy of it, and treat promotion as part of the fix rather than a follow-up.
+
+## Editing a ruleset: `PUT`, not `PATCH`
+
+`gh api -X PATCH repos/{o}/{r}/rulesets/{id}` returns a bare `404` that reads
+exactly like a permissions problem, and reproduces under a second account with
+`admin:org` — which is what makes it convincing. Use `PUT` with the full
+object (name, target, enforcement, bypass_actors, conditions, rules).
+
 # Python Formatting & Pre-commit
 
 Every first-party Python repo (`orchestra`, `unify`, `unisdk`, `unillm`,
@@ -2072,9 +2136,8 @@ check the logs to investigate"*, the logs almost always already exist on disk. D
 
 ## 1. Central source of truth: `$UNIFY_REPO_PATH/logs/`
 
-Default `~/unify/logs/`. Stack scripts may still export the legacy alias
-`UNIFY_REPO_PATH`; both refer to the same checkout. A local deployment aggregates
-**every** repo's logs here — including Orchestra, which runs as a separate process.
+Default `~/unify/logs/`. A local deployment aggregates **every** repo's logs
+here — including Orchestra, which runs as a separate process.
 The exact paths are set in `unify-deploy/selfhost/self_host_env.sh` (search
 `*_LOG_DIR`); confirm the live values with `stack.sh status`.
 
@@ -2083,7 +2146,7 @@ The exact paths are set in `unify-deploy/selfhost/self_host_env.sh` (search
 | `logs/unillm/` | `UNILLM_LOG_DIR` | Raw LLM request/response, one `.txt` per call — system/user prompts, tool args, `reasoning_content`, model. This is **"what the model actually produced"**. |
 | `logs/unisdk/` | `UNISDK_LOG_DIR` | UniSDK ↔ Orchestra HTTP traces (JSON per request). |
 | `logs/orchestra/` | `ORCHESTRA_LOG_DIR` | Orchestra server-side per-request traces. |
-| `logs/unify/` | `UNIFY_LOG_DIR` | Unify runtime file logs (env var name is legacy). |
+| `logs/unify/` | `UNIFY_LOG_DIR` | Unify runtime file logs. |
 | `logs/all/` | `*_OTEL_LOG_DIR` | **Combined cross-repo OTel traces** — one `{trace_id}.jsonl` per request, with unify + unisdk + unillm (+ orchestra) spans stacked together. Use this for the end-to-end story of a single request. |
 | `logs/pytest/`, `logs/ci/` | — | Test runs / downloaded-CI logs. |
 
@@ -2421,6 +2484,26 @@ turns `{"detail": "..."}` into `[]`, and the script prints `found: 0`. The API
 said exactly what was wrong; the parser discarded it. An HTTP 200 on one
 endpoint is not evidence that a credential works on a different one.
 
+**A secret listing that only covers one of the three layers.** GitHub resolves
+Actions secrets **environment > repo > org**, so `gh secret list --org <o>`
+answers a narrower question than "does this secret exist anywhere". An
+environment-scoped copy in `unisdk` / `unify-testing` once silently shadowed
+both other layers, which made deleting the repo-level copy a no-op and made
+that repo's green CI prove nothing about the org token. Auditing or retiring a
+secret means enumerating all three:
+`repos/{r}/actions/secrets`, `repos/{r}/environments/{e}/secrets`, and
+`repos/{r}/actions/organization-secrets`.
+
+**A search index that lags the thing you are checking.** `gh search code`
+indexes **default branches only**, and lags a merge by minutes. Two minutes
+after unify-deploy#157 merged, an org-wide search still listed four
+`.github/workflows/` paths that `git grep origin/main` showed as zero. This is
+the same lie told backwards: the stop-condition on an irreversible step —
+"if any workflow still references the secret, stop" — produced a false *stop*
+rather than a false clear. Resolve any search result that gates an action
+against a freshly fetched ref, and remember that a PR head branch is invisible
+to code search entirely.
+
 ## What to do
 
 - **Prove the query could have answered.** Before believing a zero, run the
@@ -2428,7 +2511,16 @@ endpoint is not evidence that a credential works on a different one.
   fail has proved nothing.
 - **Check liveness explicitly, not by inference.** `gcloud auth print-access-token
   >/dev/null 2>&1 || echo EXPIRED` costs nothing and turns a silent empty into
-  a stated one. Do it before a batch and again after a long poll.
+  a stated one. Do it before a batch and again after a long poll. This is not
+  hypothetical: mid-session gcloud expiry has twice made `kubectl get pods`
+  return completely empty output with a zero exit — a cluster that looks idle
+  and a cluster you cannot see are the same picture.
+- **Pick a probe that cannot fail for the reason you are testing.** `gh auth
+  print-access-token` fails on some machines *while the credential is live*,
+  in foreground and background alike, though `gh api` and
+  `gh auth token --user <acct>` both work. A probe that reports the very fault
+  it exists to rule out is worse than no probe. Prefer an authenticated
+  round-trip such as `gh api user --jq .login`.
 - **Never let a loop treat empty as a state.** A poller must distinguish "no
   result yet" from "could not ask", and stop on the second. Blank output for
   several consecutive iterations is a fault, not a plateau.
@@ -2510,7 +2602,7 @@ project IDs `unity-assistant-vms` & `responsive-city-458413-a2`, all service-acc
 - Desktop pool: Ubuntu migrated to `droid-pool-ubuntu-*` (image family `droid-pool-ubuntu-vm`); **Windows still `unity-pool-windows-*`**.
 - Archive bucket: `droid-assistant-archives` (live); `unity-assistant-archives` is legacy rollback.
 - Data buckets (recordings/logs/artifacts) and ~84% of Pub/Sub topics/subs are still `unity-*`.
-- CI: GitHub org secrets are still `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
+- CI: the GitHub org secrets `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` are canonical; their `UNITY_*` twins are served only until every consumer reads the new names, then go.
 - Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels.
 
 When something infra-related "doesn't exist" or 404s/401s, suspect a legacy resource-name mismatch
