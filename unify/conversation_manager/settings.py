@@ -16,7 +16,7 @@ class ConversationSettings(BaseSettings):
 
     Attributes:
         IMPL: Implementation type - "real" or "simulated".
-        COMMS_URL: URL for the communications service (reads from UNITY_COMMS_URL).
+        COMMS_URL: URL for the communications service (reads from UNIFY_COMMS_URL).
         JOB_NAME: Job name for the ConversationManager session.
         CONTACT_ID: Default contact ID for simulated ConversationManager.
         FAST_BRAIN_MODEL: LLM model for the voice fast brain (TTS mode).
@@ -65,8 +65,8 @@ class ConversationSettings(BaseSettings):
     SLOW_BRAIN_REASONING_EFFORT: str = "high"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     IMPL: str = "real"
-    COMMS_URL: str = Field(default="", validation_alias="UNITY_COMMS_URL")
-    ADAPTERS_URL: str = Field(default="", validation_alias="UNITY_ADAPTERS_URL")
+    COMMS_URL: str = Field(default="", validation_alias="UNIFY_COMMS_URL")
+    ADAPTERS_URL: str = Field(default="", validation_alias="UNIFY_ADAPTERS_URL")
     JOB_NAME: str = ""
     CONTACT_ID: str = "1"
     BLACKLIST_CHECKS_ENABLED: bool = False

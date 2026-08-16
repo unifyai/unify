@@ -22,7 +22,7 @@ def test_gmail_notification_skips_universal_coordinator_mailbox(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator_email = SETTINGS.UNITY_COORDINATOR_EMAIL_ADDRESS
+    coordinator_email = SETTINGS.UNIFY_COORDINATOR_EMAIL_ADDRESS
     payload = {
         "emailAddress": coordinator_email,
         "historyId": "12345",

@@ -576,13 +576,13 @@ unset _orchestra_repo_path _local_orchestra_script
 # ---------------------------------------------------------------------------
 # Communication Service URL Setup
 # ---------------------------------------------------------------------------
-# UNITY_COMMS_URL must be set via .env or environment for real-comms tests.
+# UNIFY_COMMS_URL must be set via .env or environment for real-comms tests.
 # CI sets this in .github/workflows/tests.yml; local developers set it in .env.
 # Tests that use simulated comms (the default) do not require this.
-if [[ -n "${UNITY_COMMS_URL:-}" ]]; then
-  echo "Using communication service: $UNITY_COMMS_URL"
+if [[ -n "${UNIFY_COMMS_URL:-}" ]]; then
+  echo "Using communication service: $UNIFY_COMMS_URL"
 else
-  echo "UNITY_COMMS_URL not set (simulated comms only — real-comms tests will be skipped)"
+  echo "UNIFY_COMMS_URL not set (simulated comms only — real-comms tests will be skipped)"
 fi
 
 # Build pytest marker filter based on flags

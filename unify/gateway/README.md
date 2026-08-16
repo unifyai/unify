@@ -57,7 +57,7 @@ python -m unity.gateway serve --port 8001 --single-url --public-url https://your
 ```
 
 `scripts/local.sh start` starts the gateway automatically and points
-`UNITY_COMMS_URL`, `UNITY_ADAPTERS_URL`, and `LOCAL_ADAPTERS_URL` at the same
+`UNIFY_COMMS_URL`, `UNIFY_ADAPTERS_URL`, and `LOCAL_ADAPTERS_URL` at the same
 local process. In local mode, adapter routes publish through `HttpEnvelopeSink`
 to the local Unity runtime.
 

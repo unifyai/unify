@@ -15,15 +15,15 @@ def _derive_local_scheduler_default() -> bool:
 
     Resolution order, first match wins:
     1. ``UNIFY_LOCAL_SCHEDULER`` set explicitly → use the parsed bool.
-    2. ``UNITY_COMMS_URL`` empty/unset → local (Orchestra projection silently
+    2. ``UNIFY_COMMS_URL`` empty/unset → local (Orchestra projection silently
        stops syncing to Communication, so something has to fire timers).
     3. ``UNIFY_CONVERSATION_LOCAL_COMMS_MODE`` == ``"local"`` or
        ``UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED`` truthy → local.
     4. Otherwise hosted (the default for production deployments).
 
-    Hosted deployments leave ``UNITY_COMMS_URL`` set, so this defaults to
+    Hosted deployments leave ``UNIFY_COMMS_URL`` set, so this defaults to
     ``False`` there. The fresh ``unity`` install path runs with
-    ``LOCAL_COMMS_MODE=local`` and an empty ``UNITY_COMMS_URL``, so it
+    ``LOCAL_COMMS_MODE=local`` and an empty ``UNIFY_COMMS_URL``, so it
     defaults to ``True`` and the scheduler fires.
     """
 
@@ -31,7 +31,7 @@ def _derive_local_scheduler_default() -> bool:
     if explicit is not None:
         return explicit.strip().lower() in {"1", "true", "yes", "on"}
 
-    comms_url = os.environ.get("UNITY_COMMS_URL", "").strip()
+    comms_url = os.environ.get("UNIFY_COMMS_URL", "").strip()
     if not comms_url:
         return True
 
@@ -62,7 +62,7 @@ class TaskSettings(BaseSettings):
             ``unify.task_scheduler.offline_runner`` (offline mode). When
             False, scheduled activations are materialised by Communication's
             Cloud Tasks queues — the hosted path. Auto-derived from
-            ``UNITY_COMMS_URL`` / ``LOCAL_COMMS_*`` env signals so a fresh
+            ``UNIFY_COMMS_URL`` / ``LOCAL_COMMS_*`` env signals so a fresh
             local ``unity`` install gets ``True`` and a production deploy
             gets ``False``. Override explicitly with
             ``UNIFY_LOCAL_SCHEDULER=true|false``.

@@ -1045,7 +1045,7 @@ class IngestionManager(BaseIngestionManager):
             raise RuntimeError(
                 "This run needs the worker fleet and no pipeline control plane is "
                 "reachable (neither UNIFY_INGESTION_PIPELINE_URL nor "
-                "UNITY_COMMS_URL is set). Files are "
+                "UNIFY_COMMS_URL is set). Files are "
                 "always parsed off the assistant's process, so configure a control "
                 "plane or run the self-host worker services.",
             )

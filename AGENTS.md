@@ -2510,7 +2510,7 @@ project IDs `unity-assistant-vms` & `responsive-city-458413-a2`, all service-acc
 - Desktop pool: Ubuntu migrated to `droid-pool-ubuntu-*` (image family `droid-pool-ubuntu-vm`); **Windows still `unity-pool-windows-*`**.
 - Archive bucket: `droid-assistant-archives` (live); `unity-assistant-archives` is legacy rollback.
 - Data buckets (recordings/logs/artifacts) and ~84% of Pub/Sub topics/subs are still `unity-*`.
-- CI: GitHub org secrets are still `UNITY_ADAPTERS_URL`/`UNITY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
+- CI: GitHub org secrets are still `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` while workflows read `DROID_*` (so they can resolve empty).
 - Deliberate legacy-named identifiers (not typos): `UnitySystemEvent` gateway envelope (unity↔console wire contract), `UnityTests` default test project, `unity-user-filesync` SSH key comment, `WaitingForUnity` state labels.
 
 When something infra-related "doesn't exist" or 404s/401s, suspect a legacy resource-name mismatch

@@ -831,7 +831,7 @@ async def test_make_whatsapp_call_live_hosted_does_not_probe(monkeypatch):
         "WHATSAPP_CALL_PERMISSION_PROBE_ENABLED",
         "ORCHESTRA_URL",
         "COMMUNICATION_URL",
-        "UNITY_COMMS_URL",
+        "UNIFY_COMMS_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)

@@ -30,9 +30,9 @@ run("uses explicit UNIFY_UNILLM_URL as the proxy base URL", () => {
   });
 });
 
-run("derives the proxy URL from UNITY_COMMS_URL", () => {
+run("derives the proxy URL from UNIFY_COMMS_URL", () => {
   assert.strictEqual(
-    resolveUnillmBaseUrl({ UNITY_COMMS_URL: "https://comms.example.com/" }),
+    resolveUnillmBaseUrl({ UNIFY_COMMS_URL: "https://comms.example.com/" }),
     "https://comms.example.com/unillm",
   );
 });
@@ -64,7 +64,7 @@ run("allows the agent-service model to be overridden without changing routing", 
 
 run("ignores raw provider keys when a UniLLM proxy is configured", () => {
   const config = getLlmConfig({
-    UNITY_COMMS_URL: "https://comms.example.com",
+    UNIFY_COMMS_URL: "https://comms.example.com",
     UNIFY_KEY: "uk-test",
     [["ANTHROPIC", "API", "KEY"].join("_")]: "unused-anthropic-provider-credential",
     [["OPENAI", "API", "KEY"].join("_")]: "unused-openai-provider-credential",

@@ -52,7 +52,7 @@ os.environ.setdefault("UNIFY_SKILL_ENABLED", "false")
 os.environ.setdefault("UNIFY_WEB_ENABLED", "false")
 # Flow tests run against local Orchestra only; hosted Comms URLs in .env would
 # disable the in-process task scheduler and route outbound comms elsewhere.
-os.environ["UNITY_COMMS_URL"] = ""
+os.environ["UNIFY_COMMS_URL"] = ""
 os.environ["UNIFY_LOCAL_SCHEDULER"] = "true"
 os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "true"
 os.environ["UNIFY_FILE_ENABLED"] = "true"

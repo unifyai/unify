@@ -776,8 +776,8 @@ jobs:
       # through OpenRouter, so the CI-local Orchestra needs this key too.
       ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
-      # Communication service URL (org secret is still named UNITY_COMMS_URL)
-      UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
+      # Communication service URL (org secret is still named UNIFY_COMMS_URL)
+      UNIFY_COMMS_URL: ${{ secrets.UNIFY_COMMS_URL }}
       # Orchestra GCP configuration (set by google-github-actions/auth step)
       # GOOGLE_APPLICATION_CREDENTIALS is set automatically by the google-github-actions/auth action
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}

@@ -534,9 +534,9 @@ async def start_session(
     finally:
         restore()
 
-    # When UNITY_COMMS_URL is unset (no --real-comms), call.py's
+    # When UNIFY_COMMS_URL is unset (no --real-comms), call.py's
     # dispatch_livekit_agent() is skipped, so we dispatch directly via the
-    # LiveKit API.  When UNITY_COMMS_URL IS set, call.py already dispatched
+    # LiveKit API.  When UNIFY_COMMS_URL IS set, call.py already dispatched
     # via the comms service — a second dispatch here would create a duplicate
     # agent process (LiveKit does not deduplicate CreateAgentDispatch calls).
     from unify.settings import SETTINGS

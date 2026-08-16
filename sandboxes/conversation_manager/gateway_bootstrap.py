@@ -26,7 +26,7 @@ ProgressCallback = Callable[[str], None]
 _GATEWAY_HEALTH_PATH = "/health"
 # Port 8787 matches the CM's LOCAL_COMMS_PORT default (UNIFY_CONVERSATION_LOCAL_COMMS_PORT).
 # Starting on this exact port means the CM's _local_comms_base_url() fallback resolves
-# correctly without needing UNITY_COMMS_URL to be set (which would be too late after
+# correctly without needing UNIFY_COMMS_URL to be set (which would be too late after
 # pydantic-settings has already instantiated SETTINGS at import time).
 _GATEWAY_PORT = 8787
 _GATEWAY_STARTUP_TIMEOUT_S = 15.0
