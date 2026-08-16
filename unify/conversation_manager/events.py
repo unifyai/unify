@@ -2634,3 +2634,63 @@ class DirectMessageEvent(Event):
 
     content: str
     source: str = "system"
+
+
+# Events whose arrival means a person — or a person's own code, for the API —
+# asked something of the assistant. The LLM work in the turn they drive is
+# billed as ``chat`` / ``call``; a turn driven by anything else is billed as
+# ``task`` (the scheduler) or ``system``, so a ledger row says who started
+# the work rather than what shape the reply took. A welcome email the
+# coordinator was woken to write is not a chat, however chat-like the turn.
+HUMAN_INITIATED_EVENTS: frozenset[str] = frozenset(
+    {
+        # Console and API
+        "UnifyMessageReceived",
+        "UnifyMessageReactionChanged",
+        "ApiMessageReceived",
+        # Messaging channels
+        "WhatsAppReceived",
+        "WhatsAppReactionChanged",
+        "SMSReceived",
+        "EmailReceived",
+        "DiscordMessageReceived",
+        "DiscordChannelMessageReceived",
+        "SlackMessageReceived",
+        "SlackChannelMessageReceived",
+        "TeamsMessageReceived",
+        "TeamsChannelMessageReceived",
+        "MsTeamsBotMessageReceived",
+        "MsTeamsBotChannelMessageReceived",
+        # Calls and meetings: a person on the line, speaking or typing
+        "PhoneCallReceived",
+        "PhoneCallStarted",
+        "InboundPhoneUtterance",
+        "WhatsAppCallReceived",
+        "WhatsAppCallStarted",
+        "InboundWhatsAppCallUtterance",
+        "UnifyMeetReceived",
+        "InboundUnifyMeetUtterance",
+        "GoogleMeetReceived",
+        "InboundGoogleMeetUtterance",
+        "GoogleMeetChatMessage",
+        "TeamsMeetReceived",
+        "InboundTeamsMeetUtterance",
+        "TeamsMeetChatMessage",
+    },
+)
+
+TASK_INITIATED_EVENTS: frozenset[str] = frozenset({"TaskDue", "TaskTriggerRequested"})
+
+
+def billing_source(origin_event_name: str, *, is_voice: bool) -> tuple[str, str]:
+    """``(source, label)`` for the LLM work a turn driven by ``origin_event_name`` bills.
+
+    ``chat`` / ``call`` for a human-initiated turn, ``task`` for one the
+    scheduler started, ``system`` for everything else — with the driving
+    event's name as the label, so a system turn stays auditable in the ledger.
+    """
+    if origin_event_name in TASK_INITIATED_EVENTS:
+        return "task", "Task run"
+    if origin_event_name in HUMAN_INITIATED_EVENTS:
+        return ("call", "Voice reply") if is_voice else ("chat", "Chat reply")
+    return "system", origin_event_name or "System turn"
