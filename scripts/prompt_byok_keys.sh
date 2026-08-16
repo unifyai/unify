@@ -403,8 +403,8 @@ ensure_local_comms_defaults() {
   if ! has_env_value UNIFY_GATEWAY_URL; then
     upsert_env "UNIFY_GATEWAY_URL" "$url"
   fi
-  if ! has_env_value UNITY_COMMS_URL; then
-    upsert_env "UNITY_COMMS_URL" "$url"
+  if ! has_env_value UNIFY_COMMS_URL; then
+    upsert_env "UNIFY_COMMS_URL" "$url"
   fi
 }
 

@@ -40,7 +40,7 @@ CONTAINER_ENV_KEYS: tuple[str, ...] = (
     "UNIFY_KEY",
     "ORCHESTRA_URL",
     "UNIFY_GATEWAY_URL",
-    "UNITY_COMMS_URL",
+    "UNIFY_COMMS_URL",
     "UNIFY_MODEL",
     "UNIFY_AGENT_SERVICE_LLM_MODEL",
     "ANTHROPIC_API_KEY",
@@ -51,7 +51,7 @@ _SUPERVISORD_ENV_KEYS: tuple[str, ...] = (
     "UNIFY_KEY",
     "ORCHESTRA_URL",
     "UNIFY_GATEWAY_URL",
-    "UNITY_COMMS_URL",
+    "UNIFY_COMMS_URL",
     "UNIFY_MODEL",
 )
 
@@ -414,13 +414,13 @@ def _container_env_values(
 
     gateway = (
         resolved.get("UNIFY_GATEWAY_URL")
-        or resolved.get("UNITY_COMMS_URL")
+        or resolved.get("UNIFY_COMMS_URL")
         or _DEFAULT_LOCAL_COMMS_URL
     )
-    comms = resolved.get("UNITY_COMMS_URL") or gateway
+    comms = resolved.get("UNIFY_COMMS_URL") or gateway
     gateway = resolved.get("UNIFY_GATEWAY_URL") or comms
     resolved["UNIFY_GATEWAY_URL"] = gateway
-    resolved["UNITY_COMMS_URL"] = comms
+    resolved["UNIFY_COMMS_URL"] = comms
 
     if llm_model:
         resolved["UNIFY_AGENT_SERVICE_LLM_MODEL"] = llm_model.strip()
@@ -531,7 +531,7 @@ def _start_container(
             "[desktop] Missing required env for desktop container: "
             f"{', '.join(missing)}. "
             "Run the install wizard or add them to .env "
-            "(UNIFY_GATEWAY_URL/UNITY_COMMS_URL default to http://localhost:8787).",
+            "(UNIFY_GATEWAY_URL/UNIFY_COMMS_URL default to http://localhost:8787).",
         )
         return None
 

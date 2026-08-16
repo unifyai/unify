@@ -182,7 +182,7 @@ def _restart_agent_service_with_key(api_key: str) -> None:
         env_file = agent_dir / ".env"
         _update_env_file(env_file, "UNIFY_KEY", api_key)
         _update_env_file(env_file, "ORCHESTRA_URL", SETTINGS.ORCHESTRA_URL)
-        _update_env_file(env_file, "UNITY_COMMS_URL", SETTINGS.conversation.COMMS_URL)
+        _update_env_file(env_file, "UNIFY_COMMS_URL", SETTINGS.conversation.COMMS_URL)
         LOGGER.info(
             "[agent-service-restart] Updated agent-service .env",
         )

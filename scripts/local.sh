@@ -21,11 +21,11 @@
 #
 # Environment (all optional — sensible defaults for local testing):
 #   UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable Unity-owned local comms ingress
-#   UNIFY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted (default: local unless UNITY_COMMS_URL is set)
+#   UNIFY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted (default: local unless UNIFY_COMMS_URL is set)
 #   UNIFY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host (default: 127.0.0.1)
 #   UNIFY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port (default: 8787)
 #   UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL Public URL for external webhooks
-#   UNITY_COMMS_URL         Hosted communication service URL (optional)
+#   UNIFY_COMMS_URL         Hosted communication service URL (optional)
 #   PUBSUB_EMULATOR_HOST    Pub/Sub emulator (echo mode only; default: localhost:8085)
 #   GCP_PROJECT_ID          Project ID (echo mode / hosted comms only)
 #   ASSISTANT_ID            Test assistant ID (default: default-test-assistant)
@@ -54,7 +54,7 @@ ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
 
 if [[ -n "${UNIFY_CONVERSATION_LOCAL_COMMS_MODE:-}" ]]; then
   LOCAL_COMMS_MODE="$UNIFY_CONVERSATION_LOCAL_COMMS_MODE"
-elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
+elif [[ -n "${UNIFY_COMMS_URL:-}" ]]; then
   LOCAL_COMMS_MODE="hosted"
 elif [[ -n "$PUBSUB_EMULATOR_HOST_EXPLICIT" ]]; then
   # Console --chat uses the Pub/Sub emulator end-to-end; local ingress outbox
@@ -226,8 +226,8 @@ run_gateway_doctor() {
 describe_comms_backend() {
   if [[ "$LOCAL_COMMS_ENABLED" == "true" || "$LOCAL_COMMS_MODE" == "local" ]]; then
     echo "local gateway ($(gateway_base_url))"
-  elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
-    echo "hosted service ($UNITY_COMMS_URL)"
+  elif [[ -n "${UNIFY_COMMS_URL:-}" ]]; then
+    echo "hosted service ($UNIFY_COMMS_URL)"
   else
     echo "simulated / no external comms"
   fi
@@ -274,8 +274,8 @@ start_gateway() {
   env \
     ORCHESTRA_URL="$ORCHESTRA_URL" \
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
-    UNITY_COMMS_URL="$(gateway_base_url)" \
-    UNITY_ADAPTERS_URL="$(gateway_base_url)" \
+    UNIFY_COMMS_URL="$(gateway_base_url)" \
+    UNIFY_ADAPTERS_URL="$(gateway_base_url)" \
     UNIFY_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_internal_url)" \
     UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED="$LOCAL_COMMS_ENABLED" \
     UNIFY_CONVERSATION_LOCAL_COMMS_MODE="$LOCAL_COMMS_MODE" \
@@ -405,8 +405,8 @@ __start_full_cm_impl() {
     "UNIFY_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
     "UNIFY_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
     "UNIFY_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
-    "UNITY_COMMS_URL=${UNITY_COMMS_URL:-$(gateway_base_url)}"
-    "UNITY_ADAPTERS_URL=${UNITY_ADAPTERS_URL:-$(gateway_base_url)}"
+    "UNIFY_COMMS_URL=${UNIFY_COMMS_URL:-$(gateway_base_url)}"
+    "UNIFY_ADAPTERS_URL=${UNIFY_ADAPTERS_URL:-$(gateway_base_url)}"
     "UNIFY_VALIDATE_LLM_PROVIDERS=false"
     "EVENTBUS_PUBLISHING_ENABLED=$eventbus_publish"
     "EVENTBUS_PUBSUB_STREAMING=$eventbus_stream"
@@ -646,7 +646,7 @@ cmd_help() {
   echo "  UNIFY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host"
   echo "  UNIFY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port"
   echo "  UNIFY_GATEWAY_PUBLIC_URL                Public HTTPS callback URL"
-  echo "  UNITY_COMMS_URL                         Hosted comms service URL"
+  echo "  UNIFY_COMMS_URL                         Hosted comms service URL"
   echo "  PUBSUB_EMULATOR_HOST                    Pub/Sub host for echo mode"
   echo "  GCP_PROJECT_ID                          Project ID for echo mode"
   echo "  ASSISTANT_ID            Assistant ID (default: default-test-assistant)"

@@ -9,7 +9,7 @@ from unify.settings import SETTINGS
 def _post_to_comms(path: str, payload: dict, *, label: str, timeout: float) -> bool:
     """POST a fire-and-forget control message to the comms gateway.
 
-    Resilient to a missing ``UNITY_COMMS_URL`` (common in local/test
+    Resilient to a missing ``UNIFY_COMMS_URL`` (common in local/test
     environments), timeouts, and connection errors: none of these may take a
     live call down. Returns True when the request was attempted and not
     rejected, False when it was skipped or refused.
@@ -17,7 +17,7 @@ def _post_to_comms(path: str, payload: dict, *, label: str, timeout: float) -> b
     unity_comms_url = SETTINGS.conversation.COMMS_URL
     if not unity_comms_url:
         LOGGER.debug(
-            f"{DEFAULT_ICON} [{label}] Skipping: UNITY_COMMS_URL not configured.",
+            f"{DEFAULT_ICON} [{label}] Skipping: UNIFY_COMMS_URL not configured.",
         )
         return False
 

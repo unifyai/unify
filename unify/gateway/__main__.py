@@ -72,7 +72,7 @@ def _add_serve_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         default=os.environ.get("UNIFY_GATEWAY_SINGLE_URL", "").lower()
         in ("1", "true", "yes"),
-        help="Point UNITY_COMMS_URL and UNITY_ADAPTERS_URL at this gateway.",
+        help="Point UNIFY_COMMS_URL and UNIFY_ADAPTERS_URL at this gateway.",
     )
 
 
@@ -254,14 +254,14 @@ def _apply_url_env(args: argparse.Namespace) -> None:
     if getattr(args, "public_url", ""):
         public_url = args.public_url.rstrip("/")
         os.environ["UNIFY_GATEWAY_PUBLIC_URL"] = public_url
-        os.environ.setdefault("UNITY_ADAPTERS_URL", public_url)
-        os.environ.setdefault("UNITY_COMMS_URL", public_url)
+        os.environ.setdefault("UNIFY_ADAPTERS_URL", public_url)
+        os.environ.setdefault("UNIFY_COMMS_URL", public_url)
     if getattr(args, "single_url", False):
         base_url = getattr(args, "public_url", "").rstrip("/")
         if not base_url:
             base_url = f"http://{args.host}:{args.port}"
-        os.environ["UNITY_COMMS_URL"] = base_url
-        os.environ["UNITY_ADAPTERS_URL"] = base_url
+        os.environ["UNIFY_COMMS_URL"] = base_url
+        os.environ["UNIFY_ADAPTERS_URL"] = base_url
     os.environ["UNIFY_GATEWAY_MODE"] = getattr(args, "mode", "all")
 
 

@@ -35,12 +35,12 @@ def default_public_url_provider() -> StaticPublicUrlProvider:
     """Build the default URL provider from process environment."""
 
     comms_url = (
-        os.environ.get("UNITY_COMMS_URL")
+        os.environ.get("UNIFY_COMMS_URL")
         or os.environ.get("COMMS_URL")
         or "http://localhost:8001"
     )
     adapters_url = (
-        os.environ.get("UNITY_ADAPTERS_URL")
+        os.environ.get("UNIFY_ADAPTERS_URL")
         or os.environ.get("LOCAL_ADAPTERS_URL")
         or os.environ.get("ADAPTERS_URL")
         or comms_url

@@ -72,7 +72,7 @@ def _is_outlook_assistant(assistant: dict) -> bool:
 def _is_shared_coordinator_email(sender: str) -> bool:
     return (
         sender.strip().lower()
-        == SETTINGS.UNITY_COORDINATOR_EMAIL_ADDRESS.strip().lower()
+        == SETTINGS.UNIFY_COORDINATOR_EMAIL_ADDRESS.strip().lower()
     )
 
 

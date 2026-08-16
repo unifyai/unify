@@ -248,7 +248,7 @@ class CommsPrimitives:
         local_urls = (
             os.environ.get("ORCHESTRA_URL", ""),
             os.environ.get("COMMUNICATION_URL", ""),
-            os.environ.get("UNITY_COMMS_URL", ""),
+            os.environ.get("UNIFY_COMMS_URL", ""),
         )
         return any("127.0.0.1" in url or "localhost" in url for url in local_urls)
 

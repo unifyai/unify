@@ -1,7 +1,7 @@
 export interface LlmConfigEnv {
   [key: string]: string | undefined;
   UNIFY_UNILLM_URL?: string;
-  UNITY_COMMS_URL?: string;
+  UNIFY_COMMS_URL?: string;
   UNIFY_GATEWAY_URL?: string;
   UNIFY_AGENT_SERVICE_LLM_MODEL?: string;
   UNIFY_KEY?: string;
@@ -29,15 +29,15 @@ export function resolveUnillmBaseUrl(env: LlmConfigEnv = process.env): string {
   if (env.UNIFY_UNILLM_URL?.trim()) {
     return cleanUrl(env.UNIFY_UNILLM_URL);
   }
-  if (env.UNITY_COMMS_URL?.trim()) {
-    return withUnillmPath(env.UNITY_COMMS_URL);
+  if (env.UNIFY_COMMS_URL?.trim()) {
+    return withUnillmPath(env.UNIFY_COMMS_URL);
   }
   if (env.UNIFY_GATEWAY_URL?.trim()) {
     return withUnillmPath(env.UNIFY_GATEWAY_URL);
   }
   throw new Error(
     'No UniLLM proxy configured for agent-service. Set UNIFY_UNILLM_URL, ' +
-    'UNITY_COMMS_URL, or UNIFY_GATEWAY_URL. Direct provider API fallbacks are disabled.'
+    'UNIFY_COMMS_URL, or UNIFY_GATEWAY_URL. Direct provider API fallbacks are disabled.'
   );
 }
 

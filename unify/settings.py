@@ -122,7 +122,7 @@ class ProductionSettings(BaseSettings):
     # Per-environment deployments override this or every shared link
     # points at production Console regardless of where the row lives.
     CONSOLE_URL: str = "https://console.unify.ai"
-    UNITY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
+    UNIFY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
     # Catch-all domain for multiplayer twin alias addresses, and the Workspace
     # mailbox that receives them. Alias addresses have no Workspace user of
     # their own: reads and sends delegate to the mailbox while the From header
