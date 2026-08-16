@@ -78,4 +78,4 @@ def test_env_placeholder_lines_do_not_duplicate_shared_credentials() -> None:
     assert len(variable_lines) == len(set(variable_lines))
     assert "ORCHESTRA_ADMIN_KEY=" in variable_lines
     assert "TWILIO_AUTH_TOKEN=" in variable_lines
-    assert "UNITY_GATEWAY_PUBLIC_URL=" in variable_lines
+    assert "UNIFY_GATEWAY_PUBLIC_URL=" in variable_lines

@@ -68,7 +68,7 @@ def _check_orchestra_available() -> bool:
     state: if session setup skipped ``unify.init()``, later tests seeing
     True would run against an uninitialised runtime.
 
-    Under parallel_run (``UNITY_TEST_SOCKET`` set) the first call retries
+    Under parallel_run (``UNIFY_TEST_SOCKET`` set) the first call retries
     for up to 30s before concluding False: parallel_run boots Orchestra
     just before spawning sessions, and dozens of sessions probing a
     still-warming server can also transiently time out even after
@@ -96,7 +96,7 @@ def _check_orchestra_available() -> bool:
     else:
         url = f"{base.rstrip('/')}/v0/projects"
 
-    deadline = time.monotonic() + (30.0 if os.environ.get("UNITY_TEST_SOCKET") else 0.0)
+    deadline = time.monotonic() + (30.0 if os.environ.get("UNIFY_TEST_SOCKET") else 0.0)
     while True:
         try:
             with httpx.Client(timeout=2.0) as client:
@@ -312,7 +312,7 @@ def stub_external_deps(monkeypatch):
     # - A formatted string (as_string=True): "Friday, June 13, 2025 at 12:00 PM UTC"
     # - A datetime object (as_string=False): for timestamp comparisons
     #
-    # When UNITY_INCREMENTING_TIMESTAMPS is enabled (e.g., ConversationManager tests),
+    # When UNIFY_INCREMENTING_TIMESTAMPS is enabled (e.g., ConversationManager tests),
     # datetime objects auto-increment by microseconds so last_snapshot < message.timestamp
     # comparisons work correctly for **NEW** markers.
 
@@ -322,7 +322,7 @@ def stub_external_deps(monkeypatch):
 
     def _static_now(time_only: bool = False, as_string: bool = True):
         """Return a fixed timestamp for testing."""
-        if SETTINGS.UNITY_INCREMENTING_TIMESTAMPS and not as_string:
+        if SETTINGS.UNIFY_INCREMENTING_TIMESTAMPS and not as_string:
             # Return incrementing datetime for **NEW** marker comparisons
             _timestamp_counter["value"] += 1
             return _FIXED_DATETIME + timedelta(microseconds=_timestamp_counter["value"])
@@ -562,7 +562,7 @@ def get_test_log_format(config):
 
 
 def pytest_sessionstart(session):
-    if os.environ.get("SKIP_UNITY_TEST_INIT"):
+    if os.environ.get("SKIP_UNIFY_TEST_INIT"):
         return
 
     # ------------------------------------------------------------------
@@ -723,12 +723,12 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):
     # Write cache stats to a temp file for parallel_run.sh to consume
-    # The file is keyed by UNITY_TMUX_SESSION_ID env var (set by parallel_run.sh)
+    # The file is keyed by UNIFY_TMUX_SESSION_ID env var (set by parallel_run.sh)
     try:
         import unillm
 
         stats = unillm.get_cache_stats()
-        session_id = os.environ.get("UNITY_TMUX_SESSION_ID", "")
+        session_id = os.environ.get("UNIFY_TMUX_SESSION_ID", "")
         if session_id:
             stats_file = f"/tmp/parallel_run_cache_{session_id}.txt"
             with open(stats_file, "w") as f:
@@ -738,7 +738,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     # Write LLM provider cost to a temp file for parallel_run.sh to consume
     try:
-        session_id = os.environ.get("UNITY_TMUX_SESSION_ID", "")
+        session_id = os.environ.get("UNIFY_TMUX_SESSION_ID", "")
         if session_id:
             total_cost = sum(cost for _, cost in _session_costs)
             cost_file = f"/tmp/parallel_run_cost_{session_id}.txt"
@@ -796,7 +796,7 @@ def pytest_unconfigure(config):
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    if SETTINGS.UNITY_CACHE_STATS:
+    if SETTINGS.UNIFY_CACHE_STATS:
         import unillm
 
         stats = unillm.get_cache_stats()
@@ -812,7 +812,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     # that ran nothing — and a summary that calls those the same thing hides
     # coverage silently disappearing.
     try:
-        session_id = os.environ.get("UNITY_TMUX_SESSION_ID", "")
+        session_id = os.environ.get("UNIFY_TMUX_SESSION_ID", "")
         if session_id:
             passed = len(terminalreporter.stats.get("passed", []))
             skipped = len(terminalreporter.stats.get("skipped", []))
@@ -859,7 +859,7 @@ def pytest_configure(config):
     global _original_home
     _original_home = os.environ.get("HOME")
     if _original_home:
-        os.environ["UNITY_REAL_HOME"] = _original_home
+        os.environ["UNIFY_REAL_HOME"] = _original_home
     test_home = os.path.join(tempfile.gettempdir(), "unity_test_home")
     os.makedirs(test_home, exist_ok=True)
     os.environ["HOME"] = test_home
@@ -927,7 +927,7 @@ def pytest_configure(config):
     )
 
     # Required to disable explicit log level if set from pytest.ini or command line options
-    if os.environ.get("UNITY_TESTS_CLI_LOGGING", "true").lower() == "false":
+    if os.environ.get("UNIFY_TESTS_CLI_LOGGING", "true").lower() == "false":
         config.option.log_cli_level = None
         config.option.showcapture = "no"
         config.option.capture = "no"
@@ -959,7 +959,7 @@ def pytest_configure(config):
 # Skip tests marked with requires_orchestra when Orchestra is not available
 def pytest_runtest_setup(item):
     test_name_log_filter.set_test_name(item.nodeid)
-    if not os.environ.get("SKIP_UNITY_TEST_INIT") and _uses_unify_context(item):
+    if not os.environ.get("SKIP_UNIFY_TEST_INIT") and _uses_unify_context(item):
         _set_unify_context_for_test(item)
 
     # Skip requires_orchestra tests if Orchestra is not running
@@ -1044,13 +1044,13 @@ def pytest_report_teststatus(report, config):
 
 
 def pytest_runtest_teardown(item, nextitem=None):
-    if not os.environ.get("SKIP_UNITY_TEST_INIT") and _uses_unify_context(item):
+    if not os.environ.get("SKIP_UNIFY_TEST_INIT") and _uses_unify_context(item):
         _unset_unify_context_for_test(item)
     test_name_log_filter.reset_test_name()
 
 
 def pytest_html_results_summary(prefix, summary, postfix):
-    if SETTINGS.UNITY_CACHE_STATS:
+    if SETTINGS.UNIFY_CACHE_STATS:
         import unillm
 
         stats = unillm.get_cache_stats()

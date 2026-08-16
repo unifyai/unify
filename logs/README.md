@@ -103,7 +103,7 @@ All logs are organized under `logs/` with seven main subdirectories:
 |-----------|---------|-----------|---------|
 | `logs/ci/` | **Downloaded CI artifacts** | `<run_id>/<artifact>/` | `download_ci_logs.sh` |
 | `logs/pytest/` | Test output (stdout/stderr) | One `.txt` per test | Test-only |
-| `logs/unity/` | Unity LOGGER output (async tool loop, managers) | `unity.log` per session | `UNITY_LOG` + `UNITY_LOG_DIR` |
+| `logs/unity/` | Unity LOGGER output (async tool loop, managers) | `unity.log` per session | `UNIFY_LOG` + `UNIFY_LOG_DIR` |
 | `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
 | `logs/unisdk/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
 | `logs/orchestra/` | Orchestra API traces | Per-request JSON with OpenTelemetry spans | `ORCHESTRA_LOG_DIR` |
@@ -183,7 +183,7 @@ ls logs/pytest/*/*.txt       # List all log files across all runs
 
 ## Unity Logs (`logs/unity/`)
 
-Unity LOGGER output captures async tool loop events, manager operations, tool scheduling, and other runtime logging. This is production-ready logging controlled by the `UNITY_LOG_DIR` environment variable.
+Unity LOGGER output captures async tool loop events, manager operations, tool scheduling, and other runtime logging. This is production-ready logging controlled by the `UNIFY_LOG_DIR` environment variable.
 
 ```
 logs/unity/
@@ -199,7 +199,7 @@ logs/unity/
 2026-01-01 14:26:50,664    INFO 🛠️  ToolCall Scheduled [ContactManager.ask(ca3e)] search_contacts
 ```
 
-**Production usage:** Set `UNITY_LOG_DIR=/path/to/logs` to enable file logging in production. If not set, logs go to console only.
+**Production usage:** Set `UNIFY_LOG_DIR=/path/to/logs` to enable file logging in production. If not set, logs go to console only.
 
 ---
 
@@ -627,17 +627,17 @@ OTEL is enabled automatically by `parallel_run.sh`. To customize:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UNITY_OTEL` | `true` (via parallel_run.sh) | Enable Unity OTEL tracing |
+| `UNIFY_OTEL` | `true` (via parallel_run.sh) | Enable Unity OTEL tracing |
 | `UNISDK_OTEL` | `true` (via parallel_run.sh) | Enable Unify SDK OTEL tracing |
 | `UNILLM_OTEL` | `true` (via parallel_run.sh) | Enable Unillm OTEL tracing |
-| `UNITY_OTEL_LOG_DIR` | `logs/all/` | Unity span output directory |
+| `UNIFY_OTEL_LOG_DIR` | `logs/all/` | Unity span output directory |
 | `UNISDK_OTEL_LOG_DIR` | `logs/all/` | Unify span output directory |
 | `UNILLM_OTEL_LOG_DIR` | `logs/all/` | Unillm span output directory |
 | `ORCHESTRA_OTEL_LOG_DIR` | `logs/all/` | Orchestra span output directory |
 
 To disable OTEL tracing:
 ```bash
-parallel_run.sh --env UNITY_OTEL=false --env UNISDK_OTEL=false --env UNILLM_OTEL=false tests/
+parallel_run.sh --env UNIFY_OTEL=false --env UNISDK_OTEL=false --env UNILLM_OTEL=false tests/
 ```
 
 ---
@@ -729,7 +729,7 @@ cat logs/orchestra/2025-12-30T18-27-43/requests/*7be454fc*.json | jq .
 
 To disable OpenTelemetry tracing in tests:
 ```bash
-parallel_run --env UNITY_TEST_TRACING=false tests/
+parallel_run --env UNIFY_TEST_TRACING=false tests/
 ```
 
 This removes the `[TRACE] TRACE_ID=...` output and disables `traceparent` header injection.
@@ -773,28 +773,28 @@ Control trace upload behavior via settings in `tests/settings.py` or environment
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `UNITY_TRACE_UPLOAD` | `true` | Enable/disable trace upload entirely |
-| `UNITY_TRACE_SERVICES` | `all` | Services to include: `all` or comma-separated (e.g., `unity,orchestra`) |
-| `UNITY_TRACE_EXCLUDE_PATTERNS` | `""` | Comma-separated span name patterns to exclude |
+| `UNIFY_TRACE_UPLOAD` | `true` | Enable/disable trace upload entirely |
+| `UNIFY_TRACE_SERVICES` | `all` | Services to include: `all` or comma-separated (e.g., `unity,orchestra`) |
+| `UNIFY_TRACE_EXCLUDE_PATTERNS` | `""` | Comma-separated span name patterns to exclude |
 
 ### Example Configurations
 
 ```bash
 # Disable trace upload entirely
-UNITY_TRACE_UPLOAD=false pytest tests/
+UNIFY_TRACE_UPLOAD=false pytest tests/
 
 # Unity spans only (~30 spans per test)
-UNITY_TRACE_SERVICES=unity pytest tests/
+UNIFY_TRACE_SERVICES=unity pytest tests/
 
 # Unity + Orchestra HTTP spans, skip DB internals (~100 spans)
-UNITY_TRACE_SERVICES=unity,orchestra
-UNITY_TRACE_EXCLUDE_PATTERNS=connect,db.query pytest tests/
+UNIFY_TRACE_SERVICES=unity,orchestra
+UNIFY_TRACE_EXCLUDE_PATTERNS=connect,db.query pytest tests/
 
 # Everything except auth overhead (~200 spans)
-UNITY_TRACE_EXCLUDE_PATTERNS=db.query.select.users,db.query.select.api_key,db.query.select.team_member pytest tests/
+UNIFY_TRACE_EXCLUDE_PATTERNS=db.query.select.users,db.query.select.api_key,db.query.select.team_member pytest tests/
 
 # Full detail (default, ~600 spans per test)
-UNITY_TRACE_SERVICES=all pytest tests/
+UNIFY_TRACE_SERVICES=all pytest tests/
 ```
 
 ### Understanding Span Counts
@@ -808,7 +808,7 @@ A typical test generates spans from multiple sources:
 | `unillm` | ~5 | LLM request/response |
 | `orchestra` | ~550 | HTTP handlers, DB queries (very granular) |
 
-Orchestra's instrumentation is particularly detailed, capturing every SQL query and connection. Use `UNITY_TRACE_SERVICES=unity` for a clean view of test logic, or `UNITY_TRACE_EXCLUDE_PATTERNS=connect,db.query` to keep HTTP-level Orchestra spans while filtering DB noise.
+Orchestra's instrumentation is particularly detailed, capturing every SQL query and connection. Use `UNIFY_TRACE_SERVICES=unity` for a clean view of test logic, or `UNIFY_TRACE_EXCLUDE_PATTERNS=connect,db.query` to keep HTTP-level Orchestra spans while filtering DB noise.
 
 ### Querying Trace Data
 

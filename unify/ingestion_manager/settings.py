@@ -19,10 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class IngestionSettings(BaseSettings):
-    """Environment-driven configuration, prefixed ``UNITY_INGESTION_``."""
+    """Environment-driven configuration, prefixed ``UNIFY_INGESTION_``."""
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_INGESTION_",
+        env_prefix="UNIFY_INGESTION_",
         extra="ignore",
     )
 

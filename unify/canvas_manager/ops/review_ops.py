@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 # Where the assistant image vendors the runtime host, so a preview renders
 # against byte-identical assets to the ones console serves. Configured via
-# UNITY_CANVAS_HOST_ROOT; these are the fallbacks the install script writes to.
+# UNIFY_CANVAS_HOST_ROOT; these are the fallbacks the install script writes to.
 _HOST_FALLBACKS = (
     Path("/opt/canvas-host"),
     Path.home() / ".unity" / "canvas-host",

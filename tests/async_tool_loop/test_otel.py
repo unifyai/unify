@@ -49,17 +49,17 @@ def reset_otel():
 
 
 class TestOtelEnabled:
-    """Tests for UNITY_OTEL master switch."""
+    """Tests for UNIFY_OTEL master switch."""
 
     def test_otel_disabled_by_default(self, monkeypatch):
-        """UNITY_OTEL defaults to false."""
+        """UNIFY_OTEL defaults to false."""
         from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         assert logger.is_otel_enabled() is False
 
     def test_otel_enabled_via_setting(self, monkeypatch):
-        """UNITY_OTEL=true enables OTel."""
+        """UNIFY_OTEL=true enables OTel."""
         from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
@@ -430,10 +430,10 @@ class TestFullStackHierarchy:
 
 
 class TestSettingsValidation:
-    """Tests for UNITY_OTEL settings validation."""
+    """Tests for UNIFY_OTEL settings validation."""
 
     def test_otel_setting_parses_true(self):
-        """UNITY_OTEL parses 'true' string correctly."""
+        """UNIFY_OTEL parses 'true' string correctly."""
         from unify.settings import _parse_bool
 
         assert _parse_bool("true") is True
@@ -443,7 +443,7 @@ class TestSettingsValidation:
         assert _parse_bool("yes") is True
 
     def test_otel_setting_parses_false(self):
-        """UNITY_OTEL parses 'false' string correctly."""
+        """UNIFY_OTEL parses 'false' string correctly."""
         from unify.settings import _parse_bool
 
         assert _parse_bool("false") is False
@@ -532,7 +532,7 @@ class TestCrossPackageIntegration:
 
 
 class TestFileSpanExporter:
-    """Tests for file-based span export (UNITY_OTEL_LOG_DIR)."""
+    """Tests for file-based span export (UNIFY_OTEL_LOG_DIR)."""
 
     def test_file_exporter_writes_spans(self, reset_otel, monkeypatch, tmp_path):
         """FileSpanExporter writes spans to JSONL files."""
@@ -706,14 +706,14 @@ class TestFileSpanExporter:
         assert span_data["status"] == "ERROR"
 
     def test_get_otel_log_dir_returns_none_when_unset(self, monkeypatch):
-        """get_otel_log_dir returns None when UNITY_OTEL_LOG_DIR is not set."""
+        """get_otel_log_dir returns None when UNIFY_OTEL_LOG_DIR is not set."""
         from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_LOG_DIR", "")
         assert logger.get_otel_log_dir() is None
 
     def test_get_otel_log_dir_returns_path_when_set(self, monkeypatch, tmp_path):
-        """get_otel_log_dir returns Path when UNITY_OTEL_LOG_DIR is set."""
+        """get_otel_log_dir returns Path when UNIFY_OTEL_LOG_DIR is set."""
 
         from unify import logger
 
@@ -726,7 +726,7 @@ class TestFileSpanExporterIntegration:
     """Integration tests for FileSpanExporter with unity_span."""
 
     def test_unity_span_writes_to_file(self, reset_otel, monkeypatch, tmp_path):
-        """unity_span writes spans to file when UNITY_OTEL_LOG_DIR is set."""
+        """unity_span writes spans to file when UNIFY_OTEL_LOG_DIR is set."""
         import json
 
         from unify import logger

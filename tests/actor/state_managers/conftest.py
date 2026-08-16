@@ -24,22 +24,22 @@ def _apply_impl_overrides(
 ) -> None:
     """Apply IMPL overrides for all state managers used by Actor primitives."""
     # Env vars (documented contract): each manager settings uses prefix UNITY_<X>_.
-    monkeypatch.setenv("UNITY_CONTACT_IMPL", impl)
-    monkeypatch.setenv("UNITY_TASK_IMPL", impl)
-    monkeypatch.setenv("UNITY_TRANSCRIPT_IMPL", impl)
-    monkeypatch.setenv("UNITY_KNOWLEDGE_IMPL", impl)
-    monkeypatch.setenv("UNITY_GUIDANCE_IMPL", impl)
-    monkeypatch.setenv("UNITY_SECRET_IMPL", impl)
-    monkeypatch.setenv("UNITY_WEB_IMPL", impl)
-    monkeypatch.setenv("UNITY_FILE_IMPL", impl)
-    monkeypatch.setenv("UNITY_DATA_IMPL", impl)
+    monkeypatch.setenv("UNIFY_CONTACT_IMPL", impl)
+    monkeypatch.setenv("UNIFY_TASK_IMPL", impl)
+    monkeypatch.setenv("UNIFY_TRANSCRIPT_IMPL", impl)
+    monkeypatch.setenv("UNIFY_KNOWLEDGE_IMPL", impl)
+    monkeypatch.setenv("UNIFY_GUIDANCE_IMPL", impl)
+    monkeypatch.setenv("UNIFY_SECRET_IMPL", impl)
+    monkeypatch.setenv("UNIFY_WEB_IMPL", impl)
+    monkeypatch.setenv("UNIFY_FILE_IMPL", impl)
+    monkeypatch.setenv("UNIFY_DATA_IMPL", impl)
 
     # Optional managers are disabled by default; enable them for simulated manager tests.
     # This keeps routing tests meaningful (the Actor can actually call these tools).
-    monkeypatch.setenv("UNITY_FILE_ENABLED", "true")
-    monkeypatch.setenv("UNITY_GUIDANCE_ENABLED", "true")
-    monkeypatch.setenv("UNITY_WEB_ENABLED", "true")
-    monkeypatch.setenv("UNITY_KNOWLEDGE_ENABLED", "true")
+    monkeypatch.setenv("UNIFY_FILE_ENABLED", "true")
+    monkeypatch.setenv("UNIFY_GUIDANCE_ENABLED", "true")
+    monkeypatch.setenv("UNIFY_WEB_ENABLED", "true")
+    monkeypatch.setenv("UNIFY_KNOWLEDGE_ENABLED", "true")
 
     # Also update the already-instantiated SETTINGS singleton so ManagerRegistry's
     # settings accessors (lambda: SETTINGS.<x>) see the new IMPL values.

@@ -68,7 +68,7 @@ class CanvasSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(
-        env_prefix="UNITY_CANVAS_",
+        env_prefix="UNIFY_CANVAS_",
         case_sensitive=True,
         extra="ignore",
     )

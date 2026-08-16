@@ -2658,7 +2658,7 @@ class ConversationManagerBrainActionTools:
                 self._cm.onboarding_clicked_trigger_steps,
             ):
                 tools.pop(name, None)
-        if is_coordinator and SETTINGS.UNITY_CONSOLE_UI:
+        if is_coordinator and SETTINGS.UNIFY_CONSOLE_UI:
             if self._cm.coordinator_onboarding_active:
                 tools["deactivate_onboarding"] = self.deactivate_onboarding
                 tools["set_onboarding_task_state"] = self.set_onboarding_task_state

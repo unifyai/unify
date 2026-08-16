@@ -134,7 +134,7 @@ Everything per-assistant stays in the assistant's own contexts: installations,
 params, planted rows, and requested changes.
 
 Authoring is **git-only**. Bundles live in unify-deploy; unify points at them via
-`UNITY_WORKFLOWS_DIR` and resolves the installed `unify_deploy` package as a
+`UNIFY_WORKFLOWS_DIR` and resolves the installed `unify_deploy` package as a
 fallback — a guarded, optional import, the same pattern
 `integration_status/discovery.py` uses, so a checkout without the private sibling
 simply has no shelf.

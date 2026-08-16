@@ -39,10 +39,10 @@ _DEFAULT_LOCAL_COMMS_URL = "http://localhost:8787"
 CONTAINER_ENV_KEYS: tuple[str, ...] = (
     "UNIFY_KEY",
     "ORCHESTRA_URL",
-    "UNITY_GATEWAY_URL",
+    "UNIFY_GATEWAY_URL",
     "UNITY_COMMS_URL",
     "UNIFY_MODEL",
-    "UNITY_AGENT_SERVICE_LLM_MODEL",
+    "UNIFY_AGENT_SERVICE_LLM_MODEL",
     "ANTHROPIC_API_KEY",
 )
 
@@ -50,7 +50,7 @@ CONTAINER_ENV_KEYS: tuple[str, ...] = (
 _SUPERVISORD_ENV_KEYS: tuple[str, ...] = (
     "UNIFY_KEY",
     "ORCHESTRA_URL",
-    "UNITY_GATEWAY_URL",
+    "UNIFY_GATEWAY_URL",
     "UNITY_COMMS_URL",
     "UNIFY_MODEL",
 )
@@ -413,17 +413,17 @@ def _container_env_values(
             resolved[key] = value
 
     gateway = (
-        resolved.get("UNITY_GATEWAY_URL")
+        resolved.get("UNIFY_GATEWAY_URL")
         or resolved.get("UNITY_COMMS_URL")
         or _DEFAULT_LOCAL_COMMS_URL
     )
     comms = resolved.get("UNITY_COMMS_URL") or gateway
-    gateway = resolved.get("UNITY_GATEWAY_URL") or comms
-    resolved["UNITY_GATEWAY_URL"] = gateway
+    gateway = resolved.get("UNIFY_GATEWAY_URL") or comms
+    resolved["UNIFY_GATEWAY_URL"] = gateway
     resolved["UNITY_COMMS_URL"] = comms
 
     if llm_model:
-        resolved["UNITY_AGENT_SERVICE_LLM_MODEL"] = llm_model.strip()
+        resolved["UNIFY_AGENT_SERVICE_LLM_MODEL"] = llm_model.strip()
         resolved["UNIFY_MODEL"] = llm_model.strip()
 
     if not resolved.get("UNIFY_MODEL"):
@@ -434,8 +434,8 @@ def _container_env_values(
         except Exception:
             pass
 
-    if not resolved.get("UNITY_AGENT_SERVICE_LLM_MODEL"):
-        resolved["UNITY_AGENT_SERVICE_LLM_MODEL"] = resolved.get(
+    if not resolved.get("UNIFY_AGENT_SERVICE_LLM_MODEL"):
+        resolved["UNIFY_AGENT_SERVICE_LLM_MODEL"] = resolved.get(
             "UNIFY_MODEL",
             "",
         )
@@ -494,7 +494,7 @@ def _container_matches_llm_model(
 ) -> bool:
     """Return True when the running container was started with the same LLM model."""
     env = _running_container_env(container_name)
-    configured = env.get("UNITY_AGENT_SERVICE_LLM_MODEL", "").strip()
+    configured = env.get("UNIFY_AGENT_SERVICE_LLM_MODEL", "").strip()
     return configured == llm_model.strip()
 
 
@@ -531,7 +531,7 @@ def _start_container(
             "[desktop] Missing required env for desktop container: "
             f"{', '.join(missing)}. "
             "Run the install wizard or add them to .env "
-            "(UNITY_GATEWAY_URL/UNITY_COMMS_URL default to http://localhost:8787).",
+            "(UNIFY_GATEWAY_URL/UNITY_COMMS_URL default to http://localhost:8787).",
         )
         return None
 

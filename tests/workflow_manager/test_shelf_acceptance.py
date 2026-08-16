@@ -37,7 +37,7 @@ from unify.workflow_manager.workflow_manager import WorkflowManager
 
 
 def _shelf_root() -> Path:
-    configured = (os.environ.get("UNITY_WORKFLOWS_DIR") or "").strip()
+    configured = (os.environ.get("UNIFY_WORKFLOWS_DIR") or "").strip()
     if configured:
         return Path(configured)
     # Resolve the sibling checkout from this repo's location, never from

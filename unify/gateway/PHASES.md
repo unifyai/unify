@@ -87,7 +87,7 @@ testable commits:
 4. **A.bis.4 — Wire injection.** Refactor `CommsManager` to accept
    an `IngressTransport` via constructor injection. Update
    `unify/conversation_manager/main.py` to select transport via
-   `UNITY_INGRESS_TRANSPORT` env var (default `inmemory`, hosted sets
+   `UNIFY_INGRESS_TRANSPORT` env var (default `inmemory`, hosted sets
    `pubsub`). Delete the now-dead helpers (`_publish_from_callback`,
    `_ack_with_latency`) and the inline `subscribe_to_topic` /
    `handle_message`. Run the full `tests/conversation_manager/` suite
@@ -113,7 +113,7 @@ Cloud Build of any Unify-based image) carries the refactored
 transports. Mitigated by:
 
 - Default env value (`inmemory`) leaves the test suite unchanged.
-- Hosted sets `UNITY_INGRESS_TRANSPORT=pubsub` via the existing deploy
+- Hosted sets `UNIFY_INGRESS_TRANSPORT=pubsub` via the existing deploy
   envs.
 - Soak in staging for 24h before promoting to production.
 
@@ -214,9 +214,9 @@ Dockerfiles in `communication/` to `pip install unify` and `CMD ["unify",
   `CMD ["unify", "gateway", "adapters", "--host=0.0.0.0", "--port=8080"]`.
 - Update `communication/cloudbuild/unity-comms-app.yaml` and
   `communication/cloudbuild/adapters.yaml` if any env vars or build
-  args differ (`UNITY_EVENT_BROKER=pubsub`,
-  `UNITY_GATEWAY_STORAGE_BACKEND=gcs`,
-  `UNITY_GATEWAY_SECRETS_BACKEND=gcp`).
+  args differ (`UNIFY_EVENT_BROKER=pubsub`,
+  `UNIFY_GATEWAY_STORAGE_BACKEND=gcs`,
+  `UNIFY_GATEWAY_SECRETS_BACKEND=gcp`).
 - Keep `communication/cloudbuild/*-staging.yaml` driven off the
   Unify feature branch first.
 

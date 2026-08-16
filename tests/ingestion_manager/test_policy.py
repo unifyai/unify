@@ -377,13 +377,13 @@ class TestControlPlaneResolution:
     """
 
     def test_an_explicit_override_wins(self, monkeypatch):
-        monkeypatch.setenv("UNITY_INGESTION_PIPELINE_URL", "https://plane.example")
+        monkeypatch.setenv("UNIFY_INGESTION_PIPELINE_URL", "https://plane.example")
         assert IngestionSettings().resolved_pipeline_url() == "https://plane.example"
 
     def test_it_falls_back_to_the_communication_service(self, monkeypatch):
         # The control plane is mounted on the comms app, so the URL the pod
         # already has is the right answer rather than a second thing to set.
-        monkeypatch.delenv("UNITY_INGESTION_PIPELINE_URL", raising=False)
+        monkeypatch.delenv("UNIFY_INGESTION_PIPELINE_URL", raising=False)
         from unify.settings import SETTINGS
 
         monkeypatch.setattr(
@@ -395,7 +395,7 @@ class TestControlPlaneResolution:
         assert IngestionSettings().resolved_pipeline_url() == "https://comms.example"
 
     def test_neither_configured_means_no_fleet(self, monkeypatch):
-        monkeypatch.delenv("UNITY_INGESTION_PIPELINE_URL", raising=False)
+        monkeypatch.delenv("UNIFY_INGESTION_PIPELINE_URL", raising=False)
         from unify.settings import SETTINGS
 
         monkeypatch.setattr(SETTINGS.conversation, "COMMS_URL", "", raising=False)

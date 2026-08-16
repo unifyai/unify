@@ -18,7 +18,7 @@ def _seed_module():
 def test_force_override_defaults_to_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _seed_module()
 
-    monkeypatch.delenv("UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE", raising=False)
+    monkeypatch.delenv("UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE", raising=False)
 
     assert module._force_override_from_env() is None
 
@@ -41,7 +41,7 @@ def test_force_override_accepts_tristate_values(
 ) -> None:
     module = _seed_module()
 
-    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE", value)
+    monkeypatch.setenv("UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE", value)
 
     assert module._force_override_from_env() is expected
 
@@ -51,7 +51,7 @@ def test_force_override_rejects_ambiguous_values(
 ) -> None:
     module = _seed_module()
 
-    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE", "sometimes")
+    monkeypatch.setenv("UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE", "sometimes")
 
-    with pytest.raises(ValueError, match="UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE"):
+    with pytest.raises(ValueError, match="UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE"):
         module._force_override_from_env()

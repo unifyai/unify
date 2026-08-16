@@ -63,7 +63,7 @@ class ShellSession:
         self.initial_env = env
         self.initial_cwd = cwd
         self._process: Optional[asyncio.subprocess.Process] = None
-        self._marker = f"__UNITY_SHELL_DONE_{uuid.uuid4().hex[:8]}__"
+        self._marker = f"__UNIFY_SHELL_DONE_{uuid.uuid4().hex[:8]}__"
         self._started = False
 
     def _get_shell_command(self) -> List[str]:
@@ -167,7 +167,7 @@ class ShellSession:
         # 4. Echo end marker with exit code
         # The start marker ensures any pending output is flushed before we
         # begin, and the end marker indicates command completion.
-        start_marker = f"__UNITY_START_{self._marker[-8:]}__"
+        start_marker = f"__UNIFY_START_{self._marker[-8:]}__"
 
         if self.language == "powershell":
             # PowerShell uses different syntax
@@ -202,7 +202,7 @@ class ShellSession:
         stdout_lines: List[str] = []
         exit_code = 0
 
-        start_marker = f"__UNITY_START_{self._marker[-8:]}__"
+        start_marker = f"__UNIFY_START_{self._marker[-8:]}__"
         found_start = False
 
         async def read_until_marker() -> ShellExecutionResult:

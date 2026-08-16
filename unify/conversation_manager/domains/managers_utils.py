@@ -2808,7 +2808,7 @@ async def init_conv_manager(
                 perf_counter() - _t0,
             )
 
-            os.environ["UNITY_CM_INITIALIZED"] = "1"
+            os.environ["UNIFY_CM_INITIALIZED"] = "1"
 
             # Best-effort: learn whether the boss's WhatsApp free-form window is
             # already open so the brain's send_whatsapp docstring can warn up

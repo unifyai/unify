@@ -48,7 +48,7 @@ def _fake_cm() -> SimpleNamespace:
 async def test_workspace_demo_requested_refreshes_render_without_arming(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="workspace_demo_requested",
@@ -69,7 +69,7 @@ async def test_workspace_demo_requested_refreshes_render_without_arming(
 async def test_integration_demo_requested_refreshes_render_without_arming(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="integration_demo_requested",
@@ -88,7 +88,7 @@ async def test_integration_demo_requested_refreshes_render_without_arming(
 async def test_integration_connect_chip_requested_refreshes_render_without_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="integration_connect_chip_requested",
@@ -111,7 +111,7 @@ async def test_integration_connect_chip_requested_refreshes_render_without_compl
 async def test_render_updated_integration_connected_apps_triggers_notif_and_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_render_updated",
@@ -137,7 +137,7 @@ async def test_render_updated_integration_connected_apps_triggers_notif_and_run(
 async def test_render_updated_refreshes_render_without_notif_or_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_render_updated",
@@ -157,7 +157,7 @@ async def test_render_updated_refreshes_render_without_notif_or_run(
 async def test_session_started_chat_schedules_scripted_intro_without_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     schedule = MagicMock(return_value=True)
     monkeypatch.setattr(
         "unify.conversation_manager.domains.coordinator_onboarding.schedule_coordinator_chat_intro_delivery",
@@ -182,7 +182,7 @@ async def test_session_started_chat_schedules_scripted_intro_without_run(
 async def test_session_started_call_suppresses_run_without_chat_intro(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     send_intro = AsyncMock()
     monkeypatch.setattr(
@@ -206,7 +206,7 @@ async def test_session_started_call_suppresses_run_without_chat_intro(
 async def test_step_completed_refreshes_render_but_suppresses_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNIFY_CONSOLE_UI", True)
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_step_completed",

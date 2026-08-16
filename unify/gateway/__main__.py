@@ -32,45 +32,45 @@ GATEWAY_MODES = ("all", "channels", "adapters", "local-single-process")
 def _add_serve_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--host",
-        default=os.environ.get("UNITY_GATEWAY_HOST", "0.0.0.0"),
-        help="Bind host (default: 0.0.0.0, env: UNITY_GATEWAY_HOST)",
+        default=os.environ.get("UNIFY_GATEWAY_HOST", "0.0.0.0"),
+        help="Bind host (default: 0.0.0.0, env: UNIFY_GATEWAY_HOST)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("UNITY_GATEWAY_PORT", "8080")),
-        help="Bind port (default: 8080, env: UNITY_GATEWAY_PORT)",
+        default=int(os.environ.get("UNIFY_GATEWAY_PORT", "8080")),
+        help="Bind port (default: 8080, env: UNIFY_GATEWAY_PORT)",
     )
     parser.add_argument(
         "--log-level",
-        default=os.environ.get("UNITY_GATEWAY_LOG_LEVEL", "info"),
-        help="Uvicorn log level (default: info, env: UNITY_GATEWAY_LOG_LEVEL)",
+        default=os.environ.get("UNIFY_GATEWAY_LOG_LEVEL", "info"),
+        help="Uvicorn log level (default: info, env: UNIFY_GATEWAY_LOG_LEVEL)",
     )
     parser.add_argument(
         "--reload",
         action="store_true",
-        default=os.environ.get("UNITY_GATEWAY_RELOAD", "").lower()
+        default=os.environ.get("UNIFY_GATEWAY_RELOAD", "").lower()
         in ("1", "true", "yes"),
         help=(
             "Enable uvicorn auto-reload (default: off, "
-            "env: UNITY_GATEWAY_RELOAD=true)"
+            "env: UNIFY_GATEWAY_RELOAD=true)"
         ),
     )
     parser.add_argument(
         "--mode",
         choices=GATEWAY_MODES,
-        default=os.environ.get("UNITY_GATEWAY_MODE", "all"),
+        default=os.environ.get("UNIFY_GATEWAY_MODE", "all"),
         help="Gateway route set to serve (default: all)",
     )
     parser.add_argument(
         "--public-url",
-        default=os.environ.get("UNITY_GATEWAY_PUBLIC_URL", ""),
+        default=os.environ.get("UNIFY_GATEWAY_PUBLIC_URL", ""),
         help="Externally reachable HTTPS callback base URL.",
     )
     parser.add_argument(
         "--single-url",
         action="store_true",
-        default=os.environ.get("UNITY_GATEWAY_SINGLE_URL", "").lower()
+        default=os.environ.get("UNIFY_GATEWAY_SINGLE_URL", "").lower()
         in ("1", "true", "yes"),
         help="Point UNITY_COMMS_URL and UNITY_ADAPTERS_URL at this gateway.",
     )
@@ -89,7 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="Validate gateway configuration")
     doctor.add_argument(
         "--public-url",
-        default=os.environ.get("UNITY_GATEWAY_PUBLIC_URL", ""),
+        default=os.environ.get("UNIFY_GATEWAY_PUBLIC_URL", ""),
         help="Externally reachable HTTPS callback base URL.",
     )
     doctor.add_argument(
@@ -117,7 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     urls = subparsers.add_parser("urls", help="Print provider callback URLs")
     urls.add_argument(
         "--public-url",
-        default=os.environ.get("UNITY_GATEWAY_PUBLIC_URL", ""),
+        default=os.environ.get("UNIFY_GATEWAY_PUBLIC_URL", ""),
         help="Externally reachable HTTPS callback base URL.",
     )
     urls.add_argument(
@@ -142,7 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
     setup = subparsers.add_parser("setup", help="Print local channel setup guidance")
     setup.add_argument(
         "--public-url",
-        default=os.environ.get("UNITY_GATEWAY_PUBLIC_URL", ""),
+        default=os.environ.get("UNIFY_GATEWAY_PUBLIC_URL", ""),
         help="Externally reachable HTTPS callback base URL.",
     )
     setup.add_argument(
@@ -191,7 +191,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_serve_args(smoke)
     smoke.add_argument(
         "--base-url",
-        default=os.environ.get("UNITY_GATEWAY_HEALTH_URL", ""),
+        default=os.environ.get("UNIFY_GATEWAY_HEALTH_URL", ""),
         help="Gateway base URL for /health (default: host/port flags).",
     )
     smoke.add_argument(
@@ -214,7 +214,7 @@ def _build_parser() -> argparse.ArgumentParser:
     wizard = subparsers.add_parser("wizard", help="Run the interactive setup wizard")
     wizard.add_argument(
         "--public-url",
-        default=os.environ.get("UNITY_GATEWAY_PUBLIC_URL", ""),
+        default=os.environ.get("UNIFY_GATEWAY_PUBLIC_URL", ""),
         help="Externally reachable HTTPS callback base URL.",
     )
     wizard.add_argument(
@@ -253,7 +253,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
 def _apply_url_env(args: argparse.Namespace) -> None:
     if getattr(args, "public_url", ""):
         public_url = args.public_url.rstrip("/")
-        os.environ["UNITY_GATEWAY_PUBLIC_URL"] = public_url
+        os.environ["UNIFY_GATEWAY_PUBLIC_URL"] = public_url
         os.environ.setdefault("UNITY_ADAPTERS_URL", public_url)
         os.environ.setdefault("UNITY_COMMS_URL", public_url)
     if getattr(args, "single_url", False):
@@ -262,7 +262,7 @@ def _apply_url_env(args: argparse.Namespace) -> None:
             base_url = f"http://{args.host}:{args.port}"
         os.environ["UNITY_COMMS_URL"] = base_url
         os.environ["UNITY_ADAPTERS_URL"] = base_url
-    os.environ["UNITY_GATEWAY_MODE"] = getattr(args, "mode", "all")
+    os.environ["UNIFY_GATEWAY_MODE"] = getattr(args, "mode", "all")
 
 
 def _serve(args: argparse.Namespace) -> int:
@@ -432,7 +432,7 @@ def _doctor(args: argparse.Namespace) -> int:
     print("")
     print("Local Runtime")
     print("-------------")
-    ingress_url = os.environ.get("UNITY_GATEWAY_LOCAL_INGRESS_URL", "").strip()
+    ingress_url = os.environ.get("UNIFY_GATEWAY_LOCAL_INGRESS_URL", "").strip()
     if ingress_url:
         if ingress_url.startswith(("http://", "https://")):
             print(f"local ingress: configured ({ingress_url})")

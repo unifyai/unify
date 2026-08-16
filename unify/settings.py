@@ -64,8 +64,8 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # Root directory for local file operations, CodeActActor working directory,
     # virtual environments, and .env storage.  Defaults to ~/Unity/Local when
-    # empty.  Override via UNITY_LOCAL_ROOT env var.
-    UNITY_LOCAL_ROOT: str = ""
+    # empty.  Override via UNIFY_LOCAL_ROOT env var.
+    UNIFY_LOCAL_ROOT: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # Core LLM Settings
@@ -100,7 +100,7 @@ class ProductionSettings(BaseSettings):
     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
     # OpenRouter — used for ``*@openrouter`` endpoints (platform defaults).
     OPENROUTER_API_KEY: SecretStr = SecretStr("")
-    UNITY_VALIDATE_LLM_PROVIDERS: bool = True
+    UNIFY_VALIDATE_LLM_PROVIDERS: bool = True
 
     # ─────────────────────────────────────────────────────────────────────────
     # External Service Credentials
@@ -127,15 +127,15 @@ class ProductionSettings(BaseSettings):
     # mailbox that receives them. Alias addresses have no Workspace user of
     # their own: reads and sends delegate to the mailbox while the From header
     # keeps the alias.
-    UNITY_TWIN_ALIAS_EMAIL_DOMAIN: str = "twins.unify.ai"
-    UNITY_TWIN_ALIAS_MAILBOX: str = "twins@unify.ai"
+    UNIFY_TWIN_ALIAS_EMAIL_DOMAIN: str = "twins.unify.ai"
+    UNIFY_TWIN_ALIAS_MAILBOX: str = "twins@unify.ai"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Builtins Catalogue
     # ─────────────────────────────────────────────────────────────────────────
     # Name of the public-read Unify project holding the global builtins
     # catalogues (function primitives and guidance), one copy platform-wide.
-    UNITY_BUILTINS_PROJECT: str = "Builtins"
+    UNIFY_BUILTINS_PROJECT: str = "Builtins"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Workflow Catalogue
@@ -143,7 +143,7 @@ class ProductionSettings(BaseSettings):
     # Root directory holding the curated workflow bundles (one directory
     # per workflow: manifest.yaml + guidance/ + tasks/ + ...). Empty means
     # no catalogue: the WorkflowManager is not built at boot.
-    UNITY_WORKFLOWS_DIR: str = ""
+    UNIFY_WORKFLOWS_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # GCP Project
@@ -158,9 +158,9 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     PYTEST_LOG_TO_FILE: bool = True
     # Directory for Unity LOGGER file output (async tool loop, managers, etc.)
-    # When set, logs are written to {UNITY_LOG_DIR}/unity.log
+    # When set, logs are written to {UNIFY_LOG_DIR}/unity.log
     # Default: None (console only)
-    UNITY_LOG_DIR: str = ""
+    UNIFY_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # EventBus Publishing
@@ -199,50 +199,50 @@ class ProductionSettings(BaseSettings):
     # OpenTelemetry Tracing
     # ─────────────────────────────────────────────────────────────────────────
     # Master switch for OTel tracing.
-    # - UNITY_OTEL=false (default): OTel tracing disabled
-    # - UNITY_OTEL=true: OTel tracing enabled, creates TracerProvider if needed
-    # - UNITY_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
-    # - UNITY_OTEL_LOG_DIR: Directory for file-based span export (optional)
+    # - UNIFY_OTEL=false (default): OTel tracing disabled
+    # - UNIFY_OTEL=true: OTel tracing enabled, creates TracerProvider if needed
+    # - UNIFY_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
+    # - UNIFY_OTEL_LOG_DIR: Directory for file-based span export (optional)
     #
     # When enabled, manager operations and async tool loops create spans that
     # propagate trace context to downstream libraries (unillm, unify).
     #
     # File-based span export:
-    # When UNITY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
+    # When UNIFY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
     # by trace_id. This enables full-stack trace correlation with Orchestra
     # (which runs in a separate process but receives the traceparent header).
-    UNITY_OTEL: bool = False
-    UNITY_OTEL_ENDPOINT: str = ""
-    UNITY_OTEL_LOG_DIR: str = ""
+    UNIFY_OTEL: bool = False
+    UNIFY_OTEL_ENDPOINT: str = ""
+    UNIFY_OTEL_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # Terminal Logging
     # ─────────────────────────────────────────────────────────────────────────
-    UNITY_TERMINAL_LOG: bool = True
-    UNITY_TERMINAL_LOG_LEVEL: str = "INFO"
+    UNIFY_TERMINAL_LOG: bool = True
+    UNIFY_TERMINAL_LOG_LEVEL: str = "INFO"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Debug Modes (performance overhead, development-only)
     # ─────────────────────────────────────────────────────────────────────────
-    UNITY_ASYNCIO_DEBUG: bool = False
+    UNIFY_ASYNCIO_DEBUG: bool = False
 
     # ─────────────────────────────────────────────────────────────────────────
     # Test Infrastructure
     # ─────────────────────────────────────────────────────────────────────────
     # Log subdirectory for LLM I/O log files (datetime-prefixed for ordering)
-    UNITY_LOG_SUBDIR: str = ""
+    UNIFY_LOG_SUBDIR: str = ""
     # Terminal socket name for tmux isolation; also used as log subdir fallback
-    # when UNITY_LOG_SUBDIR is not set
-    UNITY_TEST_SOCKET: str = ""
+    # when UNIFY_LOG_SUBDIR is not set
+    UNIFY_TEST_SOCKET: str = ""
     # Explicit repository root for log file placement (e.g., worktrees)
-    UNITY_LOG_ROOT: str = ""
+    UNIFY_LOG_ROOT: str = ""
     # Test mode flag
     TEST: bool = False
 
     # ─────────────────────────────────────────────────────────────────────────
     # Feature Flags
     # ─────────────────────────────────────────────────────────────────────────
-    UNITY_READONLY_ASK_GUARD: bool = True
+    UNIFY_READONLY_ASK_GUARD: bool = True
     FIRST_ASK_TOOL_IS_SEARCH: bool = False
     FIRST_MUTATION_TOOL_IS_ASK: bool = False
     DEPLOY_ENV: Literal["production", "staging"] = "production"
@@ -250,7 +250,7 @@ class ProductionSettings(BaseSettings):
     # deployment. Hosted and self-host run with a Console (default True); the
     # public local install runs against hosted Orchestra with no Console and
     # sets this False to suppress Console-UI knowledge and onboarding prompts.
-    UNITY_CONSOLE_UI: bool = True
+    UNIFY_CONSOLE_UI: bool = True
 
     # ─────────────────────────────────────────────────────────────────────────
     # Manager Configuration
@@ -289,17 +289,17 @@ class ProductionSettings(BaseSettings):
     # Validators
     # ─────────────────────────────────────────────────────────────────────────
     @field_validator(
-        "UNITY_TERMINAL_LOG",
-        "UNITY_ASYNCIO_DEBUG",
+        "UNIFY_TERMINAL_LOG",
+        "UNIFY_ASYNCIO_DEBUG",
         "EVENTBUS_PUBLISHING_ENABLED",
         "EVENTBUS_PUBSUB_STREAMING",
         "PYTEST_LOG_TO_FILE",
-        "UNITY_READONLY_ASK_GUARD",
+        "UNIFY_READONLY_ASK_GUARD",
         "FIRST_ASK_TOOL_IS_SEARCH",
         "FIRST_MUTATION_TOOL_IS_ASK",
         "TEST",
-        "UNITY_VALIDATE_LLM_PROVIDERS",
-        "UNITY_OTEL",
+        "UNIFY_VALIDATE_LLM_PROVIDERS",
+        "UNIFY_OTEL",
         mode="before",
     )
     @classmethod
@@ -344,7 +344,7 @@ class ProductionSettings(BaseSettings):
         Raises:
             RuntimeError: If neither a credential nor a broker is available.
         """
-        if not self.UNITY_VALIDATE_LLM_PROVIDERS:
+        if not self.UNIFY_VALIDATE_LLM_PROVIDERS:
             return
         from unify.common.broker import broker_origin
 

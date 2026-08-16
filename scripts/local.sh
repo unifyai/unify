@@ -20,11 +20,11 @@
 #   ./scripts/local.sh check              # Quick check (returns 0 if running)
 #
 # Environment (all optional — sensible defaults for local testing):
-#   UNITY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable Unity-owned local comms ingress
-#   UNITY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted (default: local unless UNITY_COMMS_URL is set)
-#   UNITY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host (default: 127.0.0.1)
-#   UNITY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port (default: 8787)
-#   UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL Public URL for external webhooks
+#   UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable Unity-owned local comms ingress
+#   UNIFY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted (default: local unless UNITY_COMMS_URL is set)
+#   UNIFY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host (default: 127.0.0.1)
+#   UNIFY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port (default: 8787)
+#   UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL Public URL for external webhooks
 #   UNITY_COMMS_URL         Hosted communication service URL (optional)
 #   PUBSUB_EMULATOR_HOST    Pub/Sub emulator (echo mode only; default: localhost:8085)
 #   GCP_PROJECT_ID          Project ID (echo mode / hosted comms only)
@@ -43,7 +43,7 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-UNITY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+UNIFY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 PUBSUB_EMULATOR_HOST_EXPLICIT="${PUBSUB_EMULATOR_HOST+x}"
 PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-localhost:8085}"
@@ -52,8 +52,8 @@ ASSISTANT_ID="${ASSISTANT_ID:-default-test-assistant}"
 DEPLOY_ENV="${DEPLOY_ENV:-staging}"
 ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
 
-if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_MODE:-}" ]]; then
-  LOCAL_COMMS_MODE="$UNITY_CONVERSATION_LOCAL_COMMS_MODE"
+if [[ -n "${UNIFY_CONVERSATION_LOCAL_COMMS_MODE:-}" ]]; then
+  LOCAL_COMMS_MODE="$UNIFY_CONVERSATION_LOCAL_COMMS_MODE"
 elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
   LOCAL_COMMS_MODE="hosted"
 elif [[ -n "$PUBSUB_EMULATOR_HOST_EXPLICIT" ]]; then
@@ -64,20 +64,20 @@ else
   LOCAL_COMMS_MODE="local"
 fi
 
-if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_ENABLED:-}" ]]; then
-  LOCAL_COMMS_ENABLED="$UNITY_CONVERSATION_LOCAL_COMMS_ENABLED"
+if [[ -n "${UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED:-}" ]]; then
+  LOCAL_COMMS_ENABLED="$UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED"
 elif [[ "$LOCAL_COMMS_MODE" == "local" ]]; then
   LOCAL_COMMS_ENABLED="true"
 else
   LOCAL_COMMS_ENABLED="false"
 fi
 
-LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
-LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
-LOCAL_COMMS_PUBLIC_URL="${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}"
-GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}"
-GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}"
-GATEWAY_PUBLIC_URL="${UNITY_GATEWAY_PUBLIC_URL:-$LOCAL_COMMS_PUBLIC_URL}"
+LOCAL_COMMS_HOST="${UNIFY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
+LOCAL_COMMS_PORT="${UNIFY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+LOCAL_COMMS_PUBLIC_URL="${UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}"
+GATEWAY_HOST="${UNIFY_GATEWAY_HOST:-127.0.0.1}"
+GATEWAY_PORT="${UNIFY_GATEWAY_PORT:-8001}"
+GATEWAY_PUBLIC_URL="${UNIFY_GATEWAY_PUBLIC_URL:-$LOCAL_COMMS_PUBLIC_URL}"
 
 PIDFILE="/tmp/unity-local.pid"
 LOGFILE="/tmp/unity-local.log"
@@ -97,7 +97,7 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 full_stack_state_file() {
-  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 port_is_listening() {
@@ -126,14 +126,14 @@ PY
 
 refuse_isolated_when_full_stack_active() {
   local action="$1"
-  if [[ "${UNITY_ALLOW_ISOLATED:-0}" == "1" || -n "${UNITY_STACK_ORCHESTRATOR:-}" ]]; then
+  if [[ "${UNIFY_ALLOW_ISOLATED:-0}" == "1" || -n "${UNIFY_STACK_ORCHESTRATOR:-}" ]]; then
     return 0
   fi
   if full_stack_source_is_active; then
     log_error "Refusing isolated Unity $action while the full local stack is active."
     log_info "Use unity-deploy/selfhost/stack.sh status or repair-console instead."
     log_info "Override only for intentionally isolated Unity work:"
-    log_info "  UNITY_ALLOW_ISOLATED=1 $0 $action"
+    log_info "  UNIFY_ALLOW_ISOLATED=1 $0 $action"
     return 1
   fi
 }
@@ -166,8 +166,8 @@ check_python() {
 
 get_python() {
   # Prefer the venv python if available.
-  if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
-    echo "$UNITY_REPO_PATH/.venv/bin/python"
+  if [[ -f "$UNIFY_REPO_PATH/.venv/bin/python" ]]; then
+    echo "$UNIFY_REPO_PATH/.venv/bin/python"
   else
     echo "python3"
   fi
@@ -213,7 +213,7 @@ gateway_base_url() {
 }
 
 run_gateway_doctor() {
-  cd "$UNITY_REPO_PATH"
+  cd "$UNIFY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
@@ -252,7 +252,7 @@ start_gateway() {
     return 0
   fi
 
-  cd "$UNITY_REPO_PATH"
+  cd "$UNIFY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
 
@@ -276,12 +276,12 @@ start_gateway() {
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
     UNITY_COMMS_URL="$(gateway_base_url)" \
     UNITY_ADAPTERS_URL="$(gateway_base_url)" \
-    UNITY_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_internal_url)" \
-    UNITY_CONVERSATION_LOCAL_COMMS_ENABLED="$LOCAL_COMMS_ENABLED" \
-    UNITY_CONVERSATION_LOCAL_COMMS_MODE="$LOCAL_COMMS_MODE" \
-    UNITY_CONVERSATION_LOCAL_COMMS_HOST="$LOCAL_COMMS_HOST" \
-    UNITY_CONVERSATION_LOCAL_COMMS_PORT="$LOCAL_COMMS_PORT" \
-    UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$LOCAL_COMMS_PUBLIC_URL" \
+    UNIFY_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_internal_url)" \
+    UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED="$LOCAL_COMMS_ENABLED" \
+    UNIFY_CONVERSATION_LOCAL_COMMS_MODE="$LOCAL_COMMS_MODE" \
+    UNIFY_CONVERSATION_LOCAL_COMMS_HOST="$LOCAL_COMMS_HOST" \
+    UNIFY_CONVERSATION_LOCAL_COMMS_PORT="$LOCAL_COMMS_PORT" \
+    UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$LOCAL_COMMS_PUBLIC_URL" \
     "${gateway_command[@]}" \
     > "$GATEWAY_LOGFILE" 2>&1 &
 
@@ -314,7 +314,7 @@ start_gateway() {
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
     log_info "Public callback URL: $GATEWAY_PUBLIC_URL"
   else
-    log_warn "Public callback URL not set. Use UNITY_GATEWAY_PUBLIC_URL for provider webhooks."
+    log_warn "Public callback URL not set. Use UNIFY_GATEWAY_PUBLIC_URL for provider webhooks."
   fi
 }
 
@@ -339,7 +339,7 @@ stop_gateway() {
 start_echo() {
   log_info "Starting echo responder (Pub/Sub plumbing check) ..."
 
-  cd "$UNITY_REPO_PATH"
+  cd "$UNIFY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
 
@@ -382,7 +382,7 @@ start_full_cm() {
 __start_full_cm_impl() {
   log_info "Starting ConversationManager for assistant=$ASSISTANT_ID ..."
 
-  cd "$UNITY_REPO_PATH"
+  cd "$UNIFY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
 
@@ -401,22 +401,22 @@ __start_full_cm_impl() {
     "ASSISTANT_ID=$ASSISTANT_ID"
     "DEPLOY_ENV=$DEPLOY_ENV"
     "ORCHESTRA_URL=$ORCHESTRA_URL"
-    "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=$LOCAL_COMMS_ENABLED"
-    "UNITY_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
-    "UNITY_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
-    "UNITY_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED=$LOCAL_COMMS_ENABLED"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
     "UNITY_COMMS_URL=${UNITY_COMMS_URL:-$(gateway_base_url)}"
     "UNITY_ADAPTERS_URL=${UNITY_ADAPTERS_URL:-$(gateway_base_url)}"
-    "UNITY_VALIDATE_LLM_PROVIDERS=false"
+    "UNIFY_VALIDATE_LLM_PROVIDERS=false"
     "EVENTBUS_PUBLISHING_ENABLED=$eventbus_publish"
     "EVENTBUS_PUBSUB_STREAMING=$eventbus_stream"
     "TEST=false"
-    "UNITY_INACTIVITY_TIMEOUT_SECONDS=${UNITY_INACTIVITY_TIMEOUT_SECONDS:-0}"
-    "UNITY_CONSOLE_UI=${UNITY_CONSOLE_UI:-false}"
+    "UNIFY_INACTIVITY_TIMEOUT_SECONDS=${UNIFY_INACTIVITY_TIMEOUT_SECONDS:-0}"
+    "UNIFY_CONSOLE_UI=${UNIFY_CONSOLE_UI:-false}"
   )
-  [[ -n "${UNITY_LOCAL_ROOT:-}" ]] && env_vars+=("UNITY_LOCAL_ROOT=$UNITY_LOCAL_ROOT")
-  [[ -n "${UNITY_LOCAL_SCHEDULER:-}" ]] && env_vars+=("UNITY_LOCAL_SCHEDULER=$UNITY_LOCAL_SCHEDULER")
-  [[ -n "$LOCAL_COMMS_PUBLIC_URL" ]] && env_vars+=("UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=$LOCAL_COMMS_PUBLIC_URL")
+  [[ -n "${UNIFY_LOCAL_ROOT:-}" ]] && env_vars+=("UNIFY_LOCAL_ROOT=$UNIFY_LOCAL_ROOT")
+  [[ -n "${UNIFY_LOCAL_SCHEDULER:-}" ]] && env_vars+=("UNIFY_LOCAL_SCHEDULER=$UNIFY_LOCAL_SCHEDULER")
+  [[ -n "$LOCAL_COMMS_PUBLIC_URL" ]] && env_vars+=("UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=$LOCAL_COMMS_PUBLIC_URL")
 
   # Forward API keys if present.
   [[ -n "${OPENAI_API_KEY:-}" ]]       && env_vars+=("OPENAI_API_KEY=$OPENAI_API_KEY")
@@ -525,7 +525,7 @@ cmd_start() {
     if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
       echo "  Callbacks:  $GATEWAY_PUBLIC_URL"
     else
-      echo "  Callbacks:  not set (export UNITY_GATEWAY_PUBLIC_URL)"
+      echo "  Callbacks:  not set (export UNIFY_GATEWAY_PUBLIC_URL)"
     fi
   fi
   echo "  Log:        $LOGFILE"
@@ -578,7 +578,7 @@ cmd_status() {
     if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
       echo "  Callbacks: $GATEWAY_PUBLIC_URL"
     else
-      echo "  Callbacks: not set (export UNITY_GATEWAY_PUBLIC_URL)"
+      echo "  Callbacks: not set (export UNIFY_GATEWAY_PUBLIC_URL)"
     fi
     echo ""
     echo "Gateway Doctor"
@@ -641,11 +641,11 @@ cmd_help() {
   echo "are set, starts full CM. Otherwise falls back to echo responder."
   echo ""
   echo "Environment:"
-  echo "  UNITY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable local comms ingress"
-  echo "  UNITY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted"
-  echo "  UNITY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host"
-  echo "  UNITY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port"
-  echo "  UNITY_GATEWAY_PUBLIC_URL                Public HTTPS callback URL"
+  echo "  UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable local comms ingress"
+  echo "  UNIFY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted"
+  echo "  UNIFY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host"
+  echo "  UNIFY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port"
+  echo "  UNIFY_GATEWAY_PUBLIC_URL                Public HTTPS callback URL"
   echo "  UNITY_COMMS_URL                         Hosted comms service URL"
   echo "  PUBSUB_EMULATOR_HOST                    Pub/Sub host for echo mode"
   echo "  GCP_PROJECT_ID                          Project ID for echo mode"

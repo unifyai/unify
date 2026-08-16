@@ -25,31 +25,31 @@ def _env(name: str, default: str = "") -> str:
 def is_email_configured() -> bool:
     """Return whether the local IMAP/SMTP email path is configured."""
     return bool(
-        _env("UNITY_LOCAL_EMAIL_ADDRESS")
-        and _env("UNITY_LOCAL_EMAIL_PASSWORD")
-        and _env("UNITY_LOCAL_EMAIL_IMAP_HOST")
-        and _env("UNITY_LOCAL_EMAIL_SMTP_HOST"),
+        _env("UNIFY_LOCAL_EMAIL_ADDRESS")
+        and _env("UNIFY_LOCAL_EMAIL_PASSWORD")
+        and _env("UNIFY_LOCAL_EMAIL_IMAP_HOST")
+        and _env("UNIFY_LOCAL_EMAIL_SMTP_HOST"),
     )
 
 
 def _email_address() -> str:
-    return _env("UNITY_LOCAL_EMAIL_ADDRESS") or (SESSION_DETAILS.assistant.email or "")
+    return _env("UNIFY_LOCAL_EMAIL_ADDRESS") or (SESSION_DETAILS.assistant.email or "")
 
 
 def _email_password() -> str:
-    return _env("UNITY_LOCAL_EMAIL_PASSWORD")
+    return _env("UNIFY_LOCAL_EMAIL_PASSWORD")
 
 
 def _imap_port() -> int:
-    return int(_env("UNITY_LOCAL_EMAIL_IMAP_PORT", "993"))
+    return int(_env("UNIFY_LOCAL_EMAIL_IMAP_PORT", "993"))
 
 
 def _smtp_port() -> int:
-    return int(_env("UNITY_LOCAL_EMAIL_SMTP_PORT", "465"))
+    return int(_env("UNIFY_LOCAL_EMAIL_SMTP_PORT", "465"))
 
 
 def _use_starttls() -> bool:
-    return _env("UNITY_LOCAL_EMAIL_SMTP_STARTTLS", "false").lower() in {
+    return _env("UNIFY_LOCAL_EMAIL_SMTP_STARTTLS", "false").lower() in {
         "1",
         "true",
         "yes",
@@ -142,10 +142,10 @@ class LocalEmailPoller:
         if not is_email_configured():
             return []
 
-        imap_host = _env("UNITY_LOCAL_EMAIL_IMAP_HOST")
+        imap_host = _env("UNIFY_LOCAL_EMAIL_IMAP_HOST")
         username = _email_address()
         password = _email_password()
-        mailbox_name = _env("UNITY_LOCAL_EMAIL_IMAP_MAILBOX", "INBOX")
+        mailbox_name = _env("UNIFY_LOCAL_EMAIL_IMAP_MAILBOX", "INBOX")
 
         mail = imaplib.IMAP4_SSL(imap_host, _imap_port())
         try:
@@ -265,7 +265,7 @@ async def send_email(
             filename=attachment["filename"],
         )
 
-    smtp_host = _env("UNITY_LOCAL_EMAIL_SMTP_HOST")
+    smtp_host = _env("UNIFY_LOCAL_EMAIL_SMTP_HOST")
     smtp_port = _smtp_port()
 
     def _send() -> dict:

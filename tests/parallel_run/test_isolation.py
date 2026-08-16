@@ -81,13 +81,13 @@ class TestSocketIsolation:
             assert result.socket in sockets or len(result.sessions_created) > 0
 
     def test_explicit_socket_override(self, runner):
-        """UNITY_TEST_SOCKET env var should override auto-detection."""
+        """UNIFY_TEST_SOCKET env var should override auto-detection."""
         custom_socket = "unity_test_custom_socket"
 
         result = runner.run(
             runner.fixture_path("test_always_pass.py"),
             wait_for_completion=True,
-            env={"UNITY_TEST_SOCKET": custom_socket},
+            env={"UNIFY_TEST_SOCKET": custom_socket},
         )
 
         assert result.exit_code == 0

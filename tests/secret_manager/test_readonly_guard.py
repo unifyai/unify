@@ -12,12 +12,12 @@ from unify.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 @_handle_project
 async def test_ask_guard_triggers_when_enabled(monkeypatch):
     """
-    When UNITY_READONLY_ASK_GUARD is enabled, SecretManager.ask should be guarded:
+    When UNIFY_READONLY_ASK_GUARD is enabled, SecretManager.ask should be guarded:
     mutation intent triggers an early stop and returns the early response.
     """
 
     # Ensure the env flag is on for this test only
-    monkeypatch.setenv("UNITY_READONLY_ASK_GUARD", "true")
+    monkeypatch.setenv("UNIFY_READONLY_ASK_GUARD", "true")
 
     sm = SecretManager()
 

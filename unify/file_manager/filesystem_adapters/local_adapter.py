@@ -22,7 +22,7 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
     This adapter operates on the local workspace root (``get_local_root()``,
     typically ``~/Unity/Local``) for user files. When no explicit ``root`` is
     passed, that path is resolved on each access so HOME /
-    ``UNITY_LOCAL_ROOT`` changes take effect. When sync is enabled and a
+    ``UNIFY_LOCAL_ROOT`` changes take effect. When sync is enabled and a
     managed VM is configured (via SESSION_DETAILS.desktop_url), the workspace
     directory is synchronized with the VM via rclone SFTP.
 
@@ -52,7 +52,7 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
         root : str | None, default None
             Root directory for file operations. When omitted, the root is
             resolved lazily via ``get_local_root()`` on each access so HOME /
-            ``UNITY_LOCAL_ROOT`` changes are picked up (e.g. per-test isolation).
+            ``UNIFY_LOCAL_ROOT`` changes are picked up (e.g. per-test isolation).
             An explicit ``root`` is frozen at construction time.
         enable_sync : bool, default True
             Whether to enable VM file sync. Actual sync only occurs if

@@ -514,13 +514,13 @@ jobs:
           ORCHESTRA_BRANCH="$REPO_VAR_BRANCH"
           echo "Orchestra branch from repo variable: $ORCHESTRA_BRANCH" >&2
         else
-          UNITY_BRANCH="${{ github.ref_name }}"
-          if [[ "$UNITY_BRANCH" == "main" ]]; then
+          UNIFY_BRANCH="${{ github.ref_name }}"
+          if [[ "$UNIFY_BRANCH" == "main" ]]; then
             ORCHESTRA_BRANCH="main"
           else
             ORCHESTRA_BRANCH="staging"
           fi
-          echo "Orchestra branch auto-detected: $ORCHESTRA_BRANCH (unity on '$UNITY_BRANCH')" >&2
+          echo "Orchestra branch auto-detected: $ORCHESTRA_BRANCH (unity on '$UNIFY_BRANCH')" >&2
         fi
 
         # Parse env_file_content for project management flags only

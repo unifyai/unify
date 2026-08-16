@@ -11,15 +11,15 @@
 # (e.g., Cursor Background Agents) without any extra configuration.
 
 # ---- Directory detection ----
-UNITY_TESTS_DIR="${0:A:h}"  # Absolute path to directory containing this script
+UNIFY_TESTS_DIR="${0:A:h}"  # Absolute path to directory containing this script
 
 # ---- Socket name (captured at init time for completions) ----
 # Must be computed here because `tty` doesn't work inside completion functions
 _unity_tty_id=$(tty 2>/dev/null)
 if [[ "$_unity_tty_id" == "not a tty" || -z "$_unity_tty_id" || ! "$_unity_tty_id" =~ ^/ ]]; then
-    _UNITY_SOCKET="unity_default"
+    _UNIFY_SOCKET="unity_default"
 else
-    _UNITY_SOCKET="unity${_unity_tty_id//\//_}"
+    _UNIFY_SOCKET="unity${_unity_tty_id//\//_}"
 fi
 unset _unity_tty_id
 
@@ -34,7 +34,7 @@ _unity_resolve_script() {
     if [[ -n "$git_root" && -x "$git_root/tests/$script_name" ]]; then
         echo "$git_root/tests/$script_name"
     else
-        echo "$UNITY_TESTS_DIR/$script_name"
+        echo "$UNIFY_TESTS_DIR/$script_name"
     fi
 }
 
@@ -83,7 +83,7 @@ orchestra() {
     # Find the orchestra repo relative to the unity repo.
     local git_root
     git_root=$(git rev-parse --show-toplevel 2>/dev/null)
-    local orchestra_repo="${ORCHESTRA_REPO_PATH:-${git_root:-$UNITY_TESTS_DIR/..}/../orchestra}"
+    local orchestra_repo="${ORCHESTRA_REPO_PATH:-${git_root:-$UNIFY_TESTS_DIR/..}/../orchestra}"
 
     if [[ -x "$orchestra_repo/scripts/local.sh" ]]; then
         # Set defaults if not already set
@@ -101,7 +101,7 @@ orchestra() {
 # ---- Completion: attach ----
 _unity_attach_complete() {
     local -a sessions
-    sessions=(${(f)"$(tmux -L "$_UNITY_SOCKET" list-sessions -F '#{session_name}' 2>/dev/null)"})
+    sessions=(${(f)"$(tmux -L "$_UNIFY_SOCKET" list-sessions -F '#{session_name}' 2>/dev/null)"})
     [[ -n "${sessions[*]}" ]] && compadd "${sessions[@]}"
 }
 compdef _unity_attach_complete attach

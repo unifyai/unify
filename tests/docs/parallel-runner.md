@@ -196,10 +196,10 @@ Settings are organized in two classes with inheritance:
 | `UNIFY_MODEL` | str | `openai/gpt-5.2@openrouter` | LLM model to use |
 | `UNILLM_CACHE` | bool/str | `true` | Enable/disable LLM response caching |
 | `LLM_IO_DEBUG` | bool | `true` | Log full LLM request/response payloads |
-| `UNITY_TERMINAL_LOG` | bool | `true` | Enable/disable terminal (console) logging |
-| `UNITY_ASYNCIO_DEBUG` | bool | `false` | Enable Python asyncio debug mode |
+| `UNIFY_TERMINAL_LOG` | bool | `true` | Enable/disable terminal (console) logging |
+| `UNIFY_ASYNCIO_DEBUG` | bool | `false` | Enable Python asyncio debug mode |
 | `PYTEST_LOG_TO_FILE` | bool | `true` | Log pytest output to files |
-| `UNITY_READONLY_ASK_GUARD` | bool | `true` | Enable read-only ask guard |
+| `UNIFY_READONLY_ASK_GUARD` | bool | `true` | Enable read-only ask guard |
 | `FIRST_ASK_TOOL_IS_SEARCH` | bool | `false` | Force semantic search on first `ask` step |
 | `FIRST_MUTATION_TOOL_IS_ASK` | bool | `false` | Force `ask` on first mutation step |
 

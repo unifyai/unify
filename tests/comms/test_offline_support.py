@@ -27,11 +27,11 @@ def _expected_first_sms_body(content: str) -> str:
 
 def _seed_offline_env(monkeypatch):
     monkeypatch.setenv(
-        "UNITY_OFFLINE_RUN_KEY",
+        "UNIFY_OFFLINE_RUN_KEY",
         "offline:scheduled:42:101:rev:once",
     )
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_ID", "101")
+    monkeypatch.setenv("UNIFY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
     monkeypatch.setattr(offline_support, "_OPERATION_COUNTER", 0)
     monkeypatch.setattr(offline_support.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(offline_support.SESSION_DETAILS.assistant, "contact_id", 0)
