@@ -647,6 +647,60 @@ class _CodeActTaskExecutionDelegate:
 
 
 # ---------------------------------------------------------------------------
+# Verification tools shared by the storage and repair loops
+# ---------------------------------------------------------------------------
+
+
+def _verification_librarian_tools(fm: Any) -> Dict[str, Callable]:
+    """``confirm_side_effect_class`` and ``set_verification_policy`` bound to ``fm``.
+
+    Both shape how much verification a stored function needs; neither can
+    grant trust, and the ledger is written only by the runtime.
+    """
+    if fm is None:
+        return {}
+
+    async def confirm_side_effect_class(
+        function_id: int,
+        side_effect_class: str,
+        rationale: str,
+    ) -> str:
+        return str(
+            fm.confirm_side_effect_class(
+                function_id=int(function_id),
+                side_effect_class=str(side_effect_class),
+                rationale=str(rationale),
+            ),
+        )
+
+    async def set_verification_policy(
+        function_id: int,
+        always_verify: bool | None = None,
+        required_passes: int | None = None,
+        min_distinct_inputs: int | None = None,
+        fixture_only: bool | None = None,
+        spot_check_rate: float | None = None,
+    ) -> str:
+        return str(
+            fm.set_verification_policy(
+                function_id=int(function_id),
+                always_verify=always_verify,
+                required_passes=required_passes,
+                min_distinct_inputs=min_distinct_inputs,
+                fixture_only=fixture_only,
+                spot_check_rate=spot_check_rate,
+            ),
+        )
+
+    confirm_side_effect_class.__doc__ = fm.confirm_side_effect_class.__doc__
+    set_verification_policy.__doc__ = fm.set_verification_policy.__doc__
+    return {
+        "confirm_side_effect_class": confirm_side_effect_class,
+        "set_verification_policy": set_verification_policy,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Shared storage-review prompt sections
 # ---------------------------------------------------------------------------
 
@@ -783,6 +837,49 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "required, call the injected `run_coro_sync(factory)` helper (also "
     "`from unify.common.asyncio_compat import run_coro_sync`) instead of "
     "nesting `asyncio.run`.\n\n"
+    "### Verifiable functions\n\n"
+    "A stored function is not trusted when it is stored. Every call of it "
+    "runs under independent verification — a static review of its source, "
+    "an argument review, a precondition probe before any effect, and a "
+    "post-execution review — until enough independent verdicts have "
+    "accumulated for its effect class; only then does it run bare. You "
+    "cannot grant that trust and you never write the verification ledger. "
+    "What you can do is store functions that are cheap to verify and hard "
+    "to get wrong:\n\n"
+    "- **Thin effects.** A function that performs an irreversible effect "
+    "(send, post, delete, pay, drive a desktop) must do only that. Compute "
+    "in one function, perform the effect in another, and let the root "
+    "compose them. This is what makes a failed verdict cheap to repair and "
+    "blame precise: the computation can be re-run and corrected without "
+    "the effect ever having happened. Example — instead of one "
+    "`send_weekly_summary(week)` that fetches, totals and posts, store "
+    "`compute_weekly_summary(week) -> dict` (read-only, verifiable "
+    "against its inputs) and `post_summary(channel: str, text: str) -> "
+    "dict` (the one effect), with a root that calls the first, then the "
+    "second.\n"
+    "- **Type hints on every parameter and the return.** The input and "
+    "output contracts a call is checked against are derived from them; an "
+    "unhinted function has no deterministic contract.\n"
+    "- **A docstring whose first sentence is a checkable postcondition** "
+    '("Return the sum of `amount` over the rows, in minor units, as an '
+    'int"), not a paraphrase of the name. Where the postcondition is '
+    "expressible as an expression over `result` and `kwargs`, author it "
+    "via `FunctionManager_add_functions(contracts={name: "
+    "{'postconditions': [...]}})` so it is checked on every call.\n"
+    "- **Fixtures for pure functions.** When the trajectory contains "
+    "concrete inputs and the exact output a pure (`safe_noop`) function "
+    "reproduces, store them via `FunctionManager_add_functions(fixtures="
+    "{name: [{'args': {...}, 'result': ...}]})`; they are replayed "
+    "whenever the function changes and reject silent regressions.\n"
+    "- **Confirm the effect class.** Detection from the source is a lower "
+    "bound (safe_noop < read_only < idempotent_effectful < "
+    "unsafe_effectful). When you know a function's real class — an effect "
+    "the source does not reveal, or a third-party import that only reads "
+    "— call `confirm_side_effect_class(function_id, side_effect_class, "
+    "rationale)`; raising is always allowed, lowering stops at the "
+    "detected bound. Use `set_verification_policy(function_id, ...)` to "
+    "demand more verification for unusually consequential functions; it "
+    "can only raise the bar.\n\n"
     "### Third-party package dependencies\n\n"
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
@@ -840,7 +937,11 @@ _STORAGE_THREE_STORES = (
     "(`FunctionManager_delete_venv`) virtual environments for "
     "functions with third-party dependencies. Link a function to a "
     "venv via `FunctionManager_set_function_venv` or pass `venv_id` "
-    "directly to `FunctionManager_add_functions`.\n\n"
+    "directly to `FunctionManager_add_functions`.\n"
+    "- **Shape verification** of a stored function: confirm its effect "
+    "class within the detected bound (`confirm_side_effect_class`) and "
+    "raise its trust bar (`set_verification_policy`). Neither grants "
+    "trust; verdicts from independent verification do.\n\n"
     "Do NOT store trivial one-liners, test scaffolding, or functions "
     "that are too task-specific to be reusable.\n\n"
     "### Guidance Store — the *how*\n\n"
@@ -1224,6 +1325,7 @@ def _build_storage_tools(
             *storage_methods,
             include_class_name=True,
         ),
+        **_verification_librarian_tools(fm),
     }
 
     # ── Wire ask_about_completed_tool from snapshot ───────────────────
@@ -5072,7 +5174,7 @@ class CodeActActor(BaseCodeActActor):
 
     def _verification_librarian_tools(self) -> Dict[str, Callable]:
         """Tools that let a librarian or repair loop shape verification policy (never trust)."""
-        return {}
+        return _verification_librarian_tools(self.function_manager)
 
     @functools.wraps(BaseCodeActActor.act, updated=())
     @log_manager_call(

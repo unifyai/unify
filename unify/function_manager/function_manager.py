@@ -89,6 +89,7 @@ from .types.verification import (
     SideEffectClass,
     StaticReviewRecord,
     VerdictKind,
+    VerificationPolicy,
     VerificationRow,
     VerificationSummary,
 )
@@ -3412,6 +3413,212 @@ class FunctionManager(BaseFunctionManager):
             settings=self.verification_settings,
             current_hash=self.function_trust_hash(row),
         )
+
+    def confirm_side_effect_class(
+        self,
+        *,
+        function_id: int,
+        side_effect_class: str,
+        rationale: str,
+    ) -> Dict[str, Any]:
+        """Confirm, raise, or lower a stored function's effect class.
+
+        The effect class decides how much independent verification a stored
+        function needs before it is trusted and whether its calls must wait
+        for earlier verdicts. Detection from the source is a lower bound:
+        ``safe_noop`` (pure computation, no I/O beyond its arguments) <
+        ``read_only`` (reads external state, mutates nothing) <
+        ``idempotent_effectful`` (mutates, but re-running with the same inputs
+        converges to the same state: upsert by key, write a file at a path,
+        set a field) < ``unsafe_effectful`` (mutates non-idempotently or
+        irreversibly: send, delete, pay, post, drive a desktop).
+
+        You may raise the class freely — do so whenever the docstring or the
+        trajectory shows an effect the source alone does not reveal. You may
+        lower it only down to the detected bound: a class below what the
+        source proves is rejected, not clamped. Confirming a class that
+        detection inferred from third-party imports replaces the safe
+        default (unsafe until confirmed) with your judgement, so confirm only
+        what you can defend in ``rationale``. Confirmation never grants trust;
+        the function still earns it from verdicts against the confirmed bar.
+
+        Returns a dict with ``outcome`` (``confirmed`` or ``rejected``), the
+        ``detected`` bound, the ``effective`` class after the call and, when
+        rejected, ``reason``.
+        """
+        log = self._get_log_by_function_id(function_id=int(function_id))
+        row = dict(log.entries)
+        try:
+            requested = SideEffectClass(str(side_effect_class))
+        except ValueError:
+            return {
+                "outcome": "rejected",
+                "function_id": int(function_id),
+                "reason": (
+                    f"Unknown side_effect_class {side_effect_class!r}; choose one of "
+                    f"{[c.value for c in SideEffectClass]}."
+                ),
+            }
+        detected = SideEffectClass(
+            str(
+                row.get("side_effect_class_detected")
+                or SideEffectClass.unsafe_effectful,
+            ),
+        )
+        if requested.rank < detected.rank:
+            return {
+                "outcome": "rejected",
+                "function_id": int(function_id),
+                "detected": detected.value,
+                "effective": row.get("side_effect_class"),
+                "reason": (
+                    f"The source proves at least {detected.value}; a class below the "
+                    "detected bound cannot be confirmed."
+                ),
+            }
+        rationale_text = str(rationale or "").strip()
+        if not rationale_text:
+            return {
+                "outcome": "rejected",
+                "function_id": int(function_id),
+                "reason": "A rationale is required when confirming an effect class.",
+            }
+        unisdk.update_logs(
+            logs=[log.id],
+            context=self._compositional_ctx,
+            entries={
+                "side_effect_class": requested.value,
+                "class_source": "librarian",
+                "class_rationale": rationale_text[:2000],
+            },
+            overwrite=True,
+        )
+        verify = self.refresh_trust(int(function_id))
+        return {
+            "outcome": "confirmed",
+            "function_id": int(function_id),
+            "detected": detected.value,
+            "effective": requested.value,
+            "verify": verify,
+        }
+
+    def set_verification_policy(
+        self,
+        *,
+        function_id: int,
+        always_verify: Optional[bool] = None,
+        required_passes: Optional[int] = None,
+        min_distinct_inputs: Optional[int] = None,
+        fixture_only: Optional[bool] = None,
+        spot_check_rate: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Raise the verification bar for a stored function; never lower it.
+
+        Trust is earned by policy from independent verdicts. These knobs let
+        you demand more than the class default when a function is unusually
+        consequential or its inputs unusually varied: ``always_verify`` keeps
+        every call under verification forever; ``required_passes`` and
+        ``min_distinct_inputs`` raise how many passing verdicts, and across how
+        many distinct inputs, are needed before trust; ``spot_check_rate``
+        raises how often a trusted effectful call is re-checked afterwards.
+        ``fixture_only`` records that a ``safe_noop`` function is judged by its
+        recorded fixtures and deterministic contract alone (which is already
+        how pure functions are trusted).
+
+        Every argument may only move the bar up: a value at or below the
+        class default, or below the current policy, is rejected. Omit what you
+        do not want to change. Trust can never be granted here; only made
+        harder to earn.
+        """
+        from .verification.policy import (
+            min_distinct_inputs as _class_min_inputs,
+            required_passes as _class_required_passes,
+            spot_check_rate as _class_spot_rate,
+        )
+
+        log = self._get_log_by_function_id(function_id=int(function_id))
+        row = dict(log.entries)
+        settings = self.verification_settings
+        current = VerificationPolicy.model_validate(
+            row.get("verification_policy") or {},
+        )
+        base_row = {**row, "verification_policy": {}}
+        rejections: List[str] = []
+        updated = current.model_copy()
+
+        if always_verify is not None:
+            if always_verify is False and current.always_verify:
+                rejections.append("always_verify cannot be switched off once set.")
+            elif always_verify:
+                updated.always_verify = True
+        if required_passes is not None:
+            floor = max(
+                _class_required_passes(base_row, settings),
+                current.required_passes or 0,
+            )
+            if int(required_passes) <= floor:
+                rejections.append(
+                    f"required_passes must exceed the current bar ({floor}); {required_passes} does not raise it.",
+                )
+            else:
+                updated.required_passes = int(required_passes)
+        if min_distinct_inputs is not None:
+            floor = max(
+                _class_min_inputs(base_row, settings),
+                current.min_distinct_inputs or 0,
+            )
+            if int(min_distinct_inputs) <= floor:
+                rejections.append(
+                    f"min_distinct_inputs must exceed the current bar ({floor}); {min_distinct_inputs} does not raise it.",
+                )
+            else:
+                updated.min_distinct_inputs = int(min_distinct_inputs)
+        if spot_check_rate is not None:
+            floor = max(
+                _class_spot_rate(base_row, settings),
+                current.spot_check_rate or 0.0,
+            )
+            if not (0.0 <= float(spot_check_rate) <= 1.0):
+                rejections.append("spot_check_rate must be between 0 and 1.")
+            elif float(spot_check_rate) <= floor:
+                rejections.append(
+                    f"spot_check_rate must exceed the current rate ({floor}); {spot_check_rate} does not raise it.",
+                )
+            else:
+                updated.spot_check_rate = float(spot_check_rate)
+        if fixture_only is not None:
+            if row.get("side_effect_class") != SideEffectClass.safe_noop.value:
+                rejections.append("fixture_only applies to safe_noop functions only.")
+            elif fixture_only is False and current.fixture_only:
+                rejections.append("fixture_only cannot be switched off once set.")
+            elif fixture_only:
+                updated.fixture_only = True
+        if rejections:
+            return {
+                "outcome": "rejected",
+                "function_id": int(function_id),
+                "reasons": rejections,
+                "policy": current.model_dump(mode="json"),
+            }
+        if updated == current:
+            return {
+                "outcome": "unchanged",
+                "function_id": int(function_id),
+                "policy": current.model_dump(mode="json"),
+            }
+        unisdk.update_logs(
+            logs=[log.id],
+            context=self._compositional_ctx,
+            entries={"verification_policy": updated.model_dump(mode="json")},
+            overwrite=True,
+        )
+        verify = self.refresh_trust(int(function_id))
+        return {
+            "outcome": "raised",
+            "function_id": int(function_id),
+            "policy": updated.model_dump(mode="json"),
+            "verify": verify,
+        }
 
     # ------------------------------------------------------------------ #
     #  Public API                                                        #
