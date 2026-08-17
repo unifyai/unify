@@ -182,7 +182,6 @@ fm.sync_custom()  # Syncs venvs first, then functions
 @custom_function(
     venv_name="acme_ml",         # Reference to custom/venvs/<name>.toml
     venv_id=1,                   # Direct venv ID (prefer venv_name for custom venvs)
-    verify=True,                 # Actor verifies execution result
     precondition={"url": "..."}, # Required state before execution
     auto_sync=False,             # Exclude from sync entirely
 )
@@ -192,9 +191,10 @@ fm.sync_custom()  # Syncs venvs first, then functions
 |--------|------|---------|-------------|
 | `venv_name` | `Optional[str]` | `None` | Name of custom venv (filename without .toml) |
 | `venv_id` | `Optional[int]` | `None` | Direct venv ID (for non-custom venvs) |
-| `verify` | `bool` | `True` | Whether Actor should verify function execution |
 | `precondition` | `Optional[dict]` | `None` | Required state before function can run |
 | `auto_sync` | `bool` | `True` | Set to `False` to exclude from auto-sync |
+
+Whether a function is *trusted* (`Function.verify`) is never authored: it is derived from the verification ledger (see below), and a synced source change puts the function back on the ramp.
 
 **Note:** When `venv_name` is set, it takes precedence over `venv_id`. The name is resolved to an actual `venv_id` during sync.
 
@@ -377,6 +377,18 @@ async def research_contact(contact_name: str) -> str:
 ```
 
 ---
+
+## Verification and Trust
+
+Every compositional function carries a **verification ledger** (`unify/function_manager/verification/`):
+
+- **Effect class** — detected from the AST as a lower bound (`classify.py`): the maximum over the primitives it calls (`PRIMITIVE_EFFECT_CLASSES` covers every primitive; unknown names are `unsafe_effectful` and logged), the classes of its compositional dependencies, and its third-party imports. `safe_noop` (pure) < `read_only` < `idempotent_effectful` < `unsafe_effectful`. A librarian may confirm a class within that bound via `confirm_side_effect_class` (raise freely, lower only to the detected bound).
+- **Trust hash** (`ledger.function_trust_hash`) — over the normalised source, every compositional dependency's own trust hash, the venv and its pyproject, and the language. Any component changing changes the hash and invalidates trust, dependents included.
+- **Contract** (`contracts.py`) — JSON schemas for inputs and output derived from type hints, plus postconditions authored via `add_functions(contracts={name: {"postconditions": [...]}})` (boolean expressions over `result` and `kwargs`, restricted to an allowlist). Tier-0 checks run on every call while untrusted and stay on for trusted read/effectful functions.
+- **Fixtures** (`fixtures.py`) — recorded `(args, result)` pairs for `safe_noop` functions, captured on passing calls or authored via `add_functions(fixtures=...)`, replayed whenever the function's content changes; a mismatch rejects the change with `FixtureRegressionError`.
+- **Ledger** — one append-only row per verdict in `Functions/Verifications` (`record_verification`); the per-function summary is refolded from the rows for the current hash on every write, and `verify` is derived from it by `policy.derive_verify` — the only writer of that flag. `set_verification_policy` lets a librarian raise the bar for a function; nothing lowers it.
+
+Rows stored before the ledger existed are classified once on first read.
 
 ## Steerable Functions
 

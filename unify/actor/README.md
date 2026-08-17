@@ -13,6 +13,10 @@ A conversational actor that uses a stateful code execution sandbox. It operates 
 -   **Correction**: Reactive (requires user/LLM interjection).
 -   **Execution Model**: `LLM -> Execute Python Code -> LLM -> Execute Python Code ...`
 
+#### Symbolic runs and verification
+
+When `act()` is given an `entrypoint` (a stored function id, as `TaskScheduler.execute` does for a bound task), the CodeAct loop is bypassed and the function runs directly in the sandbox. Until every function in the entrypoint's closure is trusted, the run is supervised (`unify/actor/verification_runtime.py`): untrusted callables are wrapped with per-call verifier passes, effectful leaves wait for every earlier verdict, a failed verdict rewinds and repairs the blamed leaf and re-invokes the root with a memo so no effect repeats, and an unsettled verdict holds the run with an owner notification. Trust is earned from the ledger by policy and never granted by the librarian or the repair loop; a fully trusted closure runs bare. Every LLM client the actor creates is tagged with a `purpose` — `planning`, `verification` or `repair` — and the run's token split is recorded on the execution row.
+
 ## How to Run an Actor
 
 First, ensure you have the necessary setup:
