@@ -521,9 +521,30 @@ class SecretManager(BaseSecretManager):
             timeout=15,
         )
         if resp.status_code != 200:
+            logger.info(
+                "[workspace-policy] sync: agent_id=%s http=%s policies=unchanged",
+                agent_id,
+                resp.status_code,
+            )
             return
         info = resp.json().get("info") or {}
-        get_policy_store().set_policies(info.get("policies") or [])
+        policies = info.get("policies") or []
+        get_policy_store().set_policies(policies)
+        # This gate can drop files out of a listing and answer 404 for an item
+        # the user can see in their own drive UI, so what it is enforcing has to
+        # be legible after the fact. Without a line here the only evidence of a
+        # mask is the absence of a result, which reads identically to the
+        # provider having nothing to return.
+        logger.info(
+            "[workspace-policy] sync: agent_id=%s %s",
+            agent_id,
+            ", ".join(
+                f"{p.get('provider')}(default_allow={p.get('default_allow')},"
+                f"decisions={len(p.get('decisions') or ())})"
+                for p in policies
+            )
+            or "no policies (unrestricted)",
+        )
 
     def sync_assistant_secrets_if_stale(
         self,
