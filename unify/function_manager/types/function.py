@@ -4,6 +4,16 @@ from typing import List, Optional, Dict, Any, Literal
 from unify.common.authorship import AuthoredRow
 from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
+from .verification import (
+    ClassSource,
+    Fixture,
+    FunctionContract,
+    SideEffectClass,
+    StaticReviewRecord,
+    VerificationPolicy,
+    VerificationSummary,
+)
+
 
 class Function(AuthoredRow):
     """
@@ -88,14 +98,81 @@ class Function(AuthoredRow):
         json_schema_extra={"ui_editable": True},
     )
 
+    side_effect_class: SideEffectClass = Field(
+        SideEffectClass.unsafe_effectful,
+        description=(
+            "Effective effect class used by verification policy: safe_noop, "
+            "read_only, idempotent_effectful or unsafe_effectful. Equals the "
+            "detected lower bound unless a librarian confirmed a class."
+        ),
+    )
+    side_effect_class_detected: SideEffectClass = Field(
+        SideEffectClass.unsafe_effectful,
+        description=(
+            "Lower bound on the effect class derived deterministically from the "
+            "AST: the maximum over primitives called, dependencies' classes and "
+            "third-party imports."
+        ),
+    )
+    class_source: ClassSource = Field(
+        "inferred_third_party",
+        description=(
+            "Where the effective class came from: 'pure' (no I/O in the source), "
+            "'primitives' (from the primitives called), 'inferred_third_party' "
+            "(third-party imports raised the bound; treated as unsafe_effectful "
+            "until confirmed) or 'librarian' (a librarian confirmed it)."
+        ),
+    )
+    class_rationale: Optional[str] = Field(
+        None,
+        description="Rationale recorded when a librarian confirmed, raised or lowered the class.",
+    )
+    verification_policy: VerificationPolicy = Field(
+        default_factory=VerificationPolicy,
+        description="Librarian-set overrides that can only raise the trust bar.",
+    )
+    verified_hash: Optional[str] = Field(
+        None,
+        description=(
+            "Trust hash the ledger summary applies to (source, dependencies, venv "
+            "and language). None when the function has never been verified under "
+            "its current content."
+        ),
+    )
+    static_review: Optional[StaticReviewRecord] = Field(
+        None,
+        description="Cached static-review verdict for verified_hash.",
+    )
+    ledger: VerificationSummary = Field(
+        default_factory=VerificationSummary,
+        description="Fold of Functions/Verifications rows for verified_hash.",
+    )
+    contract: FunctionContract = Field(
+        default_factory=FunctionContract,
+        description="Tier-0 contract: input/output JSON schemas and postconditions.",
+    )
+    fixtures: List[Fixture] = Field(
+        default_factory=list,
+        description=(
+            "Recorded (args, result) pairs a safe_noop function must reproduce; "
+            "replayed whenever the trust hash changes."
+        ),
+    )
+
     verify: bool = Field(
         True,
         description=(
-            "Whether the function should be verified by the Actor upon completion. "
-            "If True, the Actor may check initial/final states or logs to ensure success. "
-            "If verification fails, the Actor may reimplement and overwrite the function in the 'Functions' store."
+            "Whether calls to this compositional function still run under "
+            "verification. Derived by the trust policy from the ledger — never "
+            "set by a tool, a prompt or the model that wrote the code. True "
+            "while the function is on the ramp; False once accumulated verdicts "
+            "for verified_hash meet the policy for its effect class. Any change "
+            "to source, dependencies, venv or linked guidance sets it back to "
+            "True. On primitive rows this field carries an unrelated meaning: "
+            "for integration primitives it is the confirmation-required flag "
+            "(confirmation_required, or a write/destructive/bulk_export action "
+            "class), and the ledger does not apply to primitives."
         ),
-        json_schema_extra={"ui_editable": True},
     )
 
     # Primitive-specific fields

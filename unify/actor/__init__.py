@@ -3,15 +3,11 @@ from importlib import import_module
 
 __all__ = [
     "CodeActActor",
-    "SingleFunctionActor",
-    "SingleFunctionActorHandle",
     "BaseCodeActActor",
 ]
 
 _lazy_map = {
     "CodeActActor": "unify.actor.code_act_actor",
-    "SingleFunctionActor": "unify.actor.single_function_actor",
-    "SingleFunctionActorHandle": "unify.actor.single_function_actor",
     "BaseCodeActActor": "unify.actor.base",
 }
 
@@ -29,5 +25,4 @@ def __dir__():
 
 if TYPE_CHECKING:
     from .code_act_actor import CodeActActor
-    from .single_function_actor import SingleFunctionActor, SingleFunctionActorHandle
     from .base import BaseCodeActActor

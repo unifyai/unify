@@ -764,11 +764,9 @@ def _populate_registry() -> None:
     # ─────────────────────────────────────────────────────────────────────────
     # Actor implementations
     # ─────────────────────────────────────────────────────────────────────────
-    from .actor.single_function_actor import SingleFunctionActor
     from .actor.code_act_actor import CodeActActor
     from .actor.simulated import SimulatedActor
 
-    ManagerRegistry.register_class("actor", "single_function", SingleFunctionActor)
     ManagerRegistry.register_class("actor", "code_act", CodeActActor)
     ManagerRegistry.register_class("actor", "simulated", SimulatedActor)
 

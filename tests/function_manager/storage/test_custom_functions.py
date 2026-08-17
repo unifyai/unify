@@ -33,7 +33,7 @@ async def example_add(a: int, b: int) -> int:
     \"\"\"Add two integers together.\"\"\"
     return a + b
 
-@custom_function(verify=False)
+@custom_function(precondition={"locale": "en"})
 async def example_uppercase(text: str) -> str:
     \"\"\"Convert text to uppercase.\"\"\"
     return text.upper()
@@ -134,8 +134,10 @@ def test_collect_custom_functions_has_required_fields(custom_functions_dir):
 
 def test_collect_custom_functions_respects_decorator_options(custom_functions_dir):
     functions = collect_custom_functions(directory=custom_functions_dir)
-    assert functions["example_add"]["verify"] is True
-    assert functions["example_uppercase"]["verify"] is False
+    assert functions["example_add"]["precondition"] is None
+    assert functions["example_uppercase"]["precondition"] == {"locale": "en"}
+    # Trust is derived from the verification ledger, never authored in source.
+    assert "verify" not in functions["example_add"]
 
 
 def test_compute_custom_functions_hash_is_deterministic(custom_functions_dir):

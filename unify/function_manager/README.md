@@ -336,7 +336,7 @@ These are always available (from `create_execution_globals()`):
 
 #### Injected by Actor at Runtime
 
-When functions are executed via an Actor (`CodeActActor`, `SingleFunctionActor`), additional objects are injected:
+When functions are executed via an Actor (`CodeActActor`), additional objects are injected:
 
 | Name | Description |
 |------|-------------|
@@ -380,7 +380,7 @@ async def research_contact(contact_name: str) -> str:
 
 ## Steerable Functions
 
-Compositional functions can optionally return a **steerable handle** instead of a final result. This allows the calling layer (e.g., `SingleFunctionActor`) to forward steering operations (interject, pause, stop) into the running function.
+Compositional functions can optionally return a **steerable handle** instead of a final result. This allows the calling layer (e.g., `CodeActActor`) to forward steering operations (interject, pause, stop) into the running function.
 
 ### What is a Steerable Function?
 

@@ -1,8 +1,10 @@
 # Plan: verified functions — earning the compiled steady state
 
-**Status:** specified, not started. Written against `staging` @ `5ec185ada`
-(2026-08-17). Line numbers below are approximate as of that commit; symbols
-are exact. Re-verify both before editing.
+**Status:** Phases 0–2 landed (schema, classification, ledger, policy,
+settings, backfill; tier-0 contracts, fixtures, boundary). Phases 3–9 in
+progress. Written against `staging` @ `5ec185ada` (2026-08-17). Line numbers
+below are approximate as of that commit; symbols are exact. Re-verify both
+before editing.
 
 **Thesis.** A recurring task's steady state is a stored function firing with
 no model in the loop. Today the harness reaches that state by one librarian

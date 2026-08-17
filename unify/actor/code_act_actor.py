@@ -58,6 +58,7 @@ from unify.common.act_llm_profiles import (
 from unify.common.llm_helpers import methods_to_tool_dict
 from unify.common.tool_spec import ToolSpec, llm_soft_required
 from unify.function_manager.base import BaseFunctionManager
+from unify.function_manager.function_manager import strip_ledger_internals
 from unify.function_manager.primitives import ComputerPrimitives
 from unify.actor.prompt_builders import build_code_act_prompt
 from unify.events.manager_event_logging import log_manager_call
@@ -3640,7 +3641,7 @@ class CodeActActor(BaseCodeActActor):
                     self._session_executor.register_fm_globals(
                         {k: sb.global_state[k] for k in new_keys},
                     )
-                return result["metadata"]
+                return strip_ledger_internals(result["metadata"])
 
             FunctionManager_filter_functions.__doc__ = (
                 BaseFunctionManager.filter_functions.__doc__

@@ -133,7 +133,6 @@ def _compute_function_hash(
     depends_on: List[str],
     venv_name: Optional[str],
     venv_id: Optional[int],
-    verify: bool,
     precondition: Optional[Dict[str, Any]],
     windows_os_required: bool = False,
 ) -> str:
@@ -154,7 +153,6 @@ def _compute_function_hash(
         "|".join(sorted(depends_on or [])),
         venv_name or "",
         str(venv_id) if venv_id is not None else "",
-        str(verify),
         json.dumps(precondition, sort_keys=True) if precondition else "",
         str(windows_os_required),
     ]
@@ -275,7 +273,7 @@ def collect_custom_functions(
     Returns:
         Dict mapping function name to metadata dict with keys:
         - name, argspec, docstring, implementation
-        - venv_name, venv_id, verify, precondition
+        - venv_name, venv_id, precondition
         - custom_hash, embedding_text, depends_on
         - is_primitive (always False), guidance_ids (always [])
         - windows_os_required
@@ -339,7 +337,6 @@ def collect_custom_functions(
             depends_on=deps,
             venv_name=metadata.venv_name,
             venv_id=metadata.venv_id,
-            verify=metadata.verify,
             precondition=metadata.precondition,
             windows_os_required=metadata.windows_os_required,
         )
@@ -357,7 +354,6 @@ def collect_custom_functions(
             "implementation": implementation,
             "venv_name": metadata.venv_name,
             "venv_id": metadata.venv_id,
-            "verify": metadata.verify,
             "precondition": metadata.precondition,
             "custom_hash": custom_hash,
             "embedding_text": embedding_text,
