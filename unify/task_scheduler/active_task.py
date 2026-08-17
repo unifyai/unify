@@ -444,9 +444,10 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         )
 
     def _verification_run_stats(self) -> dict[str, Any]:
-        """Verification accounting exposed by the inner entrypoint handle, if any."""
-        stats = getattr(self._actor_handle, "run_stats", None)
-        return dict(stats) if isinstance(stats, dict) else {}
+        """Verification and token accounting exposed by the inner handle, if any."""
+        from unify.common.llm_meter import handle_run_stats
+
+        return handle_run_stats(self._actor_handle)
 
     def _held_outcome(self) -> Any:
         return getattr(self._actor_handle, "held_outcome", None)
