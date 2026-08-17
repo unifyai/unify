@@ -865,12 +865,7 @@ def find_terminal_execution_for_task(
     """
 
     terminal_states = " or ".join(
-        f"state == '{state.value}'"
-        for state in (
-            ExecutionState.completed,
-            ExecutionState.failed,
-            ExecutionState.cancelled,
-        )
+        f"state == '{state.value}'" for state in ExecutionState if state.is_terminal
     )
     filter_clauses = [f"task_id == {int(task_id)}", f"({terminal_states})"]
     normalized_destination = _canonical_destination_or_none(destination)

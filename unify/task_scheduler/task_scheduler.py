@@ -1309,15 +1309,9 @@ class TaskScheduler(BaseTaskScheduler):
                 scheduler=self,
                 entrypoint=task.entrypoint,
                 entrypoint_kwargs=entrypoint_kwargs,
-                # Deployment-owned tasks (custom_hash set) are healed by
-                # bundle resync, never by LLM repair — including when the
-                # entrypoint row itself is missing, where the per-function
-                # ownership guard has nothing left to inspect.
-                entrypoint_repair_attempts=(
-                    1 if task.entrypoint is not None and not task.custom_hash else 0
-                ),
                 entrypoint_repair_context=(
                     {
+                        "task_name": task.name,
                         "task_run_context": entrypoint_kwargs.get(
                             "task_execution_context",
                             {},
@@ -1457,15 +1451,9 @@ class TaskScheduler(BaseTaskScheduler):
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            # Same ownership rule as the scheduled path: bundle-owned tasks
-            # never LLM-repair, even when the entrypoint row is gone.
-            entrypoint_repair_attempts=(
-                1
-                if definition.entrypoint is not None and not definition.custom_hash
-                else 0
-            ),
             entrypoint_repair_context=(
                 {
+                    "task_name": definition.name,
                     "task_run_context": entrypoint_kwargs.get(
                         "task_execution_context",
                         {},
