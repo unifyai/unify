@@ -1798,3 +1798,62 @@ class TestParticipantTimezones:
 
         rendered = {_get_current_time_in_timezone("Europe/London") for _ in range(5)}
         assert rendered == {"1:00 PM"}
+
+
+class TestCompletedTaskResponsePolicy:
+    """The author's delivery instruction has to reach the turn that can act on it."""
+
+    def test_response_policy_renders_beside_the_result(self, renderer):
+        """Without this the relay decision is taken with no statement of intent.
+
+        `response_policy` is written when the task is set up — "Deliver the
+        briefing as one chat message" — and used to be rendered only into the
+        actor's own request, which is the one place that cannot send chat. The
+        conversation turn that can send saw the result and nothing about what
+        was supposed to happen to it, and went both ways on identical inputs.
+        """
+        completed_actions = {
+            0: {
+                "handle": MagicMock(),
+                "query": "Scheduled task due now: 'Daily briefing' (task_id=1).",
+                "action_type": "task",
+                "task_description": "Compose and deliver the morning briefing.",
+                "response_policy": "Deliver the briefing as one chat message.",
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "## Today …",
+                        "success": True,
+                        "result": "## Today …",
+                    },
+                ],
+            },
+        }
+
+        result = renderer.render_completed_actions(completed_actions)
+
+        assert (
+            "<task_response_policy>Deliver the briefing as one chat message."
+            "</task_response_policy>" in result
+        )
+        assert "<result>## Today …</result>" in result
+
+    def test_absent_policy_renders_no_tag(self, renderer):
+        """An ordinary act carries no delivery contract and must not imply one."""
+        completed_actions = {
+            0: {
+                "handle": MagicMock(),
+                "query": "Look something up.",
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "Found it.",
+                        "success": True,
+                    },
+                ],
+            },
+        }
+
+        assert "<task_response_policy>" not in renderer.render_completed_actions(
+            completed_actions,
+        )
