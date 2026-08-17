@@ -51,6 +51,7 @@ from unify.common.task_execution_context import (
 )
 from unify.events.event_bus import EVENT_BUS, Event
 from unify.common.llm_client import new_llm_client
+from unify.common.llm_meter import RunMeter, current_run_meter, new_run_meter
 from unify.common.act_llm_profiles import (
     CURRENT_ACT_LLM_PROFILE,
     resolve_act_llm_profile,
@@ -456,9 +457,11 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         entrypoint_id: int,
         execution_task: asyncio.Task[Any],
         on_finally: Optional[Callable[[], Awaitable[None]]] = None,
+        meter: Optional[RunMeter] = None,
     ) -> None:
         self._entrypoint_id = int(entrypoint_id)
         self._execution_task = execution_task
+        self._meter = meter
         self._completion_event = asyncio.Event()
         self._result_str: Optional[str] = None
         self._error: Optional[BaseException] = None
@@ -485,6 +488,9 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
                     "verifier_tasks": int(out.verifier_tasks),
                     "held_reason": (
                         f"{out.held.code}: {out.held.reason}" if out.held else None
+                    ),
+                    "tokens": (
+                        self._meter.snapshot()["tokens"] if self._meter else None
                     ),
                 }
                 self._follow_up = out.follow_up
@@ -531,7 +537,7 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         _parent_chat_context: list[dict] | None = None,
     ) -> SteerableToolHandle:
         status = "completed" if self.done() else "still running"
-        client = new_llm_client()
+        client = new_llm_client(purpose="planning", origin="EntrypointHandle.ask")
         client.set_system_message(
             "You are an AI assistant answering a status question about an in-flight entrypoint execution. "
             "Be brief and factual.",
@@ -1758,7 +1764,7 @@ def _start_storage_check_loop(
         f"{original_result}"
     )
 
-    client = new_llm_client(actor._model)
+    client = new_llm_client(actor._model, purpose="planning", origin="StorageCheck")
     client.set_system_message(system_prompt)
 
     return start_async_tool_loop(
@@ -1883,7 +1889,7 @@ def _start_proactive_storage_loop(
         f"{trajectory_json}"
     )
 
-    client = new_llm_client(actor._model)
+    client = new_llm_client(actor._model, purpose="planning", origin="ProactiveStorage")
     client.set_system_message(system_prompt)
 
     return start_async_tool_loop(
@@ -1928,10 +1934,12 @@ class _StorageCheckHandle(SteerableToolHandle):
         inner: "AsyncToolLoopHandle",
         actor: "CodeActActor",
         post_run_review_context: PostRunReviewContext | None = None,
+        meter: Optional[RunMeter] = None,
     ) -> None:
         self._inner = inner
         self._actor = actor
         self._post_run_review_context = post_run_review_context
+        self._meter = meter
         self._notification_q: asyncio.Queue[dict] = asyncio.Queue()
         self._task_done_event = asyncio.Event()
         self._completion_event = asyncio.Event()
@@ -1945,6 +1953,13 @@ class _StorageCheckHandle(SteerableToolHandle):
 
         # Start the two-phase lifecycle manager.
         self._lifecycle_task = asyncio.create_task(self._run_lifecycle())
+
+    @property
+    def run_stats(self) -> dict[str, Any]:
+        """Token accounting for the execution row (planning tokens for an agentic run)."""
+        if self._meter is None:
+            return {}
+        return {"tokens": self._meter.snapshot()["tokens"]}
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -1994,6 +2009,9 @@ class _StorageCheckHandle(SteerableToolHandle):
 
     async def _run_lifecycle(self) -> None:
         """Manage the two-phase lifecycle: task -> storage check -> done."""
+        if self._meter is not None:
+            # The librarian's calls are planning tokens of this run.
+            current_run_meter.set(self._meter)
         try:
             # ── Phase 1: task execution ───────────────────────────────
             self._active_relay = asyncio.create_task(
@@ -2238,7 +2256,7 @@ class _StorageCheckHandle(SteerableToolHandle):
             "ask_about_skill_storage": ask_about_skill_storage,
         }
 
-        routing_client = new_llm_client()
+        routing_client = new_llm_client(purpose="planning", origin="StorageCheck.ask")
         routing_client.set_system_message(
             "You are answering a question about an agent that has completed "
             "its primary task and is now reviewing its execution trajectory "
@@ -5591,18 +5609,22 @@ class CodeActActor(BaseCodeActActor):
                     await asyncio.to_thread(_settle_ledger_and_promote)
                 return outcome
 
+            run_meter = new_run_meter()
             delegate_token = current_task_execution_delegate.set(
                 task_execution_delegate,
             )
+            meter_token = current_run_meter.set(run_meter)
             try:
                 entry_task = asyncio.create_task(_run_entrypoint())
                 entry_handle = _CodeActEntrypointHandle(
                     entrypoint_id=entrypoint_id,
                     execution_task=entry_task,
                     on_finally=_cleanup,
+                    meter=run_meter,
                 )
                 entry_handle_ref.append(entry_handle)
             finally:
+                current_run_meter.reset(meter_token)
                 current_task_execution_delegate.reset(delegate_token)
             return entry_handle
 
@@ -5788,7 +5810,12 @@ class CodeActActor(BaseCodeActActor):
         # Build an LLM client for this act() call. The profile is per-call so
         # concurrent runs on the same actor can use different models safely.
         client_model = act_llm_profile.model or self._model
-        client = new_llm_client(client_model, **act_llm_profile.client_kwargs)
+        client = new_llm_client(
+            client_model,
+            purpose="planning",
+            origin="CodeActActor.act",
+            **act_llm_profile.client_kwargs,
+        )
         if system_prompt:
             client.set_system_message(system_prompt)
 
@@ -5873,7 +5900,9 @@ class CodeActActor(BaseCodeActActor):
                 pass
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] starting async tool loop")
+        run_meter = new_run_meter()
         delegate_token = current_task_execution_delegate.set(task_execution_delegate)
+        meter_token = current_run_meter.set(run_meter)
         try:
             handle = start_async_tool_loop(
                 client,
@@ -5898,7 +5927,9 @@ class CodeActActor(BaseCodeActActor):
                 on_notify=_on_notify,
             )
         finally:
+            current_run_meter.reset(meter_token)
             current_task_execution_delegate.reset(delegate_token)
+        handle.run_meter = run_meter  # type: ignore[attr-defined]
         logger.debug(
             f"⏱️ [CodeActActor.act +{_act_ms()}] loop started, returning handle",
         )
@@ -5953,6 +5984,7 @@ class CodeActActor(BaseCodeActActor):
                 inner=handle,
                 actor=self,
                 post_run_review_context=post_run_review_context,
+                meter=run_meter,
             )
 
         return handle
