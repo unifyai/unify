@@ -86,6 +86,7 @@ from .types.verification import (
     Fixture,
     FunctionContract,
     SideEffectClass,
+    StaticReviewRecord,
     VerdictKind,
     VerificationRow,
     VerificationSummary,
@@ -3085,6 +3086,23 @@ class FunctionManager(BaseFunctionManager):
                 context=str(context) if context else None,
             ),
             what=f"Fixture capture for function {function_id}",
+        )
+
+    def persist_static_review_nowait(
+        self,
+        fn: Dict[str, Any],
+        record: StaticReviewRecord,
+    ) -> None:
+        """Persist a static-review verdict onto the row without awaiting the write."""
+        function_id = int(fn["function_id"])
+        context = fn.get("_context")
+        self._write_off_loop(
+            lambda: self._persist_verification_fields(
+                function_id=function_id,
+                fields={"static_review": record.model_dump(mode="json")},
+                context=str(context) if context else None,
+            ),
+            what=f"Static review write for function {function_id}",
         )
 
     def _tier0_checker(

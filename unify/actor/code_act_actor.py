@@ -61,6 +61,7 @@ from unify.function_manager.base import BaseFunctionManager
 from unify.function_manager.function_manager import strip_ledger_internals
 from unify.function_manager.primitives import ComputerPrimitives
 from unify.actor.prompt_builders import build_code_act_prompt
+from unify.actor.verification_runtime import run_probe
 from unify.events.manager_event_logging import log_manager_call
 from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
 from unify.common.hierarchical_logger import log_boundary_event
@@ -5024,46 +5025,6 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
-    @staticmethod
-    async def _run_repair_diagnostic_probe(code: str) -> str:
-        """Execute a short read-only Python diagnosis snippet in a fresh subprocess.
-
-        Use this to observe the CURRENT behavior of the external interfaces a
-        failing function reads — for example, fetch the endpoint it ingests
-        and print the response's shape, keys, and a sample record — so the
-        repair is grounded in observed reality rather than in assumptions or
-        in the function's own error messages. The snippet runs in a fresh
-        isolated interpreter with the standard library only and must print
-        its observations to stdout.
-
-        Strictly read-only diagnosis: fetch and inspect inputs only. Never
-        perform the failing function's side effects (no writes, deliveries,
-        or state mutations on external systems). Output is truncated after
-        20,000 characters; the subprocess is killed after 60 seconds.
-        """
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            "-c",
-            str(code),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        try:
-            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return "Probe timed out after 60 seconds and was killed."
-        output = raw.decode("utf-8", errors="replace")
-        if len(output) > 20_000:
-            output = output[:20_000] + "\n... (output truncated)"
-        return (
-            f"exit_code={proc.returncode}\n{output}"
-            if output.strip()
-            else f"exit_code={proc.returncode} (no output printed)"
-        )
-
     async def _repair_symbolic_entrypoint(
         self,
         *,
@@ -5122,7 +5083,7 @@ class CodeActActor(BaseCodeActActor):
             fm.get_function_venv,
             include_class_name=True,
         )
-        tools["run_diagnostic_probe"] = self._run_repair_diagnostic_probe
+        tools["run_diagnostic_probe"] = run_probe
         client = new_llm_client(self._model)
         client.set_system_message(
             "You are repairing a stored symbolic task executor. The contract "
