@@ -110,6 +110,22 @@ def _headers(provider: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _ms_probe_headers(drive_id: str) -> dict[str, str]:
+    """Probe headers that redeem a sharing link, as the forwarded request does.
+
+    Resolving a ``/shares`` item runs two separate calls: this access-check
+    probe, and then the forwarded request. Only the forwarded one carried the
+    redemption preference, so for any link the account had not already redeemed
+    the probe was refused, the refusal was returned as the answer, and the
+    request that would have redeemed the link never ran -- the check denying
+    precisely what it was checking. The two calls have to ask the same question.
+    """
+    headers = _headers("microsoft")
+    if drive_id.startswith("share:"):
+        headers["Prefer"] = "redeemSharingLinkIfNecessary"
+    return headers
+
+
 # ── Google ───────────────────────────────────────────────────────────────
 
 
@@ -188,7 +204,7 @@ async def ms_get(drive_id: str, item_id: str) -> dict[str, Any]:
         resp = await http.get(
             _ms_item_url(drive_id, item_id),
             params={"$select": "id,name,folder,file,parentReference,webUrl"},
-            headers=_headers("microsoft"),
+            headers=_ms_probe_headers(drive_id),
         )
     if resp.status_code == 404:
         raise WorkspaceFileNotFound(item_id)
@@ -223,7 +239,7 @@ async def ms_get_by_path(
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
         resp = await http.get(
             _ms_path_url(drive_id, anchor_item_id, path),
-            headers=_headers("microsoft"),
+            headers=_ms_probe_headers(drive_id),
         )
     if resp.status_code == 404:
         return None
@@ -268,6 +284,7 @@ async def ancestry_chain(
     current_drive = drive_id
     current_item = item_id
     seen: set[str] = set()
+    resolved_any = False
     for _ in range(_MAX_ANCESTRY_DEPTH):
         if not current_item or current_item in seen:
             break
@@ -276,6 +293,7 @@ async def ancestry_chain(
             node = await get_node(provider, current_drive, current_item)
         except WorkspaceFileNotFound:
             break
+        resolved_any = True
         resolved_drive = node.get("drive_id") or current_drive
         resolved_item = node.get("item_id") or current_item
         chain.append((resolved_drive or "", resolved_item))
@@ -285,8 +303,20 @@ async def ancestry_chain(
         current_drive = resolved_drive
         current_item = parent
 
-    with _CACHE_LOCK:
-        _ANCESTRY_CACHE[cache_key] = chain
+    if not chain and item_id:
+        # An item shared from another tenant cannot be addressed through the
+        # sending drive's id, so the very first hop fails and the walk ends
+        # before recording the item itself. An empty chain matches no decision
+        # at all, which leaves a legitimately shared item governed only by the
+        # provider default and makes an explicit Console allow on it unable to
+        # take effect. Standing in its own key keeps that decision reachable.
+        chain = [(drive_id or "", item_id)]
+
+    # Only a chain the provider actually answered is worth reusing: caching an
+    # unresolved walk turns one refusal into a decision that outlives it.
+    if resolved_any:
+        with _CACHE_LOCK:
+            _ANCESTRY_CACHE[cache_key] = chain
     return chain
 
 
