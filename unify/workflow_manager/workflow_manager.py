@@ -84,6 +84,65 @@ def _connect_phrase(unmet: List[Dict[str, Any]]) -> str:
     return " and ".join(parts)
 
 
+def _coerce_declared_type(value: Any, declared: str) -> Any:
+    """Return `value` as the type the manifest declares, or unchanged.
+
+    Nothing here guesses: an input that will not convert is passed through
+    untouched so the existing behaviour — and any error it produces — is
+    preserved rather than replaced by a validation failure at install time.
+    """
+
+    if declared == "number":
+        if isinstance(value, bool) or not isinstance(value, str):
+            return value
+        text = value.strip()
+        try:
+            return int(text) if text.lstrip("-").isdigit() else float(text)
+        except ValueError:
+            return value
+    if declared == "boolean" and isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        if text in {"false", "no", "off", "0"}:
+            return False
+    return value
+
+
+def _resolve_declared_params(
+    bundle: "WorkflowBundle",
+    params: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Apply the manifest's declared defaults and types to submitted params.
+
+    The schema has always declared `type: number` and `type: boolean`, and
+    nothing read either: presence of the required keys was the whole check, so
+    a number arrived as `""` and every default lived only in English help text
+    for a model to infer. A run then depended on that inference — one live
+    briefing received its `focus` as the two-character string `''`, which is
+    truthy, from a user who had set nothing.
+
+    Resolving here means the stored installation and the run request carry the
+    value the user effectively chose, so the same install behaves the same way
+    on every run instead of once per reading.
+    """
+
+    resolved: Dict[str, Any] = dict(params)
+    for name, spec in bundle.params_schema.items():
+        if not isinstance(spec, Mapping):
+            continue
+        declared = str(spec.get("type") or "").lower()
+        supplied = resolved.get(name)
+        # An empty string is how every surface spells "left blank", including
+        # a checkbox that was never touched; it is an absence, not a value.
+        if name not in resolved or supplied is None or supplied == "":
+            if "default" in spec:
+                resolved[name] = spec.get("default")
+            continue
+        resolved[name] = _coerce_declared_type(supplied, declared)
+    return resolved
+
+
 class WorkflowManager(BaseWorkflowManager):
     """Catalogue of available workflow bundles and their installations."""
 
@@ -578,7 +637,7 @@ class WorkflowManager(BaseWorkflowManager):
                     ),
                 },
             )
-        return dict(params)
+        return _resolve_declared_params(bundle, params)
 
     # ------------------------------------------------------------------ #
     # Public API                                                         #
