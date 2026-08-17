@@ -70,6 +70,7 @@ from unify.actor.verification_runtime import (
     VerifierPasses,
     closure_rows,
     install_wrappers,
+    rederive_trust,
     run_probe,
     run_verified_entrypoint,
 )
@@ -654,7 +655,6 @@ _DEFAULT_STORAGE_REVIEW_INSTRUCTIONS = (
     "Review the trajectory and store any reusable functions, "
     "compositional guidance, and durable knowledge claims."
 )
-MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS = 2
 
 
 def _signature_compatible_kwargs(
@@ -771,8 +771,9 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "dead exploratory `print`s, duplicated setup, or formatting noise, "
     "but never remove validation gates, recovery branches, or diagnostic "
     "logging that explains why a path returned early or returned empty. "
-    "Store non-executor helpers and guidance freely; offline executor "
-    "promotion requires separate certification.\n\n"
+    "Store non-executor helpers and guidance freely; a stored executor earns "
+    "trust from independent verification of its runs, and offline promotion "
+    "follows from that trust.\n\n"
     "### Async / event-loop safety in stored functions\n\n"
     "Offline TaskScheduler Jobs already own an event loop via "
     "`asyncio.run`. Nested `asyncio.run(...)` inside a sync helper then "
@@ -1351,9 +1352,7 @@ def _build_storage_tools(
 
     if task_entrypoint_review:
         attach_entrypoint = task_entrypoint_review.get("attach_entrypoint")
-        promote_entrypoint_offline = task_entrypoint_review.get(
-            "promote_entrypoint_offline",
-        )
+        promote_task_offline_hook = task_entrypoint_review.get("promote_task_offline")
         metadata = dict(task_entrypoint_review.get("metadata") or {})
         task_id = metadata.get("task_id")
         task_name = metadata.get("task_name") or metadata.get("name") or "the task"
@@ -1361,18 +1360,17 @@ def _build_storage_tools(
         async def attach_entrypoint_to_recurring_task(
             function_id: int,
             rationale: str,
-            equivalence_manifest: dict[str, Any] | None = None,
-            anti_oversimplification_checklist: dict[str, Any] | None = None,
         ) -> str:
-            """Record a stored FunctionManager entrypoint candidate for future runs.
+            """Bind a stored function as the executor of future runs of this task.
 
             Use this only after you have reviewed the completed trajectory and
             decided that the stored function captures a stable reusable procedure
-            that preserves the observed operational contract. Calling this tool
-            records the function as a symbolic executor candidate on future
-            non-terminal instances; it does not promote those instances to
-            offline delivery. Leaving the task description-driven is valid when
-            future runs still need broad planning or tool discovery.
+            that preserves the observed operational contract. Binding does not
+            grant trust: future runs execute the function under independent
+            verification, trust is earned from those verdicts, and offline
+            delivery follows once every function it calls is trusted. Leaving
+            the task description-driven is valid when future runs still need
+            broad planning or tool discovery.
             """
 
             if not callable(attach_entrypoint):
@@ -1406,190 +1404,39 @@ def _build_storage_tools(
                 attach_entrypoint(
                     function_id=int(function_id),
                     rationale=str(rationale),
-                    certification_metadata={
-                        "equivalence_manifest": equivalence_manifest or {},
-                        "anti_oversimplification_checklist": (
-                            anti_oversimplification_checklist or {}
-                        ),
-                    },
                 ),
             )
 
         attach_entrypoint_to_recurring_task.__doc__ += (
             f"\n\nCurrent task: {task_name} (task_id={task_id}). "
-            "The tool only patches future non-terminal instances; it never "
-            "rewrites the completed run or flips delivery to offline."
+            "The tool only patches future runs; it never rewrites the "
+            "completed run, grants trust, or flips delivery to offline."
         )
         tools["attach_entrypoint_to_recurring_task"] = (
             attach_entrypoint_to_recurring_task
         )
 
-        certification_revision_attempts = 0
+        async def promote_task_offline() -> str:
+            """Move this task to offline (headless) delivery if its executor is trusted.
 
-        async def submit_offline_certification_evidence(
-            function_id: int,
-            certification_evidence: dict[str, Any],
-            promotion_rationale: str | None = None,
-        ) -> str:
-            """Submit evidence for offline promotion of a symbolic task executor.
-
-            Purpose:
-            - Ask the scheduler-owned promotion gate whether a previously
-              recorded FunctionManager entrypoint is safe and equivalent enough
-              for future recurring task instances to run offline.
-            - Submit structured evidence only. This tool does not certify by
-              replaying work.
-
-            Hard semantic rule:
-            - This tool does not execute the entrypoint.
-            - Do not use this tool to execute the entrypoint, replay live task
-              steps, perform a dry-run, send messages, mutate external systems,
-              fetch fresh expensive data, or make verification calls. The tool
-              only passes evidence to the scheduler gate.
-
-            Use this tool only when all of the following are true:
-            - `attach_entrypoint_to_recurring_task(...)` has already recorded
-              the symbolic executor candidate for future non-terminal instances.
-            - You can provide complete evidence for the candidate's input,
-              equivalence, side-effect, idempotency, cost, failure, observability,
-              and managed-primitive contracts.
-            - The candidate preserves the live run's managed primitive surface
-              and operational behavior closely enough for offline delivery.
-
-            Do not use this tool when:
-            - The candidate is broad or still needs live planning, open-ended
-              tool discovery, or user clarification.
-            - Side effects are unclear, unsafe, not idempotent, or not covered
-              by a concrete contract.
-            - Verification would require token-heavy, costly, or effectful
-              replay.
-            - The function changes primitives, ordering, validation, recovery,
-              output shape, failure behavior, or external data sources.
-            - Evidence is incomplete or contradictory.
-
-            Required evidence shape:
-            `certification_evidence` must include:
-            - `risk_classification`: one of `safe_noop`, `read_only`,
-              `idempotent_effectful`, or `unsafe_effectful`.
-            - `input_contract`: required runtime inputs and how future offline
-              runs provide them.
-            - `equivalence_contract`: mapping from the live task steps to the
-              stored function paths, including result shape.
-            - `managed_primitive_contract`: managed surfaces used by the live
-              run and the candidate. It must include `preserved=True` and no
-              `ad_hoc_replacements`.
-            - `side_effect_contract`: side effects, ordering, and duplicate-run
-              behavior.
-            - `idempotency_contract`: why repeated/offline execution is safe or
-              how duplicate effects are prevented.
-            - `cost_contract`: bounded token/network/runtime cost. Include
-              `bounded=True`.
-            - `failure_contract`: preserved blocker, retry, validation, and
-              recovery behavior.
-            - `observability_contract`: what the offline run logs or returns so
-              failures remain diagnosable.
-            - `attestations`: booleans confirming no hardcoded live observations,
-              no removed validation gates, no reordered side effects, no
-              discarded recovery branches, no static runtime assumptions, and no
-              ad hoc replacement of managed primitives.
-
-            Managed primitive preservation rule:
-            - Replacing live primitives with ad hoc logic is not equivalent and
-              is not acceptable. For example, replacing `primitives.web.ask(...)`
-              with custom `urllib` scraping, replacing contact/task/knowledge
-              primitives with direct storage pokes, or bypassing validation and
-              recovery primitives with local shortcuts must fail certification.
-            - Positive pattern: wrap the same primitive sequence with stable
-              parameters, expose only genuinely variable inputs, preserve side
-              effect ordering, keep validation/recovery branches, and leave
-              managed surfaces under their manager-owned primitives.
-            - Antipatterns: hardcoding observations from the live run, flattening
-              a multi-step primitive sequence into one request, using raw
-              HTTP/storage access instead of manager APIs, dropping blocker
-              handling, changing output shape, hiding side effects in helpers, or
-              swapping in cheaper but behaviorally different data sources.
-
-            Feedback and retries:
-            - Rejection returns structured reasons. Use them to revise the stored
-              function candidate or evidence, then resubmit only within the
-              bounded review budget.
-            - This post-run review allows at most two certification evidence
-              submissions. When the budget is exhausted, leave future instances
-              live. The symbolic candidate may remain recorded only if it is
-              still useful as a helper.
-
-            Fail-closed behavior:
-            - Missing, contradictory, unsafe, high-risk, or primitive-changing
-              evidence is rejected. Rejection never promotes offline delivery.
+            Eligibility is read from the verification ledger: the task must
+            have a bound entrypoint and every function in that entrypoint's
+            transitive closure must have earned trust (verify=False). This
+            tool never grants trust and takes no evidence; when the closure is
+            not yet trusted it reports which function ids still stand in the
+            way. Promotion also happens automatically at the end of the run in
+            which the last member of the closure earns trust, so calling this
+            is only needed to promote a task whose closure was already trusted.
             """
 
-            nonlocal certification_revision_attempts
-            if not callable(promote_entrypoint_offline):
+            if not callable(promote_task_offline_hook):
                 return "No task offline-promotion hook is available."
-            if (
-                certification_revision_attempts
-                >= MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
-            ):
-                return str(
-                    {
-                        "outcome": "certification_revision_attempts_exhausted",
-                        "task_id": task_id,
-                        "function_id": int(function_id),
-                        "max_revision_attempts": (
-                            MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
-                        ),
-                        "next_action": (
-                            "Leave future instances live unless a later task "
-                            "run produces a better candidate."
-                        ),
-                    },
-                )
+            return str(promote_task_offline_hook())
 
-            certification_revision_attempts += 1
-            certification_metadata = {
-                "certification_evidence": certification_evidence,
-                "promotion_rationale": promotion_rationale or "",
-                "certification_attempt": certification_revision_attempts,
-                "max_revision_attempts": (MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS),
-            }
-            certification_result = {
-                "evidence_based": True,
-                "executed_entrypoint": False,
-                "attempt": certification_revision_attempts,
-                "max_revision_attempts": (MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS),
-            }
-            outcome = promote_entrypoint_offline(
-                function_id=int(function_id),
-                certification_metadata=certification_metadata,
-                certification_result=certification_result,
-            )
-            remaining_attempts = max(
-                0,
-                MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
-                - certification_revision_attempts,
-            )
-            outcome["certification_attempt"] = certification_revision_attempts
-            outcome["remaining_revision_attempts"] = remaining_attempts
-            if outcome.get("outcome") == "certification_rejected":
-                outcome["feedback"] = (
-                    "Use rejection_reasons to revise the candidate function or "
-                    "evidence. Do not execute the candidate through certification."
-                )
-                if remaining_attempts == 0:
-                    outcome["certification_feedback_status"] = (
-                        "revision_attempts_exhausted"
-                    )
-                    outcome["next_action"] = "Keep future task instances live."
-            return str(outcome)
-
-        submit_offline_certification_evidence.__doc__ += (
-            f"\n\nCurrent task: {task_name} (task_id={task_id}). "
-            "This tool may patch future non-terminal instances to offline "
-            "delivery only after evidence-based certification passes."
+        promote_task_offline.__doc__ += (
+            f"\n\nCurrent task: {task_name} (task_id={task_id})."
         )
-        tools["submit_offline_certification_evidence"] = (
-            submit_offline_certification_evidence
-        )
+        tools["promote_task_offline"] = promote_task_offline
 
     return tools, storage_active_lines, dormant_lines
 
@@ -1758,37 +1605,29 @@ def _start_storage_check_loop(
             "source selection.\n\n"
             "If you store a FunctionManager function and decide it is a stable "
             "candidate for future runs, call "
-            "`attach_entrypoint_to_recurring_task(function_id=..., "
-            "rationale=..., equivalence_manifest=..., "
-            "anti_oversimplification_checklist=...)`. Calling that tool records "
-            "a symbolic executor candidate on future non-terminal instances; it "
-            "does not promote them to offline delivery. Do not call it unless "
-            "the function has already been persisted and you have the numeric "
-            "function_id.\n\n"
-            "Executor candidates require an equivalence manifest. Include: "
-            "required inputs; managed primitives/helpers/managers used; external "
-            "capabilities; side effects and ordering; expected result shape; "
-            "failure semantics; and a live-step to function-code-path mapping. "
-            "The anti-oversimplification checklist must confirm there are no "
-            "hardcoded observations from live tool results unless they are true "
-            "task constants, no removed validation gates, no reordered side "
-            "effects, no discarded recovery branches, and no replacement of "
+            "`attach_entrypoint_to_recurring_task(function_id=..., rationale=...)`. "
+            "Binding records the function as the executor of future runs; it "
+            "does not grant trust and does not promote the task to offline "
+            "delivery. Do not call it unless the function has already been "
+            "persisted and you have the numeric function_id.\n\n"
+            "An executor candidate must preserve the observed live execution "
+            "chain: the managed primitives and helpers used, the side effects "
+            "and their ordering, the result shape, and the failure semantics. "
+            "It must not hardcode observations from live tool results unless "
+            "they are true task constants, remove validation gates, reorder "
+            "side effects, discard recovery branches, or replace "
             "runtime-dependent decisions with static assumptions. If the "
             "candidate materially changes primitives, inputs, ordering, or "
             "failure behavior, store it as a helper/guidance only and do not "
-            "record it as the task executor candidate.\n\n"
-            "Offline promotion is a separate evidence-based certification "
-            "decision. Only call `submit_offline_certification_evidence(...)` "
-            "after the candidate is recorded and you can provide complete "
-            "evidence for equivalence, inputs, side effects, idempotency, cost, "
-            "failure behavior, observability, and managed primitive "
-            "preservation. The certification tool does not execute the "
-            "entrypoint or replay live task steps. Replacing managed primitives "
-            "with ad hoc logic is not equivalent: for example, do not replace "
-            "`primitives.web.ask(...)` with custom scraping or manager-owned "
-            "primitives with raw storage/HTTP shortcuts. Failed certification "
-            "keeps future runs live while preserving the stored artifact for "
-            "reuse.\n\n"
+            "bind it.\n\n"
+            "Trust and offline delivery are earned, not attested. Once bound, "
+            "the function runs under independent verification: each call is "
+            "checked before and after it runs, verdicts accumulate on the "
+            "function's ledger, and the function is trusted only when the "
+            "policy for its effect class is met. When every function the "
+            "entrypoint calls is trusted, the task is promoted to offline "
+            "delivery automatically; `promote_task_offline()` only re-checks "
+            "that eligibility. There is no evidence to submit.\n\n"
             "Task metadata:\n"
             f"```json\n{metadata_json}\n```\n\n"
         )
@@ -5524,7 +5363,15 @@ class CodeActActor(BaseCodeActActor):
                     raise ValueError(
                         f"Entrypoint {entrypoint_id} has no valid function name.",
                     )
-                return root_row, closure_rows(fm, root_row)
+                closure = closure_rows(fm, root_row)
+                # The stored flag can lag a change elsewhere in the closure;
+                # the run sees the derived value.
+                rederive_trust(fm, closure, settings=verification_settings)
+                root_row["verify"] = closure[str(fn_name)]["verify"]
+                last_closure_ids[0] = [
+                    int(row["function_id"]) for row in closure.values()
+                ]
+                return root_row, closure
 
             async def _invoke_root(
                 rows_by_name: dict[str, dict[str, Any]],
@@ -5599,13 +5446,37 @@ class CodeActActor(BaseCodeActActor):
                 )
 
             entry_handle_ref: list[Any] = []
+            last_closure_ids: list[list[int]] = [[]]
 
             async def _notify_owner(message: str) -> None:
                 if entry_handle_ref:
                     await entry_handle_ref[0].push_notification(message)
 
+            def _settle_ledger_and_promote() -> None:
+                """Fold this run's verdicts synchronously; promote the task if its closure is trusted."""
+                closure_ids = list(last_closure_ids[0])
+                all_trusted = bool(closure_ids)
+                for function_id in closure_ids:
+                    if fm.refresh_trust(function_id) is not False:
+                        all_trusted = False
+                if (
+                    not verification_settings.auto_promote_offline
+                    or task_id_value is None
+                    or not all_trusted
+                ):
+                    return
+                from unify.manager_registry import ManagerRegistry
+
+                scheduler = ManagerRegistry.get_task_scheduler()
+                try:
+                    scheduler.promote_task_offline(task_id=int(task_id_value))
+                except ValueError:
+                    # The run's task_id does not name a definition this
+                    # scheduler holds (ad hoc entrypoint runs); nothing to promote.
+                    return
+
             async def _run_entrypoint() -> EntrypointOutcome:
-                return await run_verified_entrypoint(
+                outcome = await run_verified_entrypoint(
                     settings=verification_settings,
                     task_name=task_name,
                     resolve=_resolve_closure,
@@ -5614,6 +5485,9 @@ class CodeActActor(BaseCodeActActor):
                     repair=_repair,
                     notify=_notify_owner,
                 )
+                if outcome.held is None and outcome.follow_up is None:
+                    await asyncio.to_thread(_settle_ledger_and_promote)
+                return outcome
 
             delegate_token = current_task_execution_delegate.set(
                 task_execution_delegate,

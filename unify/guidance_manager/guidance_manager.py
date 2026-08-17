@@ -794,7 +794,21 @@ class GuidanceManager(BaseGuidanceManager):
             entries=updates,
             overwrite=True,
         )
+        self._invalidate_linked_function_trust(guidance_id)
         return {"outcome": "guidance updated", "details": {"guidance_id": guidance_id}}
+
+    def _invalidate_linked_function_trust(self, guidance_id: int) -> None:
+        """A guidance entry a function is linked to changed: the function re-earns trust.
+
+        The linked function baked this entry's rule into its implementation,
+        so an edit or removal is a content change for the function even
+        though its source did not move.
+        """
+        from unify.function_manager.function_manager import FunctionManager
+
+        fm = ManagerRegistry.get_function_manager()
+        if isinstance(fm, FunctionManager):
+            fm.invalidate_trust_for_guidance(int(guidance_id))
 
     # ─────────────────────────── Functions helpers ───────────────────────────
     def _functions_context(self) -> str:
@@ -910,6 +924,9 @@ class GuidanceManager(BaseGuidanceManager):
             raise RuntimeError(
                 f"Multiple rows found with guidance_id {guidance_id}. Data integrity issue.",
             )
+        # Invalidate while the inverse links still exist; the delete cascades
+        # guidance_ids off the function rows.
+        self._invalidate_linked_function_trust(guidance_id)
         unisdk.delete_logs(context=context, logs=ids[0])
         return {"outcome": "guidance deleted", "details": {"guidance_id": guidance_id}}
 

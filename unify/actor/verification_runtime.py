@@ -285,7 +285,12 @@ class VerifierPasses:
         if self.gm is None:
             return []
         entries: List[Dict[str, Any]] = []
-        for guidance_id in row.get("guidance_ids") or []:
+        linked = list(row.get("guidance_ids") or [])
+        if not linked and row.get("function_id") is not None:
+            linked = self.fm._get_guidance_ids_for_function(
+                function_id=int(row["function_id"]),
+            )
+        for guidance_id in linked:
             gid = int(guidance_id)
             if gid not in self._guidance_cache:
                 try:
@@ -626,6 +631,7 @@ __all__ = [
 import concurrent.futures
 import functools
 import inspect
+import random
 import threading
 import traceback
 from collections import OrderedDict
@@ -789,6 +795,9 @@ class PendingVerdict:
     call_id: int
     future: concurrent.futures.Future
     verdict: Optional[Verdict] = None
+    # A spot check on a trusted function informs — it never gates a later
+    # effect and never rewinds; a FAIL invalidates trust and tells the owner.
+    blocking: bool = True
 
     @property
     def landed(self) -> bool:
@@ -941,6 +950,9 @@ class RunVerificationSupervisor:
         self._entry_task: Optional["asyncio.Task[Any]"] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = threading.Lock()
+        # Called with (pending, verdict) when a spot check on a trusted
+        # function fails; installed by the run so the owner hears about it.
+        self.on_spot_check_fail = None
 
     # ---- attempt lifecycle ---------------------------------------------
 
@@ -998,6 +1010,7 @@ class RunVerificationSupervisor:
         kwargs: Mapping[str, Any],
         call_id: int,
         factory,
+        blocking: bool = True,
     ) -> PendingVerdict:
         """Start a verifier pass as a background verdict, in call order."""
         with self._lock:
@@ -1017,6 +1030,7 @@ class RunVerificationSupervisor:
             kwargs=dict(kwargs),
             call_id=call_id,
             future=future,
+            blocking=blocking,
         )
         with self._lock:
             self.verdicts[ordinal] = pending
@@ -1050,7 +1064,10 @@ class RunVerificationSupervisor:
             self.pending.pop(pending.ordinal, None)
             self.landed.append(pending)
         if verdict.verdict == "FAIL":
-            self.fail(verdict, pending.frame, pending.row, ordinal=pending.ordinal)
+            if pending.blocking:
+                self.fail(verdict, pending.frame, pending.row, ordinal=pending.ordinal)
+            elif self.on_spot_check_fail is not None:
+                self.on_spot_check_fail(pending, verdict)
         self._maybe_memoise(pending.call_id)
 
     def note_sync_verdict(self, pending_like: PendingVerdict, verdict: Verdict) -> None:
@@ -1172,7 +1189,7 @@ class RunVerificationSupervisor:
             return [
                 p
                 for o, p in self.verdicts.items()
-                if before_ordinal is None or o < before_ordinal
+                if p.blocking and (before_ordinal is None or o < before_ordinal)
             ]
 
     def _outstanding(self) -> List[PendingVerdict]:
@@ -1768,6 +1785,119 @@ def memoised_call(
     return _sync
 
 
+def spot_checked_call(
+    fn: Any,
+    *,
+    row: Dict[str, Any],
+    supervisor: RunVerificationSupervisor,
+    rate: float,
+) -> Any:
+    """Memoise a trusted effectful function and sample its calls for a post probe.
+
+    The probe never gates anything and never rewinds: a FAIL puts the
+    function back on the ramp and tells the owner what was seen.
+    """
+    memoised = memoised_call(fn, row=row, supervisor=supervisor)
+    raw = getattr(fn, "__wrapped__", None)
+    signature = None
+    if raw is not None:
+        try:
+            signature = inspect.signature(raw)
+        except (TypeError, ValueError):
+            signature = None
+    if signature is None:
+        signature = signature_from_source(row.get("implementation"))
+    name = str(row.get("name"))
+    klass = _row_class(row)
+
+    def _maybe_probe(
+        args: tuple,
+        kwargs: Mapping[str, Any],
+        result: Any,
+        start: int,
+    ) -> None:
+        if random.random() >= rate:
+            return
+        named = bind_call_kwargs(signature, args, kwargs)
+        if named is None:
+            named = dict(kwargs)
+        site = locate_call_site()
+        frame = Frame(
+            function_id=int(row["function_id"]),
+            name=name,
+            docstring=str(row.get("docstring") or ""),
+            effect_class=klass.value,
+            call_site_line=site.line_text or "",
+            args_repr=json.dumps(
+                _clip(dict(named), 1000),
+                default=str,
+                ensure_ascii=False,
+            ),
+        )
+        frames = (*current_verification_frames.get(), frame)
+        passes = supervisor.passes
+        stable = passes.stable_block(
+            row,
+            frames=frames,
+            call_site=site,
+            root_row=supervisor.root_row,
+        )
+        interactions = list(supervisor.interactions[start:])
+        siblings = list(supervisor.sibling_results)
+        call_id = supervisor.new_call(
+            row=row,
+            args_signature=args_signature(named),
+            effectful=True,
+        )
+        supervisor.launch(
+            kind=VerdictKind.spot_check,
+            frame=frame,
+            row=row,
+            kwargs=named,
+            call_id=call_id,
+            blocking=False,
+            factory=lambda: passes.post_probe(
+                row,
+                kwargs=named,
+                result=result,
+                stable_block=stable,
+                call_site=site.label,
+                sibling_results=siblings,
+                interactions=interactions,
+                kind=VerdictKind.spot_check,
+            ),
+        )
+
+    target = raw if callable(raw) else fn
+    if raw is not None and inspect.iscoroutinefunction(raw):
+
+        @functools.wraps(target)
+        async def _async(*args: Any, **kwargs: Any) -> Any:
+            start = len(supervisor.interactions)
+            result = await memoised(*args, **kwargs)
+            _maybe_probe(args, kwargs, result, start)
+            return result
+
+        return _async
+
+    @functools.wraps(target)
+    def _sync(*args: Any, **kwargs: Any) -> Any:
+        start = len(supervisor.interactions)
+        result = memoised(*args, **kwargs)
+        if inspect.isawaitable(result):
+
+            async def _finish() -> Any:
+                value = await result
+                _maybe_probe(args, kwargs, value, start)
+                return value
+
+            return _finish()
+        _maybe_probe(args, kwargs, result, start)
+        return result
+
+    return _sync
+
+
 def install_wrappers(
     namespace: Dict[str, Any],
     *,
@@ -1775,6 +1905,8 @@ def install_wrappers(
     supervisor: RunVerificationSupervisor,
 ) -> int:
     """Replace closure callables in ``namespace``; returns how many were verified-wrapped."""
+    from unify.function_manager.verification.policy import spot_check_rate
+
     wrapped = 0
     for name, row in rows_by_name.items():
         fn = namespace.get(name)
@@ -1784,7 +1916,16 @@ def install_wrappers(
             namespace[name] = verified_call(fn, row=row, supervisor=supervisor)
             wrapped += 1
         else:
-            namespace[name] = memoised_call(fn, row=row, supervisor=supervisor)
+            rate = spot_check_rate(row, supervisor.settings)
+            if rate > 0:
+                namespace[name] = spot_checked_call(
+                    fn,
+                    row=row,
+                    supervisor=supervisor,
+                    rate=rate,
+                )
+            else:
+                namespace[name] = memoised_call(fn, row=row, supervisor=supervisor)
     primitives = namespace.get("primitives")
     if primitives is not None:
         namespace["primitives"] = InteractionRecorder(
@@ -1798,11 +1939,17 @@ def closure_rows(
     function_manager: Any,
     root_row: Mapping[str, Any],
 ) -> Dict[str, Dict[str, Any]]:
-    """Rows of the root and every compositional function it depends on, transitively."""
-    rows: Dict[str, Dict[str, Any]] = {str(root_row["name"]): dict(root_row)}
+    """Full rows of the root and every compositional function it depends on, transitively.
+
+    Catalogue reads strip ledger internals, so the root is re-read by name to
+    get the row the trust policy needs.
+    """
+    root_name = str(root_row["name"])
+    full_root = function_manager._get_function_data_by_name(name=root_name)
+    rows: Dict[str, Dict[str, Any]] = {root_name: dict(full_root or root_row)}
     queue = [
         d
-        for d in (root_row.get("depends_on") or [])
+        for d in (rows[root_name].get("depends_on") or [])
         if isinstance(d, str) and "." not in d
     ]
     while queue:
@@ -1823,6 +1970,56 @@ def closure_rows(
 
 def closure_is_trusted(rows_by_name: Mapping[str, Mapping[str, Any]]) -> bool:
     return all(not row.get("verify", True) for row in rows_by_name.values())
+
+
+def closure_needs_supervision(
+    rows_by_name: Mapping[str, Mapping[str, Any]],
+    settings: Any,
+) -> bool:
+    """Whether a run over this closure needs a supervisor at all.
+
+    Untrusted members do; so does a trusted effectful member without an
+    output contract, because its calls are sampled for spot checks.
+    """
+    from unify.function_manager.verification.policy import spot_check_rate
+
+    for row in rows_by_name.values():
+        if row.get("verify", True):
+            return True
+        if spot_check_rate(row, settings) > 0:
+            return True
+    return False
+
+
+def rederive_trust(
+    function_manager: Any,
+    rows_by_name: Dict[str, Dict[str, Any]],
+    *,
+    settings: Any,
+) -> None:
+    """Recompute ``verify`` for every closure row from its ledger and current content.
+
+    The stored flag can lag a content change elsewhere in the closure; the
+    run must see the derived value, and a row whose stored trust no longer
+    holds is refolded so the store catches up.
+    """
+    from unify.function_manager.verification.ledger import function_trust_hash
+    from unify.function_manager.verification.policy import derive_verify
+
+    for name, row in rows_by_name.items():
+        if row.get("is_primitive"):
+            continue
+        current = function_trust_hash(
+            row,
+            resolve_row=lambda dep, _rows=rows_by_name: _rows.get(dep)
+            or function_manager._get_function_data_by_name(name=dep),
+            resolve_venv=lambda venv_id: function_manager.get_venv(venv_id=venv_id),
+        )
+        derived = derive_verify(row, settings=settings, current_hash=current)
+        stored = bool(row.get("verify", True))
+        row["verify"] = derived
+        if derived != stored:
+            function_manager.refresh_trust(int(row["function_id"]))
 
 
 def held_message(task_name: str, outcome: HeldOutcome) -> str:
@@ -1934,6 +2131,19 @@ async def run_verified_entrypoint(
     repair_counts: Dict[str, int] = {}
     delivered_early = False
     memo: Dict[tuple, Any] = {}
+    spot_check_failures: List[tuple[PendingVerdict, Verdict]] = []
+
+    async def _settle_spot_checks(fm: Any) -> None:
+        """A failed spot check puts the function back on the ramp and tells the owner."""
+        while spot_check_failures:
+            pending, verdict = spot_check_failures.pop(0)
+            fm.invalidate_trust([int(pending.row["function_id"])])
+            if notify is not None:
+                await notify(
+                    f"Spot check of {task_name}: {pending.frame.name} ran but failed "
+                    f"verification afterwards ({verdict.reason}). It was not repeated; "
+                    "the function is back under verification until it earns trust again.",
+                )
 
     async def _repair_for(rewind: RewindRequested) -> Optional[HeldOutcome]:
         """Repair the rewind's target, escalating one frame on a repeat; None on success."""
@@ -1972,7 +2182,7 @@ async def run_verified_entrypoint(
     for attempt in range(1, max_attempts + 1):
         outcome.attempts = attempt
         root_row, rows_by_name = resolve()
-        if closure_is_trusted(rows_by_name):
+        if not closure_needs_supervision(rows_by_name, settings):
             try:
                 outcome.result = await invoke(rows_by_name, None)
                 return outcome
@@ -2012,6 +2222,11 @@ async def run_verified_entrypoint(
         loop = asyncio.get_running_loop()
         entry_task = asyncio.current_task()
         supervisor.begin_attempt(entry_task, loop)  # type: ignore[arg-type]
+        supervisor.on_spot_check_fail = (
+            lambda pending, verdict: spot_check_failures.append(
+                (pending, verdict),
+            )
+        )
         rewind: Optional[RewindRequested] = None
         try:
             result = await invoke(rows_by_name, supervisor)
@@ -2097,6 +2312,7 @@ async def run_verified_entrypoint(
 
             await supervisor.drain()
             outcome.verifier_tasks += supervisor.tasks_created
+            await _settle_spot_checks(passes.fm)
             if supervisor.rewind is None:
                 outcome.result = result
                 return outcome

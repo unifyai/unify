@@ -29,12 +29,14 @@ class StaleReason(BaseModel):
     records alone.
     """
 
-    kind: Literal["missing_dependency"] = Field(
+    kind: Literal["missing_dependency", "guidance_changed"] = Field(
         "missing_dependency",
         description=(
-            "Link-debt class. Today only ``missing_dependency`` — the "
-            "referenced dependee was deleted, renamed, or otherwise no "
-            "longer resolves."
+            "Link-debt class. ``missing_dependency`` — the referenced "
+            "dependee was deleted, renamed, or otherwise no longer resolves. "
+            "``guidance_changed`` — a guidance entry a function is linked to "
+            "was updated or deleted, so the function's earned trust was "
+            "invalidated and its linkage should be re-checked."
         ),
     )
     dep_kind: DepKind = Field(

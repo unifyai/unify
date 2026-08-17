@@ -128,46 +128,105 @@ def _classify(fm: FunctionManager, name: str, klass: str) -> None:
 
 
 def _trust(fm: FunctionManager, name: str) -> None:
-    fid = fm._get_function_data_by_name(name=name)["function_id"]
-    fm._persist_verification_fields(function_id=fid, fields={"verify": False})
+    """Earn trust for ``name`` the only way it can be earned: with ledger evidence."""
+    from unify.function_manager.types.verification import (
+        StaticReviewRecord,
+        VerdictKind,
+        VerificationRow,
+    )
+    from unify.function_manager.verification.policy import (
+        min_distinct_inputs,
+        required_passes,
+    )
+
+    row = fm._get_function_data_by_name(name=name)
+    fid = int(row["function_id"])
+    current = fm.function_trust_hash(row)
+    fm._persist_verification_fields(
+        function_id=fid,
+        fields={
+            "static_review": StaticReviewRecord(
+                verdict="PASS",
+                reason="test",
+                function_hash=current,
+            ).model_dump(mode="json"),
+        },
+    )
+    settings = fm.verification_settings
+    needed = required_passes(row, settings)
+    inputs = max(1, min_distinct_inputs(row, settings))
+    kinds = [VerdictKind.args, VerdictKind.post] if needed > 0 else [VerdictKind.tier0]
+    for i in range(max(needed, 1)):
+        for kind in kinds:
+            fm.record_verification(
+                VerificationRow(
+                    function_id=fid,
+                    function_hash=current,
+                    kind=kind,
+                    verdict="PASS",
+                    args_signature=f"seed{i % inputs}",
+                ),
+            )
+    assert fm._get_function_data_by_name(name=name)["verify"] is False
 
 
 class PassStubs:
     """Controllable verdicts per (pass, function name); everything else passes."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, record: bool = False) -> None:
         self.calls: list[tuple[str, str]] = []
         self.plan: dict[tuple[str, str], list] = {}
         self.gates: dict[tuple[str, str], Gate] = {}
+        # When set, verdicts are written to the ledger like a real pass would.
+        self.record = record
 
     def install(self, monkeypatch) -> None:
         stubs = self
 
-        async def _run(kind: str, row: dict) -> Verdict:
+        async def _run(
+            passes,
+            kind: str,
+            row: dict,
+            kwargs=None,
+            verdict_kind=None,
+        ) -> Verdict:
             key = (kind, str(row.get("name")))
             stubs.calls.append(key)
             gate = stubs.gates.get(key)
             if gate is not None:
                 await gate.wait()
             queue = stubs.plan.get(key)
+            verdict = Verdict(verdict="PASS", reason="stub")
             if queue:
                 verdict = queue.pop(0)
                 if isinstance(verdict, BaseException):
                     raise verdict
-                return verdict
-            return Verdict(verdict="PASS", reason="stub")
+            if stubs.record:
+                from unify.actor.verification_runtime import PassUsage
+                from unify.function_manager.types.verification import VerdictKind
+
+                passes._record(
+                    row,
+                    kind=verdict_kind or VerdictKind(kind),
+                    verdict=verdict,
+                    call_site="root",
+                    kwargs=kwargs,
+                    usage=PassUsage(),
+                    wall_ms=0,
+                )
+            return verdict
 
         async def static_review(self, row):
-            return await _run("static", row)
+            return await _run(self, "static", row)
 
-        async def args_review(self, row, **kwargs):
-            return await _run("args", row)
+        async def args_review(self, row, *, kwargs=None, **_):
+            return await _run(self, "args", row, kwargs)
 
-        async def precondition_probe(self, row, **kwargs):
-            return await _run("precondition", row)
+        async def precondition_probe(self, row, *, kwargs=None, **_):
+            return await _run(self, "precondition", row, kwargs)
 
-        async def post_probe(self, row, **kwargs):
-            return await _run("post", row)
+        async def post_probe(self, row, *, kwargs=None, kind=None, **_):
+            return await _run(self, "post", row, kwargs, verdict_kind=kind)
 
         monkeypatch.setattr(VerifierPasses, "static_review", static_review)
         monkeypatch.setattr(VerifierPasses, "args_review", args_review)
@@ -567,3 +626,70 @@ async def test_active_task_persists_held_state(monkeypatch):
     assert written[0]["held_payload"] == {"x": 1}
     assert written[0]["verdicts"] == {"PASS": 2, "FAIL": 0, "UNSURE": 1}
     assert ExecutionState.held.is_terminal and not ExecutionState.held.is_open
+
+
+_UNTYPED_SEND = (
+    "def untyped_send(trace_path: str):\n"
+    '    """Send without a declared output."""\n'
+    "    import json, pathlib\n"
+    "    pathlib.Path(trace_path).open('a').write(json.dumps({'fn': 'untyped_send'}) + '\\n')\n"
+    "    return {'sent': True}\n"
+)
+_SC_ROOT = (
+    "def spot_root(trace_path: str) -> dict:\n"
+    '    """Send via the untyped sender."""\n'
+    "    return untyped_send(trace_path)\n"
+)
+
+
+@_handle_project
+async def test_spot_check_fail_invalidates_trust_and_notifies_owner(
+    tmp_path,
+    monkeypatch,
+):
+    fm = FunctionManager()
+    fm.add_functions(implementations=[_UNTYPED_SEND, _SC_ROOT])
+    _classify(fm, "untyped_send", "unsafe_effectful")
+    _classify(fm, "spot_root", "unsafe_effectful")
+    _trust(fm, "untyped_send")
+    _trust(fm, "spot_root")
+    assert (
+        fm._get_function_data_by_name(name="untyped_send")["contract"]["output_schema"]
+        is None
+    )
+    monkeypatch.setattr(
+        fm.verification_settings,
+        "spot_check_rate",
+        {"unsafe_effectful": 1.0, "idempotent_effectful": 1.0},
+    )
+    stubs = PassStubs(record=True)
+    stubs.install(monkeypatch)
+    stubs.fail(
+        "post",
+        "untyped_send",
+        fault="leaf",
+        reason="the message body was empty",
+    )
+    actor = CodeActActor(function_manager=fm)
+    root_id = fm._get_function_data_by_name(name="spot_root")["function_id"]
+    trace = tmp_path / "trace.jsonl"
+    try:
+        handle, result = await _run(actor, root_id, trace)
+        # The effect ran once and the result was delivered; nothing was repeated.
+        assert result == "{'sent': True}"
+        assert handle.held_outcome is None
+        assert [t["fn"] for t in _trace(trace)] == ["untyped_send"]
+        notification = await asyncio.wait_for(handle.next_notification(), timeout=10)
+        assert "Spot check of Weekly report" in notification["message"]
+        assert "the message body was empty" in notification["message"]
+        assert "was not repeated" in notification["message"]
+        row = fm._get_function_data_by_name(name="untyped_send")
+        assert row["verify"] is True
+        assert row["ledger"]["fails"] >= 1
+        rows = fm.list_verifications(function_id=int(row["function_id"]))
+        assert [
+            (r["kind"], r["verdict"]) for r in rows if r["kind"] == "spot_check"
+        ] == [("spot_check", "FAIL")]
+        assert ("post", "untyped_send") in stubs.calls
+    finally:
+        await actor.close()
