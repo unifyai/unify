@@ -1,11 +1,17 @@
 # Plan: verified functions — earning the compiled steady state
 
-**Status:** Phases 0–8 landed in `unify` (schema, classification, ledger,
+**Status:** Phases 0–9 landed. In `unify`: schema, classification, ledger,
 policy, settings, backfill; tier-0 contracts and fixtures; verifier passes and
 prompt builders; run supervisor with barrier/memo/rewind/held; trust flips,
 invalidation, spot checks and offline promotion; librarian tools and prompt;
-purpose-tagged token accounting; docs). Phase 9 (`colleague` benchmark) in
-progress in its own worktree. Written against `staging` @ `5ec185ada`
+purpose-tagged token accounting; docs. In `colleague` (branch
+`verified-functions`, commit `1e3e9ac`): the fire-series engine, the
+`silent_drift` / `edge_week` / `repair_locality` /
+`change_without_regression` experiments, the six-week `teaching` extension,
+tokens by purpose in the unify arm's ledger, `plot_distillation_curve.py`,
+README/DESIGN updates including the "held scores below correct" rule — all
+self-testing; no paid run has been made yet, so §7's "publish the loss, the
+fix, the new result" is still open. Written against `staging` @ `5ec185ada`
 (2026-08-17). Line numbers below are approximate as of that commit; symbols
 are exact. Re-verify both before editing.
 
