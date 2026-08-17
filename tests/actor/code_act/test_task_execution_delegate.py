@@ -197,7 +197,6 @@ async def test_task_execution_delegates_forward_named_protocol_kwargs():
             images=[],
             guidelines="Follow task-specific execution guidelines.",
             entrypoint_kwargs={"scheduled_run_timestamp": "2026-04-10T09:00:00Z"},
-            entrypoint_repair_attempts=1,
             entrypoint_repair_context={"reason": "certification"},
         )
 
@@ -210,7 +209,7 @@ async def test_task_execution_delegates_forward_named_protocol_kwargs():
         assert call["kwargs"]["entrypoint_kwargs"] == {
             "scheduled_run_timestamp": "2026-04-10T09:00:00Z",
         }
-        assert call["kwargs"]["entrypoint_repair_attempts"] == 1
+        assert "entrypoint_repair_attempts" not in call["kwargs"]
         assert call["kwargs"]["entrypoint_repair_context"] == {
             "reason": "certification",
         }
@@ -312,20 +311,20 @@ def repairable_task():
             )
             return "updated existing function"
 
-        monkeypatch.setattr(actor, "_repair_symbolic_entrypoint", _repair)
+        monkeypatch.setattr(actor, "_repair_function", _repair)
 
         handle = await actor.act(
             "Run the repairable symbolic task.",
             entrypoint=function_id,
             entrypoint_kwargs={"scheduled_run_timestamp": "2026-04-10T09:00:00Z"},
-            entrypoint_repair_attempts=1,
             clarification_enabled=False,
             persist=False,
         )
 
         assert await handle.result() == "repaired task completed"
         assert len(repair_calls) == 1
-        assert repair_calls[0]["entrypoint_id"] == function_id
+        assert repair_calls[0]["function_id"] == function_id
+        assert isinstance(repair_calls[0]["failure"], RuntimeError)
     finally:
         await actor.close()
         ManagerRegistry.clear()
@@ -384,7 +383,7 @@ async def test_symbolic_entrypoint_resolves_by_task_destination(
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_repair_symbolic_entrypoint_snapshot_uses_callable_contract(monkeypatch):
+async def test_repair_function_snapshot_uses_callable_contract(monkeypatch):
     """Repair must request metadata with _return_callable=True (FM contract)."""
 
     ManagerRegistry.clear()
@@ -412,13 +411,13 @@ def snapshot_task():
         )
         monkeypatch.setattr(
             "unify.actor.code_act_actor.new_llm_client",
-            lambda model: MagicMock(
+            lambda model, **kwargs: MagicMock(
                 set_system_message=MagicMock(),
             ),
         )
 
-        summary = await actor._repair_symbolic_entrypoint(
-            entrypoint_id=function_id,
+        summary = await actor._repair_function(
+            function_id=function_id,
             request="Run snapshot task.",
             entrypoint_kwargs={},
             failure=RuntimeError("boom"),

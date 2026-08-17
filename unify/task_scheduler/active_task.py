@@ -185,7 +185,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         task_run_provenance: Optional[TaskRunProvenance] = None,
         task_entrypoint_review: Optional[dict[str, Any]] = None,
         task_guidelines: Optional[str] = None,
-        entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
         destination: Optional[str] = None,
         preserve_definition_status: bool = False,
@@ -272,7 +271,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                             clarification_down_q=_clarification_down_q,
                             guidelines=task_guidelines,
                             entrypoint_kwargs=entrypoint_kwargs,
-                            entrypoint_repair_attempts=entrypoint_repair_attempts,
                             entrypoint_repair_context=entrypoint_repair_context,
                             destination=destination,
                         )
@@ -289,7 +287,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                             _clarification_down_q=_clarification_down_q,
                             entrypoint=entrypoint,
                             entrypoint_kwargs=entrypoint_kwargs,
-                            entrypoint_repair_attempts=entrypoint_repair_attempts,
                             entrypoint_repair_context=entrypoint_repair_context,
                             destination=destination,
                             persist=False,
@@ -420,6 +417,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         state: str,
         result_summary: str | None = None,
         error: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         """Patch the durable run row when the live execution reaches a terminal state."""
 
@@ -441,8 +439,17 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 "completed_at": _now_iso(),
                 "result_summary": summary,
                 "error": _truncate_task_run_text(error) if error else None,
+                **(extra or {}),
             },
         )
+
+    def _verification_run_stats(self) -> dict[str, Any]:
+        """Verification accounting exposed by the inner entrypoint handle, if any."""
+        stats = getattr(self._actor_handle, "run_stats", None)
+        return dict(stats) if isinstance(stats, dict) else {}
+
+    def _held_outcome(self) -> Any:
+        return getattr(self._actor_handle, "held_outcome", None)
 
     @functools.wraps(BaseActiveTask.result, updated=())
     async def result(self) -> str:
@@ -453,7 +460,9 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         try:
             ret = await self._actor_handle.result()
             if not self._was_stopped:
-                final_status = "completed"
+                final_status = (
+                    "held" if self._held_outcome() is not None else "completed"
+                )
 
         except Exception as e:
             error = e
@@ -469,10 +478,16 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         finally:
             try:
                 if final_status and not self._was_stopped:
+                    extra = self._verification_run_stats()
+                    held = self._held_outcome()
+                    if held is not None:
+                        extra["held_reason"] = f"{held.code}: {held.reason}"
+                        extra["held_payload"] = getattr(held, "payload", None)
                     await self._persist_task_run_terminal_state(
                         state=final_status,
                         result_summary=ret,
                         error=str(error) if error is not None else None,
+                        extra=extra or None,
                     )
 
                     if (

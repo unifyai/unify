@@ -61,7 +61,18 @@ from unify.function_manager.base import BaseFunctionManager
 from unify.function_manager.function_manager import strip_ledger_internals
 from unify.function_manager.primitives import ComputerPrimitives
 from unify.actor.prompt_builders import build_code_act_prompt
-from unify.actor.verification_runtime import run_probe
+from unify.actor.verification_runtime import (
+    EntrypointOutcome,
+    Frame,
+    HeldOutcome,
+    RepairRefused,
+    RewindRequested,
+    VerifierPasses,
+    closure_rows,
+    install_wrappers,
+    run_probe,
+    run_verified_entrypoint,
+)
 from unify.events.manager_event_logging import log_manager_call
 from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
 from unify.common.hierarchical_logger import log_boundary_event
@@ -452,27 +463,65 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         self._error: Optional[BaseException] = None
         self._stopped = False
         self._on_finally = on_finally
+        self._notification_q: asyncio.Queue[dict] = asyncio.Queue()
+        self._follow_up: Optional[asyncio.Task[Any]] = None
+        # Set when the run finished without performing an effect because a
+        # verdict it depended on failed, timed out or could not be settled.
+        self.held_outcome: Optional[HeldOutcome] = None
+        # Verification accounting for the execution row.
+        self.run_stats: dict[str, Any] = {}
 
         asyncio.create_task(self._monitor_execution())
 
     async def _monitor_execution(self) -> None:
         try:
             out = await self._execution_task
-            if not self._stopped:
+            if isinstance(out, EntrypointOutcome):
+                self.held_outcome = out.held
+                self.run_stats = {
+                    "verdicts": dict(out.verdict_counts),
+                    "rewinds": int(out.rewinds),
+                    "verifier_tasks": int(out.verifier_tasks),
+                    "held_reason": (
+                        f"{out.held.code}: {out.held.reason}" if out.held else None
+                    ),
+                }
+                self._follow_up = out.follow_up
+                if not self._stopped:
+                    if out.held is not None:
+                        self._result_str = out.held.message
+                    else:
+                        self._result_str = (
+                            str(out.result) if out.result is not None else ""
+                        )
+            elif not self._stopped:
                 self._result_str = str(out) if out is not None else ""
         except asyncio.CancelledError:
             self._stopped = True
-            self._result_str = f"Entrypoint {self._entrypoint_id} was cancelled."
+            if self._result_str is None:
+                self._result_str = f"Entrypoint {self._entrypoint_id} was cancelled."
         except Exception as e:
             self._error = e
             self._result_str = f"Error: {e}"
         finally:
+            self._completion_event.set()
+            if self._follow_up is not None:
+                try:
+                    await self._follow_up
+                except Exception:
+                    pass
             if self._on_finally is not None:
                 try:
                     await self._on_finally()
                 except Exception:
                     pass
-            self._completion_event.set()
+            self._notification_q.put_nowait({})
+
+    async def push_notification(self, message: str) -> None:
+        """Deliver an owner-facing follow-up (a correction after early delivery)."""
+        await self._notification_q.put(
+            {"type": "notification", "message": message, "completed": True},
+        )
 
     async def ask(
         self,
@@ -545,8 +594,7 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         return {}
 
     async def next_notification(self) -> dict:
-        await asyncio.Event().wait()
-        return {}
+        return await self._notification_q.get()
 
     async def answer_clarification(self, call_id: str, answer: str) -> None:
         return None
@@ -574,9 +622,6 @@ class _CodeActTaskExecutionDelegate:
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
         entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
-        entrypoint_repair_attempts = int(
-            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
-        )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
         destination = kwargs.pop("destination", None)
         if kwargs:
@@ -593,7 +638,6 @@ class _CodeActTaskExecutionDelegate:
             _clarification_down_q=clarification_down_q,
             entrypoint=entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
             destination=destination,
             persist=False,
@@ -5025,27 +5069,36 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
-    async def _repair_symbolic_entrypoint(
+    async def _repair_function(
         self,
         *,
-        entrypoint_id: int,
+        function_id: int,
         request: str | dict | list[str | dict],
         entrypoint_kwargs: dict[str, Any],
-        failure: BaseException,
+        failure: BaseException | None,
+        verdict: Any = None,
+        frames: tuple[Frame, ...] = (),
         repair_context: dict[str, Any] | None,
         destination: str | None = None,
     ) -> str:
-        """Run a bounded review loop that can repair a failing symbolic executor."""
+        """Run a bounded review loop that repairs one failing stored function in place.
+
+        The target is the leaf a verdict blamed (or the innermost stored
+        function in a traceback). Deployment-owned functions (``custom_hash``
+        set) are never rewritten here: their bodies are re-synced from the
+        bundle, so an in-place rewrite would silently diverge from it and
+        mask the failure. ``RepairRefused`` is raised instead.
+        """
 
         fm = self.function_manager
         if fm is None:
-            raise RuntimeError(
-                "Cannot repair symbolic entrypoint without FunctionManager.",
+            raise RepairRefused(
+                "Cannot repair a stored function without a FunctionManager.",
             )
 
         snapshot_namespace: dict[str, Any] = {}
         snapshot_result = fm.filter_functions(
-            filter=f"function_id == {int(entrypoint_id)}",
+            filter=f"function_id == {int(function_id)}",
             destination=destination,
             _return_callable=True,
             _namespace=snapshot_namespace,
@@ -5056,18 +5109,16 @@ class CodeActActor(BaseCodeActActor):
             if isinstance(snapshot_result, dict)
             else snapshot_result
         )
-        # Deployment-synced functions (custom_hash set) are owned by the
-        # client bundle: their bodies are re-synced by deployment reconcile,
-        # and an in-place LLM rewrite would silently diverge from the bundle
-        # and mask the underlying failure. Surface the failure instead.
         for row in function_snapshot or []:
             if isinstance(row, dict) and row.get("custom_hash"):
-                raise RuntimeError(
-                    f"Symbolic entrypoint {entrypoint_id} is deployment-owned "
-                    "(custom_hash set); refusing LLM repair. Fix the bundle "
-                    "source and re-sync via deployment reconcile. Original "
-                    f"failure: {type(failure).__name__}: {failure}",
-                ) from failure
+                raise RepairRefused(
+                    f"Function {row.get('name')!r} (id {function_id}) is "
+                    "deployment-owned (custom_hash set); refusing repair. Fix the "
+                    "bundle source and re-sync via deployment reconcile.",
+                )
+        snapshot_for_prompt = strip_ledger_internals(
+            [row for row in (function_snapshot or []) if isinstance(row, dict)],
+        )
         tools = methods_to_tool_dict(
             fm.search_functions,
             fm.filter_functions,
@@ -5084,49 +5135,82 @@ class CodeActActor(BaseCodeActActor):
             include_class_name=True,
         )
         tools["run_diagnostic_probe"] = run_probe
-        client = new_llm_client(self._model)
+        tools.update(self._verification_librarian_tools())
+        client = new_llm_client(self._model, purpose="repair")
         client.set_system_message(
-            "You are repairing a stored symbolic task executor. The contract "
-            "you must preserve is the task's OUTCOME: what it computes, the "
-            "semantics and exactness of those values, which side effects it "
-            "performs, where it delivers them, in what order, and how it fails "
-            "when the outcome is truly unachievable. How the function READS its "
-            "external inputs is not contract: external interfaces evolve after "
-            "a function is stored (fields get renamed or nested, endpoints get "
-            "versioned), and adapting ingestion to the environment's current "
-            "shape while keeping the outcome exactly equivalent is precisely "
-            "what repair is for. Diagnose before you rewrite: when the failure "
-            "implicates an external input surface, first use "
-            "run_diagnostic_probe to observe what that interface actually "
-            "returns right now (its shape, keys, and a sample record) and base "
-            "the repair on that observation. Probes are strictly read-only "
-            "diagnosis — never perform the function's side effects through "
-            "them. The task description records the environment "
-            "as it looked when the task was created; when observed reality "
-            "contradicts it, trust the observation over the description's "
-            "input details. Bear in mind that the function's own validation "
-            "messages describe its assumptions, not what the environment "
-            "actually returned — a missing expected field usually means the "
-            "interface changed shape, not that the data is corrupt, so prefer "
-            "ingestion that reads the observed current shape over rejecting "
-            "the input. Never weaken the "
-            "outcome to make the error disappear: do not fabricate values, "
-            "skip required side effects, or coerce genuinely invalid data. "
-            "Update the existing function in place with overwrite=True so its "
-            "function_id stays stable; never delete and re-add it, because "
-            "references such as task entrypoints hold the id. Do not replace "
-            "managed primitives with ad hoc weaker implementations.",
+            "You are repairing a stored function that runs as part of a "
+            "recurring task. The contract you must preserve is the task's "
+            "OUTCOME: what it computes, the semantics and exactness of those "
+            "values, which side effects it performs, where it delivers them, in "
+            "what order, and how it fails when the outcome is truly "
+            "unachievable. How the function READS its external inputs is not "
+            "contract: external interfaces evolve after a function is stored "
+            "(fields get renamed or nested, endpoints get versioned), and "
+            "adapting ingestion to the environment's current shape while "
+            "keeping the outcome exactly equivalent is precisely what repair is "
+            "for. Diagnose before you rewrite: when the failure implicates an "
+            "external input surface, first use run_diagnostic_probe to observe "
+            "what that interface actually returns right now (its shape, keys, "
+            "and a sample record) and base the repair on that observation. "
+            "Probes are strictly read-only diagnosis — never perform the "
+            "function's side effects through them. The task description "
+            "records the environment as it looked when the task was created; "
+            "when observed reality contradicts it, trust the observation over "
+            "the description's input details. Bear in mind that the function's "
+            "own validation messages describe its assumptions, not what the "
+            "environment actually returned — a missing expected field usually "
+            "means the interface changed shape, not that the data is corrupt, "
+            "so prefer ingestion that reads the observed current shape over "
+            "rejecting the input. Never weaken the outcome to make the error "
+            "disappear: do not fabricate values, skip required side effects, "
+            "or coerce genuinely invalid data. Update the existing function in "
+            "place with overwrite=True so its function_id stays stable; never "
+            "delete and re-add it, because references such as task entrypoints "
+            "hold the id. Do not replace managed primitives with ad hoc weaker "
+            "implementations. When an independent verifier failed the function, "
+            "its verdict and the chain of calls that led to it are below: the "
+            "verdict names what was wrong and whether the fault sits in this "
+            "function (leaf) or in how its caller used it. A repaired pure "
+            "function is replayed against its recorded fixtures before it is "
+            "accepted; keep every recorded input/output pair reproducing. Trust "
+            "in the repaired function is earned again by independent "
+            "verification — you cannot grant it.",
         )
+        failure_line = (
+            f"Failure: {type(failure).__name__}: {failure}"
+            if failure is not None
+            else "Failure: verifier verdict (below)."
+        )
+        verdict_block = ""
+        if verdict is not None:
+            verdict_block = (
+                "Verifier verdict:\n"
+                f"```json\n{json.dumps(getattr(verdict, 'model_dump', lambda **_: verdict)(mode='json') if hasattr(verdict, 'model_dump') else verdict, indent=2, default=str)}\n```\n\n"
+            )
+        chain_block = ""
+        if frames:
+            chain_lines = []
+            for index, frame in enumerate(frames, start=1):
+                chain_lines.append(
+                    f"{index}. {frame.name} [{frame.effect_class}] — "
+                    f"{(frame.docstring or '').strip().splitlines()[0] if (frame.docstring or '').strip() else '(no docstring)'}",
+                )
+                if frame.call_site_line:
+                    chain_lines.append(f"   called as: {frame.call_site_line.strip()}")
+            chain_block = (
+                "Call chain (root → failing call):\n" + "\n".join(chain_lines) + "\n\n"
+            )
         message = (
-            "A symbolic task executor failed certification or execution.\n\n"
+            "A stored function failed during a symbolic task run.\n\n"
             f"Task request:\n{request}\n\n"
             "Deterministic entrypoint kwargs:\n"
             f"```json\n{json.dumps(entrypoint_kwargs, indent=2, default=str)}\n```\n\n"
             "Function snapshot:\n"
-            f"```json\n{json.dumps(function_snapshot, indent=2, default=str)}\n```\n\n"
+            f"```json\n{json.dumps(snapshot_for_prompt, indent=2, default=str)}\n```\n\n"
             "Repair context:\n"
             f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
-            f"Failure: {type(failure).__name__}: {failure}\n\n"
+            f"{verdict_block}{chain_block}"
+            f"{failure_line}\n\n"
             "Diagnose the failure — observing the current behavior of any "
             "implicated external input surface via run_diagnostic_probe "
             "(read-only) before deciding — then repair the stored function in "
@@ -5141,11 +5225,15 @@ class CodeActActor(BaseCodeActActor):
             client=client,
             message=message,
             tools=tools,
-            loop_id=f"SymbolicEntrypointRepair({entrypoint_id})",
+            loop_id=f"FunctionRepair({function_id})",
             max_consecutive_failures=2,
         )
         result = await handle.result()
         return str(result)
+
+    def _verification_librarian_tools(self) -> Dict[str, Callable]:
+        """Tools that let a librarian or repair loop shape verification policy (never trust)."""
+        return {}
 
     @functools.wraps(BaseCodeActActor.act, updated=())
     @log_manager_call(
@@ -5170,7 +5258,6 @@ class CodeActActor(BaseCodeActActor):
         entrypoint: Optional[int] = None,
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
-        entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
         destination: Optional[str] = None,
         persist: Optional[bool] = None,
@@ -5193,8 +5280,6 @@ class CodeActActor(BaseCodeActActor):
         from unify.runtime.drain_gate import refuse_if_draining
 
         refuse_if_draining()
-
-        entrypoint_repair_attempts = int(entrypoint_repair_attempts or 0)
 
         effective_can_compose = (
             self.can_compose if can_compose is None else bool(can_compose)
@@ -5398,14 +5483,53 @@ class CodeActActor(BaseCodeActActor):
             entrypoint_id = int(entrypoint)
             args = list(entrypoint_args or [])
             kwargs_for_entrypoint = dict(entrypoint_kwargs or {})
+            fm = self.function_manager
+            if fm is None:
+                raise RuntimeError(
+                    "CodeActActor cannot execute entrypoint: function_manager is None",
+                )
+            verification_settings = fm.verification_settings
+            repair_context = (
+                entrypoint_repair_context
+                if isinstance(entrypoint_repair_context, dict)
+                else None
+            )
+            task_name = str(
+                (repair_context or {}).get("task_name")
+                or (repair_context or {}).get("task_run_context", {}).get("task_name")
+                or f"task {kwargs_for_entrypoint.get('task_id', '')}".strip()
+                or "the task",
+            )
+            run_key = kwargs_for_entrypoint.get("run_key")
+            task_id_value = kwargs_for_entrypoint.get("task_id")
+            goal_text = (
+                request
+                if isinstance(request, str)
+                else json.dumps(request, default=str)
+            )
 
-            async def _run_entrypoint_once() -> Any:
-                fm = self.function_manager
-                if fm is None:
-                    raise RuntimeError(
-                        "CodeActActor cannot execute entrypoint: function_manager is None",
+            def _resolve_closure() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+                rows = fm.filter_functions(
+                    filter=f"function_id == {entrypoint_id}",
+                    destination=destination,
+                    include_implementations=True,
+                )
+                if not rows:
+                    raise ValueError(
+                        f"Entrypoint function_id {entrypoint_id} not found in FunctionManager.",
                     )
+                root_row = dict(rows[0])
+                fn_name = root_row.get("name")
+                if not isinstance(fn_name, str) or not fn_name.strip():
+                    raise ValueError(
+                        f"Entrypoint {entrypoint_id} has no valid function name.",
+                    )
+                return root_row, closure_rows(fm, root_row)
 
+            async def _invoke_root(
+                rows_by_name: dict[str, dict[str, Any]],
+                supervisor: Any,
+            ) -> Any:
                 out = fm.filter_functions(
                     filter=f"function_id == {entrypoint_id}",
                     destination=destination,
@@ -5413,26 +5537,27 @@ class CodeActActor(BaseCodeActActor):
                     _namespace=sandbox.global_state,
                     _also_return_metadata=True,
                 )
-                metadata = []
-                if isinstance(out, dict):
-                    metadata = list(out.get("metadata") or [])
+                metadata = (
+                    list(out.get("metadata") or []) if isinstance(out, dict) else []
+                )
                 if not metadata:
                     raise ValueError(
                         f"Entrypoint function_id {entrypoint_id} not found in FunctionManager.",
                     )
-                fn_name = metadata[0].get("name")
-                if not isinstance(fn_name, str) or not fn_name.strip():
-                    raise ValueError(
-                        f"Entrypoint {entrypoint_id} has no valid function name.",
+                fn_name = str(metadata[0].get("name"))
+                if supervisor is not None:
+                    install_wrappers(
+                        sandbox.global_state,
+                        rows_by_name=rows_by_name,
+                        supervisor=supervisor,
                     )
                 fn = sandbox.global_state.get(fn_name)
                 if fn is None:
                     raise ValueError(
                         f"Entrypoint {entrypoint_id} ({fn_name}) was not injected into the sandbox namespace.",
                     )
-
                 compatible_kwargs = _signature_compatible_kwargs(
-                    fn,
+                    getattr(fn, "__wrapped__", fn),
                     kwargs_for_entrypoint,
                 )
                 # Async entrypoints stay on this loop. Sync entrypoints run
@@ -5447,38 +5572,48 @@ class CodeActActor(BaseCodeActActor):
                         res = await res
                 return res
 
-            async def _run_entrypoint() -> Any:
-                attempts_remaining = max(0, entrypoint_repair_attempts)
-                while True:
-                    try:
-                        return await _run_entrypoint_once()
-                    except Exception as exc:
-                        if attempts_remaining <= 0:
-                            raise
-                        attempts_remaining -= 1
-                        try:
-                            await self._repair_symbolic_entrypoint(
-                                entrypoint_id=entrypoint_id,
-                                request=request,
-                                entrypoint_kwargs=kwargs_for_entrypoint,
-                                failure=exc,
-                                repair_context=(
-                                    entrypoint_repair_context
-                                    if isinstance(entrypoint_repair_context, dict)
-                                    else None
-                                ),
-                                destination=destination,
-                            )
-                        except Exception as repair_exc:
-                            # The entrypoint failure is the actionable
-                            # record; a broken or refused repair pass must
-                            # not displace it in the execution row.
-                            logger.warning(
-                                "Symbolic entrypoint repair for %s failed: %s",
-                                entrypoint_id,
-                                repair_exc,
-                            )
-                            raise exc from repair_exc
+            def _make_passes() -> VerifierPasses:
+                return VerifierPasses(
+                    function_manager=fm,
+                    guidance_manager=self.guidance_manager,
+                    goal=goal_text,
+                    run_key=run_key,
+                    task_id=int(task_id_value) if task_id_value is not None else None,
+                    model=verification_settings.model,
+                )
+
+            async def _repair(rewind: RewindRequested) -> None:
+                if rewind.target_function_id is None:
+                    raise RepairRefused(
+                        "No stored function could be identified to repair.",
+                    )
+                await self._repair_function(
+                    function_id=int(rewind.target_function_id),
+                    request=request,
+                    entrypoint_kwargs=kwargs_for_entrypoint,
+                    failure=rewind.exception,
+                    verdict=rewind.verdict,
+                    frames=rewind.frames,
+                    repair_context=repair_context,
+                    destination=destination,
+                )
+
+            entry_handle_ref: list[Any] = []
+
+            async def _notify_owner(message: str) -> None:
+                if entry_handle_ref:
+                    await entry_handle_ref[0].push_notification(message)
+
+            async def _run_entrypoint() -> EntrypointOutcome:
+                return await run_verified_entrypoint(
+                    settings=verification_settings,
+                    task_name=task_name,
+                    resolve=_resolve_closure,
+                    invoke=_invoke_root,
+                    make_passes=_make_passes,
+                    repair=_repair,
+                    notify=_notify_owner,
+                )
 
             delegate_token = current_task_execution_delegate.set(
                 task_execution_delegate,
@@ -5490,6 +5625,7 @@ class CodeActActor(BaseCodeActActor):
                     execution_task=entry_task,
                     on_finally=_cleanup,
                 )
+                entry_handle_ref.append(entry_handle)
             finally:
                 current_task_execution_delegate.reset(delegate_token)
             return entry_handle
