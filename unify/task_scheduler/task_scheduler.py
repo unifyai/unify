@@ -135,37 +135,6 @@ ToolsDict = Dict[str, Callable[..., Any]]
 TASKS_META_TABLE = "Tasks/Meta"
 logger = logging.getLogger(__name__)
 
-OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS = {
-    "idempotency_contract",
-    "side_effect_contract",
-    "cost_contract",
-    "input_contract",
-    "failure_contract",
-    "observability_contract",
-    "equivalence_contract",
-    "managed_primitive_contract",
-}
-OFFLINE_CERTIFICATION_ALLOWED_RISK_CLASSIFICATIONS = {
-    "safe_noop",
-    "read_only",
-    "idempotent_effectful",
-    "unsafe_effectful",
-}
-OFFLINE_CERTIFICATION_REQUIRED_ATTESTATIONS = {
-    "no_hardcoded_live_observations",
-    "no_removed_validation_gates",
-    "no_reordered_side_effects",
-    "no_discarded_recovery_branches",
-    "no_static_runtime_assumptions",
-    "no_ad_hoc_logic_replaced_managed_primitives",
-}
-
-
-def _missing_certification_value(value: Any) -> bool:
-    """Return whether a certification evidence field is materially empty."""
-
-    return value in (None, "", [], {})
-
 
 def _now_iso() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
@@ -186,9 +155,19 @@ class StaleActivationSuperseded(Exception):
     """
 
 
-# Columns definitions carried before run state moved to Tasks/Executions.
-# Dropped on read so rows written before the migration still load.
-_LEGACY_DEFINITION_FIELDS = frozenset({"status", "activated_by", "instance_id"})
+# Columns definitions carried before run state moved to Tasks/Executions, and
+# the self-attested offline certification keys that verification replaced.
+# Dropped on read so rows written before those changes still load.
+_LEGACY_DEFINITION_FIELDS = frozenset(
+    {
+        "status",
+        "activated_by",
+        "instance_id",
+        "certification_status",
+        "certification_metadata",
+        "certification_result",
+    },
+)
 
 
 class TaskSelfInvocationError(RuntimeError):
@@ -430,32 +409,20 @@ class TaskScheduler(BaseTaskScheduler):
             *,
             function_id: int,
             rationale: str,
-            certification_metadata: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return self._attach_entrypoint_to_definition(
                 task_id=task.task_id,
                 function_id=function_id,
                 rationale=rationale,
-                certification_metadata=certification_metadata,
             )
 
-        def _promote_entrypoint_offline(
-            *,
-            function_id: int,
-            certification_metadata: dict[str, Any],
-            certification_result: dict[str, Any],
-        ) -> dict[str, Any]:
-            return self._promote_definition_to_offline(
-                task_id=task.task_id,
-                function_id=function_id,
-                certification_metadata=certification_metadata,
-                certification_result=certification_result,
-            )
+        def _promote_offline() -> dict[str, Any]:
+            return self.promote_task_offline(task_id=task.task_id)
 
         return {
             "metadata": metadata,
             "attach_entrypoint": _attach_entrypoint,
-            "promote_entrypoint_offline": _promote_entrypoint_offline,
+            "promote_task_offline": _promote_offline,
         }
 
     def _build_task_run_context(
@@ -520,9 +487,8 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         function_id: int,
         rationale: str,
-        certification_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record a symbolic executor candidate on the task definition row."""
+        """Record a symbolic executor on the task definition row."""
 
         if function_id < 0:
             raise ValueError("function_id must be a non-negative integer.")
@@ -553,104 +519,79 @@ class TaskScheduler(BaseTaskScheduler):
                 entries={"entrypoint": int(function_id)},
             )
             return {
-                "outcome": "candidate_recorded",
+                "outcome": "entrypoint_recorded",
                 "task_id": task_id,
                 "function_id": int(function_id),
                 "rationale": rationale,
-                "certification_status": "required_before_offline_promotion",
-                "certification_metadata": certification_metadata or {},
+                "next": (
+                    "Future runs execute this function under verification; it "
+                    "earns trust from independent verdicts, and the task is "
+                    "promoted to offline delivery once every function it calls "
+                    "is trusted."
+                ),
             }
 
-    def _offline_promotion_rejection_reasons(
-        self,
-        *,
-        certification_metadata: dict[str, Any],
-        certification_result: dict[str, Any],
-    ) -> list[str]:
-        """Return reasons a symbolic candidate is not certified for offline use."""
+    def _function_manager_for_trust(self) -> Any:
+        from unify.function_manager.function_manager import FunctionManager
 
+        fm = ManagerRegistry.get_function_manager()
+        return fm if isinstance(fm, FunctionManager) else None
+
+    def offline_eligible(self, task: Task) -> tuple[bool, list[str]]:
+        """Whether ``task`` may run offline: a bound entrypoint whose whole closure is trusted.
+
+        Returns ``(eligible, reasons)``; each reason names an offending
+        function_id — untrusted, or ``unsafe_effectful`` with a class that
+        was only inferred from third-party imports and never confirmed.
+        """
+        if task.entrypoint is None:
+            return False, ["no_entrypoint"]
+        fm = self._function_manager_for_trust()
+        if fm is None:
+            return False, ["no_function_manager"]
+        from unify.actor.verification_runtime import closure_rows, rederive_trust
+
+        rows = fm.filter_functions(
+            filter=f"function_id == {int(task.entrypoint)}",
+            destination=task.destination,
+            include_implementations=True,
+        )
+        if not rows:
+            return False, [f"entrypoint_missing:{int(task.entrypoint)}"]
+        closure = closure_rows(fm, rows[0])
+        rederive_trust(fm, closure, settings=fm.verification_settings)
         reasons: list[str] = []
-        evidence = certification_metadata.get("certification_evidence")
-        if not isinstance(evidence, dict) or not evidence:
-            reasons.append("missing_certification_evidence")
-            evidence = {}
+        for row in closure.values():
+            fid = int(row["function_id"])
+            if row.get("verify", True):
+                reasons.append(f"untrusted:{fid}")
+            if (
+                row.get("side_effect_class") == "unsafe_effectful"
+                and row.get("class_source") == "inferred_third_party"
+            ):
+                reasons.append(f"unconfirmed_unsafe_class:{fid}")
+        return (not reasons), reasons
 
-        missing_evidence_fields = sorted(
-            field
-            for field in OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS
-            if _missing_certification_value(evidence.get(field))
-        )
-        reasons.extend(f"missing_evidence:{field}" for field in missing_evidence_fields)
+    def promote_task_offline(self, *, task_id: int) -> dict[str, Any]:
+        """Promote a task to offline delivery when its entrypoint closure is trusted.
 
-        risk_classification = evidence.get("risk_classification")
-        if _missing_certification_value(risk_classification):
-            reasons.append("missing_evidence:risk_classification")
-        elif (
-            risk_classification
-            not in OFFLINE_CERTIFICATION_ALLOWED_RISK_CLASSIFICATIONS
-        ):
-            reasons.append(f"invalid_risk_classification:{risk_classification}")
-        elif risk_classification == "unsafe_effectful":
-            reasons.append("unsafe_side_effect_contract")
-
-        managed_primitive_contract = evidence.get("managed_primitive_contract")
-        if isinstance(managed_primitive_contract, dict):
-            preserved = managed_primitive_contract.get("preserved")
-            if preserved is not True:
-                reasons.append("primitive_surface_changed")
-            ad_hoc_replacements = managed_primitive_contract.get(
-                "ad_hoc_replacements",
-            )
-            if ad_hoc_replacements not in (None, [], {}):
-                reasons.append("ad_hoc_logic_replaced_managed_primitive")
-        elif not _missing_certification_value(managed_primitive_contract):
-            reasons.append("invalid_evidence:managed_primitive_contract")
-
-        cost_contract = evidence.get("cost_contract")
-        if isinstance(cost_contract, dict) and cost_contract.get("bounded") is not True:
-            reasons.append("cost_contract_too_expensive")
-
-        attestations = evidence.get("attestations")
-        if not isinstance(attestations, dict):
-            reasons.append("missing_evidence:attestations")
-            attestations = {}
-        failed_attestations = sorted(
-            field
-            for field in OFFLINE_CERTIFICATION_REQUIRED_ATTESTATIONS
-            if attestations.get(field) is not True
-        )
-        reasons.extend(f"failed_attestation:{field}" for field in failed_attestations)
-
-        if certification_result.get("evidence_based") is not True:
-            reasons.append("certification_evidence_not_attested")
-        if certification_result.get("executed_entrypoint") is True:
-            reasons.append("certification_must_not_execute_entrypoint")
-        return reasons
-
-    def _promote_definition_to_offline(
-        self,
-        *,
-        task_id: int,
-        function_id: int,
-        certification_metadata: dict[str, Any],
-        certification_result: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Promote the task definition to offline delivery after certification."""
-
-        if function_id < 0:
-            raise ValueError("function_id must be a non-negative integer.")
-
-        rejection_reasons = self._offline_promotion_rejection_reasons(
-            certification_metadata=certification_metadata,
-            certification_result=certification_result,
-        )
-        if rejection_reasons:
+        Eligibility is derived from the verification ledger, never attested.
+        Loss of trust later never demotes: offline is a delivery choice and
+        the headless lane runs the same verification.
+        """
+        task = self._get_task_or_raise(task_id)
+        eligible, reasons = self.offline_eligible(task)
+        if not eligible:
             return {
-                "outcome": "certification_rejected",
+                "outcome": "not_eligible",
                 "task_id": task_id,
-                "function_id": int(function_id),
-                "rejection_reasons": rejection_reasons,
+                "function_id": task.entrypoint,
+                "reasons": reasons,
             }
+        return self._promote_definition_to_offline(task_id=task_id)
+
+    def _promote_definition_to_offline(self, *, task_id: int) -> dict[str, Any]:
+        """Write ``offline=True`` on the definition; callers check eligibility first."""
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
@@ -660,29 +601,13 @@ class TaskScheduler(BaseTaskScheduler):
                 return_ids_only=False,
             )
             if not log_objs:
-                return {
-                    "outcome": "definition_missing",
-                    "task_id": task_id,
-                    "function_id": int(function_id),
-                    "certification_status": "passed",
-                    "certification_result": certification_result,
-                }
+                return {"outcome": "definition_missing", "task_id": task_id}
             row = log_objs[0]
-            if int(row.entries.get("entrypoint") or -1) != int(function_id):
-                return {
-                    "outcome": "entrypoint_mismatch",
-                    "task_id": task_id,
-                    "function_id": int(function_id),
-                    "certification_status": "passed",
-                    "certification_result": certification_result,
-                }
             if bool(row.entries.get("offline")):
                 return {
                     "outcome": "already_offline",
                     "task_id": task_id,
-                    "function_id": int(function_id),
-                    "certification_status": "passed",
-                    "certification_result": certification_result,
+                    "function_id": row.entries.get("entrypoint"),
                 }
             self._write_log_entries(
                 logs=row.id,
@@ -691,10 +616,7 @@ class TaskScheduler(BaseTaskScheduler):
             return {
                 "outcome": "offline_promoted",
                 "task_id": task_id,
-                "function_id": int(function_id),
-                "certification_status": "passed",
-                "certification_metadata": certification_metadata,
-                "certification_result": certification_result,
+                "function_id": row.entries.get("entrypoint"),
             }
 
     def warm_embeddings(self) -> None:

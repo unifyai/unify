@@ -166,7 +166,7 @@ async def test_triggerable_start_rearms_definition():
         function_id=654,
         rationale="The triggered run revealed a stable reusable procedure.",
     )
-    assert result["outcome"] == "candidate_recorded"
+    assert result["outcome"] == "entrypoint_recorded"
     assert ts._get_task_or_raise(tid).entrypoint == 654
     assert ts._get_task_or_raise(tid).offline is False
 
