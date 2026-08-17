@@ -17,6 +17,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional
 from datetime import datetime, time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -81,6 +82,19 @@ class RepeatPattern(BaseModel):
             "by the scheduler."
         ),
     )
+    timezone: Optional[str] = Field(
+        default=None,
+        description=(
+            "IANA zone the `time_of_day` clock reading belongs to, e.g. "
+            "'Asia/Karachi'. Omitted means UTC, which is what every schedule "
+            "written before this field existed meant by omission. Set it "
+            "whenever the time expresses a human hour -- 'before stand-up', "
+            "'end of day' -- because those are claims about somebody's local "
+            "clock and mean nothing in UTC: a 17:30 end-of-day log fires at "
+            "22:30 for a reader five hours east, and the previous morning for "
+            "one eight hours west."
+        ),
+    )
     jitter_seconds: Optional[int] = Field(
         default=None,
         ge=0,
@@ -109,6 +123,21 @@ class RepeatPattern(BaseModel):
             raise ValueError(
                 "`time_of_day` must be a `datetime.time`, not a full datetime",
             )
+        return v
+
+    @field_validator("timezone")
+    def _resolvable_zone(cls, v):
+        """Reject a zone this machine cannot resolve.
+
+        A typo would otherwise surface as a schedule firing at the wrong hour,
+        which is indistinguishable from the bug this field exists to fix.
+        """
+        if v is None:
+            return v
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA timezone: {v!r}") from exc
         return v
 
 
