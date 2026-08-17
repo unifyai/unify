@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import unillm
 from pydantic import BaseModel
@@ -90,6 +90,36 @@ def resolve_slow_brain_model() -> tuple[str, str | None]:
     return SETTINGS.UNIFY_MODEL, None
 
 
+LLMPurpose = Literal["planning", "verification", "repair"]
+_PURPOSE_MARK = "#purpose="
+
+
+def tag_origin_with_purpose(
+    origin: str | None,
+    purpose: LLMPurpose | None,
+) -> str | None:
+    """Encode ``purpose`` in the client's ``origin`` tag.
+
+    ``origin`` is client-side metadata: it reaches ``LLMEvent.origin`` and the
+    log filename, and never the request payload, so tagging it neither
+    changes what the model sees nor perturbs the response cache.
+    """
+    if purpose is None:
+        return origin
+    base = (origin or "").split(_PURPOSE_MARK, 1)[0]
+    return f"{base}{_PURPOSE_MARK}{purpose}"
+
+
+def purpose_from_origin(origin: str | None) -> LLMPurpose | None:
+    """Recover the purpose tag from an ``origin`` string, if one is present."""
+    if not origin or _PURPOSE_MARK not in origin:
+        return None
+    value = origin.rsplit(_PURPOSE_MARK, 1)[1].strip()
+    if value in ("planning", "verification", "repair"):
+        return value  # type: ignore[return-value]
+    return None
+
+
 def _build_llm_client(
     model: str,
     *,
@@ -98,7 +128,9 @@ def _build_llm_client(
     origin: str | None,
     default_effort: str | None,
     kwargs: dict[str, Any],
+    purpose: LLMPurpose | None = None,
 ) -> "unillm.AsyncUnify | unillm.Unify":
+    origin = tag_origin_with_purpose(origin, purpose)
     config: dict[str, Any] = {
         "reasoning_effort": "high",
         "stateful": stateful,
@@ -121,6 +153,7 @@ def _build_llm_client(
         pending_log = PendingThinkingLog(origin)
         client.set_on_log_file_pending(pending_log.on_pending_path)
         client._pending_thinking_log = pending_log
+    client._unify_purpose = purpose
 
     return client
 
@@ -131,6 +164,7 @@ def new_llm_client(
     async_client: bool = True,
     stateful: bool = False,
     origin: str | None = None,
+    purpose: LLMPurpose | None = None,
     **kwargs: Any,
 ) -> "unillm.AsyncUnify | unillm.Unify":
     """
@@ -142,6 +176,10 @@ def new_llm_client(
     Defaults to high reasoning_effort where applicable. Callers that want a
     different setting (e.g. fast-path helpers at "low", or max-effort actor
     profiles) pass ``reasoning_effort`` explicitly.
+    ``purpose`` tags what the tokens buy — ``planning`` (an actor deciding
+    what to do), ``verification`` (a verifier pass) or ``repair`` (a repair
+    loop) — so per-purpose accounting can read it back from ``LLMEvent.origin``
+    via :func:`purpose_from_origin`.
     Caching is controlled by the UNILLM_CACHE env var (owned by unillm).
     Returns an AsyncUnify client by default, or a synchronous Unify client when
     async_client=False.
@@ -157,6 +195,7 @@ def new_llm_client(
         origin=origin,
         default_effort=default_effort,
         kwargs=kwargs,
+        purpose=purpose,
     )
 
 

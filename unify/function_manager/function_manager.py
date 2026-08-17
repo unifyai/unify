@@ -82,6 +82,32 @@ from .dependency_analysis import (
 from .types.function import Function
 from .types.meta import FunctionsMeta
 from .types.venv import VirtualEnv
+from .types.verification import (
+    Fixture,
+    FunctionContract,
+    SideEffectClass,
+    VerdictKind,
+    VerificationRow,
+    VerificationSummary,
+)
+from .verification.classify import (
+    Classification,
+    classify_source,
+    effective_class,
+)
+from .verification.contracts import contract_from_callable, merge_contract
+from .verification.fixtures import (
+    FixtureRegressionError,
+    coerce_fixtures,
+    replay_fixtures,
+)
+from .verification.ledger import (
+    function_trust_hash as _function_trust_hash,
+)
+from .verification.policy import derive_verify
+from .verification.source_labels import compile_function_source
+from .verification.tier0 import Tier0Checker, signature_from_source, tier0_boundary
+from .settings import VerificationSettings
 from .base import BaseFunctionManager
 from .hash_utils import stable_hash_for_rows
 from ..common.model_to_fields import model_to_fields, with_ui_editable_forced_false
@@ -125,6 +151,25 @@ FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
 FUNCTIONS_PRIMITIVES_TABLE = "Functions/Primitives"
 FUNCTIONS_META_TABLE = "Functions/Meta"
+FUNCTIONS_VERIFICATIONS_TABLE = "Functions/Verifications"
+# Ledger state the runtime maintains; hidden from catalogue reads that do not
+# hand back callables (fixtures alone can run to tens of kilobytes).
+_LEDGER_INTERNAL_FIELDS = ("fixtures", "ledger", "static_review", "verified_hash")
+
+
+def strip_ledger_internals(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return ``rows`` without the ledger state a reader of the catalogue never acts on."""
+    hidden = set(_LEDGER_INTERNAL_FIELDS)
+    return [
+        (
+            {k: v for k, v in row.items() if k not in hidden}
+            if isinstance(row, dict)
+            else row
+        )
+        for row in rows
+    ]
+
+
 # Sentinel: omit ``destination`` to federate; pass ``None``/``"personal"``/``"team:<id>"`` to scope.
 _DESTINATION_UNSET = object()
 FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, default None
@@ -1821,6 +1866,14 @@ class FunctionManager(BaseFunctionManager):
                 fields=model_to_fields(FunctionsMeta),
                 unique_keys={"meta_id": "int"},
             ),
+            TableContext(
+                name=FUNCTIONS_VERIFICATIONS_TABLE,
+                description=(
+                    "Append-only verification verdicts for compositional "
+                    "functions, one row per pass per call."
+                ),
+                fields=model_to_fields(VerificationRow),
+            ),
         ]
 
     # ------------------------------------------------------------------ #
@@ -1869,6 +1922,10 @@ class FunctionManager(BaseFunctionManager):
             FUNCTIONS_PRIMITIVES_TABLE,
         )
         self._meta_ctx = ContextRegistry.get_context(self, FUNCTIONS_META_TABLE)
+        self._verifications_ctx = ContextRegistry.get_context(
+            self,
+            FUNCTIONS_VERIFICATIONS_TABLE,
+        )
 
         # (context, managed_by) pairs whose custom sync already ran this
         # process; each source's pass is memoised independently.
@@ -2660,6 +2717,441 @@ class FunctionManager(BaseFunctionManager):
             return None
         assert len(logs) == 1, f"Multiple functions found with id {function_id!r}."
         return logs[0]
+
+    # ------------------------------------------------------------------ #
+    #  Verification ledger                                                #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def verification_settings(self) -> VerificationSettings:
+        from unify.settings import SETTINGS
+
+        return SETTINGS.function.verification
+
+    def function_trust_hash(self, fn: Dict[str, Any]) -> str:
+        """Trust hash of a compositional row: source, dependency closure, venv, language."""
+        return _function_trust_hash(
+            fn,
+            resolve_row=lambda name: self._get_function_data_by_name(name=name),
+            resolve_venv=lambda venv_id: self.get_venv(venv_id=venv_id),
+        )
+
+    def _primitive_rows_by_name(self) -> Dict[str, Dict[str, Any]]:
+        """Materialized primitive rows keyed by name, for integration action classes."""
+        try:
+            return {row["name"]: row for row in self._primitive_logs()}
+        except Exception:
+            return {}
+
+    def classify_function(
+        self,
+        source: str,
+        *,
+        known_function_names: Set[str],
+        primitive_rows: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Classification:
+        """Detect the effect-class lower bound of ``source`` from its AST."""
+
+        def _dependency_class(name: str) -> Optional[SideEffectClass]:
+            row = self._get_function_data_by_name(name=name)
+            if row is None:
+                return None
+            return SideEffectClass(
+                str(row.get("side_effect_class") or SideEffectClass.unsafe_effectful),
+            )
+
+        return classify_source(
+            source,
+            known_function_names=known_function_names,
+            dependency_class=_dependency_class,
+            primitive_rows=(
+                primitive_rows
+                if primitive_rows is not None
+                else self._primitive_rows_by_name()
+            ),
+        )
+
+    def _verification_fields_for_source(
+        self,
+        *,
+        source: str,
+        fn_obj: Optional[Callable[..., Any]],
+        known_function_names: Set[str],
+        prior: Optional[Dict[str, Any]] = None,
+        primitive_rows: Optional[Dict[str, Dict[str, Any]]] = None,
+        authored_contract: Optional[Dict[str, Any]] = None,
+        authored_fixtures: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Ledger fields for a row whose content is ``source``.
+
+        A stored librarian confirmation survives while it still sits at or
+        above the newly detected bound; the policy survives always (it only
+        raises the bar); fixtures survive so they can be replayed against the
+        new content; authored postconditions survive unless replaced. Everything
+        hash-bound resets: the row starts on the ramp.
+        """
+        prior = prior or {}
+        classification = self.classify_function(
+            source,
+            known_function_names=known_function_names,
+            primitive_rows=primitive_rows,
+        )
+        confirmed: Optional[SideEffectClass] = None
+        if prior.get("class_source") == "librarian" and prior.get("side_effect_class"):
+            candidate = SideEffectClass(str(prior["side_effect_class"]))
+            if candidate.rank >= classification.detected.rank:
+                confirmed = candidate
+        effective = effective_class(
+            detected=classification.detected,
+            source=classification.source,
+            confirmed=confirmed,
+        )
+        hinted = (
+            contract_from_callable(fn_obj) if fn_obj is not None else FunctionContract()
+        )
+        if authored_contract is None:
+            prior_contract = prior.get("contract") or {}
+            prior_postconditions = list(
+                (
+                    prior_contract.get("postconditions")
+                    if isinstance(prior_contract, dict)
+                    else None
+                )
+                or [],
+            )
+            authored_contract = (
+                {"postconditions": prior_postconditions}
+                if prior_postconditions
+                else None
+            )
+        contract = merge_contract(hinted, authored_contract)
+        settings = self.verification_settings
+        stored_fixtures = list(prior.get("fixtures") or [])
+        if authored_fixtures is not None:
+            if effective is not SideEffectClass.safe_noop:
+                raise ValueError(
+                    "Fixtures are only meaningful for safe_noop functions; "
+                    f"this function is {effective.value}.",
+                )
+            authored = coerce_fixtures(
+                authored_fixtures,
+                max_bytes=settings.max_fixture_bytes,
+            )
+            merged: Dict[str, Dict[str, Any]] = {
+                item.get("args_signature"): item for item in stored_fixtures
+            }
+            for fixture in authored:
+                merged[fixture.args_signature] = fixture.model_dump(mode="json")
+            stored_fixtures = list(merged.values())[
+                -settings.max_fixtures_per_function :
+            ]
+        if effective is not SideEffectClass.safe_noop:
+            # Fixtures record pure computation only; the world moved for every
+            # other class, so replaying them would prove nothing.
+            stored_fixtures = []
+        return {
+            "side_effect_class_detected": classification.detected.value,
+            "side_effect_class": effective.value,
+            "class_source": (
+                "librarian" if confirmed is not None else classification.source
+            ),
+            "class_rationale": (
+                prior.get("class_rationale") if confirmed is not None else None
+            ),
+            "verification_policy": dict(prior.get("verification_policy") or {}),
+            "verified_hash": None,
+            "static_review": None,
+            "ledger": VerificationSummary().model_dump(mode="json"),
+            "contract": contract.model_dump(mode="json"),
+            "fixtures": stored_fixtures,
+            "verify": True,
+        }
+
+    def _replay_fixtures_for_entry(
+        self,
+        *,
+        name: str,
+        entry: Dict[str, Any],
+        namespace: Dict[str, Any],
+    ) -> None:
+        """Replay a ``safe_noop`` entry's fixtures through its new implementation.
+
+        Any mismatch raises ``FixtureRegressionError`` before the row is
+        written. When every fixture passes, the ledger is seeded with one
+        ``tier0`` pass per fixture under the new trust hash, so a pure function
+        that still reproduces its recorded behaviour needs no live runs beyond
+        its static review to be trusted again.
+        """
+        fixtures = [
+            Fixture.model_validate(item) for item in entry.get("fixtures") or []
+        ]
+        if (
+            not fixtures
+            or entry.get("side_effect_class") != SideEffectClass.safe_noop.value
+        ):
+            return
+        self._inject_dependencies(
+            {"name": name, "depends_on": entry.get("depends_on") or []},
+            namespace=namespace,
+            visited={name},
+        )
+        fn_obj = namespace.get(name)
+        if not callable(fn_obj):
+            return
+
+        from unify.common.asyncio_compat import run_coro_sync
+
+        replayed = run_coro_sync(
+            lambda: replay_fixtures(fixtures, fn_obj, function_name=name),
+        )
+        probe_row = {
+            "name": name,
+            "implementation": entry.get("implementation"),
+            "depends_on": entry.get("depends_on") or [],
+            "language": entry.get("language") or "python",
+            "venv_id": entry.get("venv_id"),
+        }
+        entry["verified_hash"] = self.function_trust_hash(probe_row)
+        entry["ledger"] = VerificationSummary(
+            passes={VerdictKind.tier0.value: replayed},
+            distinct_args_signatures=[fixture.args_signature for fixture in fixtures],
+        ).model_dump(mode="json")
+
+    @staticmethod
+    def _unclassifiable_verification_fields() -> Dict[str, Any]:
+        """Ledger fields for a row whose source cannot be analysed: unsafe until confirmed."""
+        return {
+            "side_effect_class_detected": SideEffectClass.unsafe_effectful.value,
+            "side_effect_class": SideEffectClass.unsafe_effectful.value,
+            "class_source": "inferred_third_party",
+            "class_rationale": None,
+            "verification_policy": {},
+            "verified_hash": None,
+            "static_review": None,
+            "ledger": VerificationSummary().model_dump(mode="json"),
+            "contract": FunctionContract().model_dump(mode="json"),
+            "fixtures": [],
+            "verify": True,
+        }
+
+    def _hydrate_verification_fields(
+        self,
+        rows: List[Dict[str, Any]],
+        *,
+        default_context: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Backfill ledger fields on compositional rows written before they existed.
+
+        Idempotent: a row that already carries ``side_effect_class`` is left
+        untouched. A row lacking it is classified from its stored source, the
+        fields are persisted on the row, and the in-memory dict is updated so
+        every reader sees a classified row.
+        """
+        pending = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and not row.get("is_primitive")
+            and row.get("side_effect_class") is None
+            and row.get("function_id") is not None
+        ]
+        if not pending:
+            return rows
+        known_names: Set[str] = set()
+        for row in rows:
+            name = row.get("name") if isinstance(row, dict) else None
+            if isinstance(name, str):
+                known_names.add(name)
+        primitive_rows = self._primitive_rows_by_name()
+        for row in pending:
+            source = row.get("implementation")
+            if not isinstance(source, str) or not source.strip():
+                continue
+            fields = self._unclassifiable_verification_fields()
+            if str(row.get("language") or "python") == "python":
+                stripped = _strip_custom_function_decorators(source)
+                fn_obj: Any = None
+                try:
+                    namespace = create_base_globals()
+                    self._inject_forward_ref_annotation_placeholders(
+                        stripped,
+                        namespace=namespace,
+                    )
+                    exec(stripped, namespace)
+                    fn_obj = namespace.get(str(row.get("name")))
+                except Exception:
+                    fn_obj = None
+                try:
+                    fields = self._verification_fields_for_source(
+                        source=stripped,
+                        fn_obj=fn_obj if callable(fn_obj) else None,
+                        known_function_names=known_names,
+                        prior=row,
+                        primitive_rows=primitive_rows,
+                    )
+                except (SyntaxError, ValueError):
+                    logger.warning(
+                        "Function %r could not be classified from its stored source; "
+                        "treating it as unsafe_effectful.",
+                        row.get("name"),
+                    )
+            context = row.get("_context") or default_context or self._compositional_ctx
+            self._persist_verification_fields(
+                function_id=int(row["function_id"]),
+                fields=fields,
+                context=str(context),
+            )
+            row.update(fields)
+        return rows
+
+    def _persist_verification_fields(
+        self,
+        *,
+        function_id: int,
+        fields: Dict[str, Any],
+        context: Optional[str] = None,
+    ) -> None:
+        """Write ledger-owned fields onto the row with ``function_id``."""
+        ctx = context or self._compositional_ctx
+        logs = unisdk.get_logs(
+            context=ctx,
+            filter=f"function_id == {int(function_id)}",
+            from_fields=["function_id"],
+            limit=1,
+        )
+        if not logs:
+            raise ValueError(f"No function with id {function_id!r} exists in {ctx}.")
+        unisdk.update_logs(
+            logs=[logs[0].id],
+            context=ctx,
+            entries=dict(fields),
+            overwrite=True,
+        )
+
+    def record_verification(self, row: VerificationRow) -> None:
+        """Append one verdict row to ``Functions/Verifications``."""
+        payload = row.model_dump(mode="json")
+        if payload.get("created_at") is None:
+            payload["created_at"] = datetime.now(timezone.utc).isoformat()
+        unity_create_logs(
+            context=self._verifications_ctx,
+            entries=[payload],
+            stamp_authoring=False,
+            batched=False,
+        )
+
+    def _write_off_loop(self, fn: Callable[[], None], *, what: str) -> None:
+        """Run a ledger write without blocking the caller's event loop.
+
+        Bounded retry: one immediate retry, then the failure is logged. A
+        lost row only delays trust; it never grants it.
+        """
+
+        def _attempt() -> None:
+            for attempt in (1, 2):
+                try:
+                    fn()
+                    return
+                except Exception as exc:
+                    if attempt == 2:
+                        logger.warning("%s failed after retry: %s", what, exc)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _attempt()
+            return
+        loop.run_in_executor(None, _attempt)
+
+    def record_verification_nowait(self, row: VerificationRow) -> None:
+        """Append a verdict row without awaiting the write."""
+        self._write_off_loop(
+            lambda: self.record_verification(row),
+            what=f"Verification row write for function {row.function_id}",
+        )
+
+    def capture_fixture_nowait(
+        self,
+        fn: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        """Persist captured fixtures for ``fn`` without awaiting the write."""
+        function_id = int(fn["function_id"])
+        context = fn.get("_context")
+        self._write_off_loop(
+            lambda: self._persist_verification_fields(
+                function_id=function_id,
+                fields=fields,
+                context=str(context) if context else None,
+            ),
+            what=f"Fixture capture for function {function_id}",
+        )
+
+    def _tier0_checker(
+        self,
+        func_data: Dict[str, Any],
+        *,
+        call_site: str = "root",
+    ) -> Tier0Checker:
+        return Tier0Checker(row=func_data, writer=self, call_site=call_site)
+
+    def _boundary(
+        self,
+        raw: Callable[..., Any],
+        func_data: Dict[str, Any],
+    ) -> Callable[..., Any]:
+        """The namespace-facing callable for a compositional function.
+
+        Lineage tracking sits inside; tier-0 contract checks and fixture
+        capture sit outside so every call site — a plan namespace or a
+        symbolic closure — pays the same deterministic check.
+        """
+        name = str(func_data.get("name"))
+        inner = raw
+        if not isinstance(inner, _LineageTrackedFunction):
+            inner = _LineageTrackedFunction(raw, name)
+        underlying = getattr(raw, "__wrapped__", raw)
+        if isinstance(underlying, _VenvFunctionProxy):
+            # Venv proxies carry no Python signature; derive one from the source.
+            return tier0_boundary(
+                inner,
+                raw=None,
+                checker=self._tier0_checker(func_data),
+                signature=signature_from_source(func_data.get("implementation")),
+            )
+        return tier0_boundary(
+            inner,
+            raw=underlying if callable(underlying) else None,
+            checker=self._tier0_checker(func_data),
+        )
+
+    def list_verifications(
+        self,
+        *,
+        function_id: int,
+        function_hash: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """Verdict rows for one function, newest last."""
+        clauses = [f"function_id == {int(function_id)}"]
+        if function_hash is not None:
+            clauses.append(f"function_hash == {json.dumps(function_hash)}")
+        logs = unisdk.get_logs(
+            context=self._verifications_ctx,
+            filter=" and ".join(clauses),
+            limit=limit,
+        )
+        rows = [lg.entries for lg in logs]
+        rows.sort(key=lambda entry: str(entry.get("created_at") or ""))
+        return rows
+
+    def derive_verify_for_row(self, row: Dict[str, Any]) -> bool:
+        """``verify`` for a compositional row under the current settings and content."""
+        return derive_verify(
+            row,
+            settings=self.verification_settings,
+            current_hash=self.function_trust_hash(row),
+        )
 
     # ------------------------------------------------------------------ #
     #  Public API                                                        #
@@ -3753,12 +4245,54 @@ class FunctionManager(BaseFunctionManager):
                     available_names=self._available_dependency_names(),
                 )
             ]
+        # Synced content changed: the row goes back on the ramp under a fresh
+        # classification (a librarian confirmation survives if still in bounds).
+        update_data.update(
+            self._derived_verification_fields_for_row(
+                update_data,
+                prior=log.entries,
+            ),
+        )
         unisdk.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
             entries=update_data,
             overwrite=True,
         )
+
+    def _derived_verification_fields_for_row(
+        self,
+        data: Dict[str, Any],
+        *,
+        prior: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Ledger fields derived from a row dict that carries its implementation."""
+        source = data.get("implementation")
+        if not isinstance(source, str) or not source.strip():
+            return self._unclassifiable_verification_fields()
+        if str(data.get("language") or "python") != "python":
+            return self._unclassifiable_verification_fields()
+        stripped = _strip_custom_function_decorators(source)
+        fn_obj: Any = None
+        try:
+            namespace = create_base_globals()
+            self._inject_forward_ref_annotation_placeholders(
+                stripped,
+                namespace=namespace,
+            )
+            exec(stripped, namespace)
+            fn_obj = namespace.get(str(data.get("name")))
+        except Exception:
+            fn_obj = None
+        try:
+            return self._verification_fields_for_source(
+                source=stripped,
+                fn_obj=fn_obj if callable(fn_obj) else None,
+                known_function_names=self._available_dependency_names(),
+                prior=prior,
+            )
+        except (SyntaxError, ValueError):
+            return self._unclassifiable_verification_fields()
 
     def _insert_custom_function(self, data: Dict[str, Any]) -> int:
         """Insert a new custom function."""
@@ -3771,6 +4305,7 @@ class FunctionManager(BaseFunctionManager):
                 available_names=self._available_dependency_names(),
             )
         ]
+        insert_data.update(self._derived_verification_fields_for_row(insert_data))
         result = unity_create_logs(
             context=self._compositional_ctx,
             entries=[insert_data],
@@ -4160,7 +4695,8 @@ class FunctionManager(BaseFunctionManager):
         implementations: Union[str, List[str]],
         language: Literal["python", "bash", "zsh", "sh", "powershell"] = "python",
         preconditions: Optional[Dict[str, Dict]] = None,
-        verify: Optional[Dict[str, bool]] = None,
+        contracts: Optional[Dict[str, Dict[str, Any]]] = None,
+        fixtures: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
         venv_id: Optional[int] = None,
@@ -4172,7 +4708,8 @@ class FunctionManager(BaseFunctionManager):
             implementations: Function source code (single string or list of strings).
             language: The language/interpreter for the function(s). Default is "python".
             preconditions: Optional preconditions for functions.
-            verify: Optional verification settings (name -> bool).
+            contracts: Optional per-function contract additions (postconditions).
+            fixtures: Optional per-function recorded (args, result) pairs.
             overwrite: If True, update existing functions; if False, skip duplicates.
             raise_on_error: If True (default), raise ValueError when any function
                 fails to add. If False, errors are returned in the result dict.
@@ -4189,8 +4726,10 @@ class FunctionManager(BaseFunctionManager):
 
         if preconditions is None:
             preconditions = {}
-        if verify is None:
-            verify = {}
+        if contracts is None:
+            contracts = {}
+        if fixtures is None:
+            fixtures = {}
         if isinstance(implementations, str):
             implementations = [implementations]
 
@@ -4200,7 +4739,6 @@ class FunctionManager(BaseFunctionManager):
                 implementations=implementations,
                 language=language,
                 preconditions=preconditions,
-                verify=verify,
                 overwrite=overwrite,
                 raise_on_error=raise_on_error,
             )
@@ -4228,6 +4766,7 @@ class FunctionManager(BaseFunctionManager):
                 parse_errors[key] = f"error: {e}"
 
         results: Dict[str, str] = parse_errors
+        fixture_regressions: List[FixtureRegressionError] = []
 
         # Get existing functions for duplicate detection and dependency checking
         try:
@@ -4241,6 +4780,11 @@ class FunctionManager(BaseFunctionManager):
             existing_functions = {}
             existing_names = set()
             all_known_function_names = temp_names
+        primitive_rows = {
+            name: data
+            for name, data in existing_functions.items()
+            if data.get("is_primitive")
+        }
 
         # Check for duplicates and separate into new vs. existing functions
         duplicates_to_skip: Set[str] = set()
@@ -4306,7 +4850,13 @@ class FunctionManager(BaseFunctionManager):
                 docstring = inspect.getdoc(fn_obj) or ""
                 embedding_text = f"Function Name: {name}\nSignature: {signature}\nDocstring: {docstring}"
                 precondition = preconditions.get(name)
-                should_verify = verify.get(name, True)
+
+                prior_log = None
+                if name in existing_to_update:
+                    prior_log = self._get_log_by_function_id(
+                        function_id=existing_functions[name]["function_id"],
+                        raise_if_missing=True,
+                    )
 
                 entry_data = {
                     "language": "python",
@@ -4317,7 +4867,6 @@ class FunctionManager(BaseFunctionManager):
                     "third_party_imports": sorted(tp_imports),
                     "embedding_text": embedding_text,
                     "precondition": precondition,
-                    "verify": should_verify,
                     "stale_reasons": [
                         reason.model_dump(mode="json")
                         for reason in self._dependency_stale_reasons(
@@ -4325,17 +4874,29 @@ class FunctionManager(BaseFunctionManager):
                             available_names=all_known_function_names,
                         )
                     ],
+                    **self._verification_fields_for_source(
+                        source=source,
+                        fn_obj=fn_obj,
+                        known_function_names=all_known_function_names,
+                        prior=prior_log.entries if prior_log is not None else None,
+                        primitive_rows=primitive_rows,
+                        authored_contract=contracts.get(name),
+                        authored_fixtures=fixtures.get(name),
+                    ),
                 }
 
                 if venv_id is not None:
                     entry_data["venv_id"] = venv_id
 
-                if name in existing_to_update:
+                self._replay_fixtures_for_entry(
+                    name=name,
+                    entry=entry_data,
+                    namespace=namespace,
+                )
+
+                if prior_log is not None:
                     # Update existing function
-                    log_id = self._get_log_by_function_id(
-                        function_id=existing_functions[name]["function_id"],
-                        raise_if_missing=True,
-                    ).id
+                    log_id = prior_log.id
                     log_ids_to_update.append(log_id)
                     log_id_to_name[log_id] = name
                     entries_to_update.append(entry_data)
@@ -4346,6 +4907,9 @@ class FunctionManager(BaseFunctionManager):
                     entry_data["guidance_ids"] = []
                     entries_to_create.append(entry_data)
                     results[name] = "added"
+            except FixtureRegressionError as e:
+                results[name] = f"error: {e}"
+                fixture_regressions.append(e)
             except ValueError as e:
                 results[name] = f"error: {e}"
             except Exception as e:
@@ -4399,6 +4963,8 @@ class FunctionManager(BaseFunctionManager):
 
         # Check for errors and raise if requested
         if raise_on_error:
+            if fixture_regressions:
+                raise fixture_regressions[0]
             errors = {k: v for k, v in results.items() if v.startswith("error")}
             if errors:
                 error_details = "; ".join(f"{k}: {v}" for k, v in errors.items())
@@ -4412,7 +4978,6 @@ class FunctionManager(BaseFunctionManager):
         implementations: List[str],
         language: Literal["bash", "zsh", "sh", "powershell"],
         preconditions: Dict[str, Dict],
-        verify: Dict[str, bool],
         overwrite: bool,
         raise_on_error: bool = True,
     ) -> Dict[str, str]:
@@ -4489,8 +5054,10 @@ class FunctionManager(BaseFunctionManager):
             try:
                 embedding_text = f"Function Name: {name}\nLanguage: {lang}\nSignature: {argspec}\nDocstring: {docstring}"
                 precondition = preconditions.get(name)
-                should_verify = verify.get(name, True)
 
+                # A shell script can reach anything on the machine; without an
+                # AST to bound it, it sits at the unsafe end until a librarian
+                # confirms otherwise.
                 entry_data = {
                     "argspec": argspec,
                     "docstring": docstring,
@@ -4499,8 +5066,8 @@ class FunctionManager(BaseFunctionManager):
                     "depends_on": [],  # Shell scripts don't have auto-detected dependencies
                     "embedding_text": embedding_text,
                     "precondition": precondition,
-                    "verify": should_verify,
                     "stale_reasons": [],
+                    **self._unclassifiable_verification_fields(),
                 }
 
                 if name in existing_to_update:
@@ -4623,7 +5190,10 @@ class FunctionManager(BaseFunctionManager):
                         f"⏱️ [FM._get_function_data_by_name] found (attempt={attempt}, "
                         f"query={_q_ms:.0f}ms, total={(_time.perf_counter() - _gfdn_t0) * 1000:.0f}ms)",
                     )
-                    return logs[0].entries
+                    return self._hydrate_verification_fields(
+                        [logs[0].entries],
+                        default_context=context,
+                    )[0]
                 logger.debug(
                     f"⏱️ [FM._get_function_data_by_name] miss (attempt={attempt}, "
                     f"query={_q_ms:.0f}ms, total={(_time.perf_counter() - _gfdn_t0) * 1000:.0f}ms)",
@@ -4709,7 +5279,7 @@ class FunctionManager(BaseFunctionManager):
             namespace=namespace,
         )
 
-        exec(implementation, namespace)
+        exec(compile_function_source(func_name, implementation), namespace)
         raw_fn = namespace.get(func_name)
         if not callable(raw_fn):
             raise ValueError(
@@ -4943,8 +5513,9 @@ class FunctionManager(BaseFunctionManager):
                     dep_data,
                     namespace=namespace,
                 )
-                # Wrap boundary so inter-function calls create lineage frames.
-                namespace[dep_name] = _LineageTrackedFunction(_venv_cb, dep_name)
+                # Wrap boundary so inter-function calls create lineage frames
+                # and pay the tier-0 contract check.
+                namespace[dep_name] = self._boundary(_venv_cb, dep_data)
                 # Treat venv functions as atomic; do not recurse into their deps.
                 continue
 
@@ -4957,15 +5528,10 @@ class FunctionManager(BaseFunctionManager):
                 namespace=namespace,
             )
             # replace namespace[dep_name] with wrapper so inter-function calls
-            # also flow through lineage/event boundaries.
-            try:
-                raw_dep = namespace.get(dep_name)
-                if callable(raw_dep):
-                    # Avoid double-wrapping.
-                    if not isinstance(raw_dep, _LineageTrackedFunction):
-                        namespace[dep_name] = _LineageTrackedFunction(raw_dep, dep_name)
-            except Exception:
-                pass
+            # also flow through lineage/event boundaries and tier-0 checks.
+            raw_dep = namespace.get(dep_name)
+            if callable(raw_dep) and not hasattr(raw_dep, "__tier0_inner__"):
+                namespace[dep_name] = self._boundary(raw_dep, dep_data)
 
             nested = dep_data.get("depends_on") or []
             if isinstance(nested, list):
@@ -5055,23 +5621,17 @@ class FunctionManager(BaseFunctionManager):
             if func_data.get("venv_id") is not None:
                 # Venv: proxy goes in namespace (only way to call them)
                 fn = self._create_venv_callable(func_data, namespace=namespace)
-                # Wrap boundary for lineage/events and keep proxy for return value.
-                namespace[name] = _LineageTrackedFunction(fn, name)
+                # Wrap boundary for lineage/events and tier-0; keep proxy for return value.
+                namespace[name] = self._boundary(fn, func_data)
             else:
                 # In-process: exec puts raw function in namespace, return proxy to caller
                 # DON'T overwrite namespace - raw function stays for internal use
                 fn = self._create_in_process_callable(func_data, namespace=namespace)
                 # replace namespace[name] with wrapper so inter-function calls
-                # also flow through lineage/event boundaries.
-                try:
-                    raw_root = namespace.get(name)
-                    if callable(raw_root) and not isinstance(
-                        raw_root,
-                        _LineageTrackedFunction,
-                    ):
-                        namespace[name] = _LineageTrackedFunction(raw_root, name)
-                except Exception:
-                    pass
+                # also flow through lineage/event boundaries and tier-0 checks.
+                raw_root = namespace.get(name)
+                if callable(raw_root) and not hasattr(raw_root, "__tier0_inner__"):
+                    namespace[name] = self._boundary(raw_root, func_data)
 
             callables.append(fn)
 
@@ -5145,13 +5705,19 @@ class FunctionManager(BaseFunctionManager):
 
         compositional_rows: List[Dict[str, Any]] = []
         for context in self._read_compositional_contexts():
-            compositional_rows.extend(
+            context_rows = [
                 lg.entries
                 for lg in unisdk.get_logs(
                     context=context,
                     filter=self._scoped_filter(None),
                     exclude_fields=list_private_fields(context),
                 )
+            ]
+            compositional_rows.extend(
+                self._hydrate_verification_fields(
+                    context_rows,
+                    default_context=context,
+                ),
             )
 
         primitive_rows: List[Dict[str, Any]] = []
@@ -5663,9 +6229,10 @@ class FunctionManager(BaseFunctionManager):
             )
         except ToolErrorException as exc:
             return exc.payload
+        self._hydrate_verification_fields(rows)
 
         if not _return_callable:
-            # Strip implementations if not requested (reduces payload size)
+            rows = strip_ledger_internals(rows)
             if not include_implementations:
                 rows = [
                     {k: v for k, v in row.items() if k != "implementation"}
@@ -5770,6 +6337,8 @@ class FunctionManager(BaseFunctionManager):
             unique_id_field="function_id",
             backfill=True,
         )
+        if _return_callable:
+            self._hydrate_verification_fields(results)
 
         if not _return_callable:
             compact_results = self._compact_function_search_rows(results)
@@ -7063,7 +7632,11 @@ class FunctionManager(BaseFunctionManager):
         language = func_data.get("language", "python")
 
         if language == "python":
-            return await self._execute_python_function(
+            checker = self._tier0_checker(func_data)
+            named_kwargs = dict(call_kwargs or {})
+            if checker.active:
+                checker.check_input(named_kwargs)
+            outcome = await self._execute_python_function(
                 func_data=func_data,
                 implementation=implementation,
                 call_kwargs=call_kwargs,
@@ -7074,6 +7647,13 @@ class FunctionManager(BaseFunctionManager):
                 extra_namespaces=ns,
                 _parent_chat_context=_parent_chat_context,
             )
+            if (
+                checker.active
+                and isinstance(outcome, dict)
+                and not outcome.get("error")
+            ):
+                checker.check_output(result=outcome.get("result"), kwargs=named_kwargs)
+            return outcome
         elif language in ("bash", "zsh", "sh", "powershell"):
             return await self._execute_shell_function(
                 func_data=func_data,
@@ -7836,7 +8416,7 @@ if __name__ == "__main__":
                     ),
                 )
 
-            exec(to_exec, globals_dict)
+            exec(compile_function_source(definition.name, to_exec), globals_dict)
             fn = globals_dict.get(definition.name)
             if fn is None:
                 raise ValueError(

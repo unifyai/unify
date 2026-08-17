@@ -49,7 +49,8 @@ class BaseFunctionManager(BaseStateManager):
         implementations: Union[str, List[str]],
         language: FunctionLanguage = "python",
         preconditions: Optional[Dict[str, Dict]] = None,
-        verify: Optional[Dict[str, bool]] = None,
+        contracts: Optional[Dict[str, Dict[str, Any]]] = None,
+        fixtures: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
         venv_id: Optional[int] = None,
@@ -64,7 +65,8 @@ class BaseFunctionManager(BaseStateManager):
             implementations: str | list[str],
             language: Literal["python", "bash", "zsh", "sh", "powershell"] = "python",
             preconditions: dict[str, dict] | None = None,
-            verify: dict[str, bool] | None = None,
+            contracts: dict[str, dict] | None = None,
+            fixtures: dict[str, list[dict]] | None = None,
             overwrite: bool = False,
             raise_on_error: bool = True,
             venv_id: int | None = None,
@@ -85,10 +87,28 @@ class BaseFunctionManager(BaseStateManager):
             payload is stored as the ``precondition`` field on the corresponding
             ``Function`` record. The expected shape matches the
             ``Function.precondition`` type (``dict[str, Any] | None``).
-        verify : dict[str, bool] | None, default ``None``
-            Optional mapping from function name → verification requirement.
-            If a function name is present and mapped to ``True`` (default) or ``False``,
-            it sets the ``verify`` field on the ``Function`` record.
+        contracts : dict[str, dict] | None, default ``None``
+            Optional mapping from function name → contract additions. The only
+            authored key is ``postconditions``: a list of boolean Python
+            expressions over ``result`` (the return value) and ``kwargs`` (the
+            call's keyword arguments) that must hold after every call, e.g.
+            ``["isinstance(result, list)", "all(r['amount'] >= 0 for r in result)"]``.
+            Expressions may use only ``result``, ``kwargs``, comparison and
+            boolean operators, and the builtins ``len``, ``all``, ``any``,
+            ``isinstance``, ``min``, ``max``, ``sum``, ``abs``, ``round``,
+            ``sorted``, ``set``, ``list``, ``dict``, ``str``, ``int``,
+            ``float``, ``bool``; anything else is rejected. Input and output
+            JSON schemas are derived from the function's type hints, so hint
+            every parameter and the return type. Postconditions are kept
+            across ``overwrite=True`` unless a new ``contracts`` entry replaces
+            them.
+        fixtures : dict[str, list[dict]] | None, default ``None``
+            Optional mapping from function name → recorded ``{"args": {...},
+            "result": ...}`` pairs the function must reproduce. Only accepted
+            for pure functions (no I/O; effect class ``safe_noop``); each pair
+            must be JSON-serialisable and small. Fixtures are replayed against
+            the implementation whenever it changes; a mismatch rejects the
+            change with ``FixtureRegressionError`` naming the failing pair.
         overwrite : bool, default ``False``
             If ``True``, a function whose name already exists is updated in
             place, keeping its ``function_id`` stable so existing references
