@@ -640,3 +640,64 @@ def test_provenance_is_never_part_of_a_task_patch():
     authored, runtime = split_provider_event_task_update({"description": "x"})
     assert authored == {"description": "x"}
     assert runtime == {}
+
+
+class TestDeclaredParamResolution:
+    """The manifest declares types and defaults; something has to apply them."""
+
+    class _Bundle:
+        slug = "meeting_prep"
+        params_schema = {
+            "lead_minutes": {"type": "number", "default": 30},
+            "skip_recurring": {"type": "boolean", "default": False},
+            "focus": {"type": "textarea"},
+        }
+
+    def test_a_blank_value_becomes_the_declared_default(self):
+        """Blank is how every surface spells "left alone", not a value.
+
+        `""` for a `type: number` used to be stored and forwarded verbatim,
+        leaving the default to be inferred from English help text on each run.
+        """
+        from unify.workflow_manager.workflow_manager import _resolve_declared_params
+
+        resolved = _resolve_declared_params(
+            self._Bundle(),
+            {"lead_minutes": "", "skip_recurring": False, "focus": ""},
+        )
+
+        assert resolved["lead_minutes"] == 30
+        assert resolved["skip_recurring"] is False
+
+    def test_a_supplied_value_is_coerced_to_its_declared_type(self):
+        from unify.workflow_manager.workflow_manager import _resolve_declared_params
+
+        resolved = _resolve_declared_params(
+            self._Bundle(),
+            {"lead_minutes": "45", "skip_recurring": "true"},
+        )
+
+        assert resolved["lead_minutes"] == 45
+        assert resolved["skip_recurring"] is True
+
+    def test_an_absent_param_takes_its_default(self):
+        from unify.workflow_manager.workflow_manager import _resolve_declared_params
+
+        assert _resolve_declared_params(self._Bundle(), {})["lead_minutes"] == 30
+
+    def test_a_param_with_no_declared_default_is_left_alone(self):
+        """Only the manifest may decide a default; this must not invent one."""
+        from unify.workflow_manager.workflow_manager import _resolve_declared_params
+
+        assert _resolve_declared_params(self._Bundle(), {"focus": ""})["focus"] == ""
+
+    def test_an_uncoercible_value_passes_through_untouched(self):
+        """Preserve existing behaviour rather than fail an install on a typo."""
+        from unify.workflow_manager.workflow_manager import _resolve_declared_params
+
+        resolved = _resolve_declared_params(
+            self._Bundle(),
+            {"lead_minutes": "half an hour"},
+        )
+
+        assert resolved["lead_minutes"] == "half an hour"

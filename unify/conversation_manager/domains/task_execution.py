@@ -92,6 +92,35 @@ class _ConversationTaskExecutionDelegate:
         )
 
 
+def _task_authoring_fields(
+    scheduler: Any,
+    task_id: int,
+) -> tuple[str | None, str | None]:
+    """The task's description and response policy, for the turn that reports it.
+
+    `response_policy` is the author's instruction about *delivery* — "Deliver
+    the briefing as one chat message", "Nudges are direct messages". It was
+    being rendered only into the actor's own request, which is the one place
+    that cannot send chat, and never reached the conversation turn that can.
+    The result: whether a completed run reached the user came down to a
+    per-turn judgement made without the author's instruction in view.
+
+    Read from the definition rather than carried on `TaskDue`, because the
+    conversation manager shares a process with the scheduler and can simply
+    ask. A field on the wire would have to be populated by every producer of
+    that event and kept in step with the definition it copies.
+    """
+
+    try:
+        task = scheduler._get_task_or_raise(task_id)
+    except ValueError:
+        return None, None
+    return (
+        getattr(task, "description", None),
+        getattr(task, "response_policy", None),
+    )
+
+
 def _record_task_start_failure(
     *,
     activation: TaskExecutionSnapshot | None,
@@ -134,6 +163,7 @@ async def _register_live_task_handle(
     handle: "SteerableToolHandle",
     query: str,
     task_description: str | None = None,
+    response_policy: str | None = None,
 ) -> int:
     """Register a deterministically started task with CM steering state."""
 
@@ -156,6 +186,8 @@ async def _register_live_task_handle(
     }
     if task_description:
         cm.in_flight_actions[handle_id]["task_description"] = task_description
+    if response_policy:
+        cm.in_flight_actions[handle_id]["response_policy"] = response_policy
     asyncio.create_task(
         managers_utils.actor_watch_result(
             handle_id,
@@ -203,16 +235,16 @@ async def _start_live_task_due_execution(
         f"Scheduled task due now: '{_task_due_label(event, activation)}' "
         f"(task_id={event.task_id})."
     )
-    task_description: str | None = None
-    try:
-        task_description = scheduler._get_task_or_raise(event.task_id).description
-    except ValueError:
-        task_description = None
+    task_description, response_policy = _task_authoring_fields(
+        scheduler,
+        event.task_id,
+    )
     return await _register_live_task_handle(
         cm,
         handle=handle,
         query=query,
         task_description=task_description,
+        response_policy=response_policy,
     )
 
 
@@ -228,11 +260,10 @@ async def _start_live_task_trigger_execution(
         )
 
     scheduler = ManagerRegistry.get_task_scheduler()
-    task_description: str | None = None
-    try:
-        task_description = scheduler._get_task_or_raise(event.task_id).description
-    except ValueError:
-        task_description = None
+    task_description, response_policy = _task_authoring_fields(
+        scheduler,
+        event.task_id,
+    )
     delegate = _ConversationTaskExecutionDelegate(cm.actor)
     delegate_token = current_task_execution_delegate.set(delegate)
     try:
@@ -252,6 +283,7 @@ async def _start_live_task_trigger_execution(
         handle=handle,
         query=query,
         task_description=task_description,
+        response_policy=response_policy,
     )
 
 
@@ -655,7 +687,14 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             error_message,
             error_type="scheduled_task_start_failed",
         )
-        return False
+        # Ask for a turn. The caller only runs the slow brain when this
+        # returns True, and returning False on the failure path meant a run
+        # the user was waiting on could be lost with the assistant never
+        # noticing -- the notification just written above sat unread until
+        # some unrelated later turn, and on a pod with no actor there is
+        # none. A person is owed the news that their scheduled work did not
+        # happen, and this is the only moment anything knows it.
+        return True
 
     cm.notifications_bar.push_notif(
         "Tasks",
@@ -740,7 +779,9 @@ async def _handle_task_trigger_requested_event(
             error_message,
             error_type="rest_task_trigger_start_failed",
         )
-        return False
+        # A turn, for the same reason as the scheduled path: somebody asked
+        # for this run and is owed the news that it did not start.
+        return True
 
     cm.notifications_bar.push_notif(
         "Tasks",

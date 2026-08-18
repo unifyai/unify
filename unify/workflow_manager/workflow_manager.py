@@ -84,6 +84,65 @@ def _connect_phrase(unmet: List[Dict[str, Any]]) -> str:
     return " and ".join(parts)
 
 
+def _coerce_declared_type(value: Any, declared: str) -> Any:
+    """Return `value` as the type the manifest declares, or unchanged.
+
+    Nothing here guesses: an input that will not convert is passed through
+    untouched so the existing behaviour — and any error it produces — is
+    preserved rather than replaced by a validation failure at install time.
+    """
+
+    if declared == "number":
+        if isinstance(value, bool) or not isinstance(value, str):
+            return value
+        text = value.strip()
+        try:
+            return int(text) if text.lstrip("-").isdigit() else float(text)
+        except ValueError:
+            return value
+    if declared == "boolean" and isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        if text in {"false", "no", "off", "0"}:
+            return False
+    return value
+
+
+def _resolve_declared_params(
+    bundle: "WorkflowBundle",
+    params: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Apply the manifest's declared defaults and types to submitted params.
+
+    The schema has always declared `type: number` and `type: boolean`, and
+    nothing read either: presence of the required keys was the whole check, so
+    a number arrived as `""` and every default lived only in English help text
+    for a model to infer. A run then depended on that inference — one live
+    briefing received its `focus` as the two-character string `''`, which is
+    truthy, from a user who had set nothing.
+
+    Resolving here means the stored installation and the run request carry the
+    value the user effectively chose, so the same install behaves the same way
+    on every run instead of once per reading.
+    """
+
+    resolved: Dict[str, Any] = dict(params)
+    for name, spec in bundle.params_schema.items():
+        if not isinstance(spec, Mapping):
+            continue
+        declared = str(spec.get("type") or "").lower()
+        supplied = resolved.get(name)
+        # An empty string is how every surface spells "left blank", including
+        # a checkbox that was never touched; it is an absence, not a value.
+        if name not in resolved or supplied is None or supplied == "":
+            if "default" in spec:
+                resolved[name] = spec.get("default")
+            continue
+        resolved[name] = _coerce_declared_type(supplied, declared)
+    return resolved
+
+
 class WorkflowManager(BaseWorkflowManager):
     """Catalogue of available workflow bundles and their installations."""
 
@@ -265,7 +324,18 @@ class WorkflowManager(BaseWorkflowManager):
         *,
         context: str,
         existing: Optional[Dict[str, Any]],
-    ) -> None:
+    ) -> WorkflowInstallation:
+        """Persist one installation row and return it carrying its real id.
+
+        ``workflow_id`` is auto-counted by Orchestra, so a new installation is
+        built with the ``UNASSIGNED`` placeholder and only acquires an id once
+        the insert lands. Returning the pre-insert record put ``-1`` into the
+        install result, and from there into the durable
+        ``Workflows/Requests.outcome`` blob -- every recorded install claimed
+        an id no row has ever had, so a requests-to-installations join on it
+        matched nothing.
+        """
+
         payload = strip_authoring_assistant_id(record.to_post_json())
         if existing:
             logs = unisdk.get_logs(
@@ -281,12 +351,115 @@ class WorkflowManager(BaseWorkflowManager):
                     entries=payload,
                     overwrite=True,
                 )
-                return
+                return record
         unity_create_logs(
             context=context,
             entries=[payload],
             stamp_authoring=True,
         )
+        return record.model_copy(
+            update={"workflow_id": self._assigned_workflow_id(record, context=context)},
+        )
+
+    def _assigned_workflow_id(
+        self,
+        record: WorkflowInstallation,
+        *,
+        context: str,
+    ) -> int:
+        """Read back the id the insert assigned, falling back to the placeholder."""
+
+        logs = unisdk.get_logs(
+            context=context,
+            filter=f"slug == '{record.slug}'",
+            limit=1,
+        )
+        if not logs:
+            return record.workflow_id
+        assigned = getattr(logs[0], "entries", {}).get("workflow_id")
+        return int(assigned) if assigned is not None else record.workflow_id
+
+    def _distilled_entrypoints(
+        self,
+        slug: str,
+        *,
+        destination: Optional[str],
+    ) -> set:
+        """Function ids this workflow's tasks run.
+
+        Membership is derived rather than stored. A function a run distilled
+        is recorded in exactly one place already -- the ``entrypoint`` on the
+        task the workflow planted -- so a second copy on the function row
+        would be a duplicate that can disagree with it, and would: detaching
+        an entrypoint clears the task's field and would leave the function
+        still claiming to belong here.
+
+        Read before the surfaces are pruned, because pruning deletes the very
+        rows this reads.
+        """
+
+        return {
+            job["entrypoint"]
+            for job in self._planted_jobs(slug, destination=destination)
+            if job.get("entrypoint") is not None
+        }
+
+    def _release_distilled_entrypoints(
+        self,
+        candidates: set,
+        *,
+        slug: str,
+        context: str,
+        destination: Optional[str],
+    ) -> List[int]:
+        """Delete the distilled functions nothing else still references.
+
+        Two things spare a candidate. Another installed workflow's task may
+        run the same function, and a function the bundle itself authored is
+        the functions surface's to prune -- it carries a ``managed_by`` and
+        is in a source, where a distilled one is in none. Deleting either
+        here would take a row out from under the thing that owns it.
+
+        Best-effort: every surface has already cleared by this point, so a
+        leftover function is a cleanup miss, not a half-installed workflow.
+        """
+
+        if not candidates:
+            return []
+        from ..function_manager.function_manager import delete_functions
+
+        try:
+            still_used: set = set()
+            for bundle in self._installed_bundles(context):
+                still_used |= self._distilled_entrypoints(
+                    bundle.slug,
+                    destination=destination,
+                )
+            orphaned = {
+                function_id
+                for function_id in candidates - still_used
+                if not self._function_is_source_owned(function_id)
+            }
+            return delete_functions(orphaned)
+        except Exception:
+            logger.exception(
+                "Failed to release distilled entrypoints for workflow %r",
+                slug,
+            )
+            return []
+
+    @staticmethod
+    def _function_is_source_owned(function_id: int) -> bool:
+        """Whether some reconcile source owns this function row.
+
+        A bundle-authored function carries ``managed_by`` and lives in a
+        source, so the functions surface prunes it on its own terms. Only a
+        row no source owns can have come from a run distilling a trajectory.
+        """
+
+        from ..function_manager.function_manager import function_managed_by
+
+        return bool(function_managed_by(function_id))
 
     def _delete_installation(self, slug: str, *, context: str) -> bool:
         logs = unisdk.get_logs(
@@ -578,7 +751,7 @@ class WorkflowManager(BaseWorkflowManager):
                     ),
                 },
             )
-        return dict(params)
+        return _resolve_declared_params(bundle, params)
 
     # ------------------------------------------------------------------ #
     # Public API                                                         #
@@ -757,7 +930,11 @@ class WorkflowManager(BaseWorkflowManager):
                 surfaces=json.dumps(bundle.surface_names()),
                 destination=destination or "personal",
             )
-            self._write_installation(record, context=context, existing=existing)
+            record = self._write_installation(
+                record,
+                context=context,
+                existing=existing,
+            )
 
         result: Dict[str, Any] = {
             "installed": record.model_dump(mode="json"),
@@ -1333,6 +1510,10 @@ class WorkflowManager(BaseWorkflowManager):
             pruned_surfaces = (
                 [name for name in recorded if name != "data"] if keep_data else recorded
             )
+            # Read before the prune below deletes the task rows it reads.
+            # These are the only record that this workflow's runs distilled
+            # anything -- no bundle source lists a function the runtime wrote.
+            distilled = self._distilled_entrypoints(slug, destination=destination)
             removed, failures = self._plant(
                 bundle,
                 destination=destination,
@@ -1345,6 +1526,17 @@ class WorkflowManager(BaseWorkflowManager):
             # behind would leave a live URL rendering against tables that
             # may no longer be filled.
             withdrawn = self._withdraw_canvases(slug)
+            # Functions a run distilled from this workflow's tasks are in no
+            # bundle source, so the surface prune above cannot see them: it
+            # re-syncs the union of what the bundles declare, and these were
+            # never declared. Without this they survive the uninstall as rows
+            # nothing references or explains.
+            released = self._release_distilled_entrypoints(
+                distilled,
+                slug=slug,
+                context=context,
+                destination=destination,
+            )
             kept = sorted(set(recorded) - set(pruned_surfaces))
             # The installation row goes only after every surface actually
             # cleared. On failure it stays — it holds the recorded surfaces,
@@ -1355,6 +1547,8 @@ class WorkflowManager(BaseWorkflowManager):
         result: Dict[str, Any] = {"slug": slug, "removed": removed}
         if withdrawn:
             result["canvases_removed"] = withdrawn
+        if released:
+            result["distilled_functions_removed"] = released
         if kept:
             result["kept"] = kept
         if failures:

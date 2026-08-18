@@ -3601,16 +3601,34 @@ class TestTaskDueEventHandlers:
             patch(
                 "unify.conversation_manager.domains.task_execution.publish_system_error",
             ) as mock_publish_system_error,
+            patch(
+                "unify.conversation_manager.domains.task_execution."
+                "update_task_run_record",
+            ) as mock_record_failure,
         ):
             should_request_llm = await _handle_task_due_event(event, mock_cm)
 
-        assert should_request_llm is False
+        # A turn is requested so the assistant can say the run did not
+        # happen. Returning False here left the notification written below
+        # unread until some unrelated later turn, and a run the user was
+        # waiting on vanished with nothing said by any channel.
+        assert should_request_llm is True
         assert len(mock_cm.notifications_bar.notifications) == 1
         notification = mock_cm.notifications_bar.notifications[0].content
         assert "failed to start through TaskScheduler.execute" in notification
         assert "delegate mismatch" in notification
         assert "started automatically" not in notification
-        mock_cm.request_llm_run.assert_not_called()
+
+        # The occurrence is terminalized with the real reason. Left open, it
+        # keeps its seat as the definition's head and projection never mints
+        # a successor -- one failure to start would end the series.
+        mock_record_failure.assert_called_once()
+        reference, entries = mock_record_failure.call_args.args
+        assert reference.run_key == "42:101"
+        assert reference.source_task_log_id == 555
+        assert entries["state"] == "failed"
+        assert "delegate mismatch" in entries["error"]
+        assert entries["completed_at"]
         mock_publish_system_error.assert_called_once()
 
     @pytest.mark.asyncio
