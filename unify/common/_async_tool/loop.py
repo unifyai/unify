@@ -53,6 +53,7 @@ from .messages import (
     forward_handle_call,
     schedule_missing_for_message,
     build_helper_ack_content,
+    is_mutable,
 )
 from .tools_data import ToolsData, compute_context_injection
 from .dynamic_tools_factory import DynamicToolFactory
@@ -907,32 +908,45 @@ async def async_tool_loop_inner(
     with suppress(Exception):
         unreplied = find_unreplied_assistant_entries(client)
         if unreplied:
-            # backfill for all such assistant messages (oldest → newest)
+            # backfill for all such assistant messages (oldest → newest).
+            # Each entry is repaired independently, inside its own
+            # try/except: prune_over_quota_tool_calls can now raise (a
+            # below-watermark mutation refused on a resumed client whose
+            # watermark carried over), and a single blanket suppress around
+            # the whole loop would silently abandon every entry after the
+            # one that raised instead of just skipping it.
             for entry in unreplied:
-                amsg = entry["assistant_msg"]
-                # Before scheduling, drop any over-quota tool calls in this message
-                tools_data.prune_over_quota_tool_calls(amsg)
-                # De-duplicate tool calls if pruning is enabled
-                if prune_tool_duplicates and amsg.get("tool_calls"):
-                    unique, pruned = prune_duplicate_tool_calls(amsg["tool_calls"])
-                    if pruned:
-                        amsg["tool_calls"] = unique
-                        entry["missing"] = [
-                            cid for cid in entry["missing"] if cid not in pruned
-                        ]
-                missing_ids = set(entry["missing"])
-                if not missing_ids:
-                    continue
-                await schedule_missing_for_message(
-                    amsg,
-                    missing_ids,
-                    tools_data=tools_data,
-                    context_state=context_state,
-                    propagate_chat_context=propagate_chat_context,
-                    assistant_meta=assistant_meta,
-                    client=client,
-                    msg_dispatcher=_msg_dispatcher,
-                )
+                try:
+                    amsg = entry["assistant_msg"]
+                    # Before scheduling, drop any over-quota tool calls in this message
+                    tools_data.prune_over_quota_tool_calls(amsg)
+                    # De-duplicate tool calls if pruning is enabled
+                    if prune_tool_duplicates and amsg.get("tool_calls"):
+                        unique, pruned = prune_duplicate_tool_calls(amsg["tool_calls"])
+                        if pruned:
+                            amsg["tool_calls"] = unique
+                            entry["missing"] = [
+                                cid for cid in entry["missing"] if cid not in pruned
+                            ]
+                    missing_ids = set(entry["missing"])
+                    if not missing_ids:
+                        continue
+                    await schedule_missing_for_message(
+                        amsg,
+                        missing_ids,
+                        tools_data=tools_data,
+                        context_state=context_state,
+                        propagate_chat_context=propagate_chat_context,
+                        assistant_meta=assistant_meta,
+                        client=client,
+                        msg_dispatcher=_msg_dispatcher,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        f"Preflight repair failed for one assistant entry; "
+                        f"continuing with the rest: {exc}",
+                        prefix="🚨",
+                    )
 
     # ── helper: synthesize mirrored helper tool_calls (no LLM step) ───────────
     # Centralized steering: target selection + per-child dispatcher
@@ -2850,21 +2864,40 @@ async def async_tool_loop_inner(
             _persist_response_content = None  # captured by send_response for surfacing
 
             if msg["tool_calls"]:
-                # prune_over_quota_tool_calls runs first: it asserts msg is
-                # still mutable (an in-place tool_calls edit below the sent
-                # watermark would mutate already-dispatched bytes), which
-                # the dedup mutation right after it relies on too — msg is
+                # Both mutations below edit msg["tool_calls"] in place — safe
+                # only while msg is still mutable (an edit below the sent
+                # watermark would mutate already-dispatched bytes). msg is
                 # this turn's own freshly-generated message (index ==
-                # watermark, nothing dispatched it yet), so the assertion is
-                # expected to always pass here; it exists to keep that
-                # invariant stated rather than accidental.
-                tools_data.prune_over_quota_tool_calls(msg)
+                # watermark, nothing dispatched it yet), so this is expected
+                # to always hold; checked explicitly, up front, so the
+                # invariant is stated rather than accidental and doesn't
+                # depend on which mutation happens to run first.
+                if not is_mutable(client, msg):
+                    logger.error(
+                        "persist-mode tool_calls pruning: msg is already "
+                        "below the sent watermark; an in-place edit would "
+                        "mutate already-dispatched bytes.",
+                        prefix="🚨",
+                    )
+                    raise ValueError(
+                        "persist-mode tool_calls pruning: msg is already "
+                        "below the sent watermark; an in-place edit would "
+                        "mutate already-dispatched bytes.",
+                    )
 
                 # ── De-duplicate tool calls (optional) ────────────────────────
+                # Runs before quota pruning (restored original order): quota
+                # accounting should count unique calls, not raw duplicate
+                # occurrences — a tool called identically 3x against a
+                # max_total_calls=2 limit should spend 1 unit of quota, not 3.
                 if prune_tool_duplicates:
                     unique, _ = prune_duplicate_tool_calls(msg["tool_calls"])
                     if len(unique) != len(msg["tool_calls"]):
                         msg["tool_calls"] = unique
+
+                # Always ensure over-quota tool calls are removed regardless of
+                # deduplication settings, before any scheduling occurs.
+                tools_data.prune_over_quota_tool_calls(msg)
 
                 # If pruning removed all calls and left a placeholder notice, inject a user turn
                 # so the model is prompted to continue. This prevents Assistant->Assistant history

@@ -110,6 +110,14 @@ async def _wait_for_tool_result(
     - a coalesced ``[progress ...]`` / ``[clarification ...]`` user-role
       tail message: what nested-handle adoption (or any notification) now
       writes instead of rewriting a frozen placeholder in place.
+
+    Note for flake triage: neither of those two release conditions is
+    scoped to *tool_name* — a check_status message counts regardless of
+    which call_id it answers, and a progress/clarification message counts
+    regardless of which tool emitted it. In a test with more than one tool
+    in flight at once, a signal from a *different* tool can satisfy this
+    wait early. Callers with that shape should pair this with a more
+    specific assertion afterward rather than relying on the wait alone.
     """
 
     async def _predicate():
