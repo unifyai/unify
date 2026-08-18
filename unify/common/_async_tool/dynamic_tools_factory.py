@@ -50,9 +50,14 @@ action : "stop" | "interject" | "pause" | "resume" | "clarify" | "call" | "ask"
     ask       - Ask a read-only question about a call that is still running, to understand
                 its live progress or intermediate reasoning without stopping it. `payload`
                 is the question. Blocking: spins up a nested inspection turn and returns a
-                short answer. Only valid while the call is still running — once it has
-                completed, use `ask_about_completed_tool` instead (a different id namespace
-                is not needed; the same call_id applies there too).
+                short answer. Intended for a call that is still running; once it has
+                completed, prefer `ask_about_completed_tool` instead (a different id
+                namespace is not needed; the same call_id applies there too) — its
+                docstring never changes, so it is the more idiomatic choice for
+                retrospective questions. A call that finishes in the narrow window
+                between you deciding to steer it and this executing still gets a
+                coherent answer either way: this resolves to the same completed-run
+                answer `ask_about_completed_tool` would have given.
 payload : str | None
     Action-specific content — see above. Omit when the action does not need one
     (stop's reason, pause, resume).
