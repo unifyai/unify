@@ -54,6 +54,15 @@ from tests.helpers import PRECREATED_CONTEXTS, set_session_tags
 from tests.settings import SETTINGS
 from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
+# Diagnostic switch for the async tool loop's sent-watermark append-only
+# transcript invariant (see plan-append-only-transcript). Prod behavior is
+# identical whether this is set or not — it only gates an integrity
+# assertion in generate_with_preprocess plus the below-watermark hashing
+# that backs it, which would otherwise ship real per-turn CPU to prod under
+# an `if __debug__` label. `setdefault` so an explicit override (e.g. a
+# targeted rerun with it forced off) still wins.
+os.environ.setdefault("UNIFY_TRANSCRIPT_INVARIANT_CHECKS", "1")
+
 
 # --------------------------------------------------------------------------- #
 # Orchestra availability check for requires_orchestra marker                   #

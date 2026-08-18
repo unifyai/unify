@@ -94,25 +94,39 @@ async def _wait_for_tool_result(
     timeout: float = 300.0,
     poll: float = 0.05,
 ) -> None:
-    """Wait until *min_results* tool result messages are present.
+    """Wait until *min_results* signals that a tool's state moved past a bare
+    pending placeholder are present.
 
-    If *tool_name* is given, only results **whose ``name`` matches exactly**
-    are counted.  This mirrors the behaviour required by several tests that
-    must synchronise with a tool finishing before proceeding.
+    If *tool_name* is given, a tool-role message counts when its ``name``
+    matches exactly. Bare ``{"_placeholder": "pending"}`` stubs written at
+    schedule time never count, so callers do not race ahead of a real
+    update — but once the sent watermark can freeze that stub before a
+    later update lands, "a real update" itself has two more shapes this
+    also recognizes:
 
-    Bare ``pending`` placeholders written at schedule time are ignored so
-    callers do not race ahead of nested-handle adoption / progress rewrites.
+    - a ``check_status_<call_id>`` tool message: the sole below-watermark
+      delivery path for a final result once the original placeholder has
+      already been dispatched (see plan-append-only-transcript);
+    - a coalesced ``[progress ...]`` / ``[clarification ...]`` user-role
+      tail message: what nested-handle adoption (or any notification) now
+      writes instead of rewriting a frozen placeholder in place.
     """
 
     async def _predicate():
         msgs = client.messages or []
-        n_seen = sum(
-            1
-            for m in msgs
-            if m.get("role") == "tool"
-            and (tool_name is None or m.get("name") == tool_name)
-            and not _is_bare_pending_tool_placeholder(m)
-        )
+        n_seen = 0
+        for m in msgs:
+            role = m.get("role")
+            if role == "tool":
+                name = m.get("name")
+                if tool_name is not None and name != tool_name:
+                    if not (isinstance(name, str) and name.startswith("check_status_")):
+                        continue
+                if _is_bare_pending_tool_placeholder(m):
+                    continue
+                n_seen += 1
+            elif role == "user" and (m.get("_progress_msg") or m.get("_clarify_msg")):
+                n_seen += 1
         return n_seen >= min_results
 
     await _wait_for_condition(_predicate, poll=poll, timeout=timeout)
@@ -217,7 +231,12 @@ async def _wait_for_tool_message_prefix(
     )
 
 
-_USER_PREFIX_COUNTS: dict[tuple[int, str], int] = {}
+import weakref
+
+# Keyed by the client object itself (WeakKeyDictionary), not id(client): a
+# plain id-keyed dict lets a GC'd client's baseline silently apply to a
+# different, later client that happens to be allocated at the same id.
+_USER_PREFIX_COUNTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
 async def _wait_for_user_message_prefix(
@@ -243,14 +262,14 @@ async def _wait_for_user_message_prefix(
         )
 
     start_ts = _time.perf_counter()
-    key = (id(client), prefix)
+    client_counts = _USER_PREFIX_COUNTS.setdefault(client, {})
     try:
         current = _count_user_msgs(client.messages or [], prefix)
     except Exception:
         current = 0
-    baseline = _USER_PREFIX_COUNTS.get(key)
+    baseline = client_counts.get(prefix)
     if baseline is None:
-        _USER_PREFIX_COUNTS[key] = current
+        client_counts[prefix] = current
         if current > 0:
             return
     while _time.perf_counter() - start_ts < timeout:
@@ -258,11 +277,11 @@ async def _wait_for_user_message_prefix(
         cnt = _count_user_msgs(msgs, prefix)
         if baseline is None:
             if cnt > 0:
-                _USER_PREFIX_COUNTS[key] = cnt
+                client_counts[prefix] = cnt
                 return
         else:
             if cnt > baseline:
-                _USER_PREFIX_COUNTS[key] = cnt
+                client_counts[prefix] = cnt
                 return
         await asyncio.sleep(poll)
     raise TimeoutError(
