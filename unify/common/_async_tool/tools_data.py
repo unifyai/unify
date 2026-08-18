@@ -74,7 +74,13 @@ USER_VISIBILITY_GUIDANCE = (
     "the user — they are a pending tool asking you a question it needs answered to "
     'continue. Answer them by calling steer(call_id=<call_id>, action="clarify", '
     "payload=<answer>), not by responding to the user or treating the question "
-    "itself as a request."
+    "itself as a request.\n\n"
+    "user-role messages prefixed with `[steerable <call_id>]` or `[askable <call_id>]` "
+    "are also not from the user — they are lifecycle announcements the loop appends "
+    "automatically when a call becomes steerable or, once it finishes, becomes askable "
+    "via `ask_about_completed_tool`. Do not treat them as requests to incorporate or "
+    "respond to; they exist only so you know which call_id to pass to `steer` or "
+    "`ask_about_completed_tool`."
 )
 
 
@@ -561,6 +567,41 @@ class ToolsData:
         await msg_dispatcher.append_msgs([new_msg])
         info.clarify_msg = new_msg
 
+    @staticmethod
+    def _describe_custom_methods(handle: Any, call_id: str) -> str:
+        """Render a handle's custom methods (beyond the core steering surface)
+        as a short listing — name, signature, one-line docstring — the only
+        place this can live now that `action="call"` methods are validated
+        at execution time instead of minted as their own self-documenting
+        tool. Returns "" when there are none.
+        """
+        with suppress(Exception):
+            # Deferred import: dynamic_tools_factory imports this module at
+            # top level, so importing it back here at call time (not module
+            # load time) avoids a circular import.
+            from .dynamic_tools_factory import DynamicToolFactory
+
+            custom_methods = DynamicToolFactory._discover_custom_public_methods(
+                handle,
+            )
+            lines = []
+            for meth_name, bound in sorted(custom_methods.items()):
+                try:
+                    sig = inspect.signature(bound)
+                except Exception:
+                    sig = "(...)"
+                doc = (inspect.getdoc(bound) or "").strip().splitlines()
+                first_line = doc[0] if doc else ""
+                suffix = f" — {first_line}" if first_line else ""
+                lines.append(f"  - {meth_name}{sig}{suffix}")
+            if lines:
+                return (
+                    f' Custom methods reachable via steer(call_id="{call_id}", '
+                    'action="call", method=<name>, payload=<JSON object>):\n'
+                    + "\n".join(lines)
+                )
+        return ""
+
     async def record_tool_started(
         self,
         info: "ToolCallMetadata",
@@ -575,47 +616,46 @@ class ToolsData:
         steerable"); with the static schema that signal has to live in the
         transcript instead.
 
-        When the call's handle exposes custom methods beyond the core
-        steering surface, they're listed here too (name, signature, one-line
-        docstring) — the only place that information can live now that
-        `action="call"` methods are validated at execution time instead of
-        minted as their own self-documenting tool.
+        Deliberately carries no argument payload — the adjacent assistant
+        `tool_calls` entry already has the full arguments; duplicating them
+        here would freeze a second copy into the prefix forever (T4-2).
+        Custom-method discoverability, when a handle is already attached,
+        lives in `record_tool_capability_delta` instead, so a call that
+        never gets a handle never pays for that either.
         """
-        try:
-            arg_repr = ", ".join(
-                f"{k}={v!r}" for k, v in (info.llm_arguments or {}).items()
-            )
-        except Exception:
-            arg_repr = info.raw_arguments_json
-        content = f"[steerable {info.call_id}] {info.name}({arg_repr}) started."
+        await self._ensure_visibility_guidance_injected(msg_dispatcher)
+        content = f"[steerable {info.call_id}] {info.name} started."
+        await msg_dispatcher.append_msgs(
+            [{"role": "user", "content": content, "_lifecycle_msg": True}],
+        )
 
-        if info.handle is not None:
-            with suppress(Exception):
-                # Deferred import: dynamic_tools_factory imports this module
-                # at top level, so importing it back here at call time (not
-                # module load time) avoids a circular import.
-                from .dynamic_tools_factory import DynamicToolFactory
+    async def record_tool_capability_delta(
+        self,
+        info: "ToolCallMetadata",
+        msg_dispatcher: "LoopMessageDispatcher",
+    ) -> None:
+        """Announce that a call already covered by `record_tool_started`
+        just widened its steer() surface (a handle was adopted).
 
-                custom_methods = DynamicToolFactory._discover_custom_public_methods(
-                    info.handle,
-                )
-                lines = []
-                for meth_name, bound in sorted(custom_methods.items()):
-                    try:
-                        sig = inspect.signature(bound)
-                    except Exception:
-                        sig = "(...)"
-                    doc = (inspect.getdoc(bound) or "").strip().splitlines()
-                    first_line = doc[0] if doc else ""
-                    suffix = f" — {first_line}" if first_line else ""
-                    lines.append(f"  - {meth_name}{sig}{suffix}")
-                if lines:
-                    content += (
-                        f' Custom methods reachable via steer(call_id="{info.call_id}", '
-                        'action="call", method=<name>, payload=<JSON object>):\n'
-                        + "\n".join(lines)
-                    )
-
+        Not a re-announcement: no arguments, no restatement of "started" —
+        only the capability delta (which of interject/pause/ask are newly
+        available) plus any custom methods the handle exposes.
+        """
+        handle = info.handle
+        caps = []
+        if handle is not None:
+            if hasattr(handle, "interject"):
+                caps.append("interject")
+            if hasattr(handle, "pause") or hasattr(handle, "resume"):
+                caps.append("pause")
+            if hasattr(handle, "ask"):
+                caps.append("ask")
+        if not caps:
+            return
+        await self._ensure_visibility_guidance_injected(msg_dispatcher)
+        content = f"[steerable {info.call_id}] now supports {'/'.join(caps)}."
+        if handle is not None:
+            content += self._describe_custom_methods(handle, info.call_id)
         await msg_dispatcher.append_msgs(
             [{"role": "user", "content": content, "_lifecycle_msg": True}],
         )
@@ -634,6 +674,7 @@ class ToolsData:
         nothing else changed) with an appended tail message — the docstring
         itself is now frozen.
         """
+        await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
             f"[askable {call_id}] {name}({arg_repr}) completed and is askable via "
             f'ask_about_completed_tool(tool_id="{call_id}", question=...).'
@@ -652,9 +693,20 @@ class ToolsData:
         unlike the old per-call-id minted tools, there is no name-length
         budget forcing a truncated suffix, so no suffix/endswith matching
         is needed (or wanted: it was a source of ambiguity).
+
+        Scans ``self.pending`` and additionally requires ``not t.done()`` —
+        a task can briefly sit in ``self.pending``/``self.info`` after its
+        underlying coroutine has already finished but before
+        ``process_completed_task`` has popped it. A call in that window must
+        resolve as "not live" so steer() routes it to the same instructive
+        "already completed" error as any other finished call, never
+        dispatches against it as if it were still running.
         """
-        for t, inf in self.info.items():
-            if inf.call_id == call_id:
+        for t in self.pending:
+            if t.done():
+                continue
+            inf = self.info.get(t)
+            if inf is not None and inf.call_id == call_id:
                 return t, inf
         return None, None
 
@@ -1409,10 +1461,11 @@ class ToolsData:
         if self._on_handle_adopted is not None:
             with suppress(Exception):
                 self._on_handle_adopted(nested_task)
-        # Announce steerability now that a real handle backs this call_id —
-        # this is the moment its steer() surface widens beyond a bare stop.
+        # Announce the capability delta now that a real handle backs this
+        # call_id — not a re-announcement of "started" (record_tool_started
+        # already covered call_id discovery when this call was scheduled).
         with suppress(Exception):
-            await self.record_tool_started(metadata, msg_dispatcher)
+            await self.record_tool_capability_delta(metadata, msg_dispatcher)
 
     # ── Helper: adopt multiple handles from a single composite return --------
     async def adopt_multi_nested(
@@ -1526,6 +1579,10 @@ class ToolsData:
             # Announce this child's own synthesized call_id — steer() needs
             # it verbatim, and (unlike the single-handle case) it's not the
             # same id as the original tool call, so there is nothing else
-            # in the transcript the model could read it back from.
+            # in the transcript the model could read it back from. Unlike
+            # schedule_base_tool_call, this child already has its handle at
+            # birth, so the capability delta fires right after — this is
+            # its only announcement, not a re-announcement of anything.
             with suppress(Exception):
                 await self.record_tool_started(metadata, msg_dispatcher)
+                await self.record_tool_capability_delta(metadata, msg_dispatcher)
