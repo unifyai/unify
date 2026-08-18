@@ -86,6 +86,16 @@ _DIGEST_URL_RE = re.compile(r"https?://[^\s\"'<>\]\)]+")
 _DIGEST_SOURCES_CAP = 20
 _DIGEST_RESULT_HEAD_CHARS = 240
 
+# Long trajectories would otherwise grow the digest unboundedly (measured:
+# ~45 tokens/turn, so an uncapped digest blows past the plan's ~2k-token
+# target well before 100 turns and the 20k inspection-request ceiling around
+# 340). Cap turns at head+tail with an explicit elision marker in between —
+# elided turns keep their original transcript `idx`, so they stay reachable
+# via read_child_message even though they're not listed individually.
+_DIGEST_TURNS_HEAD = 17
+_DIGEST_TURNS_TAIL = 17
+_DIGEST_MAX_TURNS = _DIGEST_TURNS_HEAD + _DIGEST_TURNS_TAIL
+
 _DIGEST_SYSTEM_HEADER = (
     "You are inspecting a COMPLETED tool-use conversation to answer a question "
     "about it.\n\n"
@@ -95,12 +105,33 @@ _DIGEST_SYSTEM_HEADER = (
     "execution order (its name, its `thought` argument when the tool supplied "
     "one, a preview of its result, the result's size in bytes, and the message "
     "`idx` it corresponds to), source URLs seen across the run, and the final "
-    "result.\n\n"
+    "result. On a long run, the middle turns may be replaced by a single "
+    '`{"elided": true, ...}` marker giving their count and idx range — those '
+    "turns still exist and are still reachable, just not listed individually.\n\n"
     "If the digest does not contain enough detail to answer precisely, call "
-    "`read_child_message(idx)` with the `idx` of any turn above to fetch that "
-    "exact message from the completed transcript verbatim (compact-serialized, "
-    "capped at 32KB)."
+    "`read_child_message(idx)` with the `idx` of any turn (or any idx inside "
+    "an elided range) to fetch that exact message from the completed "
+    "transcript verbatim (compact-serialized, capped at 32KB)."
 )
+
+
+def _digest_result_head(text: str) -> str:
+    """Pick a representative preview line from a tool result's text.
+
+    A bare ``splitlines()[0]`` previews as noise whenever the first line is
+    purely structural (a pretty-printed JSON opening brace, a rule of
+    dashes) — the actual content sits on line 2+. Prefer the first line that
+    has real content; fall back to a flat character slice when no line
+    qualifies (e.g. single-line results, which are the common case).
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    for line in stripped.splitlines():
+        candidate = line.strip()
+        if len(candidate) >= 3 and any(ch.isalnum() for ch in candidate):
+            return candidate[:_DIGEST_RESULT_HEAD_CHARS]
+    return stripped[:_DIGEST_RESULT_HEAD_CHARS]
 
 
 def _replace_runtime_parent_context(messages: list[dict]) -> list[dict]:
@@ -425,9 +456,9 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         # (built once, cached — repeat asks reuse identical bytes and hit the
         # provider's prefix cache); a still-running handle keeps today's live
         # snapshot (the transcript so far, compact-serialized) since a digest
-        # only exists from completion onward. Checked synchronously, before
-        # any ``await`` below can yield control, so a task that finishes
-        # mid-call can never flip this mid-flight.
+        # only exists from completion onward. No ``await`` precedes this
+        # check (the statements above are synchronous), so nothing can yield
+        # control and let the task finish out from under the branch chosen.
         _is_completed = self.done()
 
         parent_chat_context_safe = make_messages_safe_for_context_dump(
@@ -755,11 +786,12 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         retains: the original request, each tool call in execution order
         (name, its ``thought`` argument when the tool supplied one, a preview
         of its result and the result's size in bytes, and the message index
-        it corresponds to), source URLs seen across the run, and the final
-        result. Cached after the first build so every subsequent call — and
-        every completed-``ask()`` that embeds it — returns byte-identical
-        text, which is what lets a second question about the same handle hit
-        the provider's prefix cache.
+        it corresponds to — capped at ``_DIGEST_MAX_TURNS`` with an elision
+        marker for anything in between), source URLs seen across the run, and
+        the final result. Cached after the first build so every subsequent
+        call — and every completed-``ask()`` that embeds it — returns
+        byte-identical text, which is what lets a second question about the
+        same handle hit the provider's prefix cache.
 
         Meaningful only once the handle has completed. If this handle's own
         loop compressed its context internally, ``self._client.messages``
@@ -784,6 +816,42 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 first_content = first_content.get("message")
             original_request = first_content
 
+        # The authoritative final answer: the task backing this (completed)
+        # handle already holds it. Reading it directly avoids guessing at the
+        # answer's shape in the transcript — the guess is wrong whenever the
+        # loop submitted its answer through a tool (e.g. a structured-output
+        # loop's final_response/send_response) rather than as a bare
+        # assistant message, since then the last such message is only
+        # narration ("Working on it, one moment.") that preceded the real
+        # answer. A task that errored still gets a truthful final_result
+        # instead of silently falling through to whatever narration happens
+        # to be last.
+        final_result = None
+        _task_result_available = False
+        try:
+            _raw_result = self._task.result()
+        except asyncio.CancelledError:
+            final_result = "(this run was stopped before producing a result)"
+            _task_result_available = True
+        except Exception as exc:
+            final_result = (
+                f"(this run ended with an error: {type(exc).__name__}: {exc})"
+            )
+            _task_result_available = True
+        else:
+            # `_COMPRESSION_SIGNAL` means no one has driven this task's
+            # `result()` through a compression restart yet — the digest
+            # shouldn't have been reachable in that state (see the
+            # docstring), but fall through to the heuristic rather than
+            # surface the sentinel if it somehow is.
+            if _raw_result is not _COMPRESSION_SIGNAL:
+                final_result = (
+                    _raw_result
+                    if isinstance(_raw_result, str)
+                    else json.dumps(_raw_result, separators=(",", ":"), default=str)
+                )
+                _task_result_available = True
+
         # Index tool_calls by id so the matching tool-result message can look
         # up its name/thought below.
         call_meta: dict[str, dict] = {}
@@ -805,7 +873,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         turns: list[dict] = []
         seen_urls: list[str] = []
         seen_urls_set: set[str] = set()
-        final_result = None
+        heuristic_final_result = None
 
         for idx, m in enumerate(safe_messages):
             role = m.get("role")
@@ -828,18 +896,12 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
             if role == "tool":
                 meta = call_meta.get(m.get("tool_call_id"), {})
-                stripped = text.strip()
-                head = (
-                    stripped.splitlines()[0][:_DIGEST_RESULT_HEAD_CHARS]
-                    if stripped
-                    else ""
-                )
                 turns.append(
                     {
                         "idx": idx,
                         "tool": meta.get("name") or m.get("name"),
                         "thought": meta.get("thought"),
-                        "result_head": head,
+                        "result_head": _digest_result_head(text),
                         "result_bytes": len(text.encode("utf-8")),
                     },
                 )
@@ -849,7 +911,28 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 and isinstance(content, str)
                 and content.strip()
             ):
-                final_result = content
+                # Fallback only — used when the task result itself wasn't
+                # available above (see the comment there).
+                heuristic_final_result = content
+
+        if not _task_result_available:
+            final_result = heuristic_final_result
+
+        if len(turns) > _DIGEST_MAX_TURNS:
+            head = turns[:_DIGEST_TURNS_HEAD]
+            tail = turns[-_DIGEST_TURNS_TAIL:] if _DIGEST_TURNS_TAIL else []
+            elided = turns[_DIGEST_TURNS_HEAD : len(turns) - _DIGEST_TURNS_TAIL]
+            marker = {
+                "elided": True,
+                "count": len(elided),
+                "idx_range": [elided[0]["idx"], elided[-1]["idx"]],
+                "note": (
+                    f"{len(elided)} turns elided to keep the digest compact — "
+                    "each still has a stable idx; retrieve any one verbatim "
+                    "via read_child_message(idx)."
+                ),
+            }
+            turns = [*head, marker, *tail]
 
         digest_obj = {
             "request": original_request,
