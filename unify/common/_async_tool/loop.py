@@ -2116,9 +2116,11 @@ async def async_tool_loop_inner(
                 policy_tools_norm = tools_data.normalized
 
             # When tools are in-flight, force tool_choice=required so the LLM
-            # must call a real tool (check_status_*, cancel_*, etc.) rather
-            # than ending the loop.  The response tool is masked in this
-            # situation (see below), so the only options are real tools.
+            # must call a real tool (steer, wait, ask_about_completed_tool,
+            # etc.) rather than ending the loop. The response tool stays in
+            # the schema but is refused at execution time while anything is
+            # pending (see the steer()/response-tool execution branches
+            # below), so "required" still only leaves live options.
             _has_pending_tools = bool(tools_data.pending)
             if _has_pending_tools and tool_choice_mode != "required":
                 tool_choice_mode = "required"
@@ -2135,9 +2137,9 @@ async def async_tool_loop_inner(
             if _over_threshold and enable_compression:
                 if _has_pending_tools:
                     # Over threshold, pending tools → no base tools, no
-                    # compress_context (can't compress mid-flight). Only
-                    # dynamic steering tools (check_status_*, stop_*, etc.)
-                    # remain visible.
+                    # compress_context (can't compress mid-flight). Only the
+                    # static surface (wait, steer, ask_about_completed_tool)
+                    # remains visible.
                     visible_base_tools_schema = []
                     _threshold_msg = (
                         "Context window is nearly full. "
@@ -2207,21 +2209,28 @@ async def async_tool_loop_inner(
                 if _compress_schema is not None and not _policy_eager:
                     visible_base_tools_schema.append(_compress_schema)
 
-            # Inject the response-submission tool when response_format is set
-            # AND no other tools are in-flight.  This tool is semantically
-            # "end the current turn" (the tool-call analogue of a bare text
-            # response).  When tools are still running we intentionally mask
-            # it so the LLM must interact with them (via check_status_*,
-            # cancel_*, etc.) rather than silently killing them.
+            # Inject the response-submission tool whenever response_format is
+            # set — schema presence no longer depends on whether other tools
+            # are in-flight (that used to mask it out and back in on every
+            # pending<->idle transition, a prefix break each time; see T4-4).
+            # This tool is semantically "end the current turn" (the
+            # tool-call analogue of a bare text response). Calling it while
+            # tools are still pending is refused at execution time instead —
+            # the same schema-constant-but-execution-gated pattern already
+            # used for concurrency/quota saturation and steer().
             #
             # Name varies by mode:
             #   persist=True  → "send_response"  (signals turn completion,
             #                    loop continues waiting for next interjection)
             #   persist=False → "final_response"  (terminates the loop)
             _response_tool_name = "send_response" if persist else "final_response"
+            # "Ready" now means "present in the schema" (i.e. response_format
+            # is configured and injection succeeded) — not "safe to call right
+            # now"; whether it's actually safe is enforced by the pending-tools
+            # refusal in the execution branch below, not by schema presence.
             _structured_response_tool_ready = False
 
-            if _rf_norm is not None and not _has_pending_tools:
+            if _rf_norm is not None:
                 if persist:
                     _response_tool_desc = (
                         "Submit your structured response for the current "
@@ -2911,6 +2920,33 @@ async def async_tool_loop_inner(
                         and _rf_norm is not None
                     )
                     if _is_response_tool:
+                        if tools_data.pending:
+                            # Execution-time refusal (schema presence is now
+                            # unconditional — see the injection comment above).
+                            # Name the exits explicitly: this fires under
+                            # tool_choice="required" (has_pending_tools forces
+                            # it), so a refusal with no way out would just be
+                            # the discovery-gate retry-loop shape again.
+                            tool_msg = create_tool_call_message(
+                                name=name,
+                                call_id=call["id"],
+                                content=(
+                                    f"⚠️ Cannot call '{name}': "
+                                    f"{len(tools_data.pending)} tool call(s) still "
+                                    "running. Call `wait` to let them finish, or "
+                                    'steer(call_id=<id>, action="stop") one of '
+                                    "them if it's no longer needed — do not retry "
+                                    f"'{name}' until nothing is pending."
+                                ),
+                            )
+                            await insert_tool_message_after_assistant(
+                                assistant_meta,
+                                msg,
+                                tool_msg,
+                                client,
+                                _msg_dispatcher,
+                            )
+                            continue
                         try:
                             payload = (
                                 args.get("answer") if isinstance(args, dict) else None
@@ -2927,18 +2963,6 @@ async def async_tool_loop_inner(
                                 )
                             else:
                                 payload_for_return = validated_payload
-
-                            # Cancel any in-flight tools before returning.
-                            # In persist mode this block should be unreachable
-                            # (response tool is masked while tools are pending)
-                            # but guard defensively.
-                            if tools_data.pending and not persist:
-                                logger.info(
-                                    f"{name} called while {len(tools_data.pending)} "
-                                    f"task(s) are in-flight. Auto-cancelling to terminate.",
-                                    prefix=ICONS["auto_cancel"],
-                                )
-                                await tools_data.cancel_pending_tasks()
 
                             tool_msg = create_tool_call_message(
                                 name=name,
@@ -3182,8 +3206,9 @@ async def async_tool_loop_inner(
                         return _COMPRESSION_SIGNAL
 
                     # ── Special-case dynamic helpers ──────────────────────
-                    # • wait        → acknowledge, list running tasks, no scheduling
-                    # • cancel_*    → cancel underlying task & purge metadata
+                    # • wait  → acknowledge, list running tasks, no scheduling
+                    # • steer → structured-args dispatch (stop/interject/pause/
+                    #           resume/clarify/call/ask), see below
                     # Normalise tool-call name defensively
                     lname = str(name or "").strip()
                     lname_cf = lname.casefold()
@@ -3295,15 +3320,13 @@ async def async_tool_loop_inner(
                     elif lname_cf == "steer":
                         # ── Unified steering dispatcher: structured-args routing
                         # keyed on (call_id, action) instead of name prefixes. ──
-                        with suppress(Exception):
-                            steer_args = json.loads(call["function"]["arguments"]) or {}
-                        if "steer_args" not in locals():
-                            steer_args = {}
-
-                        _target_call_id = steer_args.get("call_id")
-                        _action = str(steer_args.get("action") or "").strip().lower()
-                        _payload = steer_args.get("payload")
-                        _method = steer_args.get("method")
+                        # `args` was already parsed (with malformed-JSON refusal
+                        # already handled) earlier in this loop iteration — reuse
+                        # it directly rather than re-parsing raw arguments here.
+                        _target_call_id = args.get("call_id")
+                        _action = str(args.get("action") or "").strip().lower()
+                        _payload = args.get("payload")
+                        _method = args.get("method")
 
                         async def _steer_reply(content: str) -> None:
                             _tm = create_tool_call_message(
@@ -3409,10 +3432,54 @@ async def async_tool_loop_inner(
                                     "not accept interjections.",
                                 )
                                 continue
+
+                            # Restore continuation-context propagation the old
+                            # minted interject_<fn>_<id> tool provided: forward
+                            # _parent_chat_context_cont when the target's own
+                            # interject() accepts it and it originally opted in
+                            # to context. Reuses steer's include_parent_context
+                            # field as the same opt-out the old per-call tool's
+                            # include_parent_chat_context_cont control was.
+                            _interject_accepts_ctx_cont = False
+                            if _handle is not None and hasattr(_handle, "interject"):
+                                with suppress(Exception):
+                                    _ij_sig = inspect.signature(_handle.interject)
+                                    _ij_has_varkw = any(
+                                        p.kind == inspect.Parameter.VAR_KEYWORD
+                                        for p in _ij_sig.parameters.values()
+                                    )
+                                    _interject_accepts_ctx_cont = (
+                                        "_parent_chat_context_cont"
+                                        in _ij_sig.parameters
+                                        or _ij_has_varkw
+                                    )
+
+                            _interject_extra_kwargs, _ = compute_context_injection(
+                                args={
+                                    "include_parent_chat_context_cont": args.get(
+                                        "include_parent_context",
+                                        True,
+                                    ),
+                                },
+                                propagate_chat_context=propagate_chat_context,
+                                context_state=context_state,
+                                client_messages=client.messages,
+                                call_id=f"interject_{_target_call_id}_{call['id']}",
+                                accepts_parent_ctx=False,
+                                accepts_parent_ctx_cont=_interject_accepts_ctx_cont,
+                                target_context_opted_in=tgt_info.context_opted_in,
+                                is_continuation_only=True,
+                            )
+                            _interject_payload: Dict[str, Any] = {"content": _payload}
+                            if "_parent_chat_context_cont" in _interject_extra_kwargs:
+                                _interject_payload["_parent_chat_context_cont"] = (
+                                    _interject_extra_kwargs["_parent_chat_context_cont"]
+                                )
+
                             with suppress(Exception):
                                 await _dispatch_steering_to_child(
                                     "interject",
-                                    {"content": _payload},
+                                    _interject_payload,
                                     tgt_info,
                                 )
                             tool_msg = create_tool_call_message(
@@ -3548,7 +3615,7 @@ async def async_tool_loop_inner(
                             _ask_extra_kwargs, _ask_ctx_opted_in = (
                                 compute_context_injection(
                                     args={
-                                        "include_parent_chat_context": steer_args.get(
+                                        "include_parent_chat_context": args.get(
                                             "include_parent_context",
                                             True,
                                         ),
