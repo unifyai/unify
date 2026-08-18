@@ -652,7 +652,11 @@ async def async_tool_loop_inner(
         "When the user sends follow-up messages (interjections) during your tool-use "
         "session, these appear as regular user messages. Consider and incorporate ALL "
         "user interjections in your final response. Later interjections should override "
-        "earlier ones if there are any conflicting comments or requests."
+        "earlier ones if there are any conflicting comments or requests.\n\n"
+        "EXCEPTION: user-role messages prefixed with `[progress <call_id>]` or "
+        "`[loop <call_id>]` are NOT interjections from the user — they are status "
+        "updates the loop appends automatically to report in-flight tool progress. "
+        "Do not treat them as requests to incorporate or respond to."
     )
     _visibility_guidance_injected = False
     runtime_state = runtime_state or ToolLoopRuntimeState()
@@ -1434,27 +1438,14 @@ async def async_tool_loop_inner(
         # mark the task as waiting
         tools_data.info[src_task].waiting_for_clarification = True
 
-        # ensure/refresh single placeholder for this call-id
-        ph = tools_data.info[src_task].tool_reply_msg
-        if ph is None:
-            ph = create_tool_call_message(
-                name=f"clarification_request_{call_id}",
-                call_id=call_id,
-                content="",
-            )
-            await insert_tool_message_after_assistant(
-                assistant_meta,
-                tools_data.info[src_task].assistant_msg,
-                ph,
-                client,
-                _msg_dispatcher,
-            )
-            tools_data.info[src_task].tool_reply_msg = ph
-
-        ph["name"] = f"clarification_request_{call_id}"
-        ph["content"] = (
-            "Tool incomplete, please answer the following to continue tool execution:\n"
-            f"{question_text}"
+        # Coalesce-then-freeze into a [clarification <call_id>] tail message —
+        # never the tool_reply_msg pending stub, which stays byte-frozen once
+        # sent. The model answers off this tail message via clarify_<call_id>.
+        await tools_data.record_clarification(
+            tools_data.info[src_task],
+            call_id,
+            question_text,
+            _msg_dispatcher,
         )
 
         # Log the clarification request as a first-class event
@@ -1500,23 +1491,17 @@ async def async_tool_loop_inner(
         except Exception:
             pass
 
-        placeholder = tools_data.info[src_task].tool_reply_msg
-        if placeholder is None:
-            placeholder = create_tool_call_message(
-                name=tool_name,
-                call_id=call_id,
-                content=pretty,
-            )
-            await insert_tool_message_after_assistant(
-                assistant_meta,
-                tools_data.info[src_task].assistant_msg,
-                placeholder,
-                client,
-                _msg_dispatcher,
-            )
-            tools_data.info[src_task].tool_reply_msg = placeholder
-        else:
-            placeholder["content"] = pretty
+        # Coalesce-then-freeze into a separate [progress <call_id>] tail
+        # message — never the tool_reply_msg placeholder, which must stay
+        # byte-frozen once sent. This is the site behind the observed
+        # 0%-cache pair: rewriting the placeholder in place, mid-history,
+        # broke the cached prefix on virtually every turn a sub-agent ran.
+        await tools_data.record_progress(
+            tools_data.info[src_task],
+            call_id,
+            pretty,
+            _msg_dispatcher,
+        )
 
         # Forward programmatic notification event to the outer handle
         with suppress(Exception):
@@ -3286,7 +3271,13 @@ async def async_tool_loop_inner(
                                     prune_wait_tool_call as _prune_wait,
                                 )
 
-                                _prune_wait(msg, call["id"], client=client)
+                                await _prune_wait(
+                                    msg,
+                                    call["id"],
+                                    client=client,
+                                    assistant_meta=assistant_meta,
+                                    msg_dispatcher=_msg_dispatcher,
+                                )
 
                             # The assistant message containing this wait() was
                             # already published to EventBus before we could
