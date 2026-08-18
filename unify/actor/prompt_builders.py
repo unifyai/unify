@@ -205,14 +205,16 @@ _TOOL_SELECTION_AND_SURFACES = textwrap.dedent("""
     A running block suspends when a correction reaches it, and you get a
     turn carrying the interjection and a progress report. Work already
     done has already happened — a replacement block must not repeat it.
-    `stop_<tool>_<call_id>` abandons the block (choose when the correction
-    changes the *remaining* work — an irreversible step the correction was
-    meant to prevent is worse than a discarded plan);
-    `interject_<tool>_<call_id>` resumes it as written, the text available
-    via `steering.messages` (choose when the remaining work is unchanged).
-    Do not stop on every interjection either. When a correction concerns
-    work already running in `primitives.*` handles, route it via
-    `handle.interject(...)` rather than restarting the plan.
+    `steer(call_id=<id>, action="stop")` abandons the block (choose when the
+    correction changes the *remaining* work — an irreversible step the
+    correction was meant to prevent is worse than a discarded plan);
+    `steer(call_id=<id>, action="interject", payload=<text>)` resumes it as
+    written, the text available via `steering.messages` (choose when the
+    remaining work is unchanged). Do not stop on every interjection either.
+    When a correction concerns work already running in `primitives.*`
+    handles, route it via `handle.interject(...)` rather than restarting the
+    plan — `steer` is for handles the outer async tool loop is tracking for
+    you, not for handles you are holding directly in code.
 
     ### Execution Surface: where code runs
 
