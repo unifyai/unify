@@ -1309,6 +1309,11 @@ class FastBrainNotification(Event):
     # applies these directly: ``message`` is prose written for an LLM and is
     # rewritten freely, so inferring state from its wording silently breaks the
     # moment the copy changes.
+    #
+    # ``CALL_DESKTOP_SHARE_SURFACE`` is the one key that names no attribute. It
+    # is derived per call rather than stored, because who is watching the
+    # assistant's desktop outlives any one call while what a call puts on its
+    # stage must not.
     meet_surface_state: dict = field(default_factory=dict)
 
 
