@@ -176,7 +176,7 @@ def test_steerable_detection_pattern():
     """The pattern for detecting steerable results should be straightforward."""
     globals_dict = create_execution_globals()
 
-    # This is the pattern that SingleFunctionActor will use
+    # This is the pattern a calling actor uses
     def is_steerable(result):
         """Check if a result is a steerable handle."""
         return isinstance(result, globals_dict["SteerableToolHandle"])
@@ -257,7 +257,7 @@ async def codeact_procedure(goal: str) -> SteerableToolHandle:
         SteerableToolHandle,
     ), "CodeActActor handle should be detected as SteerableToolHandle"
 
-    # Verify handle methods are available (these would be forwarded by SingleFunctionActor)
+    # Verify handle methods are available (these are forwarded by the calling actor)
     assert hasattr(handle, "interject")
     assert hasattr(handle, "stop")
     assert hasattr(handle, "pause")

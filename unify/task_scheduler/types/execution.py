@@ -74,6 +74,11 @@ class ExecutionState(StrEnum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    # The run finished without performing an irreversible effect because a
+    # verdict it depended on failed, timed out or could not be settled and
+    # the rewind budget was exhausted; the owner is notified and the run does
+    # not retry until the next scheduled fire.
+    held = "held"
 
     @classmethod
     def normalize(cls, value: str | ExecutionState | None) -> ExecutionState:
@@ -100,4 +105,5 @@ class ExecutionState(StrEnum):
             ExecutionState.completed,
             ExecutionState.failed,
             ExecutionState.cancelled,
+            ExecutionState.held,
         }

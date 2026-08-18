@@ -31,7 +31,7 @@ async def process_data(input: str) -> str:
     \"\"\"Process the input data.\"\"\"
     return input.upper()
 
-@custom_function(venv_name="ml_env", verify=True)
+@custom_function(venv_name="ml_env")
 async def ml_inference(data: dict) -> dict:
     \"\"\"Run ML inference in a custom venv.\"\"\"
     import torch
@@ -54,7 +54,6 @@ dependencies = ["torch>=2.0", "transformers>=4.30"]
 
 - `venv_name: Optional[str]` - Name of custom venv (filename without .toml)
 - `venv_id: Optional[int]` - Direct venv ID (prefer venv_name for custom venvs)
-- `verify: bool = True` - Whether to verify function execution
 - `precondition: Optional[dict]` - Required state before execution
 - `auto_sync: bool = True` - Set to False to exclude from auto-sync
 - `windows_os_required: bool = False` - Route execution to Windows VM when True
@@ -99,7 +98,6 @@ class CustomFunctionMetadata:
 
     venv_name: Optional[str] = None
     venv_id: Optional[int] = None
-    verify: bool = True
     precondition: Optional[Dict[str, Any]] = None
     auto_sync: bool = True
     windows_os_required: bool = False
@@ -109,7 +107,6 @@ def custom_function(
     *,
     venv_name: Optional[str] = None,
     venv_id: Optional[int] = None,
-    verify: bool = True,
     precondition: Optional[Dict[str, Any]] = None,
     auto_sync: bool = True,
     windows_os_required: bool = False,
@@ -123,7 +120,6 @@ def custom_function(
         venv_id: Direct virtual environment ID. Use for non-custom venvs or
                  when the ID is known. If both venv_name and venv_id are set,
                  venv_name takes precedence.
-        verify: Whether the Actor should verify function execution (default True).
         precondition: Optional dict specifying required state before execution.
         auto_sync: If False, function is excluded from auto-sync (default True).
         windows_os_required: If True, function executes on remote Windows VM
@@ -153,7 +149,6 @@ def custom_function(
         func._custom_function_metadata = CustomFunctionMetadata(
             venv_name=venv_name,
             venv_id=venv_id,
-            verify=verify,
             precondition=precondition,
             auto_sync=auto_sync,
             windows_os_required=windows_os_required,

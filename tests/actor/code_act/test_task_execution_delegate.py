@@ -27,48 +27,6 @@ from unify.manager_registry import ManagerRegistry
 from unify.task_scheduler.task_scheduler import TaskScheduler
 
 
-def _certification_evidence():
-    return {
-        "risk_classification": "read_only",
-        "input_contract": {"required_inputs": ["task_id"]},
-        "equivalence_contract": {
-            "result_shape": "summary",
-            "live_step_mapping": ["primitives.web.ask -> primitives.web.ask"],
-        },
-        "managed_primitive_contract": {
-            "preserved": True,
-            "managed_surfaces": ["primitives.web.ask"],
-            "ad_hoc_replacements": [],
-        },
-        "side_effect_contract": {
-            "side_effects": [],
-            "ordering": "read before summarize",
-        },
-        "idempotency_contract": {
-            "classification": "read_only",
-            "duplicate_run_behavior": "safe",
-        },
-        "cost_contract": {
-            "bounded": True,
-            "cost_model": "one managed primitive call",
-        },
-        "failure_contract": {
-            "failure_semantics": "return blocker summary",
-        },
-        "observability_contract": {
-            "result_summary": "summary or blocker",
-        },
-        "attestations": {
-            "no_hardcoded_live_observations": True,
-            "no_removed_validation_gates": True,
-            "no_reordered_side_effects": True,
-            "no_discarded_recovery_branches": True,
-            "no_static_runtime_assumptions": True,
-            "no_ad_hoc_logic_replaced_managed_primitives": True,
-        },
-    }
-
-
 def _storage_actor_stub():
     def _tool_stub(*args, **kwargs):
         return None
@@ -87,6 +45,8 @@ def _storage_actor_stub():
         delete_venv=_tool_stub,
         set_function_venv=_tool_stub,
         get_function_venv=_tool_stub,
+        confirm_side_effect_class=_tool_stub,
+        set_verification_policy=_tool_stub,
     )
     guidance_manager = SimpleNamespace(
         search=_tool_stub,
@@ -106,7 +66,7 @@ def _storage_actor_stub():
             self.knowledge_manager = None
 
         async def act(self, *args, **kwargs):
-            raise AssertionError("certification evidence submission must not execute")
+            raise AssertionError("storage tools must not execute the entrypoint")
 
     return _Actor()
 
@@ -197,7 +157,6 @@ async def test_task_execution_delegates_forward_named_protocol_kwargs():
             images=[],
             guidelines="Follow task-specific execution guidelines.",
             entrypoint_kwargs={"scheduled_run_timestamp": "2026-04-10T09:00:00Z"},
-            entrypoint_repair_attempts=1,
             entrypoint_repair_context={"reason": "certification"},
         )
 
@@ -210,7 +169,7 @@ async def test_task_execution_delegates_forward_named_protocol_kwargs():
         assert call["kwargs"]["entrypoint_kwargs"] == {
             "scheduled_run_timestamp": "2026-04-10T09:00:00Z",
         }
-        assert call["kwargs"]["entrypoint_repair_attempts"] == 1
+        assert "entrypoint_repair_attempts" not in call["kwargs"]
         assert call["kwargs"]["entrypoint_repair_context"] == {
             "reason": "certification",
         }
@@ -312,20 +271,20 @@ def repairable_task():
             )
             return "updated existing function"
 
-        monkeypatch.setattr(actor, "_repair_symbolic_entrypoint", _repair)
+        monkeypatch.setattr(actor, "_repair_function", _repair)
 
         handle = await actor.act(
             "Run the repairable symbolic task.",
             entrypoint=function_id,
             entrypoint_kwargs={"scheduled_run_timestamp": "2026-04-10T09:00:00Z"},
-            entrypoint_repair_attempts=1,
             clarification_enabled=False,
             persist=False,
         )
 
         assert await handle.result() == "repaired task completed"
         assert len(repair_calls) == 1
-        assert repair_calls[0]["entrypoint_id"] == function_id
+        assert repair_calls[0]["function_id"] == function_id
+        assert isinstance(repair_calls[0]["failure"], RuntimeError)
     finally:
         await actor.close()
         ManagerRegistry.clear()
@@ -384,7 +343,7 @@ async def test_symbolic_entrypoint_resolves_by_task_destination(
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_repair_symbolic_entrypoint_snapshot_uses_callable_contract(monkeypatch):
+async def test_repair_function_snapshot_uses_callable_contract(monkeypatch):
     """Repair must request metadata with _return_callable=True (FM contract)."""
 
     ManagerRegistry.clear()
@@ -412,13 +371,13 @@ def snapshot_task():
         )
         monkeypatch.setattr(
             "unify.actor.code_act_actor.new_llm_client",
-            lambda model: MagicMock(
+            lambda model, **kwargs: MagicMock(
                 set_system_message=MagicMock(),
             ),
         )
 
-        summary = await actor._repair_symbolic_entrypoint(
-            entrypoint_id=function_id,
+        summary = await actor._repair_function(
+            function_id=function_id,
             request="Run snapshot task.",
             entrypoint_kwargs={},
             failure=RuntimeError("boom"),
@@ -431,102 +390,59 @@ def snapshot_task():
 
 
 @pytest.mark.asyncio
-async def test_offline_certification_evidence_tool_does_not_execute_entrypoint():
-    promotions = []
+async def test_promote_task_offline_tool_reads_eligibility_only():
+    calls = []
 
-    def _promote_entrypoint_offline(**kwargs):
-        promotions.append(kwargs)
-        return {
-            "outcome": "offline_promoted",
-            "task_id": 12,
-            "function_id": kwargs["function_id"],
-        }
+    def _promote():
+        calls.append(True)
+        return {"outcome": "not_eligible", "task_id": 12, "reasons": ["untrusted:321"]}
 
     tools, _, _ = _build_storage_tools(
         actor=_storage_actor_stub(),
         ask_tools={},
         task_entrypoint_review={
-            "metadata": {
-                "task_id": 12,
-                "task_name": "Daily summary",
-            },
+            "metadata": {"task_id": 12, "task_name": "Daily summary"},
             "attach_entrypoint": lambda **kwargs: kwargs,
-            "promote_entrypoint_offline": _promote_entrypoint_offline,
+            "promote_task_offline": _promote,
         },
     )
-
-    tool = tools["submit_offline_certification_evidence"]
+    assert "submit_offline_certification_evidence" not in tools
+    tool = tools["promote_task_offline"]
     docstring = tool.__doc__ or ""
-    assert "does not execute the entrypoint" in docstring
-    assert "Replacing live primitives with ad hoc logic is not equivalent" in docstring
-    assert "primitives.web.ask" in docstring
-    assert "managed_primitive_contract" in docstring
+    assert "never grants trust" in docstring
+    assert "takes no evidence" in docstring
+    import inspect as _inspect
 
-    result = await tool(
-        function_id=321,
-        certification_evidence=_certification_evidence(),
-        promotion_rationale="The stored function preserves the live procedure.",
-    )
-
-    assert "offline_promoted" in result
-    assert len(promotions) == 1
-    assert promotions[0]["function_id"] == 321
-    assert (
-        promotions[0]["certification_metadata"]["certification_evidence"][
-            "managed_primitive_contract"
-        ]["preserved"]
-        is True
-    )
-    assert promotions[0]["certification_result"] == {
-        "evidence_based": True,
-        "executed_entrypoint": False,
-        "attempt": 1,
-        "max_revision_attempts": 2,
-    }
+    assert list(_inspect.signature(tool).parameters) == []
+    result = await tool()
+    assert "not_eligible" in result and "untrusted:321" in result
+    assert calls == [True]
 
 
 @pytest.mark.asyncio
-async def test_offline_certification_rejection_feedback_is_bounded():
-    promotions = []
+async def test_attach_entrypoint_tool_binds_without_certification_metadata():
+    attached = []
 
-    def _promote_entrypoint_offline(**kwargs):
-        promotions.append(kwargs)
-        return {
-            "outcome": "certification_rejected",
-            "function_id": kwargs["function_id"],
-            "rejection_reasons": [
-                "ad_hoc_logic_replaced_managed_primitive",
-            ],
-        }
+    def _attach(**kwargs):
+        attached.append(kwargs)
+        return {"outcome": "entrypoint_recorded", **kwargs}
 
+    stub = _storage_actor_stub()
+    stub.function_manager.filter_functions = lambda **kwargs: [{"function_id": 321}]
     tools, _, _ = _build_storage_tools(
-        actor=_storage_actor_stub(),
+        actor=stub,
         ask_tools={},
         task_entrypoint_review={
-            "metadata": {
-                "task_id": 12,
-                "task_name": "Daily summary",
-            },
-            "attach_entrypoint": lambda **kwargs: kwargs,
-            "promote_entrypoint_offline": _promote_entrypoint_offline,
+            "metadata": {"task_id": 12, "task_name": "Daily summary"},
+            "attach_entrypoint": _attach,
+            "promote_task_offline": lambda: {"outcome": "not_eligible"},
         },
     )
-    tool = tools["submit_offline_certification_evidence"]
+    tool = tools["attach_entrypoint_to_recurring_task"]
+    import inspect as _inspect
 
-    first = await tool(
-        function_id=321,
-        certification_evidence=_certification_evidence(),
-    )
-    second = await tool(
-        function_id=322,
-        certification_evidence=_certification_evidence(),
-    )
-    exhausted = await tool(
-        function_id=323,
-        certification_evidence=_certification_evidence(),
-    )
-
-    assert "remaining_revision_attempts': 1" in first
-    assert "revision_attempts_exhausted" in second
-    assert "certification_revision_attempts_exhausted" in exhausted
-    assert len(promotions) == 2
+    assert list(_inspect.signature(tool).parameters) == ["function_id", "rationale"]
+    result = await tool(function_id=321, rationale="stable procedure")
+    assert "entrypoint_recorded" in result
+    assert attached == [{"function_id": 321, "rationale": "stable procedure"}]
+    assert "does not grant trust" in " ".join((tool.__doc__ or "").split())
