@@ -324,7 +324,18 @@ class WorkflowManager(BaseWorkflowManager):
         *,
         context: str,
         existing: Optional[Dict[str, Any]],
-    ) -> None:
+    ) -> WorkflowInstallation:
+        """Persist one installation row and return it carrying its real id.
+
+        ``workflow_id`` is auto-counted by Orchestra, so a new installation is
+        built with the ``UNASSIGNED`` placeholder and only acquires an id once
+        the insert lands. Returning the pre-insert record put ``-1`` into the
+        install result, and from there into the durable
+        ``Workflows/Requests.outcome`` blob -- every recorded install claimed
+        an id no row has ever had, so a requests-to-installations join on it
+        matched nothing.
+        """
+
         payload = strip_authoring_assistant_id(record.to_post_json())
         if existing:
             logs = unisdk.get_logs(
@@ -340,12 +351,53 @@ class WorkflowManager(BaseWorkflowManager):
                     entries=payload,
                     overwrite=True,
                 )
-                return
+                return record
         unity_create_logs(
             context=context,
             entries=[payload],
             stamp_authoring=True,
         )
+        return record.model_copy(
+            update={"workflow_id": self._assigned_workflow_id(record, context=context)},
+        )
+
+    def _assigned_workflow_id(
+        self,
+        record: WorkflowInstallation,
+        *,
+        context: str,
+    ) -> int:
+        """Read back the id the insert assigned, falling back to the placeholder."""
+
+        logs = unisdk.get_logs(
+            context=context,
+            filter=f"slug == '{record.slug}'",
+            limit=1,
+        )
+        if not logs:
+            return record.workflow_id
+        assigned = getattr(logs[0], "entries", {}).get("workflow_id")
+        return int(assigned) if assigned is not None else record.workflow_id
+
+    @staticmethod
+    def _release_workflow_functions(slug: str) -> List[int]:
+        """Remove functions this workflow's runs distilled, keeping shared ones.
+
+        A failure here must not retain the installation: every surface has
+        already cleared, and a leftover function is a cleanup miss rather than
+        a half-installed workflow.
+        """
+
+        from ..function_manager.function_manager import release_workflow_functions
+
+        try:
+            return release_workflow_functions(slug=slug)
+        except Exception:
+            logger.exception(
+                "Failed to release distilled functions for workflow %r",
+                slug,
+            )
+            return []
 
     def _delete_installation(self, slug: str, *, context: str) -> bool:
         logs = unisdk.get_logs(
@@ -816,7 +868,11 @@ class WorkflowManager(BaseWorkflowManager):
                 surfaces=json.dumps(bundle.surface_names()),
                 destination=destination or "personal",
             )
-            self._write_installation(record, context=context, existing=existing)
+            record = self._write_installation(
+                record,
+                context=context,
+                existing=existing,
+            )
 
         result: Dict[str, Any] = {
             "installed": record.model_dump(mode="json"),
@@ -1404,6 +1460,13 @@ class WorkflowManager(BaseWorkflowManager):
             # behind would leave a live URL rendering against tables that
             # may no longer be filled.
             withdrawn = self._withdraw_canvases(slug)
+            # Functions a run distilled from this workflow's tasks are in no
+            # bundle source, so the surface prune above cannot see them: it
+            # re-syncs the union of what the bundles declare, and these were
+            # never declared. They are reachable only through the membership
+            # the attachment recorded, and without this they survive the
+            # uninstall as rows nothing references or explains.
+            released = self._release_workflow_functions(slug)
             kept = sorted(set(recorded) - set(pruned_surfaces))
             # The installation row goes only after every surface actually
             # cleared. On failure it stays — it holds the recorded surfaces,
@@ -1414,6 +1477,8 @@ class WorkflowManager(BaseWorkflowManager):
         result: Dict[str, Any] = {"slug": slug, "removed": removed}
         if withdrawn:
             result["canvases_removed"] = withdrawn
+        if released:
+            result["distilled_functions_removed"] = released
         if kept:
             result["kept"] = kept
         if failures:

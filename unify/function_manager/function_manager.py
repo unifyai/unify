@@ -147,6 +147,135 @@ if TYPE_CHECKING:  # pragma: no cover
     )
 
 
+def _compositional_contexts() -> list[str]:
+    """Every compositional functions context readable from here."""
+
+    from unify.common.context_registry import ContextRegistry
+
+    return [
+        f"{root.strip('/')}/{FUNCTIONS_COMPOSITIONAL_TABLE}"
+        for root in ContextRegistry.read_roots(
+            FunctionManager,
+            FUNCTIONS_COMPOSITIONAL_TABLE,
+        )
+    ]
+
+
+_LOG_PAGE = 1000
+
+
+def _iter_all_logs(context: str):
+    """Every row in *context*, a page at a time.
+
+    ``get_logs`` caps at a thousand rows and says nothing when it truncates,
+    so a single call reads as "that is all of them" on a store of any size.
+    A caller deciding what to delete cannot work from a silently short
+    answer.
+    """
+
+    offset = 0
+    while True:
+        page = unisdk.get_logs(context=context, limit=_LOG_PAGE, offset=offset)
+        if not page:
+            return
+        yield from page
+        if len(page) < _LOG_PAGE:
+            return
+        offset += _LOG_PAGE
+
+
+def function_id_resolves(function_id: int) -> bool:
+    """Whether a stored id still points at a compositional function.
+
+    For callers holding an id and asking only about referential integrity --
+    a task's stored ``entrypoint``, say. An id rather than a manager handle
+    because the question is asked from stores that keep one and have no
+    reason to hold a FunctionManager.
+
+    Asked per id rather than by listing every function and testing
+    membership: ``get_logs`` pages at a thousand rows, so an enumeration
+    would report perfectly good ids as missing on any deployment past that,
+    and callers reading this as "gone" would act on it.
+    """
+
+    for context in _compositional_contexts():
+        if unisdk.get_logs(
+            context=context,
+            filter=f"function_id == {int(function_id)}",
+            limit=1,
+        ):
+            return True
+    return False
+
+
+def link_function_to_workflow(*, function_id: int, slug: str) -> bool:
+    """Record that *slug* references this function, without claiming it.
+
+    Membership is additive and idempotent: a function distilled from one
+    workflow's task can legitimately be reached by another, and re-attaching
+    the same entrypoint must not accumulate duplicates.
+
+    Deliberately not ``managed_by``. That field says who may overwrite and
+    prune a row, and a runtime-authored function is in no bundle's source --
+    so granting it would make the next reconcile delete the function as a row
+    whose key had left the source, which is worse than the orphan it was
+    meant to fix.
+    """
+
+    for context in _compositional_contexts():
+        logs = unisdk.get_logs(
+            context=context,
+            filter=f"function_id == {int(function_id)}",
+            limit=1,
+        )
+        if not logs:
+            continue
+        refs = list((logs[0].entries or {}).get("workflow_refs") or [])
+        if slug in refs:
+            return False
+        unisdk.update_logs(
+            context=context,
+            logs=[logs[0].id],
+            entries={"workflow_refs": [*refs, slug]},
+        )
+        return True
+    return False
+
+
+def release_workflow_functions(*, slug: str) -> list[int]:
+    """Drop *slug*'s membership, deleting functions no other workflow keeps.
+
+    Called when a workflow is uninstalled. A function distilled from its task
+    exists only because that workflow did, so leaving it behind leaves an
+    unreferenced row nothing can explain -- but one shared with another
+    installed workflow must survive, which is why membership is multi-valued
+    rather than a single owner.
+
+    Returns the ids actually deleted.
+    """
+
+    deleted: list[int] = []
+    for context in _compositional_contexts():
+        for log in _iter_all_logs(context):
+            entries = log.entries or {}
+            refs = list(entries.get("workflow_refs") or [])
+            if slug not in refs:
+                continue
+            remaining = [ref for ref in refs if ref != slug]
+            if remaining:
+                unisdk.update_logs(
+                    context=context,
+                    logs=[log.id],
+                    entries={"workflow_refs": remaining},
+                )
+                continue
+            unisdk.delete_logs(context=context, logs=[log.id])
+            function_id = entries.get("function_id")
+            if function_id is not None:
+                deleted.append(int(function_id))
+    return deleted
+
+
 class _LineageTrackedFunction:
     """Boundary wrapper for FunctionManager callables injected into CodeActActor sandboxes.
 
