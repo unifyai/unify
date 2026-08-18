@@ -1103,6 +1103,11 @@ async def _(
     elif isinstance(event, UnifyMeetStarted):
         cm.call_manager.unify_meet_call_session_id = event.call_session_id or ""
         cm.call_manager.unify_meet_start_timestamp = event.timestamp
+        # Desktop viewers naming a call that is not this one cannot be closed by
+        # anybody: the only stop event that would match them names a call nobody
+        # is on any more. Taken from the event rather than the field just set, so
+        # a stale id can never decide which viewers survive.
+        cm.drop_stale_call_screen_share_viewers(event.call_session_id or "")
         label = "Unify Meet"
     else:
         raise ValueError(f"Unknown event type: {event.__class__.__name__}")
@@ -1158,6 +1163,7 @@ async def _(
     # so any state that was already active needs to be pushed now.
     if cm.assistant_screen_share_active and cm.call_manager._socket_server:
         from unify.conversation_manager.medium_scripts.common import (
+            CALL_DESKTOP_SHARE_SURFACE,
             _resolve_agent_service_url,
         )
 
@@ -1167,7 +1173,17 @@ async def _(
             message=guidance_text,
             source="meet_interaction",
             agent_service_url=_resolve_agent_service_url(),
-            meet_surface_state={"assistant_screen_share_active": True},
+            # Being watched and being on this call's stage are separate answers.
+            # A Desktop tab open beside the call is the first without being the
+            # second, so the room's copy is stated rather than inferred from the
+            # flag above -- inferring it is what put one person's tab on
+            # everybody's stage.
+            meet_surface_state={
+                "assistant_screen_share_active": True,
+                CALL_DESKTOP_SHARE_SURFACE: cm.assistant_desktop_watched_from_call(
+                    cm.call_manager.unify_meet_call_session_id,
+                ),
+            },
         )
         await cm.call_manager._socket_server.queue_for_clients(
             "app:call:notification",
@@ -4227,6 +4243,47 @@ _MEET_STATE_FLAGS: dict[type, tuple[str, bool]] = {
 }
 
 
+async def _publish_call_desktop_share_state(cm: "ConversationManager") -> None:
+    """Tell the running call script whether the desktop belongs on its stage.
+
+    Sent on every viewer change rather than on a transition, so the room can
+    always be resynchronised. Each client holds its own copy of what is mounted,
+    and an edge-triggered broadcast can only correct a client that happens to be
+    wrong in the direction the edge is travelling -- which is no help at all when
+    the aggregate the edge is taken from never moves.
+
+    Carries no ``message``. The call script applies ``meet_surface_state`` before
+    it decides whether to surface a notification, so an empty one reaches the
+    surfaces and stops there: this is a state sync, and the assistant has already
+    been told in prose whatever it needed to know.
+    """
+    if not cm.mode.is_voice:
+        return
+    contact = cm.get_active_contact()
+    if not contact:
+        return
+    from unify.conversation_manager.medium_scripts.common import (
+        CALL_DESKTOP_SHARE_SURFACE,
+        _resolve_agent_service_url,
+    )
+
+    notification_event = FastBrainNotification(
+        contact=contact,
+        message="",
+        source="meet_interaction",
+        agent_service_url=_resolve_agent_service_url(),
+        meet_surface_state={
+            CALL_DESKTOP_SHARE_SURFACE: cm.assistant_desktop_watched_from_call(
+                cm.call_manager.unify_meet_call_session_id,
+            ),
+        },
+    )
+    await cm.event_broker.publish(
+        "app:call:notification",
+        notification_event.to_json(),
+    )
+
+
 @EventHandler.register(
     (
         AssistantScreenShareStarted,
@@ -4300,6 +4357,13 @@ async def _(
             source=event.viewer_source,
             watching=value,
         )
+        # The room's copy is restated on every one of these, including the ones
+        # the flag check below drops. What a call stages is decided by its own
+        # viewers, which move independently of the desktop-scoped flag: closing
+        # the last call viewer while a Desktop tab stays open leaves that flag
+        # true, so an edge-triggered broadcast would have no edge to fire on and
+        # would strand the desktop on every participant's stage.
+        await _publish_call_desktop_share_state(cm)
 
     # Restating the current state carries no new information: notifying again
     # would tell the assistant the screen share just started for a second time.

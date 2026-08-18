@@ -907,6 +907,13 @@ _TRACK_TO_EVENT: dict[tuple[str, bool], type[Event]] = {
 # source owns a surface, so it is the sole definition of the marker.
 TRACK_AUTODETECT_REASON = "LiveKit track auto-detected"
 
+# ``meet_surface_state`` key carrying whether the assistant's desktop belongs on
+# the current call's stage. Alone among that payload's keys it names no CM
+# attribute: it is derived per call from the desktop's viewer set, because a
+# stored flag is what let a standalone Desktop tab -- and a viewer left behind by
+# an earlier call -- decide what a room they were never part of shows everyone.
+CALL_DESKTOP_SHARE_SURFACE = "assistant_screen_share_call_active"
+
 
 async def publish_meet_interaction_from_track(source: str, active: bool) -> None:
     """Publish a meet interaction event inferred from a LiveKit video track.

@@ -59,6 +59,7 @@ from unify.session_details import SESSION_DETAILS
 # Shared helpers
 from unify.conversation_manager.medium_scripts.common import (
     event_broker,
+    CALL_DESKTOP_SHARE_SURFACE,
     create_end_call,  # kept for test monkeypatch compatibility
     match_say_meta,
     setup_participant_disconnect_handler,  # kept for test monkeypatch compatibility
@@ -2510,6 +2511,12 @@ async def entrypoint(ctx: agents.JobContext):
     # -- Screenshot state --
     screenshot_history = ScreenshotHistory()
     assistant_screen_share_active = False
+    # Whether the desktop belongs on *this call's* stage, which is a different
+    # question from whether anyone is watching it: a Desktop tab open beside the
+    # call watches without the room having anything to show. Kept apart so that
+    # capturing frames for the brain and mounting an iframe on every
+    # participant's screen cannot be decided by one another's answer.
+    assistant_desktop_on_stage = False
     user_remote_control_active = False
     _agent_service_url: str | None = (
         (meta.get("agent_service_url") if meta else None)
@@ -2544,7 +2551,7 @@ async def entrypoint(ctx: agents.JobContext):
         state = {
             "type": "assistant_screenshare",
             "assistantId": str(SESSION_DETAILS.assistant.agent_id or ""),
-            "active": assistant_screen_share_active,
+            "active": assistant_desktop_on_stage,
         }
 
         async def _send() -> None:
@@ -3276,7 +3283,7 @@ async def entrypoint(ctx: agents.JobContext):
             # A client that joins mid-share starts with nothing mounted, so the
             # state has to be restated for it. Only when active: "not sharing"
             # is what a fresh client already assumes.
-            if assistant_screen_share_active:
+            if assistant_desktop_on_stage:
                 _publish_assistant_screenshare_state()
         if joined_gate_required and not outbound:
             _mark_user_joined("participant_connected")
@@ -3771,6 +3778,7 @@ async def entrypoint(ctx: agents.JobContext):
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
         nonlocal _pending_console_steps, user_remote_control_active
+        nonlocal assistant_desktop_on_stage
         if data.get("event_name") == "AssistantTurnInjected":
             payload = data.get("payload") or {}
             apply_assistant_turn_injection(str(payload.get("content") or ""))
@@ -3795,6 +3803,15 @@ async def entrypoint(ctx: agents.JobContext):
                 )
                 if not assistant_screen_share_active:
                     _clear_visual_context(source="assistant")
+            # Republished on every viewer change rather than on a transition of
+            # this flag, so a room that has drifted out of step is put back.
+            # Every client's copy of what is mounted lives in its own memory, and
+            # an edge-triggered broadcast can only correct one that is wrong in
+            # the direction the edge happens to be travelling.
+            if CALL_DESKTOP_SHARE_SURFACE in surfaces:
+                assistant_desktop_on_stage = bool(
+                    surfaces[CALL_DESKTOP_SHARE_SURFACE],
+                )
                 _publish_assistant_screenshare_state()
             if surfaces.get("user_screen_share_active") is False:
                 _clear_visual_context(source="user")
