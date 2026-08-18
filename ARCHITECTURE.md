@@ -159,15 +159,28 @@ When the Actor calls `primitives.contacts.ask(...)`, the ContactManager starts i
 
 This gives full-depth steering with transcript visibility at every level.
 
-### `ask()` — inspecting a running loop
+### `ask()` — inspecting a loop, running or completed
 
-`ask()` is not a simple state peek. It:
+`ask()` is not a simple state peek, and it represents the inspected loop
+differently depending on whether it has finished:
 
-1. Snapshots the running loop's full transcript
-2. Transforms roles to `inner_user`/`inner_assistant` (so the inspection LLM distinguishes the inspected conversation from its own)
-3. Creates a fresh LLM client with the snapshot as system context
-4. Starts a **new, read-only tool loop** to answer the question
-5. If the inspected loop has its own inner handles, their `ask_*` tools are forwarded to the inspection loop, enabling recursive drill-down
+- **Still running** — a live snapshot: the transcript so far, compact-
+  serialized, with roles transformed to `inner_user`/`inner_assistant` (so
+  the inspection LLM distinguishes the inspected conversation from its own).
+- **Completed** — a compact **digest** instead: built once, mechanically (no
+  LLM call), from data the loop already retains — the original request, each
+  tool call's name/`thought`/result preview+size, source URLs seen, and the
+  final result. Cached on the handle, so a second question about the same
+  completed handle reuses byte-identical text and hits the provider's prefix
+  cache. A `read_child_message(idx)` tool is offered alongside it so the
+  inspection loop can fetch any one message from the completed transcript
+  verbatim (capped at 32KB) when the digest's previews aren't enough.
+
+Both paths otherwise follow the same shape:
+
+1. Creates a fresh LLM client with the snapshot/digest as system context
+2. Starts a **new, read-only tool loop** to answer the question
+3. If the inspected loop has its own inner handles, their `ask_*` tools are forwarded to the inspection loop, enabling recursive drill-down
 
 This means you can ask "what's the flight search doing?" and the inspection loop can, if needed, call `ask_flight_search()` to query the inner handle's own transcript.
 
