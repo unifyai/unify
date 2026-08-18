@@ -3,6 +3,7 @@ Contains classes and helpers for manipulating and managing messages in an async 
 """
 
 import copy
+import hashlib
 import json
 import unillm
 from typing import Callable, Optional, Any
@@ -12,6 +13,86 @@ from ...common.hierarchical_logger import DEFAULT_ICON
 from contextlib import suppress, contextmanager
 from .tools_utils import create_tool_call_message
 from ..context_dump import make_messages_safe_for_context_dump
+
+# ── sent-watermark invariant ────────────────────────────────────────────
+#
+# A message is immutable once it has been included in any dispatched LLM
+# request; everything from the watermark index onward is still free to
+# mutate. See plan-append-only-transcript for the full rationale — provider
+# prefix caching matches serialized requests byte-for-byte from position 0,
+# so any edit below the watermark invalidates the cached prefix for every
+# subsequent request.
+
+
+def _message_index(client, msg: dict) -> Optional[int]:
+    """Identity-index of *msg* within ``client.messages``, or ``None`` if absent.
+
+    Identity (``is``), not equality — two structurally-identical dicts must
+    not be confused, and message dicts are mutated in place over their
+    lifetime so equality is not stable anyway.
+    """
+    msgs = getattr(client, "messages", None) or []
+    for i in range(len(msgs) - 1, -1, -1):
+        if msgs[i] is msg:
+            return i
+    return None
+
+
+def is_mutable(client, msg: dict) -> bool:
+    """True when *msg* has not yet been included in any dispatched request."""
+    idx = _message_index(client, msg)
+    if idx is None:
+        return True
+    watermark = getattr(client, "_sent_watermark", 0)
+    return idx >= watermark
+
+
+def _hash_msgs_slice(msgs: list) -> str:
+    try:
+        blob = json.dumps(msgs, sort_keys=True, default=str)
+    except Exception:
+        blob = repr(msgs)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+async def emit_completion_pair(
+    result: str,
+    call_id: str,
+    msg_dispatcher: Any,
+) -> dict:
+    """
+    Append a synthetic assistant→tool pair carrying *result* for *call_id*
+    at the tail of the transcript, instead of splicing it into an
+    already-dispatched (below-watermark) position. This is the sole
+    below-watermark delivery path for both late tool results and, via
+    ``insert_tool_message_after_assistant``'s gate, any other reply that
+    would otherwise land below the mark.
+    """
+    status_call_id = f"{call_id}_completed"
+    status_tool_name = f"check_status_{call_id}"
+
+    assistant_stub = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": status_call_id,
+                "type": "function",
+                "function": {
+                    "name": status_tool_name,
+                    "arguments": "{}",
+                },
+            },
+        ],
+    }
+    tool_msg = create_tool_call_message(
+        name=status_tool_name,
+        call_id=status_call_id,
+        content=result,
+    )
+
+    await msg_dispatcher.append_msgs([assistant_stub, tool_msg])
+    return tool_msg
 
 
 @contextmanager
@@ -273,6 +354,33 @@ async def generate_with_preprocess(
     preprocess_msgs: Optional[Callable[[list[dict]], list[dict]]],
     **gen_kwargs,
 ):
+    # Sent watermark: everything below this index has been (or is about to
+    # be) included in a dispatched request and must never be mutated again.
+    # Set here — the one place both llm_task dispatch sites funnel through —
+    # on the pre-copy length, since the deep copy taken below is what
+    # actually gets serialized. Monotonic, and set unconditionally *before*
+    # the request goes out (not after it returns) so a cancelled/interrupted
+    # dispatch still advances it: the provider may have cached the prefix of
+    # a stream that never finished.
+    prev_watermark = getattr(client, "_sent_watermark", 0)
+    if __debug__:
+        # Dev-mode integrity check: the below-watermark slice must be
+        # byte-identical to what was hashed at the last dispatch. Any
+        # mutation there breaks provider prefix caching silently, so this
+        # assertion is the only thing that would ever catch it.
+        prev_hash = getattr(client, "_sent_watermark_hash", None)
+        if prev_hash is not None:
+            assert _hash_msgs_slice(client.messages[:prev_watermark]) == prev_hash, (
+                "Append-only transcript invariant violated: a message below "
+                "the sent watermark was mutated between dispatches."
+            )
+    pre_copy_len = len(client.messages)
+    client._sent_watermark = max(prev_watermark, pre_copy_len)
+    if __debug__:
+        client._sent_watermark_hash = _hash_msgs_slice(
+            client.messages[: client._sent_watermark],
+        )
+
     # Stamp the in-flight window on the client. ``handle.ask()`` snapshots
     # ``client.messages``, which dead-ends silently while a request is out; the
     # stamp lets the inspection transcript say "the loop is waiting on an LLM
@@ -655,13 +763,41 @@ def build_helper_ack_content(name: str, args_json: Any) -> str:
 # Helper: prune a `wait` tool call from an assistant message. If it was the
 # only tool call and there is no content, drop the assistant message from the
 # client's transcript where possible.
-def prune_wait_tool_call(
+#
+# Below the sent watermark, *asst_msg* was already included in a dispatched
+# request — popping the wait's tool_calls entry, or editing the array in
+# place, would mutate already-cached bytes. Instead the stale wait is left
+# untouched and acknowledged via an appended tool reply (spliced directly
+# after asst_msg, bypassing the watermark gate): a one-time prefix break,
+# accepted because the alternative — a wait tool_calls entry with no reply
+# anywhere — is a permanently illegal transcript, not just an uncached one.
+async def prune_wait_tool_call(
     asst_msg: dict,
     call_id: str,
     *,
     client: unillm.AsyncUnify | None = None,
+    assistant_meta: Optional[dict] = None,
+    msg_dispatcher: Any = None,
 ) -> None:
     try:
+        if (
+            client is not None
+            and not is_mutable(client, asst_msg)
+            and assistant_meta is not None
+            and msg_dispatcher is not None
+        ):
+            await acknowledge_helper_call(
+                asst_msg,
+                call_id,
+                "wait",
+                "{}",
+                assistant_meta=assistant_meta,
+                client=client,
+                msg_dispatcher=msg_dispatcher,
+                bypass_watermark=True,
+            )
+            return
+
         tool_calls = asst_msg.get("tool_calls") or []
         remaining = [c for c in tool_calls if c.get("id") != call_id]
         content_present = bool((asst_msg.get("content") or "").strip())
@@ -695,6 +831,7 @@ async def insert_tool_message_after_assistant(
     msg_dispatcher,
     *,
     skip_event_bus: bool = False,
+    bypass_watermark: bool = False,
 ) -> None:
     """
     Append *tool_msg* and move it directly after *parent_msg*, while
@@ -703,13 +840,44 @@ async def insert_tool_message_after_assistant(
     If *skip_event_bus* is True, the message is appended to the client
     transcript but NOT published to the EventBus. This is used for
     placeholder messages that will be updated in-place later.
+
+    If the computed insertion position falls below the client's sent
+    watermark, splicing there would shift every already-dispatched message
+    that follows — breaking the provider's cached prefix from that point
+    on. Unless *bypass_watermark* is set (the backfill/restore escape
+    hatch: an otherwise-permanently-unanswered ``tool_calls`` entry makes
+    the transcript illegal, and legality beats cache), the message is
+    instead delivered as a check_status pair appended at the tail, leaving
+    everything below the watermark untouched.
     """
     meta = assistant_meta.setdefault(
         id(parent_msg),
         {"results_count": 0},
     )
+
+    if not bypass_watermark and client is not None:
+        watermark = getattr(client, "_sent_watermark", 0)
+        parent_idx = _message_index(client, parent_msg)
+        if parent_idx is not None:
+            insert_pos = parent_idx + 1 + meta["results_count"]
+            if insert_pos < watermark:
+                call_id = (
+                    tool_msg.get("tool_call_id") if isinstance(tool_msg, dict) else None
+                )
+                content = (
+                    tool_msg.get("content")
+                    if isinstance(tool_msg, dict)
+                    else str(tool_msg)
+                )
+                await emit_completion_pair(
+                    content,
+                    call_id or "unknown",
+                    msg_dispatcher,
+                )
+                return
+
     await msg_dispatcher.append_msgs([tool_msg], skip_event_bus=skip_event_bus)
-    insert_pos = client.messages.index(parent_msg) + 1 + meta["results_count"]
+    insert_pos = _message_index(client, parent_msg) + 1 + meta["results_count"]
     client.messages.insert(insert_pos, client.messages.pop())
     meta["results_count"] += 1
 
@@ -759,6 +927,7 @@ async def acknowledge_helper_call(
     assistant_meta,
     client,
     msg_dispatcher,
+    bypass_watermark: bool = False,
 ) -> None:
     tool_msg = create_tool_call_message(
         name=name,
@@ -771,6 +940,7 @@ async def acknowledge_helper_call(
         tool_msg,
         client,
         msg_dispatcher,
+        bypass_watermark=bypass_watermark,
     )
 
 
@@ -821,7 +991,16 @@ async def ensure_placeholders_for_pending(
         if _inf.tool_reply_msg or _inf.clarify_placeholder:
             continue
 
-        ph_content: dict = {"_placeholder": "pending"}
+        # Self-describing so a permanently-frozen stub (below-watermark by
+        # the time the result arrives) still reads truthfully: the result
+        # never rewrites this message, it always arrives as a check_status
+        # pair appended below. "meta:"-prefixed keys are the established
+        # convention for annotations that don't change what this placeholder
+        # fundamentally *is* (still "pending").
+        ph_content: dict = {
+            "_placeholder": "pending",
+            "meta:status": "async — result arrives as a check_status message below",
+        }
         if time_ctx is not None:
             with suppress(Exception):
                 ph_content["meta:started"] = time_ctx.offset_at(_inf.scheduled_time)
@@ -831,6 +1010,10 @@ async def ensure_placeholders_for_pending(
             call_id=_inf.call_id,
             content=json.dumps(ph_content, indent=4),
         )
+        # The first-ever reply to a call_id must always sit immediately
+        # after its assistant message — that's the API's own legality
+        # requirement, not a caching nicety, so this always bypasses the
+        # watermark gate (see the escape hatch on insert_tool_message_after_assistant).
         await insert_tool_message_after_assistant(
             assistant_meta,
             _inf.assistant_msg,
@@ -838,6 +1021,7 @@ async def ensure_placeholders_for_pending(
             client,
             msg_dispatcher,
             skip_event_bus=True,  # Don't publish placeholders; publish when final
+            bypass_watermark=True,
         )
         _inf.tool_reply_msg = placeholder
         created.append(_inf.call_id)
@@ -881,13 +1065,22 @@ async def schedule_missing_for_message(
                 # Special-case: `wait` should not clutter the transcript.
                 if name == "wait":
                     try:
-                        prune_wait_tool_call(asst_msg, cid, client=client)
+                        await prune_wait_tool_call(
+                            asst_msg,
+                            cid,
+                            client=client,
+                            assistant_meta=assistant_meta,
+                            msg_dispatcher=msg_dispatcher,
+                        )
                     except Exception:
                         pass
                     scheduled.append(cid)
                     continue
 
-                # Other helpers: acknowledge but do not execute during backfill
+                # Other helpers: acknowledge but do not execute during backfill.
+                # This is the backfill/restore escape hatch — the call_id has
+                # no reply anywhere yet, so the ack must splice adjacently
+                # regardless of watermark; legality beats cache.
                 try:
                     await acknowledge_helper_call(
                         asst_msg,
@@ -897,6 +1090,7 @@ async def schedule_missing_for_message(
                         assistant_meta=assistant_meta,
                         client=client,
                         msg_dispatcher=msg_dispatcher,
+                        bypass_watermark=True,
                     )
                 except Exception:
                     pass
