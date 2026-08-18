@@ -1019,7 +1019,44 @@ async def async_tool_loop_inner(
                 new_text = None
             iq = getattr(inf, "interject_queue", None)
             if iq is not None:
-                await iq.put(new_text)
+                _ctx_cont = (
+                    args.get("_parent_chat_context_cont")
+                    if isinstance(args, dict)
+                    else None
+                )
+                if _ctx_cont is None:
+                    # No continuation context to carry — keep forwarding the
+                    # bare text exactly as before. Plenty of simple tools
+                    # declare `_interject_queue` and just do
+                    # `await _interject_queue.get()` expecting the raw
+                    # string; wrapping unconditionally would break that
+                    # contract for every interject that has nothing to do
+                    # with context propagation.
+                    await iq.put(new_text)
+                else:
+                    # Match AsyncToolLoopHandle.interject's own queue payload
+                    # shape exactly (unify/common/async_tool_loop.py) only
+                    # when there's actually context to carry, so a call
+                    # routed through this queue shortcut carries the same
+                    # continuation context as one routed through
+                    # handle.interject() below — bypassing the handle must
+                    # not silently drop it.
+                    await iq.put(
+                        {
+                            "message": new_text,
+                            "_parent_chat_context_continued": _ctx_cont,
+                            "trigger_immediate_llm_turn": (
+                                args.get("trigger_immediate_llm_turn", True)
+                                if isinstance(args, dict)
+                                else True
+                            ),
+                            "suppress_response_notification": (
+                                args.get("suppress_response_notification", False)
+                                if isinstance(args, dict)
+                                else False
+                            ),
+                        },
+                    )
                 return
             if h is not None:
                 await forward_handle_call(  # type: ignore[name-defined]

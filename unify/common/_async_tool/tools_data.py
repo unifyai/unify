@@ -415,7 +415,7 @@ class ToolsData:
         self._completed_ask_handles: Dict[str, Callable] = {}
         self._task_ask_keys: Dict[asyncio.Task, str] = {}
         # Metadata for completed steerable tools, keyed by call_id.
-        # Each entry: {"name": str, "call_id": str, "arg_repr": str, "ask_fn": Callable, "handle": Any}
+        # Each entry: {"name": str, "call_id": str, "ask_fn": Callable, "handle": Any}
         self._completed_askable_tools: Dict[str, dict] = {}
         # Caller-supplied ask tools injected at construction time (e.g.
         # domain-specific read-only tools for handle.ask() inspection loops).
@@ -664,7 +664,6 @@ class ToolsData:
         self,
         call_id: str,
         name: str,
-        arg_repr: str,
         msg_dispatcher: "LoopMessageDispatcher",
     ) -> None:
         """Announce that a completed call's trajectory is now askable.
@@ -673,10 +672,15 @@ class ToolsData:
         docstring (which churned the schema on every completion, even when
         nothing else changed) with an appended tail message — the docstring
         itself is now frozen.
+
+        Deliberately carries no argument payload, same as
+        ``record_tool_started`` — the adjacent assistant `tool_calls` entry
+        already has the full arguments; duplicating them here would freeze a
+        second copy into the prefix forever (T4-2).
         """
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
-            f"[askable {call_id}] {name}({arg_repr}) completed and is askable via "
+            f"[askable {call_id}] {name} completed and is askable via "
             f'ask_about_completed_tool(tool_id="{call_id}", question=...).'
         )
         await msg_dispatcher.append_msgs(
@@ -741,16 +745,9 @@ class ToolsData:
                 # Store metadata for the ask_about_completed_tool dispatcher.
                 if info is not None:
                     call_id = info.call_id
-                    arg_json = info.call_dict["function"].get("arguments", "{}")
-                    try:
-                        arg_dict = json.loads(arg_json)
-                        arg_repr = ", ".join(f"{k}={v!r}" for k, v in arg_dict.items())
-                    except Exception:
-                        arg_repr = arg_json
                     self._completed_askable_tools[call_id] = {
                         "name": info.name,
                         "call_id": call_id,
-                        "arg_repr": arg_repr,
                         "ask_fn": ask_fn,
                         "handle": info.handle,
                     }
@@ -1079,7 +1076,6 @@ class ToolsData:
                 await self.record_tool_completed_askable(
                     call_id,
                     askable_entry["name"],
-                    askable_entry["arg_repr"],
                     msg_dispatcher,
                 )
 
