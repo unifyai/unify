@@ -15,12 +15,15 @@ class ToolSpec:
     """Wrap the callable with optional metadata (e.g., max_concurrent)."""
 
     fn: Callable
-    max_concurrent: Optional[int] = None  # «None» ⇒ unlimited
+    # «None» ⇒ unlimited. Schema visibility is unconditional regardless of
+    # this limit (a stable schema beats a minimal one) — a call attempted
+    # while saturated is refused at execution time instead.
+    max_concurrent: Optional[int] = None
     # Hidden per-loop quota: when set, the tool will only be callable
-    # `max_total_calls` times within a single async tool-use loop. Once
-    # exhausted, the tool is silently hidden from the exposed schema and
-    # any additional invocations are minimally acknowledged without
-    # revealing quota details to the LLM.
+    # `max_total_calls` times within a single async tool-use loop. The tool
+    # stays visible in the schema once exhausted (same rationale as
+    # max_concurrent above); an over-quota call is pruned/rejected at
+    # execution time instead of hiding the tool.
     max_total_calls: Optional[int] = None
     read_only: Optional[bool] = None
     manager_tool: bool = False

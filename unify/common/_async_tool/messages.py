@@ -756,18 +756,12 @@ async def forward_handle_call(
         return None
 
 
-# Helper: detect helper-tool names (wait/stop_/pause_/resume_/clarify_/interject_)
+# Helper: detect helper-tool names — the static steering/inspection surface
+# (steer/wait/ask_about_completed_tool) that ack-during-backfill rather than
+# actually re-dispatching/re-executing (the underlying async work is gone on
+# restart regardless of which action was requested).
 def _is_helper_tool(name: str) -> bool:
-    return (
-        name == "wait"
-        or name.startswith("stop_")
-        or name.startswith("pause_")
-        or name.startswith("resume_")
-        or name.startswith("clarify_")
-        or name.startswith("interject_")
-        # NOTE: ask_* proxies are treated as base tools so they can be scheduled/executed
-        # during backfill when symbolically injected by the outer ask loop.
-    )
+    return name in ("wait", "steer", "ask_about_completed_tool")
 
 
 # Helper: build human-readable acknowledgement content for helper tools
@@ -784,26 +778,40 @@ def build_helper_ack_content(name: str, args_json: Any) -> str:
 
     if name == "wait":
         ack_content = "Waiting acknowledged. Keeping current tool calls in flight."
-    elif name.startswith("stop_"):
-        ack_content = "Stop request acknowledged. If the underlying call is still running, it will be stopped."
-    elif name.startswith("pause_"):
-        ack_content = "Pause request acknowledged. If the underlying call is still running, it will be paused."
-    elif name.startswith("resume_"):
-        ack_content = "Resume request acknowledged. If the underlying call was paused, it will be resumed."
-    elif name.startswith("clarify_"):
-        ans = payload.get("answer")
-        ack_content = (
-            f"Clarification answer received: {ans!r}. Waiting for the original tool to proceed."
-            if ans is not None
-            else "Clarification helper acknowledged. Waiting for the original tool to proceed."
-        )
-    elif name.startswith("interject_"):
-        guidance = payload.get("message")
-        ack_content = (
-            f"Guidance forwarded to the running tool: {guidance!r}."
-            if guidance
-            else "Interjection acknowledged and forwarded to the running tool."
-        )
+    elif name == "steer":
+        action = str(payload.get("action") or "").strip().lower()
+        steer_payload = payload.get("payload")
+        if action == "stop":
+            ack_content = "Stop request acknowledged. If the underlying call is still running, it will be stopped."
+        elif action == "pause":
+            ack_content = "Pause request acknowledged. If the underlying call is still running, it will be paused."
+        elif action == "resume":
+            ack_content = "Resume request acknowledged. If the underlying call was paused, it will be resumed."
+        elif action == "clarify":
+            ack_content = (
+                f"Clarification answer received: {steer_payload!r}. Waiting for the original tool to proceed."
+                if steer_payload is not None
+                else "Clarification helper acknowledged. Waiting for the original tool to proceed."
+            )
+        elif action == "interject":
+            ack_content = (
+                f"Guidance forwarded to the running tool: {steer_payload!r}."
+                if steer_payload
+                else "Interjection acknowledged and forwarded to the running tool."
+            )
+        elif action == "ask":
+            ack_content = "Ask request acknowledged and forwarded to the running tool."
+        elif action == "call":
+            method = payload.get("method")
+            ack_content = (
+                f"Call to {method!r} acknowledged and forwarded to the running tool."
+                if method
+                else "Custom method call acknowledged and forwarded to the running tool."
+            )
+        else:
+            ack_content = "Steering request acknowledged."
+    elif name == "ask_about_completed_tool":
+        ack_content = "Follow-up question acknowledged and forwarded for retrospective inspection."
     else:
         # Default acknowledgement for custom write-only helpers
         ack_content = (
