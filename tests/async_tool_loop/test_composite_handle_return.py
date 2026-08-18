@@ -28,7 +28,7 @@ from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_tool_result,
-    _wait_for_assistant_call_prefix,
+    _wait_for_assistant_steer_action,
     real_tool_messages,
     any_tool_message_content_contains,
 )
@@ -196,7 +196,7 @@ async def test_composite_dict_return_with_handle(llm_config):
     The outer loop should:
     1. Extract the handle and adopt it for steering.
     2. Present the intermediate data (with sentinel) as progress to the LLM.
-    3. Expose dynamic steering helpers (stop_*, etc.).
+    3. Remain steerable via steer(call_id=..., action=...).
     4. Eventually complete with the handle's final result.
     """
 
@@ -308,8 +308,8 @@ async def test_composite_dict_return_with_handle(llm_config):
 
 @pytest.mark.asyncio
 async def test_composite_return_stop_steering(llm_config):
-    """Tool returns composite data + handle. The outer loop should expose
-    ``stop_*`` helpers that propagate to the inner handle.
+    """Tool returns composite data + handle. The outer loop should stay
+    steerable via steer(action="stop") propagating to the inner handle.
     """
 
     stop_called = {"count": 0}
@@ -361,8 +361,9 @@ async def test_composite_return_stop_steering(llm_config):
     client.set_system_message(
         "You are running inside an automated test.\n"
         "1️⃣  Call `lookup_tool` with no arguments.\n"
-        "2️⃣  If the user says 'stop', immediately call the helper whose name "
-        "starts with `stop_` (e.g. `stop_lookup_tool_<id>`) exactly once.\n"
+        "2️⃣  If the user says 'stop', immediately call "
+        'steer(call_id=<the id from the "[steerable ...]" announcement for '
+        'this call>, action="stop") exactly once.\n'
         "3️⃣  Once stopped, reply with exactly 'stopped'.",
     )
 
@@ -377,9 +378,9 @@ async def test_composite_return_stop_steering(llm_config):
     await _wait_for_tool_request(client, "lookup_tool")
     await _wait_for_tool_result(client, tool_name="lookup_tool", min_results=1)
 
-    # Interject to trigger the stop helper
+    # Interject to trigger the stop action
     await outer_handle.interject("stop")
-    await _wait_for_assistant_call_prefix(client, "stop_")
+    await _wait_for_assistant_steer_action(client, "stop")
 
     final = await outer_handle.result()
     assert final is not None, "Loop should complete"
