@@ -85,18 +85,36 @@ async def test_basic_event_flow(llm_config) -> None:
 
     # Filter out internal runtime context events and check conversation flow.
     # Captured events are already in chronological order (oldest first).
+    #
+    # Scheduling the `echo` call now also publishes two lifecycle events, in
+    # this order, that were not part of the pre-steer() event anatomy:
+    #   - a "## User Visibility Context" system message, injected once per
+    #     loop the first time any lifecycle tail message is about to appear
+    #     (ToolsData._ensure_visibility_guidance_injected) — without it the
+    #     model has no way to know a later `[steerable ...]`/`[progress ...]`
+    #     message isn't a real user request;
+    #   - a "[steerable <call_id>] echo started." user message
+    #     (ToolsData.record_tool_started), announcing the call_id so the
+    #     model can reference it via steer() instead of hallucinating one —
+    #     an evidence-driven fix from live testing (models reliably guessed
+    #     a plausible-looking id instead of reading the real one back from
+    #     their own tool_calls entry).
+    # Both fire exactly once per loop (not per pending<->idle transition),
+    # so a loop making a single tool call sees exactly these two extra
+    # messages, landing between the assistant's tool-call message and the
+    # tool result: user, assistant, system, user, tool, assistant.
     events = _filter_runtime_context(captured_events)
-    assert len(events) == 4
+    assert len(events) == 6
 
     roles = [evt.payload["message"]["role"] for evt in events]
-    assert roles == ["user", "assistant", "tool", "assistant"]
+    assert roles == ["user", "assistant", "system", "user", "tool", "assistant"]
 
     assert events[0].payload["message"]["content"] == "world"  # original user question
     assert (
-        events[2].payload["message"]["content"].strip("'").strip('"') == "WORLD"
+        events[4].payload["message"]["content"].strip("'").strip('"') == "WORLD"
     )  # tool result
     assert (
-        events[3].payload["message"]["content"].strip("'").strip('"').upper() == "WORLD"
+        events[5].payload["message"]["content"].strip("'").strip('"').upper() == "WORLD"
     )  # final assistant reply (may either echo the user of the capitalized tool)
 
 
