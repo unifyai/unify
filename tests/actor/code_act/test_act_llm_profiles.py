@@ -164,8 +164,9 @@ async def test_act_llm_profile_overrides_main_actor_client(monkeypatch):
     finally:
         await actor.close()
 
-    assert (None, {}) in calls
-    assert ("openai/gpt-5.5@openrouter", {"reasoning_effort": "high"}) in calls
+    tag = {"purpose": "planning", "origin": "CodeActActor.act"}
+    assert (None, tag) in calls
+    assert ("openai/gpt-5.5@openrouter", {**tag, "reasoning_effort": "high"}) in calls
     assert "default" in active_profiles_at_loop_start
     assert "gpt_5_5_high" in active_profiles_at_loop_start
     assert CURRENT_ACT_LLM_PROFILE.get().name == "default"
