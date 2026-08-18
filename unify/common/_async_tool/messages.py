@@ -39,10 +39,16 @@ def _message_index(client, msg: dict) -> Optional[int]:
 
 
 def is_mutable(client, msg: dict) -> bool:
-    """True when *msg* has not yet been included in any dispatched request."""
+    """True when *msg* has not yet been included in any dispatched request.
+
+    Fails closed: a message absent from the transcript (e.g. a swapped-out
+    canonical log during a concurrent dispatch) is treated as immutable, so
+    callers route its content through the tail-append paths that reach the
+    model instead of writing into a dict the transcript will never contain.
+    """
     idx = _message_index(client, msg)
     if idx is None:
-        return True
+        return False
     watermark = getattr(client, "_sent_watermark", 0)
     return idx >= watermark
 
@@ -53,6 +59,45 @@ def _hash_msgs_slice(msgs: list) -> str:
     except Exception:
         blob = repr(msgs)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+# Diagnostic switch, not a rollout flag: prod behavior of the loop itself is
+# identical either way. Off by default so the below-watermark hashing (real
+# per-dispatch CPU on long transcripts) never ships to prod; the test suite's
+# conftest turns it on so CI still catches an unsanctioned mutation.
+_INVARIANT_CHECKS_ENV = "UNIFY_TRANSCRIPT_INVARIANT_CHECKS"
+
+
+def _invariant_checks_enabled() -> bool:
+    import os
+
+    return os.environ.get(_INVARIANT_CHECKS_ENV) == "1"
+
+
+def _call_id_has_reply(client, call_id: Optional[str]) -> bool:
+    """True if some tool-role message in the transcript already answers *call_id*."""
+    if not call_id:
+        return False
+    for m in getattr(client, "messages", None) or []:
+        if m.get("role") == "tool" and m.get("tool_call_id") == call_id:
+            return True
+    return False
+
+
+def _rebaseline_watermark_hash(client) -> None:
+    """Recompute the stored watermark hash after a sanctioned escape-hatch splice.
+
+    A ``bypass_watermark`` splice deliberately shifts content at indices the
+    previous hash already covered — that's the escape hatch's whole point
+    (legality beats cache). Without re-baselining here, the next dispatch's
+    integrity check would read that sanctioned shift as an unsanctioned
+    mutation and raise.
+    """
+    if not _invariant_checks_enabled():
+        return
+    watermark = getattr(client, "_sent_watermark", 0)
+    with suppress(Exception):
+        client._sent_watermark_hash = _hash_msgs_slice(client.messages[:watermark])
 
 
 async def emit_completion_pair(
@@ -142,7 +187,11 @@ def is_non_final_tool_reply(msg: dict) -> bool:
     """Return True when a tool message looks like a placeholder/progress, not a final result.
 
     Rules:
-    - Clarification wrappers (name startswith "clarification_request_") are non-final.
+    - Clarification wrappers (name startswith "clarification_request_") are
+      non-final. Nothing creates this shape anymore — ToolsData.record_clarification
+      delivers the question as a "[clarification <call_id>]" user-role tail
+      message instead — but a transcript persisted before that change can
+      still contain one, so this stays for backward compatibility.
     - Any tool message whose content parses to a dict containing the top-level key
       "_placeholder" is non-final (used for pending/progress/nested-start placeholders).
     """
@@ -363,11 +412,14 @@ async def generate_with_preprocess(
     # dispatch still advances it: the provider may have cached the prefix of
     # a stream that never finished.
     prev_watermark = getattr(client, "_sent_watermark", 0)
-    if __debug__:
-        # Dev-mode integrity check: the below-watermark slice must be
-        # byte-identical to what was hashed at the last dispatch. Any
-        # mutation there breaks provider prefix caching silently, so this
-        # assertion is the only thing that would ever catch it.
+    _checks_on = _invariant_checks_enabled()
+    if _checks_on:
+        # Integrity check (diagnostic switch — see _invariant_checks_enabled):
+        # the below-watermark slice must be byte-identical to what was hashed
+        # at the last dispatch, UNLESS a sanctioned escape-hatch splice
+        # re-baselined it in between (see _rebaseline_watermark_hash). An
+        # unsanctioned mutation is the only thing left that can still trip
+        # this.
         prev_hash = getattr(client, "_sent_watermark_hash", None)
         if prev_hash is not None:
             assert _hash_msgs_slice(client.messages[:prev_watermark]) == prev_hash, (
@@ -376,7 +428,7 @@ async def generate_with_preprocess(
             )
     pre_copy_len = len(client.messages)
     client._sent_watermark = max(prev_watermark, pre_copy_len)
-    if __debug__:
+    if _checks_on:
         client._sent_watermark_hash = _hash_msgs_slice(
             client.messages[: client._sent_watermark],
         )
@@ -779,25 +831,32 @@ async def prune_wait_tool_call(
     assistant_meta: Optional[dict] = None,
     msg_dispatcher: Any = None,
 ) -> None:
-    try:
-        if (
-            client is not None
-            and not is_mutable(client, asst_msg)
-            and assistant_meta is not None
-            and msg_dispatcher is not None
-        ):
-            await acknowledge_helper_call(
-                asst_msg,
-                call_id,
-                "wait",
-                "{}",
-                assistant_meta=assistant_meta,
-                client=client,
-                msg_dispatcher=msg_dispatcher,
-                bypass_watermark=True,
+    if client is not None and not is_mutable(client, asst_msg):
+        if assistant_meta is None or msg_dispatcher is None:
+            # A missing param here must never silently fall through to the
+            # pop/in-place edit below — that's precisely the mutation this
+            # branch exists to prevent. Fail loudly instead of corrupting
+            # an already-dispatched message.
+            raise ValueError(
+                "prune_wait_tool_call: asst_msg is already below the sent "
+                "watermark, so popping or editing its tool_calls in place "
+                "would mutate already-dispatched bytes — but assistant_meta "
+                "and msg_dispatcher (needed to route the ack through the "
+                "escape hatch) were not both provided.",
             )
-            return
+        await acknowledge_helper_call(
+            asst_msg,
+            call_id,
+            "wait",
+            "{}",
+            assistant_meta=assistant_meta,
+            client=client,
+            msg_dispatcher=msg_dispatcher,
+            bypass_watermark=True,
+        )
+        return
 
+    try:
         tool_calls = asst_msg.get("tool_calls") or []
         remaining = [c for c in tool_calls if c.get("id") != call_id]
         content_present = bool((asst_msg.get("content") or "").strip())
@@ -844,42 +903,61 @@ async def insert_tool_message_after_assistant(
     If the computed insertion position falls below the client's sent
     watermark, splicing there would shift every already-dispatched message
     that follows — breaking the provider's cached prefix from that point
-    on. Unless *bypass_watermark* is set (the backfill/restore escape
-    hatch: an otherwise-permanently-unanswered ``tool_calls`` entry makes
-    the transcript illegal, and legality beats cache), the message is
-    instead delivered as a check_status pair appended at the tail, leaving
-    everything below the watermark untouched.
+    on. The message is instead delivered as a check_status pair appended
+    at the tail, leaving everything below the watermark untouched —
+    *unless* the transcript would otherwise become illegal: when
+    ``tool_msg``'s call_id has no reply anywhere yet, this insertion IS the
+    first-ever reply, and redirecting it would permanently orphan the
+    original ``tool_calls`` entry (a check_status pair answers a different,
+    synthesized call_id). That case always splices, whether or not the
+    caller passed *bypass_watermark* — legality beats cache, enforced here
+    rather than trusted to every call site. A caller with its own reason to
+    force the splice (e.g. the backfill/restore escape hatch) may still
+    pass *bypass_watermark* explicitly.
+
+    A sanctioned below-watermark splice re-baselines the stored watermark
+    hash immediately, so the next dispatch's integrity check (when enabled)
+    reads it as the new legitimate state rather than a violation.
     """
-    meta = assistant_meta.setdefault(
-        id(parent_msg),
-        {"results_count": 0},
-    )
+    call_id = tool_msg.get("tool_call_id") if isinstance(tool_msg, dict) else None
 
-    if not bypass_watermark and client is not None:
-        watermark = getattr(client, "_sent_watermark", 0)
-        parent_idx = _message_index(client, parent_msg)
-        if parent_idx is not None:
-            insert_pos = parent_idx + 1 + meta["results_count"]
-            if insert_pos < watermark:
-                call_id = (
-                    tool_msg.get("tool_call_id") if isinstance(tool_msg, dict) else None
-                )
-                content = (
-                    tool_msg.get("content")
-                    if isinstance(tool_msg, dict)
-                    else str(tool_msg)
-                )
-                await emit_completion_pair(
-                    content,
-                    call_id or "unknown",
-                    msg_dispatcher,
-                )
-                return
+    if (
+        not bypass_watermark
+        and client is not None
+        and call_id is not None
+        and not _call_id_has_reply(client, call_id)
+    ):
+        bypass_watermark = True
 
+    watermark = getattr(client, "_sent_watermark", 0) if client is not None else 0
+    parent_idx = _message_index(client, parent_msg) if client is not None else None
+    existing_meta = assistant_meta.get(id(parent_msg))
+    results_count = existing_meta["results_count"] if existing_meta else 0
+    insert_pos = (parent_idx + 1 + results_count) if parent_idx is not None else None
+    below_watermark = insert_pos is not None and insert_pos < watermark
+
+    if below_watermark and not bypass_watermark:
+        content = (
+            tool_msg.get("content") if isinstance(tool_msg, dict) else str(tool_msg)
+        )
+        await emit_completion_pair(
+            content,
+            call_id or "unknown",
+            msg_dispatcher,
+        )
+        return
+
+    # Only now mark the parent handled — a reply diverted to check_status
+    # above must not suppress the preflight repair that looks for
+    # unanswered tool_calls entries.
+    meta = assistant_meta.setdefault(id(parent_msg), {"results_count": 0})
     await msg_dispatcher.append_msgs([tool_msg], skip_event_bus=skip_event_bus)
-    insert_pos = _message_index(client, parent_msg) + 1 + meta["results_count"]
-    client.messages.insert(insert_pos, client.messages.pop())
+    final_insert_pos = _message_index(client, parent_msg) + 1 + meta["results_count"]
+    client.messages.insert(final_insert_pos, client.messages.pop())
     meta["results_count"] += 1
+
+    if below_watermark:
+        _rebaseline_watermark_hash(client)
 
 
 # Helper: propagate a stop request to any nested SteerableToolHandle returned
