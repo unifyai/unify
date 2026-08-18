@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ..common.prompt_helpers import get_assistant_timezone
 from .types.trigger import Trigger
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,42 @@ def _parse_jsonl_file(jsonl_path: Path) -> List[CustomTaskSourceEntry]:
     return entries
 
 
+def _localize_repeat(
+    repeat: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Anchor a bundle's wall-clock slots to the assistant's own zone.
+
+    A bundle is universal, so it cannot name a zone: "08:30" in a shelf
+    manifest means *the installer's* half past eight, not UTC's. Resolved
+    here, at the moment a bundle becomes one assistant's planted task, which
+    is the first point where whose morning it is is known.
+
+    Left alone when the assistant has no zone (behaviour is then exactly what
+    it was, UTC) or when the source named one explicitly, which an author
+    would only do for a schedule that genuinely is absolute.
+
+    The resolved zone lands in the task's ``custom_hash`` along with the rest
+    of ``repeat``, so an assistant that later changes timezone re-plants on
+    the next reconcile rather than keeping the hours of a country it left.
+    """
+
+    if not repeat:
+        return repeat
+    zone = get_assistant_timezone()
+    if not zone:
+        return repeat
+
+    localized: List[Dict[str, Any]] = []
+    for pattern in repeat:
+        if not isinstance(pattern, dict):
+            localized.append(pattern)
+            continue
+        if pattern.get("time_of_day") and not pattern.get("timezone"):
+            pattern = {**pattern, "timezone": zone}
+        localized.append(pattern)
+    return localized
+
+
 def collect_custom_tasks(
     path: Optional[Path] = None,
 ) -> Dict[str, Dict[str, Any]]:
@@ -181,7 +218,7 @@ def collect_custom_tasks(
             "trigger": entry.trigger,
             "deadline": entry.deadline,
             "max_runtime_seconds": entry.max_runtime_seconds,
-            "repeat": entry.repeat,
+            "repeat": _localize_repeat(entry.repeat),
             "priority": entry.priority,
             "tags": entry.tags,
             "response_policy": entry.response_policy,
