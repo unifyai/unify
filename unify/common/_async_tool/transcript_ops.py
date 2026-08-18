@@ -140,7 +140,11 @@ def extract_assistant_and_tool_steps(
         if call_id not in referenced_call_ids:
             continue
         if allowed_tools is not None:
-            # Allow clarification wrappers to pass even if not in tool registry
+            # Allow clarification wrappers to pass even if not in tool registry.
+            # "clarification_request_*" tool messages are pre-T3 history —
+            # ToolsData.record_clarification now delivers the question as a
+            # "[clarification <call_id>]" user-role tail message instead, but
+            # a transcript persisted before that change can still have one.
             if not (
                 (isinstance(name, str) and name in allowed_tools)
                 or (isinstance(name, str) and name.startswith("clarification_request_"))

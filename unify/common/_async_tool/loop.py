@@ -625,40 +625,6 @@ async def async_tool_loop_inner(
             + json.dumps(_rf_norm.answer_json_schema, indent=2)
         )
 
-    # ── User visibility guidance ──────────────────────────────────────────────
-    # Explain to the model what the end-user can and cannot see. This guidance
-    # is injected as a system message ONLY when the first interjection arrives,
-    # not at the start of the loop. This keeps the LLM focused on the task at
-    # hand until an interjection actually occurs.
-    #
-    # The guidance helps the model understand:
-    # 1. The user does NOT see any intermediate tool calls or tool results
-    # 2. The user only sees the initial request and any interjection messages
-    # 3. The user sees the final plain-text response from the assistant
-    #
-    # Appended to the global system message via LiteLLM preprocessing.
-    # -------------------------------------------------------------------------
-    _user_visibility_guidance = (
-        "## User Visibility Context\n"
-        "IMPORTANT: The end-user who initiated this conversation can ONLY see:\n"
-        "1. Their original request and any follow-up messages they send (interjections)\n"
-        "2. Any notifications you emit (status updates, progress indicators, etc.)\n"
-        "3. Any clarification requests you send asking for more information\n"
-        "4. Your FINAL plain-text response at the end of this tool-use session\n\n"
-        "The user CANNOT see:\n"
-        "- Any intermediate tool calls you make\n"
-        "- Any tool results or outputs\n"
-        "- Any assistant messages that include tool_calls\n\n"
-        "When the user sends follow-up messages (interjections) during your tool-use "
-        "session, these appear as regular user messages. Consider and incorporate ALL "
-        "user interjections in your final response. Later interjections should override "
-        "earlier ones if there are any conflicting comments or requests.\n\n"
-        "EXCEPTION: user-role messages prefixed with `[progress <call_id>]` or "
-        "`[loop <call_id>]` are NOT interjections from the user — they are status "
-        "updates the loop appends automatically to report in-flight tool progress. "
-        "Do not treat them as requests to incorporate or respond to."
-    )
-    _visibility_guidance_injected = False
     runtime_state = runtime_state or ToolLoopRuntimeState()
 
     # ── runtime guards ────────────────────────────────────────────────────
@@ -1914,17 +1880,11 @@ async def async_tool_loop_inner(
                 # On the FIRST interjection, inject user visibility guidance as a
                 # system message so the model understands why a user message is
                 # appearing mid-tool-execution and what the user can/cannot see.
-                if not _visibility_guidance_injected:
-                    await _msg_dispatcher.append_msgs(
-                        [
-                            {
-                                "role": "system",
-                                "_visibility_guidance": True,
-                                "content": _user_visibility_guidance,
-                            },
-                        ],
-                    )
-                    _visibility_guidance_injected = True
+                # Shared trigger with record_progress/record_clarification's own
+                # call into the same method (same flag on tools_data), so a loop
+                # that gets a real interjection before any status message still
+                # only pays for one injection.
+                await tools_data._ensure_visibility_guidance_injected(_msg_dispatcher)
 
                 # Send interjection as user message(s).
                 # If context continuation is present, inject it as a separate user message
@@ -2890,15 +2850,21 @@ async def async_tool_loop_inner(
             _persist_response_content = None  # captured by send_response for surfacing
 
             if msg["tool_calls"]:
+                # prune_over_quota_tool_calls runs first: it asserts msg is
+                # still mutable (an in-place tool_calls edit below the sent
+                # watermark would mutate already-dispatched bytes), which
+                # the dedup mutation right after it relies on too — msg is
+                # this turn's own freshly-generated message (index ==
+                # watermark, nothing dispatched it yet), so the assertion is
+                # expected to always pass here; it exists to keep that
+                # invariant stated rather than accidental.
+                tools_data.prune_over_quota_tool_calls(msg)
+
                 # ── De-duplicate tool calls (optional) ────────────────────────
                 if prune_tool_duplicates:
                     unique, _ = prune_duplicate_tool_calls(msg["tool_calls"])
                     if len(unique) != len(msg["tool_calls"]):
                         msg["tool_calls"] = unique
-
-                # Always ensure over-quota tool calls are removed regardless of
-                # deduplication settings, before any scheduling occurs.
-                tools_data.prune_over_quota_tool_calls(msg)
 
                 # If pruning removed all calls and left a placeholder notice, inject a user turn
                 # so the model is prompted to continue. This prevents Assistant->Assistant history
@@ -3584,7 +3550,9 @@ async def async_tool_loop_inner(
                             )
                             # Store the clarify helper's reply so that when the tool
                             # completes, the final result goes here (not into the
-                            # clarification_request_* message which preserves the question)
+                            # tool_reply_msg pending stub, and not into the
+                            # [clarification <call_id>] tail message that carried
+                            # the question — see record_clarification)
                             tools_data.info[tgt_task].clarify_placeholder = (
                                 tool_reply_msg
                             )

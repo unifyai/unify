@@ -924,8 +924,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         # was ever dispatched. Reset explicitly rather than relying on the
         # rebuilt list happening to be shorter than the old watermark.
         self._client._sent_watermark = 0
-        if __debug__:
-            self._client._sent_watermark_hash = None
+        self._client._sent_watermark_hash = None
         self._runtime_state.message_count_offset += n_archived - len(
             result.system_msgs,
         )
