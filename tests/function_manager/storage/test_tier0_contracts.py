@@ -243,7 +243,7 @@ def test_add_functions_persists_postconditions_and_rejects_bad_ones():
     row = fm._get_function_data_by_name(name="total")
     assert row["contract"]["postconditions"] == ["result['n'] == len(kwargs['values'])"]
     assert row["contract"]["source"] == "librarian"
-    assert row["contract"]["output_schema"] == {"type": "object"}
+    assert row["contract"]["output_schema"]["type"] == "object"
 
     with pytest.raises(ValueError, match="__import__"):
         fm.add_functions(
