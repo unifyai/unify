@@ -20,6 +20,8 @@ from .messages import (
     insert_tool_message_after_assistant,
     _normalise_kwargs_for_bound_method,
     apply_llm_soft_required_defaults,
+    emit_completion_pair,
+    is_mutable,
 )
 from ..tool_spec import normalise_tools
 from ..llm_helpers import method_to_schema
@@ -96,15 +98,38 @@ class _MultiHandleState:
     template: Any  # cleaned structure with labeled sentinels
     results: dict  # label -> raw result (None while pending)
 
-    def update_placeholder(self) -> None:
-        """Rebuild the shared placeholder with any completed results merged in."""
+    async def record_child_result(
+        self,
+        child_call_id: str,
+        child_content: str,
+        *,
+        tools_data: "ToolsData",
+        msg_dispatcher: "LoopMessageDispatcher",
+    ) -> None:
+        """Merge one child's terminal result into the shared placeholder.
+
+        Each call is a *final* result for that one child (a multi-handle
+        child completes exactly once, success or error) — not an
+        intermediate update. While the shared placeholder is still mutable,
+        rebuild it in place with every result resolved so far (a bundled
+        progressive view, free since nothing has been dispatched yet). Once
+        it has been sent, it is frozen for good — a shared placeholder can't
+        keep reporting new children finishing without rewriting already-sent
+        bytes — so this child's own result is instead delivered on its own
+        synthesized call_id via a per-child check_status pair.
+        """
         updated = _rebuild_multi_handle_content(self.template, self.results)
         all_done = all(v is not None for v in self.results.values())
-        self.placeholder_msg["content"] = serialize_tool_content(
+        content = serialize_tool_content(
             tool_name=self.parent_name,
             payload=updated,
             is_final=all_done,
         )
+        if tools_data._mutable(self.placeholder_msg):
+            self.placeholder_msg["content"] = content
+            await msg_dispatcher.publish_to_event_bus([self.placeholder_msg])
+            return
+        await emit_completion_pair(child_content, child_call_id, msg_dispatcher)
 
 
 def _rebuild_multi_handle_content(template, results):
@@ -391,45 +416,65 @@ class ToolsData:
         limit = self.normalized[task_name].max_concurrent
         return limit is None or self.active_count(task_name) < limit
 
-    def _at_tail(self, msg: dict) -> bool:
-        """True when *msg* is the very last entry in client.messages."""
-        return bool(self._client.messages) and self._client.messages[-1] is msg
+    def _mutable(self, msg: dict) -> bool:
+        """True when *msg* has not yet been included in any dispatched request."""
+        return is_mutable(self._client, msg)
 
-    async def _emit_completion_pair(
+    async def record_progress(
         self,
-        result: str,
+        info: "ToolCallMetadata",
         call_id: str,
+        pretty: str,
         msg_dispatcher: "LoopMessageDispatcher",
-    ) -> dict:
-        """
-        Append a synthetic assistant→tool pair carrying the final result
-        at the chronologically correct position (end of messages).
-        """
-        status_call_id = f"{call_id}_completed"
-        status_tool_name = f"check_status_{call_id}"
+    ) -> None:
+        """Coalesce-then-freeze progress delivery.
 
-        assistant_stub = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": status_call_id,
-                    "type": "function",
-                    "function": {
-                        "name": status_tool_name,
-                        "arguments": "{}",
-                    },
-                },
-            ],
-        }
-        tool_msg = create_tool_call_message(
-            name=status_tool_name,
-            call_id=status_call_id,
-            content=result,
+        Progress notifications land as ``[progress <call_id>]``-prefixed
+        user-role tail messages, tracked in ``info.progress_msg`` — separate
+        from ``info.tool_reply_msg`` so the eventual final result never
+        shares a slot with transient progress text. While the current
+        progress message is still above the sent watermark it is free to
+        edit in place, coalescing a burst of notifications into one message;
+        once it has been dispatched it is frozen, and the next notification
+        starts a fresh tail message instead of reaching back to mutate it.
+        """
+        content = f"[progress {call_id}] {pretty}"
+        existing = info.progress_msg
+        if existing is not None and self._mutable(existing):
+            existing["content"] = content
+            return
+        new_msg = {"role": "user", "content": content, "_progress_msg": True}
+        await msg_dispatcher.append_msgs([new_msg])
+        info.progress_msg = new_msg
+
+    async def record_clarification(
+        self,
+        info: "ToolCallMetadata",
+        call_id: str,
+        question_text: str,
+        msg_dispatcher: "LoopMessageDispatcher",
+    ) -> None:
+        """Coalesce-then-freeze clarification-question delivery.
+
+        Mirrors ``record_progress``, but tracked separately in
+        ``info.clarify_msg`` and prefixed ``[clarification <call_id>]`` so
+        the model recognizes it wants a ``clarify_<call_id>`` reply, unlike
+        a status-only ``[progress ...]`` message. ``info.tool_reply_msg``
+        (the pending stub) is never touched here — the tool's eventual
+        final result still lands there, or on ``clarify_placeholder`` once
+        the model answers, never on this tail message.
+        """
+        content = (
+            f"[clarification {call_id}] Tool incomplete, please answer the "
+            f"following to continue tool execution:\n{question_text}"
         )
-
-        await msg_dispatcher.append_msgs([assistant_stub, tool_msg])
-        return tool_msg
+        existing = info.clarify_msg
+        if existing is not None and self._mutable(existing):
+            existing["content"] = content
+            return
+        new_msg = {"role": "user", "content": content, "_clarify_msg": True}
+        await msg_dispatcher.append_msgs([new_msg])
+        info.clarify_msg = new_msg
 
     def has_exceeded_quota_for_tool(self, task_name: str) -> bool:
         if task_name not in self.normalized:
@@ -784,28 +829,13 @@ class ToolsData:
                 except Exception:
                     break
 
-                # Pretty-print content for transcript placeholder
+                # Pretty-print content for the progress message
                 pretty = self._pretty_tool_payload(name, payload)
 
-                # Create/update a single tool-reply placeholder for this call_id
-                placeholder = info.tool_reply_msg
-                if placeholder is None:
-                    placeholder = create_tool_call_message(
-                        name=name,
-                        call_id=call_id,
-                        content=pretty,
-                    )
-                    await insert_tool_message_after_assistant(
-                        assistant_meta,
-                        info.assistant_msg,
-                        placeholder,
-                        self._client,
-                        msg_dispatcher,
-                        skip_event_bus=True,  # Progress placeholder; final result published later
-                    )
-                    info.tool_reply_msg = placeholder
-                else:
-                    placeholder["content"] = pretty
+                # Coalesce-then-freeze into a separate [progress <call_id>]
+                # tail message — never the tool_reply_msg placeholder, which
+                # must stay byte-frozen once sent (see record_progress).
+                await self.record_progress(info, call_id, pretty, msg_dispatcher)
 
                 # Forward a programmatic notification event to the outer handle
                 with suppress(Exception):
@@ -844,15 +874,18 @@ class ToolsData:
             if mh_state is not None:
                 label = info._multi_handle_label
                 mh_state.results[label] = raw
-                mh_state.update_placeholder()
-                await msg_dispatcher.publish_to_event_bus(
-                    [mh_state.placeholder_msg],
-                )
-                self.completed_results[call_id] = serialize_tool_content(
+                child_content = serialize_tool_content(
                     tool_name=name,
                     payload=raw,
                     is_final=True,
                 )
+                await mh_state.record_child_result(
+                    call_id,
+                    child_content,
+                    tools_data=self,
+                    msg_dispatcher=msg_dispatcher,
+                )
+                self.completed_results[call_id] = child_content
                 self._completed_tool_names[call_id] = name
                 consecutive_failures.reset_failures()
                 if self._logger.log_steps:
@@ -913,9 +946,11 @@ class ToolsData:
                 label = info._multi_handle_label
                 error_tb = _failure_text(exc)
                 mh_state.results[label] = f"[{label}: error]\n{error_tb}"
-                mh_state.update_placeholder()
-                await msg_dispatcher.publish_to_event_bus(
-                    [mh_state.placeholder_msg],
+                await mh_state.record_child_result(
+                    call_id,
+                    error_tb,
+                    tools_data=self,
+                    msg_dispatcher=msg_dispatcher,
                 )
                 self.completed_results[call_id] = error_tb
                 self._completed_tool_names[call_id] = name
@@ -977,39 +1012,40 @@ class ToolsData:
         clarify_ph = info.clarify_placeholder
         tool_reply_msg = info.tool_reply_msg
 
-        # Placeholder handling with chronological ordering:
-        # - At tail: update in-place
-        # - Not at tail: mark as completed, emit check_status pair at end
+        # Placeholder handling under the sent-watermark invariant:
+        # - Still mutable (not yet dispatched): update in-place — free, no
+        #   cache cost.
+        # - Immutable (already sent): the stub is never rewritten again — it
+        #   was self-describing from the start (see ensure_placeholders_for_pending)
+        #   — and the result is delivered solely via an appended check_status
+        #   pair.
         placeholder = clarify_ph or tool_reply_msg
 
         if placeholder is not None:
-            if self._at_tail(placeholder):
+            if self._mutable(placeholder):
                 placeholder["content"] = result
                 tool_msg = placeholder
                 # Publish the now-complete tool message to EventBus
                 # (placeholder insertion skipped EventBus; now we have final content)
                 await msg_dispatcher.publish_to_event_bus([tool_msg])
             else:
-                placeholder["content"] = json.dumps(
-                    {
-                        "_placeholder": "completed",
-                        "status": "Tool completed. See check_status result below.",
-                        "result_call_id": f"{call_id}_completed",
-                    },
-                )
-                tool_msg = await self._emit_completion_pair(
+                tool_msg = await emit_completion_pair(
                     result,
                     call_id,
                     msg_dispatcher,
                 )
         else:
             tool_msg = create_tool_call_message(name, call_id, result)
+            # First-ever reply to this call_id — legality requires strict
+            # adjacency, so this always bypasses the watermark gate (see
+            # insert_tool_message_after_assistant's escape hatch).
             await insert_tool_message_after_assistant(
                 assistant_meta,
                 asst_msg,
                 tool_msg,
                 self._client,
                 msg_dispatcher,
+                bypass_watermark=True,
             )
 
         self._logger.debug(
@@ -1109,10 +1145,22 @@ class ToolsData:
                 self._client,
                 msg_dispatcher,
                 skip_event_bus=True,  # Nested placeholder; final result published when nested task completes
+                bypass_watermark=True,  # first-ever reply to this call_id — legality, not caching
             )
             info.tool_reply_msg = ph
         else:
-            ph["content"] = placeholder_content
+            # Non-final: this is a transient "now running as a nested
+            # handle" status marker, not the call's terminal result — that
+            # still lands on `ph` untouched (via process_completed_task's
+            # own gate) when the nested task actually finishes. Route it
+            # through the same coalesce-then-freeze progress delivery as
+            # tool notifications rather than rewriting `ph` in place.
+            pretty = (
+                placeholder_content
+                if isinstance(placeholder_content, str)
+                else json.dumps(placeholder_content)
+            )
+            await self.record_progress(info, info.call_id, pretty, msg_dispatcher)
 
         # Book-keeping for the new task (inherit, share placeholder)
         metadata = dataclasses.replace(
@@ -1174,9 +1222,18 @@ class ToolsData:
                 self._client,
                 msg_dispatcher,
                 skip_event_bus=True,
+                bypass_watermark=True,  # first-ever reply to this call_id — legality, not caching
             )
         else:
-            ph["content"] = placeholder_content
+            # `ph` becomes `state.placeholder_msg` below — the single shared
+            # slot `_MultiHandleState.record_child_result` will keep
+            # managing (mutate-if-mutable, else per-child check_status)
+            # for the rest of this call's lifetime. Only refresh it here if
+            # it's still free to edit; if it's already been dispatched,
+            # leave it frozen rather than forking a second, disconnected
+            # view that record_child_result never touches.
+            if self._mutable(ph):
+                ph["content"] = placeholder_content
 
         # Shared state that all children reference
         state = _MultiHandleState(
