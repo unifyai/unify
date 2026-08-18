@@ -801,9 +801,28 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         which resolves any compression restarts, before this handle is ever
         reachable as "completed" — so the digest is built from that final
         state, not a stale pre-compression snapshot.
+
+        Raises
+        ------
+        asyncio.InvalidStateError
+            If called before the handle has completed. ``ask()`` only ever
+            reaches this on its completed branch (guarded by ``done()``),
+            so this only fires on a direct, premature call — and it must
+            fire rather than mislabel the run: without this guard, reading
+            ``self._task.result()`` on a still-running task raises its own
+            ``InvalidStateError`` ("Result is not set"), which would
+            otherwise be caught below and rendered as a false "this run
+            ended with an error" outcome for a run that neither errored
+            nor finished.
         """
         if self._digest_cache is not None:
             return self._digest_cache
+
+        if not self.done():
+            raise asyncio.InvalidStateError(
+                "digest() is only available after completion; use the "
+                "live-snapshot ask() path for a still-running handle.",
+            )
 
         raw_messages = list(getattr(self._client, "messages", None) or [])
         safe_messages = make_messages_safe_for_context_dump(raw_messages)
@@ -833,6 +852,11 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         except asyncio.CancelledError:
             final_result = "(this run was stopped before producing a result)"
             _task_result_available = True
+        except asyncio.InvalidStateError:
+            # Must never happen — the done() guard above rules this out —
+            # but re-raise rather than let the generic handler below
+            # mislabel a not-actually-finished task as one that errored.
+            raise
         except Exception as exc:
             final_result = (
                 f"(this run ended with an error: {type(exc).__name__}: {exc})"
@@ -927,9 +951,12 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 "count": len(elided),
                 "idx_range": [elided[0]["idx"], elided[-1]["idx"]],
                 "note": (
-                    f"{len(elided)} turns elided to keep the digest compact — "
-                    "each still has a stable idx; retrieve any one verbatim "
-                    "via read_child_message(idx)."
+                    f"{len(elided)} turns elided to keep the digest compact "
+                    "(count is turns; idx_range is transcript positions, "
+                    "which interleave with non-tool messages so it is not "
+                    "contiguous per turn) — each elided turn still has a "
+                    "stable idx; retrieve any one verbatim via "
+                    "read_child_message(idx)."
                 ),
             }
             turns = [*head, marker, *tail]

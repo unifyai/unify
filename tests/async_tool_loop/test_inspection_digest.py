@@ -139,6 +139,27 @@ async def test_digest_is_cached_and_byte_stable():
 
 
 @pytest.mark.asyncio
+async def test_digest_on_unfinished_handle_raises():
+    """digest() must refuse rather than mislabel: reading self._task.result()
+    on a still-running task raises its own InvalidStateError, which the
+    generic error handler below the done() guard would otherwise catch and
+    render as a false "this run ended with an error" outcome for a run that
+    neither errored nor finished."""
+    task: asyncio.Future = asyncio.Future()  # deliberately left unresolved
+    handle = AsyncToolLoopHandle(
+        task=task,
+        interject_queue=asyncio.Queue(),
+        cancel_event=asyncio.Event(),
+        stop_event=asyncio.Event(),
+        client=_DummyClient(_SAMPLE_MESSAGES),
+        loop_id="TestLoop",
+    )
+
+    with pytest.raises(asyncio.InvalidStateError):
+        handle.digest()
+
+
+@pytest.mark.asyncio
 async def test_digest_final_result_uses_task_result_not_narration_heuristic():
     """T5-1 regression: final_result must come from the task's actual result,
     not a heuristic scan that picks up pre-answer narration on structured-
