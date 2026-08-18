@@ -405,9 +405,10 @@ async def test_ask_inspection_prompt_redacts_image_payloads(monkeypatch) -> None
 
     # Deliberately left unresolved: ask() picks the live-snapshot transcript
     # path only for a still-running handle (checked via done() at invocation
-    # time), which is what this test's assertions are about (the digest path
+    # time), which is what this test's assertions are about. The digest path
     # is redaction-safe too, via the same make_messages_safe_for_context_dump
-    # helper, but is covered separately in test_inspection_digest.py).
+    # helper — see test_inspection_digest.py::
+    # test_digest_and_read_child_message_redact_image_payloads.
     task = asyncio.Future()
 
     handle = atl.AsyncToolLoopHandle(
