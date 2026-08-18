@@ -6,6 +6,7 @@ Unit tests for utility functions in unify.common._async_tool.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -527,11 +528,15 @@ class TestTruncateToolTextSpill:
         with open(spill_path, encoding="utf-8") as f:
             assert f.read() == text
 
-        # Spill dir lives under the (patched) tempdir, named per-process, 0700.
+        # Spill dir lives under the (patched) tempdir, shared (not per-process),
+        # 0700, and the filename is a content hash so identical text always
+        # spills to the identical path.
         spill_dir = os.path.dirname(spill_path)
         assert os.path.dirname(spill_dir) == str(tmp_path)
-        assert os.path.basename(spill_dir) == f"unify-tool-results-{os.getpid()}"
+        assert os.path.basename(spill_dir) == "unify-tool-results"
         assert stat.S_IMODE(os.stat(spill_dir).st_mode) == 0o700
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        assert os.path.basename(spill_path) == f"{content_hash}.txt"
 
         # Head and tail are preserved around the marker.
         head = TOOL_RESULT_TEXT_CHAR_LIMIT // 2
