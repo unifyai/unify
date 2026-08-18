@@ -10,8 +10,10 @@ purpose-tagged token accounting; docs. In `colleague` (branch
 `change_without_regression` experiments, the six-week `teaching` extension,
 tokens by purpose in the unify arm's ledger, `plot_distillation_curve.py`,
 README/DESIGN updates including the "held scores below correct" rule — all
-self-testing; no paid run has been made yet, so §7's "publish the loss, the
-fix, the new result" is still open. Written against `staging` @ `5ec185ada`
+self-testing. First live runs recorded (colleague `614b7b4`): the hermes arm
+on all four experiments; the unify arm's first attempt hit an unfunded
+staging tenant, so §7's "publish the loss, the fix, the new result" is still
+open for unify. Orchestra treats `held` as terminal (`07641c6b`). Written against `staging` @ `5ec185ada`
 (2026-08-17). Line numbers below are approximate as of that commit; symbols
 are exact. Re-verify both before editing.
 
