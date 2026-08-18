@@ -365,13 +365,22 @@ def test_steer_docstring_is_constant_regardless_of_live_handle_overrides():
 
 
 @pytest.mark.asyncio
-async def test_custom_method_docstring_surfaces_in_started_announcement():
+async def test_custom_method_docstring_surfaces_in_capability_delta_announcement():
     """
     A custom method's docstring is no longer adopted by a per-call-id minted
-    tool (that mechanism is gone) — it now surfaces in the "[steerable ...]
-    started" tail message instead (ToolsData.record_tool_started), which is
-    the only place the model can still discover a custom method's signature
-    and docstring ahead of calling steer(action="call", method=...).
+    tool (that mechanism is gone) — it now surfaces in the
+    "[steerable ...] now supports ..." capability-delta tail message
+    (ToolsData.record_tool_capability_delta), which is the only place the
+    model can still discover a custom method's signature and docstring
+    ahead of calling steer(action="call", method=...).
+
+    record_tool_started itself (the "started" announcement) carries no
+    arguments and no handle-derived content at all (T4-2) — it fires before
+    a handle exists in the schedule_base_tool_call path, and this test
+    exercises it directly with a handle already attached (mirroring
+    adopt_multi_nested's composite-child path, the one case where
+    record_tool_started legitimately runs with info.handle already set) to
+    pin that it stays silent on custom methods regardless.
     """
 
     class _FakeClient:
@@ -445,11 +454,26 @@ async def test_custom_method_docstring_surfaces_in_started_announcement():
 
     await tools_data.record_tool_started(info, dispatcher)
 
-    assert len(client.messages) == 1
-    content = client.messages[0]["content"]
-    assert "[steerable call_abc]" in content
-    assert "escalate" in content
-    assert "Escalate override doc: raise escalation to the specified level." in content
+    # Visibility guidance is injected before the first lifecycle announcement,
+    # then the started announcement itself — no args, no custom methods.
+    assert len(client.messages) == 2
+    assert client.messages[0]["role"] == "system"
+    assert client.messages[0].get("_visibility_guidance") is True
+    started_content = client.messages[1]["content"]
+    assert started_content == "[steerable call_abc] spawn_handle started."
+    assert "escalate" not in started_content
+
+    # The capability delta (fired once a handle is adopted) is where a
+    # custom method's docstring actually surfaces.
+    await tools_data.record_tool_capability_delta(info, dispatcher)
+    assert len(client.messages) == 3
+    delta_content = client.messages[2]["content"]
+    assert "[steerable call_abc] now supports" in delta_content
+    assert "escalate" in delta_content
+    assert (
+        "Escalate override doc: raise escalation to the specified level."
+        in delta_content
+    )
 
 
 async def spawn_custom_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
