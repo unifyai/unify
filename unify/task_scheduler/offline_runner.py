@@ -613,6 +613,24 @@ class _OfflineTaskExecutionDelegate:
             self._actor = None
 
 
+async def _await_post_run_review(handle: Any) -> None:
+    """Wait out any post-run storage review the handle is still running.
+
+    A failure inside the review must not turn a run that succeeded into one
+    that reports failure: the run's own outcome is already recorded and the
+    review is strictly additional. So the wait swallows, and the review's own
+    logging is what says it went wrong.
+    """
+
+    waiter = getattr(handle, "wait_until_done", None)
+    if waiter is None:
+        return
+    try:
+        await waiter()
+    except Exception:
+        LOGGER.exception("Post-run storage review ended abnormally")
+
+
 async def _execute_provider_event_offline_task(
     config: OfflineTaskConfig,
     dispatch: ProviderEventDispatchRequest,
@@ -633,7 +651,9 @@ async def _execute_provider_event_offline_task(
             captured_task_revision=captured_task_revision,
             provider_event_context=untrusted,
         )
-        return await handle.result()
+        result = await handle.result()
+        await _await_post_run_review(handle)
+        return result
     finally:
         current_task_execution_delegate.reset(token)
         await delegate.close()
@@ -652,7 +672,15 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
             trigger_attempt_token=_trigger_attempt_token(config),
             _activated_by=RunSource.normalize(config.wake.value).to_activated_by(),
         )
-        return await handle.result()
+        result = await handle.result()
+        # The run has its answer, but a post-run review may still be
+        # distilling the trajectory into reusable functions -- the mechanism
+        # that makes a recurring task cheaper and more deterministic every
+        # time it runs. This process owns the actor that review needs, so
+        # returning here would close its pools underneath it and orphan the
+        # work. The job's own deadline is the bound on all of it.
+        await _await_post_run_review(handle)
+        return result
     finally:
         current_task_execution_delegate.reset(token)
         await delegate.close()
