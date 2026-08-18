@@ -83,7 +83,8 @@ async def test_llm_uses_ask_about_completed_tool_after_inner_completes(llm_confi
         "1. Call `researcher` with no arguments and wait for it to complete.\n"
         "2. After researcher completes, you MUST call `ask_about_completed_tool` "
         "to ask: 'What specific sources were gathered?'\n"
-        "   Use the tool_id from the completed tools listing in the tool description.\n"
+        '   Use the tool_id from the "[askable ...]" tail message announcing '
+        "researcher's completion.\n"
         "3. After receiving the answer, reply with the sources that were found. "
         "Include the specific source names in your final reply.",
     )
@@ -194,7 +195,7 @@ async def test_ask_about_completed_tool_with_multiple_completed_tools(llm_config
         "2. Call `beta_worker` with no arguments. Wait for it to complete.\n"
         "3. After both complete, call `ask_about_completed_tool` to ask about "
         "the alpha_worker: 'What value did alpha_compute return?'\n"
-        "   Use the tool_id for the alpha_worker from the completed tools listing.\n"
+        '   Use the tool_id for the alpha_worker from its "[askable ...]" tail message.\n'
         "4. Reply with the value that alpha_compute returned.",
     )
 
@@ -234,16 +235,17 @@ async def test_ask_about_completed_tool_with_multiple_completed_tools(llm_config
 
 @pytest.mark.asyncio
 @pytest.mark.llm_call
-async def test_ask_about_completed_tool_not_exposed_without_completed_steerable_tools(
+async def test_ask_about_completed_tool_unused_without_completed_steerable_tools(
     llm_config,
 ):
     """
-    ``ask_about_completed_tool`` should NOT appear in the tool set when no
-    steerable inner tools have completed. Only plain (non-handle-returning)
-    tools should be visible.
-
-    This verifies that the dispatcher is only created when there's something
-    to ask about.
+    ``ask_about_completed_tool`` is now always present in the schema — its
+    docstring is frozen and no longer regenerated with a live listing (see
+    the "[askable ...]" tail-message mechanism), so removing it from the
+    schema when nothing has completed would reintroduce the per-turn schema
+    churn steer()'s design exists to kill. What's verified here instead:
+    with nothing to ask about, the model correctly never calls it (the
+    frozen docstring makes clear there's nothing listed to reference).
     """
 
     def simple_add(x: int, y: int) -> int:
@@ -343,10 +345,11 @@ async def test_pop_task_retains_handle_in_completed_askable_tools():
     )
     td.save_task(task, metadata)
 
-    # Simulate the ask_* dynamic tool being registered for this task.
+    # Simulate the live ask closure being registered for this task
+    # (DynamicToolFactory.live_ask_fns, seeded via _live_ask_fns_ref).
     ask_key = "ask_dummy_test_call_123"
     td._task_ask_keys[task] = ask_key
-    td._dynamic_tools_ref = {ask_key: MagicMock()}
+    td._live_ask_fns_ref = {ask_key: MagicMock()}
 
     # pop_task should retain the handle in _completed_askable_tools.
     td.pop_task(task)
