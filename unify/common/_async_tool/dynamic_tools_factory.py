@@ -58,6 +58,11 @@ payload : str | None
     (stop's reason, pause, resume).
 method : str | None
     Required only for action="call": the name of the custom method to invoke.
+include_parent_context : bool
+    Only relevant for action="ask". Whether to pass the parent conversation's
+    context into the nested inspection turn. Defaults to true; set false when
+    the question is self-contained and the extra context would just add cost
+    with no benefit. Ignored by every other action.
 
 Returns
 -------
@@ -280,6 +285,7 @@ class DynamicToolFactory:
             action: SteerAction,
             payload: Optional[str] = None,
             method: Optional[str] = None,
+            include_parent_context: bool = True,
         ) -> Dict[str, Any]:
             return {"status": "unreachable"}
 

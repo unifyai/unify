@@ -776,6 +776,7 @@ class ToolsData:
         context_state: LoopContextState,
         propagate_chat_context,
         assistant_meta,
+        msg_dispatcher: Optional["LoopMessageDispatcher"] = None,
         initial_paused: bool = False,
     ) -> None:
         # Base tool must exist
@@ -931,6 +932,14 @@ class ToolsData:
                 f"{name} - {call_id}",
                 prefix=f"🛠️  ToolCall Scheduled",
             )
+
+        # Announce steerability so the model has an explicit call_id pointer
+        # for steer() later — without this, models reliably hallucinate a
+        # plausible-looking id instead of reading the real one back from
+        # their own earlier tool_calls entry.
+        if msg_dispatcher is not None:
+            with suppress(Exception):
+                await self.record_tool_started(metadata, msg_dispatcher)
 
         # Increment hidden quota counter only once scheduling succeeds
         with suppress(Exception):
