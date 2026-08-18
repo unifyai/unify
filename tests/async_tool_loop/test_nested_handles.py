@@ -15,9 +15,10 @@ from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_tool_result,
-    _wait_for_assistant_call_prefix,
+    _wait_for_assistant_steer_action,
     _wait_for_tool_message_prefix,
     _wait_for_condition,
+    _steer_call_action,
     make_gated_sync_tool,
     first_user_message,
     first_assistant_tool_call,
@@ -191,10 +192,10 @@ async def test_stop_nested_loop_calls_stop(llm_config, monkeypatch):
     client.set_system_message(
         "You are running inside an automated test.\n"
         "1️⃣  Call `outer_tool` with no arguments.\n"
-        "2️⃣  If the user later says **stop**, you MUST immediately call exactly once the helper whose function name starts with `_stop_` (e.g. `stop_outer_tool_<id>`) to stop the running call. Do not wait for the inner tool to finish by itself.\n"
+        '2️⃣  If the user later says **stop**, you MUST immediately call exactly once steer(call_id=<the id from the "[steerable ...]" announcement for your outer_tool call>, action="stop") to stop the running call. Do not wait for the inner tool to finish by itself.\n'
         "2️⃣b Immediately after that, call the `wait` helper to keep waiting if needed. Do not call any other helpers. You may call `wait` again if still waiting.\n"
         "3️⃣  Do not produce any other reply until the stop has taken effect.\n"
-        "4️⃣  Only after you have called a `stop_…` helper and received the acknowledgement tool message (containing 'stopped successfully'), reply exactly the single line 'outer stopped'.",
+        "4️⃣  Only after you have called steer(action=\"stop\") and received the acknowledgement tool message (containing 'stopped successfully'), reply exactly the single line 'outer stopped'.",
     )
 
     # 2a. Gate the existing inner_tool so it cannot finish until we observe the stop helper
@@ -221,8 +222,8 @@ async def test_stop_nested_loop_calls_stop(llm_config, monkeypatch):
     await _wait_for_tool_result(client, tool_name="outer_tool", min_results=1)
     await outer_handle.interject("stop")
 
-    # Ensure the assistant actually invokes the dynamic stop helper for the outer tool
-    await _wait_for_assistant_call_prefix(client, "stop_outer_tool_")
+    # Ensure the assistant actually invokes steer(action="stop") for the outer tool
+    await _wait_for_assistant_steer_action(client, "stop")
 
     # Only now allow the inner tool to finish so the LLM's tool selection
     # happened while it was still running
@@ -257,7 +258,7 @@ async def test_interject_nested_handle(llm_config):
     1. Outer loop calls `outer_tool` which starts a nested async tool loop
     2. The nested loop starts a gated tool and waits
     3. Test sends interjection "forward: hello world" to the outer loop
-    4. Outer loop uses `interject_outer_tool_*` helper to forward to nested loop
+    4. Outer loop uses steer(action="interject") to forward to nested loop
     5. Nested loop receives the interjection and includes it in its final response
     6. Gate is released, inner tool completes, and the result flows back up
     """
@@ -294,8 +295,9 @@ async def test_interject_nested_handle(llm_config):
     client = new_llm_client(**llm_config)
     client.set_system_message(
         "Call `outer_tool` (once only) to start a nested loop. "
-        "When you receive 'forward: X', call `interject_outer_tool_*` with "
-        '`{"content": "X"}` to forward X to the nested loop. '
+        "When you receive 'forward: X', call steer(call_id=<the id from the "
+        '"[steerable ...]" announcement for your outer_tool call>, '
+        'action="interject", payload="X") to forward X to the nested loop. '
         "When outer_tool completes, reply with its result.",
     )
 
@@ -314,10 +316,11 @@ async def test_interject_nested_handle(llm_config):
     # Send the interjection to be forwarded
     await top_handle.interject("forward: hello world")
 
-    # Wait for the outer LLM to call the interject helper BEFORE releasing the gate.
-    # This ensures the forwarded message reaches the inner loop while gated_task
-    # is still running, so the inner loop can include "hello world" in its response.
-    await _wait_for_assistant_call_prefix(client, "interject_outer_tool_")
+    # Wait for the outer LLM to call steer(action="interject") BEFORE releasing
+    # the gate. This ensures the forwarded message reaches the inner loop while
+    # gated_task is still running, so the inner loop can include "hello world"
+    # in its response.
+    await _wait_for_assistant_steer_action(client, "interject")
 
     # Only now release the gate, allowing gated_task to complete
     inner_gate.set()
@@ -327,25 +330,21 @@ async def test_interject_nested_handle(llm_config):
     # Assertions
     msgs = client.messages
 
-    # a) Outer loop called the interject helper with "hello world"
+    # a) Outer loop called steer(action="interject") with "hello world"
     interject_call = next(
         (
             call
             for m in msgs
             if m.get("tool_calls")
             for call in m["tool_calls"]
-            if call.get("function", {})
-            .get("name", "")
-            .startswith(
-                "interject_outer_tool_",
-            )
+            if _steer_call_action(call) == "interject"
         ),
         None,
     )
-    assert interject_call is not None, "interject_outer_tool_* was not called"
+    assert interject_call is not None, 'steer(action="interject") was not called'
 
     args = json.loads(interject_call["function"]["arguments"]) or {}
-    content = args.get("message") or args.get("content") or ""
+    content = args.get("payload") or ""
     assert "hello world" in content.lower(), f"Wrong content forwarded: {content!r}"
 
     # b) The forwarded message reached the inner loop and appears in the
@@ -372,7 +371,8 @@ async def test_interject_nested_handle(llm_config):
 async def test_clarification_nested_handle(llm_config):
     """
     Inner tool asks a question, outer loop surfaces it, assistant answers
-    via `_clarify_<id>`, inner loop receives the answer, outer loop completes.
+    via steer(action="clarify"), inner loop receives the answer, outer loop
+    completes.
     """
     exec_log = []
 
@@ -430,7 +430,8 @@ async def test_clarification_nested_handle(llm_config):
     # ── top-level loop – the assistant must answer the clar request ——––
     client = new_llm_client(**llm_config)
     client.set_system_message(
-        "Call `outer_tool` (once only).  When it asks a question, answer with 'blue' via the clarify helper.\n"
+        "Call `outer_tool` (once only). When it asks a question, answer with 'blue' via "
+        'steer(call_id=<the id from the "[clarification ...]" tail message>, action="clarify", payload="blue").\n'
         "If waiting is still needed, call the `wait` helper; do not reply yet.\n"
         "Once outer_tool completes, say 'all done'.",
     )
@@ -575,8 +576,9 @@ async def test_pause_nested_loop_calls_pause(llm_config):
     client = new_llm_client(**llm_config)
     client.set_system_message(
         "1️⃣  Call `dummy_long_job`.\n"
-        "2️⃣  When the *user* says **pause**, you MUST immediately call exactly once the helper whose name "
-        "starts with `pause_` (e.g. `pause_dummy_long_job_<id>`). Do NOT call any other helpers before this.\n"
+        "2️⃣  When the *user* says **pause**, you MUST immediately call exactly once "
+        'steer(call_id=<the id from the "[steerable ...]" announcement for your '
+        'dummy_long_job call>, action="pause"). Do NOT call any other helpers before this.\n'
         "2️⃣b If waiting is still needed, call the `wait` helper.\n"
         "3️⃣  Keep waiting for the job to finish and do not produce any other reply; then reply with 'paused done'.",
     )
@@ -592,9 +594,9 @@ async def test_pause_nested_loop_calls_pause(llm_config):
     # Wait deterministically until the tool has been scheduled so the pause helper exists
     await _wait_for_tool_request(client, "dummy_long_job")
     await top.interject("pause")
-    # Ensure the assistant actually invoked the pause helper and we saw its ack
-    await _wait_for_assistant_call_prefix(client, "pause_")
-    await _wait_for_tool_message_prefix(client, "pause ")
+    # Ensure the assistant actually invoked steer(action="pause") and we saw its ack
+    await _wait_for_assistant_steer_action(client, "pause")
+    await _wait_for_tool_message_prefix(client, "steer:pause ")
 
     final = await top.result()
 
@@ -669,8 +671,11 @@ async def test_resume_nested_loop_calls_resume(llm_config):
     client.set_system_message(
         "You are running inside an automated test.\n"
         "1️⃣ Call `dummy_job`.\n"
-        "2️⃣ When the user says 'hold on', immediately call exactly once the helper whose name starts with `pause_` (e.g. `pause_dummy_job_<id>`). Do NOT produce any status text or explanations.\n"
-        "3️⃣ When the user then says 'resume', immediately call exactly once the helper whose name starts with `resume_` (e.g. `resume_dummy_job_<id>`). Do NOT produce any status text or explanations.\n"
+        "2️⃣ When the user says 'hold on', immediately call exactly once steer(call_id=<the "
+        'id from the "[steerable ...]" announcement for your dummy_job call>, action="pause"). '
+        "Do NOT produce any status text or explanations.\n"
+        "3️⃣ When the user then says 'resume', immediately call exactly once steer(call_id=<the "
+        'same id>, action="resume"). Do NOT produce any status text or explanations.\n'
         "4️⃣ After the job completes, reply EXACTLY with: all done\n"
         "   - No other words, lines, punctuation, or explanations.\n"
         "   - Do not add any additional content before or after all done.\n",
@@ -689,13 +694,13 @@ async def test_resume_nested_loop_calls_resume(llm_config):
 
     # Pause deterministically
     await h.interject("hold on")
-    await _wait_for_assistant_call_prefix(client, "pause")
-    await _wait_for_tool_message_prefix(client, "pause ")
+    await _wait_for_assistant_steer_action(client, "pause")
+    await _wait_for_tool_message_prefix(client, "steer:pause ")
 
     # Resume deterministically
     await h.interject("resume")
-    await _wait_for_assistant_call_prefix(client, "resume")
-    await _wait_for_tool_message_prefix(client, "resume ")
+    await _wait_for_assistant_steer_action(client, "resume")
+    await _wait_for_tool_message_prefix(client, "steer:resume ")
 
     final = await h.result()
 
@@ -839,7 +844,7 @@ async def test_handle_result_blocks_until_resume(llm_config):
 async def test_dynamic_handle_public_method(llm_config):
     """
     The inner tool returns a handle exposing a **public `.ask()` method**.
-    The outer loop must surface an `_ask_…` helper, use it exactly once when
+    The outer loop must call steer(action="ask") on it exactly once when
     the user asks "progress?", and finally reply with 'all done' after the
     long-running task completes.
     """
@@ -886,8 +891,13 @@ async def test_dynamic_handle_public_method(llm_config):
     client = new_llm_client(**llm_config)
     client.set_system_message(
         "1️⃣  Call `long_compute`.\n"
-        "2️⃣  When the *user* says 'progress?', you MUST immediately call exactly once the helper whose name starts with `ask_` (e.g. `ask_long_compute_<id>`). Do not call any other helpers before this.\n"
-        "2️⃣b After calling the `ask_…` helper, if waiting is still needed, call the `wait` helper to keep waiting. You may call `wait` repeatedly while still waiting. Do not call any other helpers (no status checks). Do not reply to the user yet.\n"
+        "2️⃣  When the *user* says 'progress?', you MUST immediately call exactly once "
+        'steer(call_id=<the id from the "[steerable ...]" announcement for your '
+        'long_compute call>, action="ask", payload="progress?"). Do not call any other '
+        "helpers before this.\n"
+        '2️⃣b After calling steer(action="ask"), if waiting is still needed, call the `wait` '
+        "helper to keep waiting. You may call `wait` repeatedly while still waiting. Do not "
+        "call any other helpers (no status checks). Do not reply to the user yet.\n"
         "3️⃣  Only once the computation finishes, answer **only** with 'all done'.",
     )
 
@@ -900,15 +910,15 @@ async def test_dynamic_handle_public_method(llm_config):
     )
 
     # Wait deterministically until the assistant has launched the tool and a placeholder exists
-    # so that dynamic helpers (including `ask_…`) are visible before we interject.
+    # so that steer(action="ask") is a valid, live target before we interject.
     await _wait_for_tool_request(client, "long_compute")
     await _wait_for_tool_result(client, tool_name="long_compute", min_results=1)
 
-    # Now interject to trigger the `ask_…` helper
+    # Now interject to trigger steer(action="ask")
     await top.interject("progress?")
 
-    # Ensure the assistant actually invokes the dynamic `ask_…` helper
-    await _wait_for_assistant_call_prefix(client, "ask_")
+    # Ensure the assistant actually invokes steer(action="ask")
+    await _wait_for_assistant_steer_action(client, "ask")
 
     final_reply = await top.result()
 
@@ -916,20 +926,18 @@ async def test_dynamic_handle_public_method(llm_config):
     assert final_reply is not None, "Loop should complete with a response"
     assert progress_calls["count"] == 1, ".ask should be invoked exactly once"
 
-    # Structural: find the ask_* helper tool_call id and its acknowledgement tool message
+    # Structural: find the steer(action="ask") tool_call id and its acknowledgement
     ask_call_id = next(
         (
             tc["id"]
             for m in client.messages
             if m.get("role") == "assistant"
             for tc in (m.get("tool_calls") or [])
-            if isinstance(tc, dict)
-            and isinstance(tc.get("function"), dict)
-            and str(tc["function"].get("name", "")).startswith("ask_")
+            if _steer_call_action(tc) == "ask"
         ),
         None,
     )
-    assert ask_call_id is not None, "Assistant did not call an ask_* helper"
+    assert ask_call_id is not None, 'Assistant did not call steer(action="ask")'
     ask_ack = next(
         (
             m
@@ -938,7 +946,7 @@ async def test_dynamic_handle_public_method(llm_config):
         ),
         None,
     )
-    assert ask_ack is not None, "No acknowledgement found for ask_* helper call"
+    assert ask_ack is not None, 'No acknowledgement found for steer(action="ask") call'
 
 
 @pytest.mark.asyncio
