@@ -30,6 +30,7 @@ from tests.async_helpers import (
     _wait_for_tool_result,
     _wait_for_assistant_call_prefix,
     real_tool_messages,
+    any_tool_message_content_contains,
 )
 
 pytestmark = pytest.mark.llm_call
@@ -289,14 +290,15 @@ async def test_composite_dict_return_with_handle(llm_config):
     final = await outer_handle.result()
     assert final is not None, "Loop should complete with a response"
 
-    # After completion, the tool message should contain the handle's final result
-    tool_msgs_final = real_tool_messages(client.messages, tool_name="composite_tool")
-    assert tool_msgs_final, "Expected final tool message for composite_tool"
-    # The final content replaces the progress placeholder
-    final_content = tool_msgs_final[0].get("content", "")
-    assert (
-        "inner-complete" in final_content
-    ), f"Final tool result should contain the handle's result; got: {final_content}"
+    # The handle's final result lands either in the placeholder (if it was
+    # still mutable when the handle completed) or in a per-child
+    # check_status pair (if the placeholder had already been dispatched in
+    # an earlier request while the model kept waiting) — see
+    # plan-append-only-transcript. Either way it must be in the transcript.
+    assert any_tool_message_content_contains(client.messages, "inner-complete"), (
+        "Expected the handle's final result ('inner-complete') to appear "
+        "somewhere in the transcript (placeholder or check_status pair)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -583,15 +585,17 @@ async def test_multi_handle_return_completes(llm_config):
     final = await outer_handle.result()
     assert final is not None, "Loop should complete"
 
-    # Final placeholder should contain both handle results
-    tool_msgs_final = real_tool_messages(client.messages, tool_name="dual_tool")
-    final_content = tool_msgs_final[0].get("content", "")
-    assert (
-        "alpha-result" in final_content
-    ), f"Expected alpha-result in final placeholder; got: {final_content}"
-    assert (
-        "beta-result" in final_content
-    ), f"Expected beta-result in final placeholder; got: {final_content}"
+    # Each handle's terminal result lands either in the shared placeholder
+    # (while still mutable) or its own per-child check_status pair (once
+    # the placeholder has been dispatched) — see plan-append-only-transcript.
+    assert any_tool_message_content_contains(client.messages, "alpha-result"), (
+        "Expected alpha-result somewhere in the transcript (placeholder or "
+        "check_status pair)"
+    )
+    assert any_tool_message_content_contains(client.messages, "beta-result"), (
+        "Expected beta-result somewhere in the transcript (placeholder or "
+        "check_status pair)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -681,9 +685,10 @@ async def test_composite_tuple_return(llm_config):
     final = await outer_handle.result()
     assert final is not None, "Loop should complete"
 
-    # Final tool result should contain the handle's result
-    tool_msgs_final = real_tool_messages(client.messages, tool_name="tuple_tool")
-    final_content = tool_msgs_final[0].get("content", "")
-    assert (
-        "tuple-handle-done" in final_content
-    ), f"Final result should contain handle result; got: {final_content}"
+    # The handle's terminal result lands either in the placeholder (while
+    # still mutable) or its own check_status pair (once dispatched) — see
+    # plan-append-only-transcript.
+    assert any_tool_message_content_contains(client.messages, "tuple-handle-done"), (
+        "Expected the handle's result ('tuple-handle-done') somewhere in "
+        "the transcript (placeholder or check_status pair)"
+    )
