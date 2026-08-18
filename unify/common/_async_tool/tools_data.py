@@ -42,6 +42,40 @@ if TYPE_CHECKING:  # TODO: remove once dependencies are fixed
 # Sentinel for bare top-level handles (no label needed).
 _HANDLE_SENTINEL = "<steerable handle — now in-flight>"
 
+# ── user visibility guidance ────────────────────────────────────────────
+#
+# Explains to the model what the end-user can and cannot see, so it doesn't
+# mistake automatically-appended [progress]/[clarification] tail messages
+# for a real user interjection it's told elsewhere to "consider and
+# incorporate". Injected on demand — see _ensure_visibility_guidance_injected
+# and the loop's own interjection-triggered call into the same method —
+# rather than unconditionally at loop start, to keep the model focused on
+# the task until one of those triggers actually fires.
+USER_VISIBILITY_GUIDANCE = (
+    "## User Visibility Context\n"
+    "IMPORTANT: The end-user who initiated this conversation can ONLY see:\n"
+    "1. Their original request and any follow-up messages they send (interjections)\n"
+    "2. Any notifications you emit (status updates, progress indicators, etc.)\n"
+    "3. Any clarification requests you send asking for more information\n"
+    "4. Your FINAL plain-text response at the end of this tool-use session\n\n"
+    "The user CANNOT see:\n"
+    "- Any intermediate tool calls you make\n"
+    "- Any tool results or outputs\n"
+    "- Any assistant messages that include tool_calls\n\n"
+    "When the user sends follow-up messages (interjections) during your tool-use "
+    "session, these appear as regular user messages. Consider and incorporate ALL "
+    "user interjections in your final response. Later interjections should override "
+    "earlier ones if there are any conflicting comments or requests.\n\n"
+    "EXCEPTION: user-role messages prefixed with `[progress <call_id>]` are NOT "
+    "interjections from the user — they are status updates a running tool appends "
+    "automatically to report its in-flight progress. Do not treat them as requests "
+    "to incorporate or respond to.\n\n"
+    "user-role messages prefixed with `[clarification <call_id>]` are also not from "
+    "the user — they are a pending tool asking you a question it needs answered to "
+    "continue. Answer them by calling the corresponding clarify_<call_id> helper, "
+    "not by responding to the user or treating the question itself as a request."
+)
+
 
 def _failure_text(exc: BaseException) -> str:
     """The text a caller reads for *exc*.
@@ -118,15 +152,14 @@ class _MultiHandleState:
         bytes — so this child's own result is instead delivered on its own
         synthesized call_id via a per-child check_status pair.
         """
-        updated = _rebuild_multi_handle_content(self.template, self.results)
-        all_done = all(v is not None for v in self.results.values())
-        content = serialize_tool_content(
-            tool_name=self.parent_name,
-            payload=updated,
-            is_final=all_done,
-        )
         if tools_data._mutable(self.placeholder_msg):
-            self.placeholder_msg["content"] = content
+            updated = _rebuild_multi_handle_content(self.template, self.results)
+            all_done = all(v is not None for v in self.results.values())
+            self.placeholder_msg["content"] = serialize_tool_content(
+                tool_name=self.parent_name,
+                payload=updated,
+                is_final=all_done,
+            )
             await msg_dispatcher.publish_to_event_bus([self.placeholder_msg])
             return
         await emit_completion_pair(child_content, child_call_id, msg_dispatcher)
@@ -376,6 +409,11 @@ class ToolsData:
         self._extra_ask_tools: Dict[str, Callable] = (
             dict(extra_ask_tools) if extra_ask_tools else {}
         )
+        # Shared with the loop's own interjection-triggered injection (see
+        # ensure_visibility_guidance_injected) so the guidance lands at most
+        # once regardless of which trigger — a user interjection or the
+        # first [progress]/[clarification] message — fires first.
+        self._visibility_guidance_injected: bool = False
 
     def get_ask_tools(self) -> Dict[str, Callable]:
         """Return a snapshot of currently available ``ask_*`` dynamic tools.
@@ -420,6 +458,34 @@ class ToolsData:
         """True when *msg* has not yet been included in any dispatched request."""
         return is_mutable(self._client, msg)
 
+    async def _ensure_visibility_guidance_injected(
+        self,
+        msg_dispatcher: "LoopMessageDispatcher",
+    ) -> None:
+        """Inject the user-visibility guidance before the first status-shaped
+        tail message a user could mistake for an interjection.
+
+        Shared with the loop's own interjection-triggered injection (same
+        flag) so the guidance lands exactly once, whichever trigger — a real
+        user interjection, or the first ``[progress]``/``[clarification]``
+        message — fires first. Most loops never see a user interjection, so
+        gating solely on that (the pre-fixup behavior) left every sub-agent
+        and unattended task without the guidance that tells the model these
+        messages are not requests to incorporate.
+        """
+        if self._visibility_guidance_injected:
+            return
+        await msg_dispatcher.append_msgs(
+            [
+                {
+                    "role": "system",
+                    "_visibility_guidance": True,
+                    "content": USER_VISIBILITY_GUIDANCE,
+                },
+            ],
+        )
+        self._visibility_guidance_injected = True
+
     async def record_progress(
         self,
         info: "ToolCallMetadata",
@@ -438,6 +504,7 @@ class ToolsData:
         once it has been dispatched it is frozen, and the next notification
         starts a fresh tail message instead of reaching back to mutate it.
         """
+        await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = f"[progress {call_id}] {pretty}"
         existing = info.progress_msg
         if existing is not None and self._mutable(existing):
@@ -464,6 +531,7 @@ class ToolsData:
         final result still lands there, or on ``clarify_placeholder`` once
         the model answers, never on this tail message.
         """
+        await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
             f"[clarification {call_id}] Tool incomplete, please answer the "
             f"following to continue tool execution:\n{question_text}"
@@ -554,10 +622,24 @@ class ToolsData:
         In-place remove tool_calls from asst_msg if they would exceed the per-tool quota.
         This ensures strict provider compliance: calls that are not executed
         must not remain in the history without a response.
+
+        Only ever safe to call while asst_msg is still mutable (not yet
+        included in a dispatched request) — an in-place tool_calls edit
+        below the sent watermark would shift every already-dispatched
+        message that follows. Both call sites today only ever reach a
+        message at preflight (watermark 0) or the current turn's own
+        message (index == watermark); asserting it here makes that a
+        stated invariant instead of an accident of caller discipline.
         """
         tcs = asst_msg.get("tool_calls")
         if not tcs:
             return
+        if not is_mutable(self._client, asst_msg):
+            raise ValueError(
+                "prune_over_quota_tool_calls: asst_msg is already below the "
+                "sent watermark; an in-place tool_calls edit would mutate "
+                "already-dispatched bytes.",
+            )
 
         # Track counts locally to handle multiple calls in this single batch
         # without permanently modifying self.call_counts yet (that happens on schedule).
@@ -1148,13 +1230,20 @@ class ToolsData:
                 bypass_watermark=True,  # first-ever reply to this call_id — legality, not caching
             )
             info.tool_reply_msg = ph
+        elif self._mutable(ph):
+            # Common fast path: nothing has dispatched ph yet, so editing it
+            # in place to reflect "now running as a nested handle" is free —
+            # this is also what test helpers (_wait_for_tool_result and
+            # friends) key off of to know adoption happened, so preserving
+            # it here keeps them from racing ahead of it.
+            ph["content"] = placeholder_content
         else:
-            # Non-final: this is a transient "now running as a nested
-            # handle" status marker, not the call's terminal result — that
-            # still lands on `ph` untouched (via process_completed_task's
-            # own gate) when the nested task actually finishes. Route it
+            # ph is already frozen (dispatched). This update is non-final —
+            # a transient status marker, not the call's terminal result,
+            # which still lands on `ph` untouched (via process_completed_task's
+            # own gate) when the nested task actually finishes — so route it
             # through the same coalesce-then-freeze progress delivery as
-            # tool notifications rather than rewriting `ph` in place.
+            # tool notifications rather than rewriting the frozen `ph`.
             pretty = (
                 placeholder_content
                 if isinstance(placeholder_content, str)
@@ -1270,6 +1359,13 @@ class ToolsData:
                 clar_up_queue=h_up_q,
                 clar_down_queue=h_down_q,
                 notification_queue=None,
+                # Each child gets its own clean slate rather than inheriting
+                # the parent's in-flight progress/clarify message reference
+                # — otherwise two children sharing that reference would
+                # coalesce their updates onto one tail message instead of
+                # each getting its own.
+                progress_msg=None,
+                clarify_msg=None,
                 _multi_handle_state=state,
                 _multi_handle_label=label,
             )
