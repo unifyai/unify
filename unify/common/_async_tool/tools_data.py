@@ -1522,3 +1522,10 @@ class ToolsData:
             if self._on_handle_adopted is not None:
                 with suppress(Exception):
                     self._on_handle_adopted(nested_task)
+
+            # Announce this child's own synthesized call_id — steer() needs
+            # it verbatim, and (unlike the single-handle case) it's not the
+            # same id as the original tool call, so there is nothing else
+            # in the transcript the model could read it back from.
+            with suppress(Exception):
+                await self.record_tool_started(metadata, msg_dispatcher)
