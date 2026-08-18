@@ -4,10 +4,14 @@ Covers the core invariant plan-stable-tools-and-inspection's acceptance #1
 asks for: the outer loop's tools array stops being a rendering of live
 per-call state. These are symbolic tests of DynamicToolFactory/ToolsData
 directly — no LLM calls — mirroring test_serialization_determinism.py and
-test_append_only_transcript.py's style. A full scripted-act integration
-version (spawn/notify/finish/saturate/quota/pending-clarification driven
-through a real start_async_tool_loop, plus the threshold-transition
-carve-out) needs a live/cached model turn and is not exercised here.
+test_append_only_transcript.py's style.
+
+These tests exercise DynamicToolFactory/ToolsData in isolation and cannot
+observe the tools array loop.py actually assembles and sends
+(`tmp_tools`/`gen_kwargs["tools"]`) — see
+tests/async_tool_loop/test_tools_bytes_loop_level.py for the test that
+drives a real `start_async_tool_loop` with a scripted fake client and
+asserts on that assembled array directly.
 """
 
 from __future__ import annotations
@@ -60,6 +64,14 @@ def _make_tools_data() -> ToolsData:
     return ToolsData(tools={}, client=None, logger=None)
 
 
+class _FakeTask:
+    """Minimal asyncio.Task stand-in — just enough surface (``done()``) for
+    ToolsData.resolve_call_id's liveness check, without a real event loop."""
+
+    def done(self) -> bool:
+        return False
+
+
 def _add_pending(
     tools_data: ToolsData,
     *,
@@ -69,7 +81,7 @@ def _add_pending(
     waiting_for_clarification=False,
     call_idx: int = 0,
 ) -> object:
-    task = object()
+    task = _FakeTask()
     tools_data.info[task] = ToolCallMetadata(
         name=name,
         call_id=call_id,
