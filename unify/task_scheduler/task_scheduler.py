@@ -15,7 +15,6 @@ from typing import (
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Type,
@@ -553,58 +552,14 @@ class TaskScheduler(BaseTaskScheduler):
                 logs=log_objs[0].id,
                 entries={"entrypoint": int(function_id)},
             )
-            workflow = self._workflow_slug_of(log_objs[0].entries)
-            if workflow:
-                self._link_entrypoint_to_workflow(
-                    function_id=int(function_id),
-                    slug=workflow,
-                )
             return {
                 "outcome": "candidate_recorded",
                 "task_id": task_id,
                 "function_id": int(function_id),
                 "rationale": rationale,
-                "workflow": workflow,
                 "certification_status": "required_before_offline_promotion",
                 "certification_metadata": certification_metadata or {},
             }
-
-    @staticmethod
-    def _workflow_slug_of(task_row: Mapping[str, Any]) -> str | None:
-        """The workflow a task belongs to, if a workflow planted it."""
-
-        managed_by = str(task_row.get("managed_by") or "").strip()
-        if not managed_by or managed_by == MANAGED_BY_DEPLOYMENT:
-            return None
-        return managed_by
-
-    @staticmethod
-    def _link_entrypoint_to_workflow(*, function_id: int, slug: str) -> None:
-        """Record the distilled function as a member of the workflow.
-
-        A run that distils a workflow's task into an entrypoint creates a
-        function the bundle never authored and, by design, never will -- a
-        bundle is universal to everyone who installs it, and a distillation
-        belongs to the one installation whose trajectory produced it. Without
-        this link the function is reachable from nothing: an uninstall removes
-        the task and leaves the function behind unreferenced, and a workflow
-        card cannot list the function its task actually runs.
-
-        A failure here must not fail the attachment. The entrypoint is
-        already recorded and works; losing the membership costs cleanup and
-        display, not correctness.
-        """
-
-        from ..function_manager.function_manager import link_function_to_workflow
-
-        try:
-            link_function_to_workflow(function_id=function_id, slug=slug)
-        except Exception:
-            logger.exception(
-                "Failed to link distilled function %s to workflow %r",
-                function_id,
-                slug,
-            )
 
     def _offline_promotion_rejection_reasons(
         self,
@@ -2157,6 +2112,7 @@ class TaskScheduler(BaseTaskScheduler):
             task_id = entries.get("task_id")
             if task_id is None:
                 continue
+            entrypoint = entries.get("entrypoint")
             planted.append(
                 {
                     "task_id": int(task_id),
@@ -2165,6 +2121,12 @@ class TaskScheduler(BaseTaskScheduler):
                     # connection: the definition exists and nothing will
                     # start it, an explicit run included.
                     "enabled": entries.get("enabled") is not False,
+                    # The function this definition runs, when it has one.
+                    # Reported because it is the only record of which
+                    # functions a source's tasks reference -- an uninstall
+                    # reads it to find what its own runs distilled, which
+                    # no bundle source lists.
+                    "entrypoint": None if entrypoint is None else int(entrypoint),
                 },
             )
         return sorted(planted, key=lambda task: task["task_id"])

@@ -164,21 +164,6 @@ class Function(AuthoredRow):
             "Present for functions defined in the custom/ folder."
         ),
     )
-    workflow_refs: Optional[List[str]] = Field(
-        None,
-        description=(
-            "Slugs of installed workflows this function belongs to. "
-            "Membership, not provenance: it records which workflows "
-            "reference the function so an uninstall can clean it up and a "
-            "workflow card can list it, and it grants no reconcile rights. "
-            "That distinction is load-bearing -- stamping a workflow's "
-            "managed_by on a function it did not author would hand the next "
-            "reconcile the right to prune a row that is in no bundle's "
-            "source, deleting it. Set when a run distils a workflow's task "
-            "into an entrypoint, which is a function the bundle never wrote "
-            "and deliberately never will."
-        ),
-    )
 
     @field_validator("stale_reasons", mode="before")
     @classmethod

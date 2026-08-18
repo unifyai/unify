@@ -379,25 +379,87 @@ class WorkflowManager(BaseWorkflowManager):
         assigned = getattr(logs[0], "entries", {}).get("workflow_id")
         return int(assigned) if assigned is not None else record.workflow_id
 
-    @staticmethod
-    def _release_workflow_functions(slug: str) -> List[int]:
-        """Remove functions this workflow's runs distilled, keeping shared ones.
+    def _distilled_entrypoints(
+        self,
+        slug: str,
+        *,
+        destination: Optional[str],
+    ) -> set:
+        """Function ids this workflow's tasks run.
 
-        A failure here must not retain the installation: every surface has
-        already cleared, and a leftover function is a cleanup miss rather than
-        a half-installed workflow.
+        Membership is derived rather than stored. A function a run distilled
+        is recorded in exactly one place already -- the ``entrypoint`` on the
+        task the workflow planted -- so a second copy on the function row
+        would be a duplicate that can disagree with it, and would: detaching
+        an entrypoint clears the task's field and would leave the function
+        still claiming to belong here.
+
+        Read before the surfaces are pruned, because pruning deletes the very
+        rows this reads.
         """
 
-        from ..function_manager.function_manager import release_workflow_functions
+        return {
+            job["entrypoint"]
+            for job in self._planted_jobs(slug, destination=destination)
+            if job.get("entrypoint") is not None
+        }
+
+    def _release_distilled_entrypoints(
+        self,
+        candidates: set,
+        *,
+        slug: str,
+        context: str,
+        destination: Optional[str],
+    ) -> List[int]:
+        """Delete the distilled functions nothing else still references.
+
+        Two things spare a candidate. Another installed workflow's task may
+        run the same function, and a function the bundle itself authored is
+        the functions surface's to prune -- it carries a ``managed_by`` and
+        is in a source, where a distilled one is in none. Deleting either
+        here would take a row out from under the thing that owns it.
+
+        Best-effort: every surface has already cleared by this point, so a
+        leftover function is a cleanup miss, not a half-installed workflow.
+        """
+
+        if not candidates:
+            return []
+        from ..function_manager.function_manager import delete_functions
 
         try:
-            return release_workflow_functions(slug=slug)
+            still_used: set = set()
+            for bundle in self._installed_bundles(context):
+                still_used |= self._distilled_entrypoints(
+                    bundle.slug,
+                    destination=destination,
+                )
+            orphaned = {
+                function_id
+                for function_id in candidates - still_used
+                if not self._function_is_source_owned(function_id)
+            }
+            return delete_functions(orphaned)
         except Exception:
             logger.exception(
-                "Failed to release distilled functions for workflow %r",
+                "Failed to release distilled entrypoints for workflow %r",
                 slug,
             )
             return []
+
+    @staticmethod
+    def _function_is_source_owned(function_id: int) -> bool:
+        """Whether some reconcile source owns this function row.
+
+        A bundle-authored function carries ``managed_by`` and lives in a
+        source, so the functions surface prunes it on its own terms. Only a
+        row no source owns can have come from a run distilling a trajectory.
+        """
+
+        from ..function_manager.function_manager import function_managed_by
+
+        return bool(function_managed_by(function_id))
 
     def _delete_installation(self, slug: str, *, context: str) -> bool:
         logs = unisdk.get_logs(
@@ -1448,6 +1510,10 @@ class WorkflowManager(BaseWorkflowManager):
             pruned_surfaces = (
                 [name for name in recorded if name != "data"] if keep_data else recorded
             )
+            # Read before the prune below deletes the task rows it reads.
+            # These are the only record that this workflow's runs distilled
+            # anything -- no bundle source lists a function the runtime wrote.
+            distilled = self._distilled_entrypoints(slug, destination=destination)
             removed, failures = self._plant(
                 bundle,
                 destination=destination,
@@ -1463,10 +1529,14 @@ class WorkflowManager(BaseWorkflowManager):
             # Functions a run distilled from this workflow's tasks are in no
             # bundle source, so the surface prune above cannot see them: it
             # re-syncs the union of what the bundles declare, and these were
-            # never declared. They are reachable only through the membership
-            # the attachment recorded, and without this they survive the
-            # uninstall as rows nothing references or explains.
-            released = self._release_workflow_functions(slug)
+            # never declared. Without this they survive the uninstall as rows
+            # nothing references or explains.
+            released = self._release_distilled_entrypoints(
+                distilled,
+                slug=slug,
+                context=context,
+                destination=destination,
+            )
             kept = sorted(set(recorded) - set(pruned_surfaces))
             # The installation row goes only after every surface actually
             # cleared. On failure it stays — it holds the recorded surfaces,
