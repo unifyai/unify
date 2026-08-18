@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 
 # Central placeholder/non-final detection lives here
@@ -240,39 +241,56 @@ def extract_interjections(msgs: List[dict]) -> Tuple[List[dict], List[int]]:
     return interjections, interjections_indices
 
 
+_CLARIFICATION_MSG_RE = re.compile(r"^\[clarification ([^\]]+)\] ")
+
+
 def extract_clarifications(
-    assistant_steps: List[dict],
-    tool_results: List[dict],
+    msgs: List[dict],
     *,
     callid_to_tool_name: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """
-    Build a clarifications summary from tool_results whose name startswith
-    "clarification_request_". Uses callid_to_tool_name to attach the base tool
-    name.
+    Build a clarifications summary from the transcript's coalesced
+    "[clarification <call_id>]" user-role tail messages (see
+    plan-append-only-transcript / ToolsData.record_clarification — a pending
+    tool's clarification question is delivered there, not by rewriting a
+    tool-role placeholder in place). Uses callid_to_tool_name to attach the
+    base tool name.
 
     Invariants:
     - Each entry contains {call_id, tool, question} where `question` is the
-      tool message content verbatim; no parsing or rewriting is applied.
+      tail message's question text verbatim (the "[clarification <call_id>]"
+      prefix and the "Tool incomplete..." framing stripped); no other
+      parsing or rewriting is applied.
+    - One entry per call_id: while a clarification message is still mutable
+      it may be coalesced/overwritten in place, and a tool that asks more
+      than once produces a fresh tail message per question — either way the
+      LAST matching message for a call_id wins, reflecting its current
+      question.
     """
     callid_to_tool_name = callid_to_tool_name or {}
-    clarifications: List[dict] = []
-    for tm in tool_results:
+    by_call_id: Dict[str, dict] = {}
+    for m in msgs or []:
         try:
-            name = str(tm.get("name"))
-            cid = str(tm.get("tool_call_id"))
-            content = tm.get("content")
+            if not isinstance(m, dict) or m.get("role") != "user":
+                continue
+            content = m.get("content")
+            if not isinstance(content, str):
+                continue
+            match = _CLARIFICATION_MSG_RE.match(content)
+            if not match:
+                continue
+            call_id = match.group(1)
+            before, sep, after = content[match.end() :].partition("\n")
+            question = after if sep else before
         except Exception:
             continue
-        if isinstance(name, str) and name.startswith("clarification_request_"):
-            clarifications.append(
-                {
-                    "call_id": cid,
-                    "tool": callid_to_tool_name.get(cid, ""),
-                    "question": content,
-                },
-            )
-    return clarifications
+        by_call_id[call_id] = {
+            "call_id": call_id,
+            "tool": callid_to_tool_name.get(call_id, ""),
+            "question": question,
+        }
+    return list(by_call_id.values())
 
 
 def initial_user_from_user_visible_history(history: List[dict] | None) -> Any:
