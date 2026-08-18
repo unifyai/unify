@@ -23,7 +23,7 @@ from ...logger import LOGGER
 from ..tool_spec import ToolSpec, normalise_tools
 from .propagation_mode import ChatContextPropagation
 from .context_tracker import LoopContextState
-from .utils import maybe_await
+from .utils import maybe_await, get_handle_paused_state
 from .event_bus_util import to_event_bus
 from ...events.types.tool_loop import ToolLoopKind
 from .messages import (
@@ -52,7 +52,6 @@ from .messages import (
     ensure_placeholders_for_pending,
     forward_handle_call,
     schedule_missing_for_message,
-    build_helper_ack_content,
     is_mutable,
 )
 from .tools_data import ToolsData, compute_context_injection
@@ -1196,69 +1195,6 @@ async def async_tool_loop_inner(
             except Exception:
                 pass
 
-        # Minimal transcript-only path: when a helper label is provided, synthesize
-        # a single helper tool_call and acknowledgement, then return (no dispatch).
-        try:
-            helper_label = payload.get("helper_label")
-        except Exception:
-            helper_label = None
-        if isinstance(helper_label, str) and helper_label:
-            try:
-                base = str(method or "").lower().strip()
-            except Exception:
-                base = ""
-            if base:
-                try:
-                    call_id = f"mirror_{short_id(6)}"
-                except Exception:
-                    call_id = "mirror_unknown"
-                # Minimal args for readability
-                args_json: dict[str, Any] = {}
-                try:
-                    if base == "interject":
-                        msg = payload.get("message") or payload.get("content")
-                        if msg is not None:
-                            args_json["content"] = msg
-                    elif base == "stop" and "reason" in payload:
-                        args_json["reason"] = payload.get("reason")
-                except Exception:
-                    pass
-                helper_name = f"{base}_{helper_label}_{str(call_id)[-6:]}"
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": helper_name,
-                                "arguments": json.dumps(args_json or {}),
-                            },
-                        },
-                    ],
-                }
-                await _msg_dispatcher.append_msgs([assistant_msg])
-                with suppress(Exception):
-                    await to_event_bus(
-                        assistant_msg,
-                        cfg,
-                        kind=ToolLoopKind.STEERING_HELPER,
-                    )
-                assistant_meta[id(assistant_msg)] = {"results_count": 0}
-                # Ack
-                with suppress(Exception):
-                    await acknowledge_helper_call(  # type: ignore[name-defined]
-                        assistant_msg,
-                        call_id,
-                        helper_name,
-                        json.dumps(args_json or {}),
-                        assistant_meta=assistant_meta,
-                        client=client,
-                        msg_dispatcher=_msg_dispatcher,
-                    )
-            return
-
         # Select targets via central policy
         targets: list[Tuple[asyncio.Task, ToolCallMetadata]] = _select_steering_targets(
             method,
@@ -1267,13 +1203,27 @@ async def async_tool_loop_inner(
         if not targets:
             return
 
-        # Build one assistant message with multiple tool_calls
+        base = str(method or "").lower().strip()
+
+        def _steer_payload_for(base_action: str) -> Optional[str]:
+            if base_action == "interject":
+                return payload.get("message") or payload.get("content")
+            if base_action == "ask":
+                return payload.get("question")
+            if base_action == "stop":
+                return payload.get("reason")
+            if base_action == "clarify":
+                return payload.get("answer")
+            return None  # pause/resume carry no payload
+
+        # Build one assistant message with one `steer` tool_call per target —
+        # same structured-args shape the LLM itself would emit, so acking and
+        # dispatching this programmatic steering path go through the exact
+        # same `steer` schema/transcript convention, not a parallel one.
         tool_calls = []
         args_by_id: dict[str, Any] = {}
         for _t, inf in targets:
             try:
-                base = str(method or "").lower().strip()
-                helper_name = f"{base}_{inf.name}_{str(inf.call_id)[-6:]}"
                 # Build full forward kwargs for dispatch (strip control keys)
                 try:
                     forward_args = dict(payload or {})
@@ -1285,36 +1235,27 @@ async def async_tool_loop_inner(
                     except Exception:
                         pass
 
-                # Minimal helper args for transcript readability
-                args_json: dict[str, Any] = {}
-                if base == "interject":
-                    msg = payload.get("message") or payload.get("content")
-                    if msg is not None:
-                        args_json["content"] = msg
-                elif base == "ask":
-                    q = payload.get("question")
-                    if q is not None:
-                        args_json["question"] = q
-                elif base == "stop":
-                    if "reason" in payload:
-                        args_json["reason"] = payload.get("reason")
-                elif base == "clarify":
-                    if "answer" in payload:
-                        args_json["answer"] = payload.get("answer")
-                # pause/resume carry no helper args
+                steer_args: dict[str, Any] = {
+                    "call_id": inf.call_id,
+                    "action": base,
+                }
+                _pl = _steer_payload_for(base)
+                if _pl is not None:
+                    steer_args["payload"] = _pl
+
                 call_id = f"mirror_{short_id(6)}"
                 tool_calls.append(
                     {
                         "id": call_id,
                         "type": "function",
                         "function": {
-                            "name": helper_name,
-                            "arguments": json.dumps(args_json or {}),
+                            "name": "steer",
+                            "arguments": json.dumps(steer_args),
                         },
                     },
                 )
                 # Use full forward kwargs for dispatch
-                args_by_id[call_id] = (helper_name, forward_args, inf)
+                args_by_id[call_id] = (forward_args, inf)
             except Exception:
                 continue
         if not tool_calls:
@@ -1333,15 +1274,13 @@ async def async_tool_loop_inner(
                 cid = call.get("id")
                 if not isinstance(cid, str):
                     continue
-                name, args, inf = args_by_id.get(cid, (None, None, None))
-                if not isinstance(name, str):
-                    continue
+                args, inf = args_by_id.get(cid, (None, None))
                 # Ack message
                 with suppress(Exception):
                     await acknowledge_helper_call(  # type: ignore[name-defined]
                         assistant_msg,
                         cid,
-                        name,
+                        "steer",
                         call["function"].get("arguments", "{}"),
                         assistant_meta=assistant_meta,
                         client=client,
@@ -1350,7 +1289,6 @@ async def async_tool_loop_inner(
                 # Forward steering to child handle or channels
                 # Centralized steering dispatch (unless inject-only)
                 if (not inject_only) and (inf is not None):
-                    base = str(method or "").lower().strip()
                     await _dispatch_steering_to_child(base, args, inf)
             except Exception:
                 continue
@@ -2247,6 +2185,11 @@ async def async_tool_loop_inner(
                         [{"role": "user", "content": _threshold_msg}],
                     )
             else:
+                # Schema constancy beats schema minimalism: tools stay visible
+                # even while saturated on max_concurrent/max_total_calls —
+                # a saturated call is refused at execution time instead (see
+                # has_exceeded_concurrent_limit_for_tool / prune_over_quota_tool_calls),
+                # so hitting the cap never changes what the model can see.
                 visible_base_tools_schema = [
                     method_to_schema(
                         spec.fn,
@@ -2257,7 +2200,6 @@ async def async_tool_loop_inner(
                         has_parent_context=bool(parent_chat_context),
                     )
                     for name, spec in policy_tools_norm.items()
-                    if tools_data.concurrency_ok(name) and tools_data.quota_ok(name)
                 ]
                 # Keep compress_context out of eager gated turns so required
                 # discovery/tool policies cannot be satisfied by compressing.
@@ -2414,26 +2356,20 @@ async def async_tool_loop_inner(
             # get_ask_tools() always reflects the latest set of helpers.
             tools_data._dynamic_tools_ref = dynamic_tools
 
-            # Register callback to refresh helpers when a handle is adopted mid-loop
+            # Register callback to refresh capability bookkeeping (is_interjectable,
+            # clarification queue wiring, live-ask closures) when a handle is
+            # adopted mid-loop. No outer-visible tools are minted here anymore —
+            # steer()/wait/ask_about_completed_tool are already static.
             def _refresh_helpers_for_task(task: asyncio.Task) -> None:
                 with suppress(Exception):
-                    dynamic_tool_factory._process_task(task)
-                    dynamic_tools.update(dynamic_tool_factory.dynamic_tools)
+                    dynamic_tool_factory._refresh_task_capabilities(task)
 
             tools_data._on_handle_adopted = _refresh_helpers_for_task
 
-            # If any task is currently waiting for clarification, hide the
-            # global `wait` helper to ensure the model proceeds to request
-            # clarification rather than idling. This avoids deadlocks where
-            # no interjection arrives and a tool is blocked awaiting input.
-            try:
-                if any(
-                    getattr(_inf, "waiting_for_clarification", False)
-                    for _inf in tools_data.info.values()
-                ):
-                    dynamic_tools.pop("wait", None)
-            except Exception:
-                pass
+            # NOTE: `wait` is no longer hidden from the schema while a
+            # clarification is pending — the interlock moved to execution
+            # time (see the `lname_cf == "wait"` branch below), so `wait`
+            # stays present and byte-stable every turn.
 
             # make sure every pending call already has a *tool* reply ──
             #  (a placeholder) before we let the assistant speak again.
@@ -3252,6 +3188,38 @@ async def async_tool_loop_inner(
                     lname = str(name or "").strip()
                     lname_cf = lname.casefold()
 
+                    if lname_cf == "wait" and any(
+                        getattr(_inf, "waiting_for_clarification", False)
+                        for _inf in tools_data.info.values()
+                    ):
+                        # Wait interlock (execution-time, per the stable-schema
+                        # design): `wait` is always in the schema now, so the
+                        # deadlock guard that used to hide it from the schema
+                        # while a clarification is pending moves here instead.
+                        _pending_clar_ids = [
+                            _inf.call_id
+                            for _inf in tools_data.info.values()
+                            if getattr(_inf, "waiting_for_clarification", False)
+                        ]
+                        tool_msg = create_tool_call_message(
+                            name="wait",
+                            call_id=call["id"],
+                            content=(
+                                "⚠️ Refused: a clarification is pending on "
+                                f"{_pending_clar_ids} — answer it via "
+                                'steer(call_id=<id>, action="clarify", payload=<answer>) '
+                                "before waiting."
+                            ),
+                        )
+                        await insert_tool_message_after_assistant(
+                            assistant_meta,
+                            msg,
+                            tool_msg,
+                            client,
+                            _msg_dispatcher,
+                        )
+                        continue
+
                     if lname_cf == "wait":
                         # When there ARE pending tools, prune the wait call to avoid
                         # transcript clutter - the loop will naturally wait for them.
@@ -3324,74 +3292,97 @@ async def async_tool_loop_inner(
                         )
                         continue
 
-                    elif lname_cf.startswith("stop_") and not lname_cf.startswith(
-                        "_stop_tasks",
-                    ):
-                        # Helper names are of the form: stop_{toolName}_{safeId}
-                        call_id_suffix = name.split("_")[-1]
-
-                        # ── locate & cancel the underlying coroutine ──────
-                        task_to_cancel = next(
-                            (
-                                t
-                                for t, info in tools_data.info.items()
-                                if str(info.call_id).endswith(call_id_suffix)
-                            ),
-                            None,
-                        )
-
-                        orig_fn = (
-                            tools_data.info[task_to_cancel].name
-                            if task_to_cancel
-                            else "unknown"
-                        )
-                        orig_call_id = (
-                            tools_data.info[task_to_cancel].call_id
-                            if task_to_cancel
-                            else None
-                        )
-                        arg_json = (
-                            tools_data.info[task_to_cancel].call_dict["function"][
-                                "arguments"
-                            ]
-                            if task_to_cancel
-                            else "{}"
-                        )
-                        pretty_name = f"stop   {orig_fn}({arg_json})"
-
-                        # Parse payload to forward extras to handle.stop if available
+                    elif lname_cf == "steer":
+                        # ── Unified steering dispatcher: structured-args routing
+                        # keyed on (call_id, action) instead of name prefixes. ──
                         with suppress(Exception):
-                            payload = json.loads(call["function"]["arguments"]) or {}
-                        if "payload" not in locals():
-                            payload = {}
+                            steer_args = json.loads(call["function"]["arguments"]) or {}
+                        if "steer_args" not in locals():
+                            steer_args = {}
 
-                        # ── gracefully shut down any *nested* async-tool loop first (central dispatcher) ──────
-                        if task_to_cancel:
+                        _target_call_id = steer_args.get("call_id")
+                        _action = str(steer_args.get("action") or "").strip().lower()
+                        _payload = steer_args.get("payload")
+                        _method = steer_args.get("method")
+
+                        async def _steer_reply(content: str) -> None:
+                            _tm = create_tool_call_message(
+                                name="steer",
+                                call_id=call["id"],
+                                content=content,
+                            )
+                            await insert_tool_message_after_assistant(
+                                assistant_meta,
+                                msg,
+                                _tm,
+                                client,
+                                _msg_dispatcher,
+                            )
+
+                        if not isinstance(_target_call_id, str) or not _target_call_id:
+                            await _steer_reply(
+                                "⚠️ steer() requires a string `call_id` identifying "
+                                "which call to steer.",
+                            )
+                            continue
+
+                        tgt_task, tgt_info = tools_data.resolve_call_id(
+                            _target_call_id,
+                        )
+
+                        if tgt_task is None or tgt_info is None:
+                            # Not live — distinguish "already completed" from
+                            # "never existed" so the model can self-correct.
+                            _completed_name = tools_data._completed_tool_names.get(
+                                _target_call_id,
+                            )
+                            if _completed_name is not None:
+                                if _action == "ask":
+                                    _err = (
+                                        f"call_id={_target_call_id!r} "
+                                        f"({_completed_name}) has already completed "
+                                        "and is no longer live. Use "
+                                        f'ask_about_completed_tool(tool_id="{_target_call_id}", '
+                                        "question=...) instead."
+                                    )
+                                else:
+                                    _err = (
+                                        f"Cannot {_action or '<missing action>'} "
+                                        f"call_id={_target_call_id!r} ({_completed_name}): "
+                                        "it has already completed."
+                                    )
+                            else:
+                                _err = (
+                                    f"No live call found for call_id={_target_call_id!r}. "
+                                    "It may never have existed, or is mistyped — check "
+                                    "the call_id shown on the original tool call or on its "
+                                    "[steerable ...]/[progress ...]/[clarification ...] "
+                                    "tail messages."
+                                )
+                            await _steer_reply(f"⚠️ {_err}")
+                            continue
+
+                        _handle = tgt_info.handle
+                        _orig_fn = tgt_info.name
+                        _orig_arg_json = tgt_info.call_dict["function"]["arguments"]
+                        _pretty_name = (
+                            f"steer:{_action or '?'} {_orig_fn}({_orig_arg_json})"
+                        )
+
+                        if _action == "stop":
                             with suppress(Exception):
                                 await _dispatch_steering_to_child(
                                     "stop",
-                                    payload if isinstance(payload, dict) else {},
-                                    tools_data.info[task_to_cancel],
+                                    {"reason": _payload} if _payload else {},
+                                    tgt_info,
                                 )
-
-                        # ── then cancel the waiter coroutine itself ───────────────────────────
-                        if task_to_cancel and not task_to_cancel.done():
-                            task_to_cancel.cancel()
-                        if task_to_cancel:
-                            tools_data.pop_task(task_to_cancel)
-
-                    # Acknowledge only when a live target was actually affected
-                    if lname_cf.startswith("stop_") and task_to_cancel:
-                        with suppress(Exception):
-                            try:
-                                reason_txt = payload.get("reason")
-                            except Exception:
-                                reason_txt = ""
-
+                            if not tgt_task.done():
+                                tgt_task.cancel()
+                            tools_data.pop_task(tgt_task)
                             tool_msg = create_tool_call_message(
-                                name=pretty_name,
+                                name=_pretty_name,
                                 call_id=call["id"],
-                                content=f"The tool call [{call_id_suffix}] has been stopped successfully.",
+                                content=f"The call [{_target_call_id}] has been stopped successfully.",
                             )
                             await insert_tool_message_after_assistant(
                                 assistant_meta,
@@ -3400,64 +3391,34 @@ async def async_tool_loop_inner(
                                 client,
                                 _msg_dispatcher,
                             )
-
-                        # Emit a synthetic tool result for the *original* call_id
-                        # so the frontend can resolve the pending tool-call row.
-                        # Same pattern as the wait() handler above.
-                        with suppress(Exception):
-                            if orig_call_id is not None:
+                            with suppress(Exception):
                                 await to_event_bus(
                                     create_tool_call_message(
-                                        orig_fn,
-                                        orig_call_id,
+                                        _orig_fn,
+                                        _target_call_id,
                                         json.dumps({"status": "stopped"}),
                                     ),
                                     cfg,
                                 )
+                            continue
 
-                        continue  # helper handled for a live target
-
-                    # ── _pause helper ────────────────────────────────────────────────
-                    elif lname_cf.startswith("pause_") and not lname_cf.startswith(
-                        "_pause_tasks",
-                    ):
-                        call_id_suffix = name.split("_")[-1]
-                        tgt_task = next(
-                            (
-                                t
-                                for t, info in tools_data.info.items()
-                                if str(info.call_id).endswith(call_id_suffix)
-                            ),
-                            None,
-                        )
-                        orig_fn = (
-                            tools_data.info[tgt_task].name if tgt_task else "unknown"
-                        )
-                        arg_json = (
-                            tools_data.info[tgt_task].call_dict["function"]["arguments"]
-                            if tgt_task
-                            else "{}"
-                        )
-                        pretty_name = f"pause {orig_fn}({arg_json})"
-
-                        # Forward via central dispatcher (pause)
-                        with suppress(Exception):
-                            payload = json.loads(call["function"]["arguments"]) or {}
-                        if "payload" not in locals():
-                            payload = {}
-
-                        if tgt_task:
+                        elif _action == "interject":
+                            if not tgt_info.is_interjectable:
+                                await _steer_reply(
+                                    f"⚠️ call_id={_target_call_id!r} ({_orig_fn}) does "
+                                    "not accept interjections.",
+                                )
+                                continue
                             with suppress(Exception):
                                 await _dispatch_steering_to_child(
-                                    "pause",
-                                    payload,
-                                    tools_data.info[tgt_task],
+                                    "interject",
+                                    {"content": _payload},
+                                    tgt_info,
                                 )
-
                             tool_msg = create_tool_call_message(
-                                name=pretty_name,
+                                name=_pretty_name,
                                 call_id=call["id"],
-                                content=f"The tool call [{call_id_suffix}] has been paused successfully.",
+                                content=f'Guidance "{_payload}" forwarded to the running tool.',
                             )
                             await insert_tool_message_after_assistant(
                                 assistant_meta,
@@ -3466,111 +3427,99 @@ async def async_tool_loop_inner(
                                 client,
                                 _msg_dispatcher,
                             )
+                            continue
 
-                            # Emit a synthetic tool result for the *original* call_id
-                            # so the frontend can resolve the pending tool-call row
-                            # (stop shimmering while paused).
+                        elif _action in ("pause", "resume"):
+                            _cap = (
+                                _handle is not None
+                                and hasattr(
+                                    _handle,
+                                    "pause" if _action == "pause" else "resume",
+                                )
+                            ) or (tgt_info.pause_event is not None)
+                            if not _cap:
+                                await _steer_reply(
+                                    f"⚠️ call_id={_target_call_id!r} ({_orig_fn}) cannot "
+                                    f"be {_action}d.",
+                                )
+                                continue
+                            _paused_state = (
+                                get_handle_paused_state(_handle)
+                                if _handle is not None
+                                else None
+                            )
+                            if (
+                                _paused_state is None
+                                and tgt_info.pause_event is not None
+                                and hasattr(tgt_info.pause_event, "is_set")
+                            ):
+                                with suppress(Exception):
+                                    _paused_state = not tgt_info.pause_event.is_set()
+                            if _action == "pause" and _paused_state is True:
+                                await _steer_reply(
+                                    f"⚠️ call_id={_target_call_id!r} ({_orig_fn}) is "
+                                    "already paused.",
+                                )
+                                continue
+                            if _action == "resume" and _paused_state is not True:
+                                await _steer_reply(
+                                    f"⚠️ call_id={_target_call_id!r} ({_orig_fn}) is not "
+                                    "currently paused.",
+                                )
+                                continue
                             with suppress(Exception):
-                                orig_call_id = tools_data.info[tgt_task].call_id
+                                await _dispatch_steering_to_child(
+                                    _action,
+                                    {},
+                                    tgt_info,
+                                )
+                            _past = "paused" if _action == "pause" else "resumed"
+                            tool_msg = create_tool_call_message(
+                                name=_pretty_name,
+                                call_id=call["id"],
+                                content=f"The call [{_target_call_id}] has been {_past} successfully.",
+                            )
+                            await insert_tool_message_after_assistant(
+                                assistant_meta,
+                                msg,
+                                tool_msg,
+                                client,
+                                _msg_dispatcher,
+                            )
+                            with suppress(Exception):
                                 await to_event_bus(
                                     create_tool_call_message(
-                                        orig_fn,
-                                        orig_call_id,
-                                        json.dumps({"status": "paused"}),
+                                        _orig_fn,
+                                        _target_call_id,
+                                        json.dumps({"status": _past}),
                                     ),
                                     cfg,
                                 )
+                            continue
 
-                            continue  # helper handled for live target; otherwise fall through
-
-                    # ── _resume helper ───────────────────────────────────────────────
-                    elif lname_cf.startswith("resume_") and not lname_cf.startswith(
-                        "_resume_tasks",
-                    ):
-                        call_id_suffix = name.split("_")[-1]
-                        tgt_task = next(
-                            (
-                                t
-                                for t, info in tools_data.info.items()
-                                if str(info.call_id).endswith(call_id_suffix)
-                            ),
-                            None,
-                        )
-                        orig_fn = (
-                            tools_data.info[tgt_task].name if tgt_task else "unknown"
-                        )
-                        arg_json = (
-                            tools_data.info[tgt_task].call_dict["function"]["arguments"]
-                            if tgt_task
-                            else "{}"
-                        )
-                        pretty_name = f"resume {orig_fn}({arg_json})"
-
-                        # Forward via central dispatcher (resume)
-                        with suppress(Exception):
-                            payload = json.loads(call["function"]["arguments"]) or {}
-                        if "payload" not in locals():
-                            payload = {}
-
-                        if tgt_task:
-                            with suppress(Exception):
-                                await _dispatch_steering_to_child(
-                                    "resume",
-                                    payload,
-                                    tools_data.info[tgt_task],
+                        elif _action == "clarify":
+                            if tgt_info.clar_up_queue is None or not getattr(
+                                tgt_info,
+                                "waiting_for_clarification",
+                                False,
+                            ):
+                                await _steer_reply(
+                                    f"⚠️ call_id={_target_call_id!r} ({_orig_fn}) has no "
+                                    "pending clarification to answer right now.",
                                 )
-
-                        if tgt_task:
-                            tool_msg = create_tool_call_message(
-                                name=pretty_name,
-                                call_id=call["id"],
-                                content=f"The tool call [{call_id_suffix}] has been resumed successfully.",
-                            )
-                            await insert_tool_message_after_assistant(
-                                assistant_meta,
-                                msg,
-                                tool_msg,
-                                client,
-                                _msg_dispatcher,
-                            )
-                            continue  # helper handled (live target); otherwise fall through to base
-
-                    elif lname_cf.startswith("clarify_"):
-                        # Helper names are of the form: clarify_{toolName}_{safeId}
-                        call_id_suffix = name.split("_")[-1]
-                        ans = args["answer"]
-
-                        # ── find the underlying pending task (if still alive) ───────────────
-                        tgt_task = next(  # ← NEW
-                            (
-                                t
-                                for t, inf in tools_data.info.items()
-                                if str(inf.call_id).endswith(call_id_suffix)
-                            ),
-                            None,
-                        )
-
-                        # Deliver via central dispatcher, then clear waiting flag
-                        if tgt_task:
+                                continue
                             with suppress(Exception):
                                 await _dispatch_steering_to_child(
                                     "clarify",
-                                    {"answer": ans},
-                                    tools_data.info[tgt_task],
+                                    {"answer": _payload},
+                                    tgt_info,
                                 )
-                                # ✔️ the tool is un-blocked – start watching it again
-                                for _t, _inf in tools_data.info.items():
-                                    if str(_inf.call_id).endswith(call_id_suffix):
-                                        _inf.waiting_for_clarification = False
-                                        break
-
-                        if tgt_task:
-                            # Always publish a tool reply acknowledging the clarify helper
+                                tgt_info.waiting_for_clarification = False
                             tool_reply_msg = create_tool_call_message(
-                                name=name,
+                                name=_pretty_name,
                                 call_id=call["id"],
                                 content=(
-                                    f"Clarification answer sent upstream: {ans!r}\n"
+                                    f"Clarification answer sent upstream: {_payload!r}\n"
                                     "⏳ Waiting for the original tool to finish…"
                                 ),
                             )
@@ -3581,71 +3530,200 @@ async def async_tool_loop_inner(
                                 client,
                                 _msg_dispatcher,
                             )
-                            # Store the clarify helper's reply so that when the tool
-                            # completes, the final result goes here (not into the
-                            # tool_reply_msg pending stub, and not into the
-                            # [clarification <call_id>] tail message that carried
-                            # the question — see record_clarification)
-                            tools_data.info[tgt_task].clarify_placeholder = (
-                                tool_reply_msg
+                            # Store the reply so the tool's eventual final result
+                            # lands here (not the tool_reply_msg pending stub, and
+                            # not the [clarification <call_id>] tail message that
+                            # carried the question — see record_clarification).
+                            tgt_info.clarify_placeholder = tool_reply_msg
+                            continue
+
+                        elif _action == "ask":
+                            if _handle is None or not hasattr(_handle, "ask"):
+                                await _steer_reply(
+                                    f"⚠️ call_id={_target_call_id!r} ({_orig_fn}) has no "
+                                    "ask capability.",
+                                )
+                                continue
+
+                            _ask_extra_kwargs, _ask_ctx_opted_in = (
+                                compute_context_injection(
+                                    args={},
+                                    propagate_chat_context=propagate_chat_context,
+                                    context_state=context_state,
+                                    client_messages=client.messages,
+                                    call_id=f"ask_{_target_call_id}_{call['id']}",
+                                    accepts_parent_ctx=True,
+                                    accepts_parent_ctx_cont=False,
+                                    is_continuation_only=False,
+                                )
                             )
-                            continue  # handled clarify helper for live target
+                            _ask_kwargs: Dict[str, Any] = {"question": _payload}
+                            if "_parent_chat_context" in _ask_extra_kwargs:
+                                _ask_kwargs["_parent_chat_context"] = _ask_extra_kwargs[
+                                    "_parent_chat_context"
+                                ]
 
-                    elif lname_cf.startswith("interject_"):
-                        # helper signature mirrors downstream handle.interject (content plus any extras)
-                        with suppress(Exception):
-                            payload = json.loads(call["function"]["arguments"]) or {}
-                            new_text = payload.get("content") or payload.get("message")
-                            if new_text is None:
-                                new_text = ""
-                        if "payload" not in locals():
-                            payload = {}
-                            new_text = "<unparsable>"
-
-                        # Helper names are of the form: interject_{toolName}_{safeId}
-                        call_id_suffix = name.split("_")[-1]
-
-                        # locate the underlying long-running task
-                        tgt_task = next(
-                            (
-                                t
-                                for t, inf in tools_data.info.items()
-                                if str(inf.call_id).endswith(call_id_suffix)
-                            ),
-                            None,
-                        )
-
-                        pretty_name = (
-                            f"interject {tools_data.info[tgt_task].name}({new_text})"
-                            if tgt_task
-                            else name
-                        )
-
-                        # ― forward via central dispatcher -------------
-                        if tgt_task:
-                            with suppress(Exception):
-                                await _dispatch_steering_to_child(
-                                    "interject",
-                                    payload,
-                                    tools_data.info[tgt_task],
+                            async def _do_ask(_h=_handle, _kw=_ask_kwargs):
+                                return await forward_handle_call(
+                                    _h,
+                                    "ask",
+                                    _kw,
+                                    fallback_positional_keys=["question"],
                                 )
 
-                            # ― emit a tool message so the chat log stays tidy ---
-                            tool_msg = create_tool_call_message(
-                                name=pretty_name,
-                                call_id=call["id"],
-                                content=f'Guidance "{new_text}" forwarded to the running tool.',
+                            _steer_call_dict = {
+                                "id": call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": "steer",
+                                    "arguments": call["function"]["arguments"],
+                                },
+                            }
+                            _t = asyncio.create_task(
+                                _do_ask(),
+                                name="ToolCall_steer_ask",
                             )
-                            await insert_tool_message_after_assistant(
-                                assistant_meta,
-                                msg,
-                                tool_msg,
-                                client,
-                                _msg_dispatcher,
+                            tools_data.save_task(
+                                _t,
+                                ToolCallMetadata(
+                                    name=f"{_orig_fn}.ask",
+                                    call_id=call["id"],
+                                    assistant_msg=msg,
+                                    call_dict=_steer_call_dict,
+                                    call_idx=idx,
+                                    is_interjectable=False,
+                                    is_dynamic=True,
+                                    chat_context=_ask_extra_kwargs.get(
+                                        "_parent_chat_context",
+                                    ),
+                                    pause_event=None,
+                                    tool_schema={
+                                        "type": "function",
+                                        "function": {"name": "steer"},
+                                    },
+                                    llm_arguments=_ask_kwargs,
+                                    raw_arguments_json=(_payload or ""),
+                                    context_opted_in=_ask_ctx_opted_in,
+                                ),
                             )
-                            continue  # handled interject helper for live target
+                            continue
 
-                    # (ask_* helpers are treated as base dynamic tools; no special-case here)
+                        elif _action == "call":
+                            if not _method:
+                                await _steer_reply(
+                                    '⚠️ action="call" requires a `method` name.',
+                                )
+                                continue
+                            _custom_methods = (
+                                DynamicToolFactory._discover_custom_public_methods(
+                                    _handle,
+                                )
+                                if _handle is not None
+                                else {}
+                            )
+                            if _method not in _custom_methods:
+                                await _steer_reply(
+                                    f"⚠️ No custom method {_method!r} on "
+                                    f"call_id={_target_call_id!r} ({_orig_fn}). "
+                                    f"Available: {sorted(_custom_methods)}",
+                                )
+                                continue
+
+                            _bound = _custom_methods[_method]
+                            try:
+                                _parsed_payload = (
+                                    json.loads(_payload) if _payload else {}
+                                )
+                                if not isinstance(_parsed_payload, dict):
+                                    raise ValueError(
+                                        "payload must be a JSON object string",
+                                    )
+                                inspect.signature(_bound).bind(**_parsed_payload)
+                            except Exception as _val_exc:
+                                await _steer_reply(
+                                    f"⚠️ Invalid payload for method={_method!r}: "
+                                    f"{_val_exc}. Expected a JSON object string "
+                                    f"matching signature {inspect.signature(_bound)}.",
+                                )
+                                continue
+
+                            _write_only = set(
+                                getattr(_handle, "write_only_methods", None) or [],
+                            ) | set(
+                                getattr(_handle, "write_only_tools", None) or [],
+                            )
+
+                            async def _invoke_custom(
+                                _m=_method,
+                                _h=_handle,
+                                _kw=_parsed_payload,
+                            ):
+                                return await forward_handle_call(_h, _m, _kw)
+
+                            if _method in _write_only:
+                                tool_msg = create_tool_call_message(
+                                    name=_pretty_name,
+                                    call_id=call["id"],
+                                    content=(
+                                        f"Operation {_method!r} acknowledged and "
+                                        "forwarded to the running tool."
+                                    ),
+                                )
+                                await insert_tool_message_after_assistant(
+                                    assistant_meta,
+                                    msg,
+                                    tool_msg,
+                                    client,
+                                    _msg_dispatcher,
+                                )
+                                with suppress(Exception):
+                                    asyncio.create_task(
+                                        _invoke_custom(),
+                                        name=f"ToolCall_steer_call_{_method}",
+                                    )
+                                continue
+
+                            _steer_call_dict = {
+                                "id": call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": "steer",
+                                    "arguments": call["function"]["arguments"],
+                                },
+                            }
+                            _t = asyncio.create_task(
+                                _invoke_custom(),
+                                name=f"ToolCall_steer_call_{_method}",
+                            )
+                            tools_data.save_task(
+                                _t,
+                                ToolCallMetadata(
+                                    name=f"{_orig_fn}.{_method}",
+                                    call_id=call["id"],
+                                    assistant_msg=msg,
+                                    call_dict=_steer_call_dict,
+                                    call_idx=idx,
+                                    is_interjectable=False,
+                                    is_dynamic=True,
+                                    chat_context=None,
+                                    pause_event=None,
+                                    tool_schema={
+                                        "type": "function",
+                                        "function": {"name": "steer"},
+                                    },
+                                    llm_arguments=_parsed_payload,
+                                    raw_arguments_json=(_payload or "{}"),
+                                    context_opted_in=False,
+                                ),
+                            )
+                            continue
+
+                        else:
+                            await _steer_reply(
+                                f"⚠️ Unknown action {_action!r}. Valid actions: "
+                                "stop, interject, pause, resume, clarify, call, ask.",
+                            )
+                            continue
 
                     # Respect hidden per-tool total-call quotas (pre-pruned); guard
                     if tools_data.has_exceeded_quota_for_tool(name):
@@ -3661,8 +3739,9 @@ async def async_tool_loop_inner(
                             content=(
                                 f"⚠️ Cannot start '{name}': "
                                 f"max_concurrent={tools_data.normalized[name].max_concurrent} "
-                                "already reached. Wait for an existing call to "
-                                "finish or stop one before retrying."
+                                "already reached — at capacity. Use `wait` for an "
+                                "existing call to finish, or "
+                                'steer(call_id=<id>, action="stop") one before retrying.'
                             ),
                         )
                         await insert_tool_message_after_assistant(
@@ -3674,210 +3753,53 @@ async def async_tool_loop_inner(
                         )
                         continue
 
-                    # first check any dynamic helpers we generated for long-running handles
-                    if name in dynamic_tools:
-                        # Global dispatchers (e.g. ask_about_completed_tool) are not
-                        # tied to any specific live call — skip the suffix check.
-                        _is_global_dispatcher = name == "ask_about_completed_tool"
-                        # Disambiguation: only treat as a dynamic helper when its suffix targets a live call
-                        _helper_targets_live = True
-                        if not _is_global_dispatcher:
-                            try:
-                                _suffix = str(name).split("_")[-1]
-                                _helper_targets_live = any(
-                                    str(inf.call_id).endswith(_suffix)
-                                    for inf in tools_data.info.values()
-                                )
-                            except Exception:
-                                _helper_targets_live = True
-                        if _helper_targets_live:
-                            fn = dynamic_tools[name]
+                    elif lname_cf == "ask_about_completed_tool":
+                        # ── Frozen-docstring dispatcher for completed tools ──
+                        # Ids arrive via appended "[askable <call_id>]" tail
+                        # messages (ToolsData.record_tool_completed_askable)
+                        # instead of a live listing baked into the docstring.
+                        _tool_id = (
+                            args.get("tool_id") if isinstance(args, dict) else None
+                        )
+                        _question = (
+                            args.get("question") if isinstance(args, dict) else None
+                        )
 
-                            # ── build **extra** kwargs (chat context + queue) for dynamic helper ──
-                            #
-                            # Context propagation for dynamic helpers:
-                            # - ask_* tools: Need FULL initial context (like base tools), since they
-                            #   spawn new inspection loops. Use is_continuation_only=False.
-                            # - interject_* tools: Need only continuation context (tool already has
-                            #   initial context). Use is_continuation_only=True.
-                            # - stop_*, pause_*, resume_*: No context needed.
-                            #
-                            target_call_id = (
-                                name.split("_")[-1] if "_" in name else call["id"]
+                        _entry = (
+                            tools_data._completed_askable_tools.get(_tool_id)
+                            if isinstance(_tool_id, str)
+                            else None
+                        )
+                        if _entry is None:
+                            _completed_name = (
+                                tools_data._completed_tool_names.get(_tool_id)
+                                if isinstance(_tool_id, str)
+                                else None
                             )
-                            # Find the target tool's metadata to check context_opted_in
-                            target_info = None
-                            for _t, _inf in tools_data.info.items():
-                                if str(_inf.call_id).endswith(target_call_id):
-                                    target_info = _inf
-                                    break
-
-                            sig = inspect.signature(fn)
-                            params = sig.parameters
-                            has_varkw = any(
-                                p.kind == inspect.Parameter.VAR_KEYWORD
-                                for p in params.values()
-                            )
-
-                            # Determine if this is an ask_* tool (needs full context) vs
-                            # interject_* (needs continuation only) vs other (no context)
-                            is_ask_tool = name.startswith("ask_")
-                            is_interject_tool = name.startswith("interject_")
-                            accepts_parent_ctx = (
-                                "_parent_chat_context" in params or has_varkw
-                            )
-                            accepts_parent_ctx_cont = (
-                                "_parent_chat_context_cont" in params or has_varkw
-                            )
-
-                            # Use shared helper for context injection
-                            if is_ask_tool:
-                                # ask_* tools spawn new loops - need full initial context
-                                extra_kwargs, context_opted_in = (
-                                    compute_context_injection(
-                                        args=args,
-                                        propagate_chat_context=propagate_chat_context,
-                                        context_state=context_state,
-                                        client_messages=client.messages,
-                                        call_id=f"ask_{target_call_id}_{call['id']}",
-                                        accepts_parent_ctx=accepts_parent_ctx,
-                                        accepts_parent_ctx_cont=accepts_parent_ctx_cont,
-                                        is_continuation_only=False,
-                                    )
-                                )
-                            elif is_interject_tool:
-                                # interject_* tools add to existing loops - need continuation only
-                                extra_kwargs, _ = compute_context_injection(
-                                    args=args,
-                                    propagate_chat_context=propagate_chat_context,
-                                    context_state=context_state,
-                                    client_messages=client.messages,
-                                    call_id=f"interject_{target_call_id}_{call['id']}",
-                                    accepts_parent_ctx=False,  # Don't inject full context
-                                    accepts_parent_ctx_cont=accepts_parent_ctx_cont,
-                                    target_context_opted_in=(
-                                        target_info.context_opted_in
-                                        if target_info
-                                        else None
-                                    ),
-                                    is_continuation_only=True,
+                            if _completed_name is not None:
+                                _err = (
+                                    f"Cannot ask about tool_id={_tool_id!r} "
+                                    f"({_completed_name}). This tool completed "
+                                    "successfully but was not steerable — it "
+                                    "executed as a direct function call with no "
+                                    "inner reasoning trajectory to inspect. Its "
+                                    "result is already visible in the outer "
+                                    "transcript above."
                                 )
                             else:
-                                # Other steering tools (stop, pause, resume) - no context
-                                # Still pop the control params so they don't get forwarded
-                                args.pop("include_parent_chat_context", None)
-                                args.pop("include_parent_chat_context_cont", None)
-                                extra_kwargs = {}
-                                context_opted_in = False
-
-                            filtered_extras = {
-                                k: v
-                                for k, v in extra_kwargs.items()
-                                if k in params or has_varkw
-                            }
-                            # Forward ALL call args verbatim. Let the callee raise if unsupported.
-                            allowed_call_args = args
-                            merged_kwargs = {**allowed_call_args, **filtered_extras}
-
-                            if asyncio.iscoroutinefunction(fn):
-                                coro = fn(**merged_kwargs)
-                            else:
-                                coro = asyncio.to_thread(fn, **merged_kwargs)
-
-                            # (Argument pretty-printing now handled in assistant message logs only)
-
-                            call_dict = {
-                                "id": call["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "arguments": call["function"]["arguments"],
-                                },
-                            }
-                            # If this dynamic helper is marked as write-only, acknowledge immediately
-                            # and run fire-and-forget without tracking in pending/task_info.
-                            if getattr(fn, "__write_only__", False):
-                                with suppress(Exception):
-                                    tool_msg = create_tool_call_message(
-                                        name=name,
-                                        call_id=call["id"],
-                                        content=build_helper_ack_content(
-                                            name,
-                                            call["function"]["arguments"],
-                                        ),
-                                    )
-                                    await insert_tool_message_after_assistant(
-                                        assistant_meta,
-                                        msg,
-                                        tool_msg,
-                                        client,
-                                        _msg_dispatcher,
-                                    )
-                                with suppress(Exception):
-                                    asyncio.create_task(coro, name=f"ToolCall_{name}")
-                                continue
-
-                            # Scheduling dynamic helper call
-                            t = asyncio.create_task(coro, name=f"ToolCall_{name}")
-                            metadata = ToolCallMetadata(
-                                name=name,
-                                call_id=call["id"],
-                                assistant_msg=msg,
-                                call_dict=call_dict,
-                                call_idx=idx,
-                                is_interjectable=False,
-                                is_dynamic=True,
-                                chat_context=extra_kwargs.get("_parent_chat_context"),
-                                pause_event=None,
-                                # Debug helpers for failure logging
-                                tool_schema=method_to_schema(
-                                    fn,
-                                    include_class_name=include_class_in_dynamic_tool_names,
-                                ),
-                                llm_arguments=allowed_call_args,
-                                raw_arguments_json=call["function"]["arguments"],
-                                # Track context opt-in for adopted handles (important for ask_*)
-                                context_opted_in=context_opted_in,
-                            )
-                            tools_data.save_task(
-                                coro=t,
-                                metadata=metadata,
-                            )
-                        else:
-                            # Target task was already removed (e.g., by a prior
-                            # stop_ helper in the same assistant message). Insert
-                            # a no-op acknowledgement so the transcript stays valid.
+                                _available = list(
+                                    tools_data._completed_askable_tools.keys(),
+                                )
+                                _err = (
+                                    f"No tool found with tool_id={_tool_id!r}. "
+                                    "This ID does not match any completed tool "
+                                    "call. Available tool_ids for retrospective "
+                                    f"inspection: {_available}"
+                                )
                             tool_msg = create_tool_call_message(
-                                name=name,
+                                name="ask_about_completed_tool",
                                 call_id=call["id"],
-                                content=(
-                                    f"No-op: target task for '{name}' is no longer active."
-                                ),
-                            )
-                            await insert_tool_message_after_assistant(
-                                assistant_meta,
-                                msg,
-                                tool_msg,
-                                client,
-                                _msg_dispatcher,
-                            )
-                    else:
-                        # ── Unknown/unavailable tool fallback ─────────────────────
-                        # If the tool doesn't exist OR wasn't visible on this turn
-                        # (e.g., the model hallucinated a tool name, or the tool was
-                        # hidden by tool_policy), insert an error tool response to
-                        # keep the transcript valid. Without this, the assistant
-                        # message would have an unresolved tool_call, causing
-                        # subsequent LLM calls to fail.
-                        if name not in policy_tools_norm:
-                            tool_msg = create_tool_call_message(
-                                name=name,
-                                call_id=call["id"],
-                                content=(
-                                    f"⚠️ Error: Tool '{name}' is not available. "
-                                    "The tool may have been removed or does not exist. "
-                                    "Please proceed without using this tool."
-                                ),
+                                content=f"⚠️ {_err}",
                             )
                             await insert_tool_message_after_assistant(
                                 assistant_meta,
@@ -3888,18 +3810,111 @@ async def async_tool_loop_inner(
                             )
                             continue
 
-                        # Use shared helper for base tools
-                        await tools_data.schedule_base_tool_call(
-                            msg,
-                            name=name,
-                            args_json=call["function"]["arguments"],
-                            call_id=call["id"],
-                            call_idx=idx,
-                            context_state=context_state,
-                            propagate_chat_context=propagate_chat_context,
-                            assistant_meta=assistant_meta,
-                            initial_paused=not pause_event.is_set(),
+                        _completed_handle = _entry.get("handle")
+                        _aact_extra_kwargs, _aact_ctx_opted_in = (
+                            compute_context_injection(
+                                args={},
+                                propagate_chat_context=propagate_chat_context,
+                                context_state=context_state,
+                                client_messages=client.messages,
+                                call_id=f"ask_{_tool_id}_{call['id']}",
+                                accepts_parent_ctx=True,
+                                accepts_parent_ctx_cont=False,
+                                is_continuation_only=False,
+                            )
                         )
+                        _aact_kwargs: Dict[str, Any] = {"question": _question}
+                        if "_parent_chat_context" in _aact_extra_kwargs:
+                            _aact_kwargs["_parent_chat_context"] = _aact_extra_kwargs[
+                                "_parent_chat_context"
+                            ]
+
+                        async def _do_completed_ask(
+                            _h=_completed_handle,
+                            _kw=_aact_kwargs,
+                        ):
+                            return await forward_handle_call(
+                                _h,
+                                "ask",
+                                _kw,
+                                fallback_positional_keys=["question"],
+                            )
+
+                        _aact_call_dict = {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": "ask_about_completed_tool",
+                                "arguments": call["function"]["arguments"],
+                            },
+                        }
+                        _t = asyncio.create_task(
+                            _do_completed_ask(),
+                            name="ToolCall_ask_about_completed_tool",
+                        )
+                        tools_data.save_task(
+                            _t,
+                            ToolCallMetadata(
+                                name=f"{_entry.get('name', '?')}.ask",
+                                call_id=call["id"],
+                                assistant_msg=msg,
+                                call_dict=_aact_call_dict,
+                                call_idx=idx,
+                                is_interjectable=False,
+                                is_dynamic=True,
+                                chat_context=_aact_extra_kwargs.get(
+                                    "_parent_chat_context",
+                                ),
+                                pause_event=None,
+                                tool_schema={
+                                    "type": "function",
+                                    "function": {"name": "ask_about_completed_tool"},
+                                },
+                                llm_arguments=_aact_kwargs,
+                                raw_arguments_json=call["function"]["arguments"],
+                                context_opted_in=_aact_ctx_opted_in,
+                            ),
+                        )
+                        continue
+
+                    # ── Unknown/unavailable tool fallback ─────────────────────
+                    # If the tool doesn't exist OR wasn't visible on this turn
+                    # (e.g., the model hallucinated a tool name, or the tool was
+                    # hidden by tool_policy), insert an error tool response to
+                    # keep the transcript valid. Without this, the assistant
+                    # message would have an unresolved tool_call, causing
+                    # subsequent LLM calls to fail.
+                    if name not in policy_tools_norm:
+                        tool_msg = create_tool_call_message(
+                            name=name,
+                            call_id=call["id"],
+                            content=(
+                                f"⚠️ Error: Tool '{name}' is not available. "
+                                "The tool may have been removed or does not exist. "
+                                "Please proceed without using this tool."
+                            ),
+                        )
+                        await insert_tool_message_after_assistant(
+                            assistant_meta,
+                            msg,
+                            tool_msg,
+                            client,
+                            _msg_dispatcher,
+                        )
+                        continue
+
+                    # Use shared helper for base tools
+                    await tools_data.schedule_base_tool_call(
+                        msg,
+                        name=name,
+                        args_json=call["function"]["arguments"],
+                        call_id=call["id"],
+                        call_idx=idx,
+                        context_state=context_state,
+                        propagate_chat_context=propagate_chat_context,
+                        assistant_meta=assistant_meta,
+                        initial_paused=not pause_event.is_set(),
+                    )
 
                 if _persist_response_emitted:
                     pass  # fall through to section F → persist wait

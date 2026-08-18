@@ -72,8 +72,9 @@ USER_VISIBILITY_GUIDANCE = (
     "to incorporate or respond to.\n\n"
     "user-role messages prefixed with `[clarification <call_id>]` are also not from "
     "the user — they are a pending tool asking you a question it needs answered to "
-    "continue. Answer them by calling the clarify_* helper for that call, "
-    "not by responding to the user or treating the question itself as a request."
+    'continue. Answer them by calling steer(call_id=<call_id>, action="clarify", '
+    "payload=<answer>), not by responding to the user or treating the question "
+    "itself as a request."
 )
 
 
@@ -399,6 +400,12 @@ class ToolsData:
         # Reference to the live dynamic_tools dict managed by DynamicToolFactory.
         # Set by the loop after the factory is initialised each turn.
         self._dynamic_tools_ref: Optional[Dict[str, Callable]] = None
+        # Reference to DynamicToolFactory.live_ask_fns for the current turn —
+        # per-call `ask` closures kept ONLY to seed recursive inspection-loop
+        # tool schemas (get_ask_tools()); never part of the outer loop's own
+        # visible schema (that dict is `_dynamic_tools_ref`, which now only
+        # ever holds the static wait/steer/ask_about_completed_tool surface).
+        self._live_ask_fns_ref: Optional[Dict[str, Callable]] = None
         self._completed_ask_handles: Dict[str, Callable] = {}
         self._task_ask_keys: Dict[asyncio.Task, str] = {}
         # Metadata for completed steerable tools, keyed by call_id.
@@ -419,22 +426,18 @@ class ToolsData:
         """Return a snapshot of currently available ``ask_*`` dynamic tools.
 
         Merges three sources with increasing precedence:
-        completed ask handles < extra_ask_tools < live dynamic tools.
+        completed ask handles < extra_ask_tools < live ask closures.
 
-        The ``ask_about_completed_tool`` meta-dispatcher is excluded because
-        it is a routing tool, not a per-tool ask function.
+        Used solely to seed a *recursive* inspection loop's own tool schema
+        (SteerableToolHandle.ask()) so it can propagate a question into a
+        still-nested grandchild — an internal plumbing surface, distinct
+        from (and never merged into) the outer loop's own visible schema.
         """
         result = dict(self._completed_ask_handles)
         result.update(self._extra_ask_tools)
-        dt = self._dynamic_tools_ref
-        if dt and isinstance(dt, dict):
-            result.update(
-                {
-                    k: v
-                    for k, v in dt.items()
-                    if k.startswith("ask_") and k != "ask_about_completed_tool"
-                },
-            )
+        live = self._live_ask_fns_ref
+        if live and isinstance(live, dict):
+            result.update(live)
         return result
 
     # Local helper: pretty-print tool payloads consistently
@@ -536,9 +539,9 @@ class ToolsData:
 
         Mirrors ``record_progress``, but tracked separately in
         ``info.clarify_msg`` and prefixed ``[clarification <call_id>]`` so
-        the model recognizes it wants a reply via the clarify_* helper for
-        that call (named ``clarify_{fn_name}_{safe_call_id}``, not a bare
-        call_id), unlike a status-only ``[progress ...]`` message. ``info.tool_reply_msg``
+        the model recognizes it wants a reply via
+        ``steer(call_id=<call_id>, action="clarify", payload=<answer>)``,
+        unlike a status-only ``[progress ...]`` message. ``info.tool_reply_msg``
         (the pending stub) is never touched here — the tool's eventual
         final result still lands there, or on ``clarify_placeholder`` once
         the model answers, never on this tail message.
@@ -546,7 +549,9 @@ class ToolsData:
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
             f"[clarification {call_id}] Tool incomplete, please answer the "
-            f"following to continue tool execution:\n{question_text}"
+            f"following to continue tool execution via "
+            f'steer(call_id="{call_id}", action="clarify", payload=<answer>):\n'
+            f"{question_text}"
         )
         existing = info.clarify_msg
         if existing is not None and self._mutable(existing):
@@ -555,6 +560,69 @@ class ToolsData:
         new_msg = {"role": "user", "content": content, "_clarify_msg": True}
         await msg_dispatcher.append_msgs([new_msg])
         info.clarify_msg = new_msg
+
+    async def record_tool_started(
+        self,
+        info: "ToolCallMetadata",
+        msg_dispatcher: "LoopMessageDispatcher",
+    ) -> None:
+        """Announce that a call is now live and steerable via ``steer``.
+
+        One-shot, append-only tail message (same shape as record_progress /
+        record_clarification, minus coalescing — a call starts exactly
+        once). Replaces the old signal a per-call-id minted tool used to
+        carry implicitly (its mere presence in the schema meant "X is now
+        steerable"); with the static schema that signal has to live in the
+        transcript instead.
+        """
+        try:
+            arg_repr = ", ".join(
+                f"{k}={v!r}" for k, v in (info.llm_arguments or {}).items()
+            )
+        except Exception:
+            arg_repr = info.raw_arguments_json
+        content = f"[steerable {info.call_id}] {info.name}({arg_repr}) started."
+        await msg_dispatcher.append_msgs(
+            [{"role": "user", "content": content, "_lifecycle_msg": True}],
+        )
+
+    async def record_tool_completed_askable(
+        self,
+        call_id: str,
+        name: str,
+        arg_repr: str,
+        msg_dispatcher: "LoopMessageDispatcher",
+    ) -> None:
+        """Announce that a completed call's trajectory is now askable.
+
+        Replaces the old live listing embedded in ``ask_about_completed_tool``'s
+        docstring (which churned the schema on every completion, even when
+        nothing else changed) with an appended tail message — the docstring
+        itself is now frozen.
+        """
+        content = (
+            f"[askable {call_id}] {name}({arg_repr}) completed and is askable via "
+            f'ask_about_completed_tool(tool_id="{call_id}", question=...).'
+        )
+        await msg_dispatcher.append_msgs(
+            [{"role": "user", "content": content, "_lifecycle_msg": True}],
+        )
+
+    def resolve_call_id(
+        self,
+        call_id: str,
+    ) -> Tuple[Optional[asyncio.Task], Optional["ToolCallMetadata"]]:
+        """Exact-match lookup of the live (pending) task for *call_id*.
+
+        The steer() dispatcher targets calls by their real id verbatim —
+        unlike the old per-call-id minted tools, there is no name-length
+        budget forcing a truncated suffix, so no suffix/endswith matching
+        is needed (or wanted: it was a source of ambiguity).
+        """
+        for t, inf in self.info.items():
+            if inf.call_id == call_id:
+                return t, inf
+        return None, None
 
     def has_exceeded_quota_for_tool(self, task_name: str) -> bool:
         if task_name not in self.normalized:
@@ -580,7 +648,7 @@ class ToolsData:
         info = self.info.get(coro)
         ask_name = self._task_ask_keys.pop(coro, None)
         if ask_name is not None:
-            dt = self._dynamic_tools_ref
+            dt = self._live_ask_fns_ref
             if dt and isinstance(dt, dict) and ask_name in dt:
                 ask_fn = dt[ask_name]
                 self._completed_ask_handles[ask_name] = ask_fn
@@ -906,6 +974,19 @@ class ToolsData:
         info: ToolCallMetadata = self.pop_task(task)
         name = info.name
         call_id = info.call_id
+
+        # Announce retrospective askability now that pop_task has (possibly)
+        # promoted this call_id into _completed_askable_tools — replaces the
+        # old live-listing docstring on ask_about_completed_tool.
+        askable_entry = self._completed_askable_tools.get(call_id)
+        if askable_entry is not None:
+            with suppress(Exception):
+                await self.record_tool_completed_askable(
+                    call_id,
+                    askable_entry["name"],
+                    askable_entry["arg_repr"],
+                    msg_dispatcher,
+                )
 
         _pickup_delay = _pct_time.perf_counter() - info.scheduled_time
         self._logger.debug(
@@ -1285,6 +1366,10 @@ class ToolsData:
         if self._on_handle_adopted is not None:
             with suppress(Exception):
                 self._on_handle_adopted(nested_task)
+        # Announce steerability now that a real handle backs this call_id —
+        # this is the moment its steer() surface widens beyond a bare stop.
+        with suppress(Exception):
+            await self.record_tool_started(metadata, msg_dispatcher)
 
     # ── Helper: adopt multiple handles from a single composite return --------
     async def adopt_multi_nested(
