@@ -15,6 +15,7 @@ import pytest
 
 import unify.common._async_tool.loop as _loop_mod
 import unify.common._async_tool.context_compression as _cc_mod
+import unify.common.async_tool_loop as _atl_mod
 from unify.common._async_tool.context_compression import (
     CompressedMessage,
     CompressedMessages,
@@ -95,6 +96,24 @@ async def test_watermark_resets_to_zero_after_forced_compression(
 
     monkeypatch.setattr(_cc_mod, "compress_messages", _compress_and_reset)
 
+    # The loop keeps running after a compression rebuild — it immediately
+    # dispatches a "continue from where you left off" turn, which correctly
+    # re-advances the watermark past 0 again. So the watermark must be
+    # observed right at reset time, not after handle.result() returns (by
+    # then several more legitimate turns may have happened).
+    watermarks_at_reset: list[int | None] = []
+    _orig_restart = _atl_mod.AsyncToolLoopHandle._restart_with_compressed_context
+
+    async def _spy_restart(self, *a, **kw):
+        await _orig_restart(self, *a, **kw)
+        watermarks_at_reset.append(getattr(self._client, "_sent_watermark", None))
+
+    monkeypatch.setattr(
+        _atl_mod.AsyncToolLoopHandle,
+        "_restart_with_compressed_context",
+        _spy_restart,
+    )
+
     add = _make_add(trigger)
     client = new_llm_client(**llm_config)
     client.set_system_message(_SYS)
@@ -118,9 +137,10 @@ async def test_watermark_resets_to_zero_after_forced_compression(
     assert result is not None
 
     # The rebuild is a deliberate full-cache sacrifice: nothing in the new
-    # (compressed) transcript was ever dispatched, so the watermark must be
-    # exactly 0 — not merely "smaller than before".
-    assert client._sent_watermark == 0
+    # (compressed) transcript was ever dispatched, so the watermark must have
+    # been exactly 0 right after the reset — not merely "smaller than before".
+    assert watermarks_at_reset, "compression never restarted the loop — spy never fired"
+    assert all(w == 0 for w in watermarks_at_reset), watermarks_at_reset
 
     # The loop continued normally after the reset: if the reset had left a
     # stale watermark/hash pair, the very next dispatch's dev-mode integrity
