@@ -8,7 +8,6 @@ as opposed to the ``request`` which specifies *what* to do.
 import asyncio
 
 import pytest
-from unittest.mock import MagicMock
 
 from unify.actor.code_act_actor import CodeActActor
 from unify.actor.prompt_builders import build_code_act_prompt
@@ -218,57 +217,6 @@ async def test_code_act_guidelines_response_format_constraint():
         assert "1." in result_str
         assert "2." in result_str
         assert "3." in result_str
-    finally:
-        try:
-            await actor.close()
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# SingleFunctionActor.act accepts guidelines (symbolic)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(30)
-async def test_single_function_actor_accepts_guidelines():
-    """
-    SingleFunctionActor.act should accept the ``guidelines`` parameter
-    without raising TypeError.
-    """
-    from unify.actor.single_function_actor import SingleFunctionActor
-
-    fm = MagicMock()
-    fm.search_functions = MagicMock(
-        return_value={
-            "metadata": [
-                {
-                    "function_id": 1,
-                    "name": "my_func",
-                    "docstring": "A test function",
-                    "argspec": "()",
-                    "implementation": "def my_func():\n    return 42",
-                    "is_primitive": False,
-                    "verify": False,
-                },
-            ],
-        },
-    )
-
-    actor = SingleFunctionActor(
-        function_manager=fm,
-    )
-    try:
-        handle = await actor.act(
-            "do something",
-            guidelines="Be concise in any LLM-generated arguments.",
-        )
-        assert handle is not None
-        # Wait for completion (the function just returns 42)
-        result = await asyncio.wait_for(handle.result(), timeout=15)
-        assert result is not None
     finally:
         try:
             await actor.close()

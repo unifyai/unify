@@ -45,6 +45,8 @@ def _storage_actor_stub():
         delete_venv=_tool_stub,
         set_function_venv=_tool_stub,
         get_function_venv=_tool_stub,
+        confirm_side_effect_class=_tool_stub,
+        set_verification_policy=_tool_stub,
     )
     guidance_manager = SimpleNamespace(
         search=_tool_stub,
@@ -443,4 +445,4 @@ async def test_attach_entrypoint_tool_binds_without_certification_metadata():
     result = await tool(function_id=321, rationale="stable procedure")
     assert "entrypoint_recorded" in result
     assert attached == [{"function_id": 321, "rationale": "stable procedure"}]
-    assert "does not grant trust" in (tool.__doc__ or "")
+    assert "does not grant trust" in " ".join((tool.__doc__ or "").split())
