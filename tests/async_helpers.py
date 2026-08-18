@@ -192,6 +192,77 @@ async def _wait_for_assistant_call_prefix(
     )
 
 
+def _steer_call_action(tc: dict) -> str | None:
+    """Return the `action` a `steer(...)` tool_call requests, or None if
+    *tc* isn't a steer call (or its arguments don't parse)."""
+    import json as _json
+
+    fn = tc.get("function", {}) or {}
+    if fn.get("name") != "steer":
+        return None
+    try:
+        parsed = _json.loads(fn.get("arguments") or "{}")
+        action = parsed.get("action")
+        return str(action) if isinstance(action, str) else None
+    except Exception:
+        return None
+
+
+async def _wait_for_assistant_steer_action(
+    client: "unillm.AsyncUnify",
+    action: str,
+    *,
+    timeout: float = 300.0,
+    poll: float = 0.05,
+) -> None:
+    """Poll for a NEW assistant `steer(action=<action>, ...)` tool_call.
+
+    steer()'s structured-args dispatch replaced the per-call-id minted
+    tools (`stop_<fn>_<id>`, `pause_<fn>_<id>`, ...) that
+    `_wait_for_assistant_call_prefix` was built to detect by tool-call
+    NAME prefix — every steer() call shares the name "steer" regardless
+    of action, so this keys on the parsed `action` argument instead.
+    Shares the baseline/polling shape with `_wait_for_assistant_call_prefix`
+    (extended, not forked) under its own prefix key so the two never collide.
+    """
+    import time as _time
+
+    def _count(msgs, act):
+        return sum(
+            1
+            for m in (msgs or [])
+            if m.get("role") == "assistant"
+            and any(_steer_call_action(tc) == act for tc in (m.get("tool_calls") or []))
+        )
+
+    start_ts = _time.perf_counter()
+    key = (id(client), f"steer:{action}")
+    try:
+        current = _count(client.messages or [], action)
+    except Exception:
+        current = 0
+    baseline = _ASSISTANT_PREFIX_COUNTS.get(key)
+    if baseline is None:
+        _ASSISTANT_PREFIX_COUNTS[key] = current
+        if current > 0:
+            return
+    while _time.perf_counter() - start_ts < timeout:
+        msgs = client.messages or []
+        cnt = _count(msgs, action)
+        if baseline is None:
+            if cnt > 0:
+                _ASSISTANT_PREFIX_COUNTS[key] = cnt
+                return
+        else:
+            if cnt > baseline:
+                _ASSISTANT_PREFIX_COUNTS[key] = cnt
+                return
+        await asyncio.sleep(poll)
+    raise TimeoutError(
+        f"Timed out after {timeout}s waiting for assistant to call steer(action={action!r}).",
+    )
+
+
 async def _wait_for_tool_message_prefix(
     client: "unillm.AsyncUnify",
     prefix: str,

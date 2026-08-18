@@ -3547,7 +3547,12 @@ async def async_tool_loop_inner(
 
                             _ask_extra_kwargs, _ask_ctx_opted_in = (
                                 compute_context_injection(
-                                    args={},
+                                    args={
+                                        "include_parent_chat_context": steer_args.get(
+                                            "include_parent_context",
+                                            True,
+                                        ),
+                                    },
                                     propagate_chat_context=propagate_chat_context,
                                     context_state=context_state,
                                     client_messages=client.messages,
@@ -3913,6 +3918,7 @@ async def async_tool_loop_inner(
                         context_state=context_state,
                         propagate_chat_context=propagate_chat_context,
                         assistant_meta=assistant_meta,
+                        msg_dispatcher=_msg_dispatcher,
                         initial_paused=not pause_event.is_set(),
                     )
 

@@ -1201,6 +1201,7 @@ async def schedule_missing_for_message(
                 context_state=context_state,
                 propagate_chat_context=propagate_chat_context,
                 assistant_meta=assistant_meta,
+                msg_dispatcher=msg_dispatcher,
                 initial_paused=initial_paused,
             )
             scheduled.append(cid)
