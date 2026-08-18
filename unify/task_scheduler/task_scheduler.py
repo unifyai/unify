@@ -15,6 +15,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Type,
@@ -552,14 +553,58 @@ class TaskScheduler(BaseTaskScheduler):
                 logs=log_objs[0].id,
                 entries={"entrypoint": int(function_id)},
             )
+            workflow = self._workflow_slug_of(log_objs[0].entries)
+            if workflow:
+                self._link_entrypoint_to_workflow(
+                    function_id=int(function_id),
+                    slug=workflow,
+                )
             return {
                 "outcome": "candidate_recorded",
                 "task_id": task_id,
                 "function_id": int(function_id),
                 "rationale": rationale,
+                "workflow": workflow,
                 "certification_status": "required_before_offline_promotion",
                 "certification_metadata": certification_metadata or {},
             }
+
+    @staticmethod
+    def _workflow_slug_of(task_row: Mapping[str, Any]) -> str | None:
+        """The workflow a task belongs to, if a workflow planted it."""
+
+        managed_by = str(task_row.get("managed_by") or "").strip()
+        if not managed_by or managed_by == MANAGED_BY_DEPLOYMENT:
+            return None
+        return managed_by
+
+    @staticmethod
+    def _link_entrypoint_to_workflow(*, function_id: int, slug: str) -> None:
+        """Record the distilled function as a member of the workflow.
+
+        A run that distils a workflow's task into an entrypoint creates a
+        function the bundle never authored and, by design, never will -- a
+        bundle is universal to everyone who installs it, and a distillation
+        belongs to the one installation whose trajectory produced it. Without
+        this link the function is reachable from nothing: an uninstall removes
+        the task and leaves the function behind unreferenced, and a workflow
+        card cannot list the function its task actually runs.
+
+        A failure here must not fail the attachment. The entrypoint is
+        already recorded and works; losing the membership costs cleanup and
+        display, not correctness.
+        """
+
+        from ..function_manager.function_manager import link_function_to_workflow
+
+        try:
+            link_function_to_workflow(function_id=function_id, slug=slug)
+        except Exception:
+            logger.exception(
+                "Failed to link distilled function %s to workflow %r",
+                function_id,
+                slug,
+            )
 
     def _offline_promotion_rejection_reasons(
         self,
@@ -3602,6 +3647,7 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         data: Dict[str, Any],
         function_name_to_id: Dict[str, int],
+        detach_entrypoint: bool = False,
     ) -> None:
         payload = dict(data)
         custom_key = payload.pop("custom_key")
@@ -3628,7 +3674,12 @@ class TaskScheduler(BaseTaskScheduler):
         description = payload.pop("description", None)
         require_consumed(payload, kind="tasks", custom_key=custom_key)
 
-        entrypoint: Any = _UNSET
+        # ``_UNSET`` leaves whatever the row holds, which is what keeps a
+        # runtime-attached entrypoint alive across an ordinary bundle update.
+        # ``None`` is the deliberate opposite: the caller has decided this
+        # row's entrypoint is no longer valid and the task must fall back to
+        # the full loop.
+        entrypoint: Any = None if detach_entrypoint else _UNSET
         if entrypoint_function is not None:
             if entrypoint_function == "":
                 entrypoint = None
@@ -3865,6 +3916,65 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         self._function_name_to_id = function_name_to_id
         self.managed_by = managed_by
         self.max_workers = scheduler._custom_task_sync_workers()
+        self._resolved: Dict[int, bool] = {}
+
+    def _entrypoint_resolves(self, function_id: int) -> bool:
+        """Whether a stored entrypoint id still points at a function.
+
+        Memoized for the pass: several tasks can share one distilled
+        entrypoint, and the answer cannot change while a reconcile holds the
+        sync lease.
+        """
+
+        from ..function_manager.function_manager import function_id_resolves
+
+        if function_id not in self._resolved:
+            self._resolved[function_id] = function_id_resolves(function_id)
+        return self._resolved[function_id]
+
+    def _detach_runtime_entrypoint(
+        self,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        """Whether this row's entrypoint was attached at runtime and must go.
+
+        A task can acquire an ``entrypoint`` its source never declared: the
+        post-run review distils a successful trajectory into a function and
+        attaches it, which is how a recurring task gets cheaper and more
+        deterministic every time it runs. That is worth having, and it is
+        deliberately not promoted into the bundle -- a bundle is universal to
+        everyone who installs it, while a distillation is the product of one
+        installation's own trajectory and data.
+
+        So the bundle stays the base and the distillation is a local overlay,
+        and reconcile has to keep both. It does that by detaching in exactly
+        two cases, each of which makes the overlay wrong rather than merely
+        old:
+
+        * **It dangles.** The function was deleted or renumbered, so the task
+          now points at nothing and every future run fails on it.
+        * **The base moved underneath it.** A distillation encodes the task
+          description it was derived from. When an update rewrites that
+          description, keeping the overlay runs yesterday's logic under
+          today's instructions -- a confident wrong answer, which is worse
+          than the slow path.
+
+        Detaching is always safe, and that asymmetry is what makes this
+        self-healing rather than merely defensive: the task ran correctly
+        through the full actor loop before any entrypoint existed, so dropping
+        one degrades to correct-and-slower, never to broken. A later run
+        re-derives against the new description if it is still worth doing.
+        """
+
+        if fields.get("entrypoint_function"):
+            return False
+        stored = live_row.get("entrypoint")
+        if stored is None:
+            return False
+        if not self._entrypoint_resolves(int(stored)):
+            return True
+        return live_row.get("custom_hash") != fields.get("custom_hash")
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
@@ -3900,10 +4010,16 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         ``entrypoint_function`` at write time. When the functions store is
         re-registered under new ids, the row dangles while its content
         hash — which covers the name, never the id — still matches.
+
+        An entrypoint attached at runtime dangles the same way and used to be
+        unrepairable by construction: this returned ``False`` on its first
+        line whenever the *source* named no ``entrypoint_function``, which is
+        precisely the case the runtime creates. The check the method exists to
+        make was skipped for the one drift no other detector can see.
         """
         entrypoint_function = fields.get("entrypoint_function")
         if not entrypoint_function:
-            return False
+            return self._detach_runtime_entrypoint(live_row, fields)
         resolved = self._function_name_to_id.get(entrypoint_function)
         if resolved is None:
             return False
@@ -3926,6 +4042,7 @@ class _TaskSyncAdapter(CustomSyncAdapter):
             task_id=int(live_row["task_id"]),
             data=fields,
             function_name_to_id=self._function_name_to_id,
+            detach_entrypoint=self._detach_runtime_entrypoint(live_row, fields),
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
