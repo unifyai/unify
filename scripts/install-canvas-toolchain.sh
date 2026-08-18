@@ -21,7 +21,7 @@
 #   scripts/install-canvas-toolchain.sh [options]
 #
 #     --branding <path>   existing branding checkout; cloned when omitted
-#     --branch <ref>      branch to clone (default: staging)
+#     --branch <ref>      branch to clone (default: main)
 #     --toolchain <dir>   default /opt/canvas-toolchain
 #     --host <dir>        default /opt/canvas-host
 #     --keep-sources      leave the clone in place (debugging)
@@ -29,7 +29,7 @@
 set -euo pipefail
 
 BRANDING_PATH=""
-BRANCH="staging"
+BRANCH="main"
 TOOLCHAIN_ROOT="/opt/canvas-toolchain"
 HOST_ROOT="/opt/canvas-host"
 KEEP_SOURCES=0
