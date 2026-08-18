@@ -103,10 +103,14 @@ def test_is_mutable_respects_watermark_by_identity():
 
     # A structurally-identical-but-distinct dict is never confused for the
     # sent one — identity, not equality.
-    assert is_mutable(client, {"i": 0}) is True
+    assert is_mutable(client, {"i": 0}) is False
 
-    # Absent from the transcript entirely (e.g. not yet appended) — mutable.
-    assert is_mutable(client, {"unrelated": True}) is True
+    # Absent from the transcript entirely — fails closed (immutable), not
+    # open. A message missing from the transcript (e.g. a swapped-out
+    # canonical log during a concurrent dispatch) must route through the
+    # tail-append paths that actually reach the model, not be written into
+    # a dict the transcript will never contain.
+    assert is_mutable(client, {"unrelated": True}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -305,10 +309,21 @@ async def test_insert_below_watermark_with_bypass_splices_adjacently():
             },
         ],
     }
-    client = _FakeClient([asst_msg])
-    client._sent_watermark = 1  # asst_msg already dispatched
+    client = _FakeClient([{"role": "user", "content": "hi"}, asst_msg])
     dispatcher = _FakeMsgDispatcher(client)
     assistant_meta = {}
+
+    async def fake_generate(**kwargs):
+        return "ok"
+
+    client.generate = fake_generate
+
+    # A real prior dispatch, so both the watermark AND its stored hash
+    # baseline reflect asst_msg genuinely having been sent — reproduces the
+    # coordinator's F1 probe (backfill/restore splice after a real dispatch),
+    # not just a hand-set watermark with no hash to violate.
+    await generate_with_preprocess(client, None)
+    assert client._sent_watermark == 2
 
     ack = create_tool_call_message(name="wait", call_id="c1", content="Acknowledged.")
     await insert_tool_message_after_assistant(
@@ -322,7 +337,15 @@ async def test_insert_below_watermark_with_bypass_splices_adjacently():
 
     # Escape hatch: spliced directly after asst_msg despite being below-mark —
     # legality (an otherwise permanently-unanswered tool_calls entry) beats cache.
-    assert client.messages == [asst_msg, ack]
+    assert client.messages[1] is asst_msg
+    assert client.messages[2] is ack
+
+    # The escape-hatch splice must re-baseline the stored watermark hash —
+    # without it, the next dispatch's integrity check would read this
+    # sanctioned, legal splice as an unsanctioned mutation and raise (this
+    # is exactly the bug an escape-hatch splice without re-baselining
+    # produces — reported and fixed as F1).
+    await generate_with_preprocess(client, None)  # must not raise
 
 
 @pytest.mark.asyncio
@@ -439,6 +462,7 @@ async def test_record_progress_coalesces_above_mark_then_freezes():
     client = _FakeClient()
     dispatcher = _FakeMsgDispatcher(client)
     tools_data = ToolsData(tools={}, client=client, logger=_FakeLogger())
+    tools_data._visibility_guidance_injected = True  # covered separately below
     frozen_stub = {"role": "tool", "tool_call_id": "c1", "content": "stub"}
     info = _make_metadata(tool_reply_msg=frozen_stub)
 
@@ -480,6 +504,7 @@ async def test_record_clarification_coalesces_and_never_touches_stub():
     client = _FakeClient()
     dispatcher = _FakeMsgDispatcher(client)
     tools_data = ToolsData(tools={}, client=client, logger=_FakeLogger())
+    tools_data._visibility_guidance_injected = True  # covered separately below
     frozen_stub = {"role": "tool", "tool_call_id": "c1", "content": "stub"}
     info = _make_metadata(tool_reply_msg=frozen_stub)
 
@@ -497,6 +522,42 @@ async def test_record_clarification_coalesces_and_never_touches_stub():
     assert len(client.messages) == 1
     assert "What color exactly?" in q_msg["content"]
     assert frozen_stub["content"] == "stub"
+
+
+@pytest.mark.asyncio
+async def test_visibility_guidance_injects_on_first_progress_message_not_just_interjection():
+    """F3: most loops never get a real user interjection, so gating the
+    guidance solely on that (the pre-fixup behavior) left every sub-agent and
+    unattended task without it — the model would see [progress ...] under the
+    standing "incorporate ALL user interjections" instruction with nothing
+    telling it that prefix is exempt. Injection must fire on the first
+    [progress]/[clarification] message too, and at most once overall.
+    """
+    client = _FakeClient()
+    dispatcher = _FakeMsgDispatcher(client)
+    tools_data = ToolsData(tools={}, client=client, logger=_FakeLogger())
+    assert tools_data._visibility_guidance_injected is False
+
+    info = _make_metadata()
+    await tools_data.record_progress(info, "c1", "working…", dispatcher)
+
+    assert len(client.messages) == 2
+    guidance_msg, progress_msg = client.messages
+    assert guidance_msg["role"] == "system"
+    assert guidance_msg.get("_visibility_guidance") is True
+    assert "[progress <call_id>]" in guidance_msg["content"]
+    assert "[clarification <call_id>]" in guidance_msg["content"]
+    assert "clarify_<call_id>" in guidance_msg["content"]
+    assert "[loop " not in guidance_msg["content"]  # dead prefix, dropped
+    assert progress_msg["content"] == "[progress c1] working…"
+    assert tools_data._visibility_guidance_injected is True
+
+    # Injected at most once — a second status message (even a different
+    # call_id / a clarification) does not re-inject.
+    info2 = _make_metadata(call_id="c2")
+    await tools_data.record_clarification(info2, "c2", "which one?", dispatcher)
+    assert len(client.messages) == 3
+    assert all(not m.get("_visibility_guidance") for m in client.messages[1:])
 
 
 # ---------------------------------------------------------------------------
@@ -688,3 +749,260 @@ async def test_process_completed_task_writes_in_place_above_mark():
     assert len(client.messages) == 2  # asst_msg + the one stub, edited in place
     assert client.messages[1] is stub
     assert "quick result" in stub["content"]
+
+
+# ---------------------------------------------------------------------------
+# 11. Wire-level: the plan's literal acceptance #1 — serialize consecutive
+#     requests, assert the common byte-prefix covers everything except
+#     appended tail content. Message-granular (each element individually
+#     re-serialized), which is the correct proxy: a provider's own request
+#     serialization concatenates discrete JSON message objects, so a changed
+#     byte inside message i is exactly what shows up as a mismatch at index i.
+# ---------------------------------------------------------------------------
+
+
+def _serialize_request(msgs: list) -> list[str]:
+    return [json.dumps(m, sort_keys=True, default=str) for m in msgs]
+
+
+@pytest.mark.asyncio
+async def test_wire_level_common_byte_prefix_across_consecutive_dispatches():
+    client = _FakeClient([{"role": "user", "content": "start"}])
+    dispatcher = _FakeMsgDispatcher(client)
+    tools_data = ToolsData(tools={}, client=client, logger=_FakeLogger())
+    tools_data._visibility_guidance_injected = True
+    assistant_meta = {}
+
+    captured: list[list[str]] = []
+
+    async def fake_generate(**kwargs):
+        captured.append(_serialize_request(client.messages))
+        return "ok"
+
+    client.generate = fake_generate
+
+    # Turn 1: dispatch with just the user message.
+    await generate_with_preprocess(client, None)
+
+    # Between dispatches: a full async-tool cycle — schedule a tool
+    # (placeholder spliced adjacently, always legal), a notification arrives
+    # while it's still mutable (coalesces in place, so it never breaks *this*
+    # prefix), then dispatch again — freezing the placeholder and the
+    # progress message both.
+    asst_msg = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "mytool", "arguments": "{}"},
+            },
+        ],
+    }
+    client.messages.append(asst_msg)
+    task = asyncio.create_task(asyncio.sleep(0))
+    info = _make_metadata(assistant_msg=asst_msg)
+    tools_data.save_task(task, info)
+    await ensure_placeholders_for_pending(
+        tools_data=tools_data,
+        assistant_meta=assistant_meta,
+        client=client,
+        msg_dispatcher=dispatcher,
+    )
+    await tools_data.record_progress(info, "c1", "starting…", dispatcher)
+
+    # Turn 2: dispatch again.
+    await generate_with_preprocess(client, None)
+    await task
+
+    prefix_1, prefix_2 = captured[0], captured[1]
+    assert prefix_2[: len(prefix_1)] == prefix_1, (
+        "turn 2's request must reproduce turn 1's byte-for-byte, with only "
+        "new content appended after it"
+    )
+
+    # A notification arrives for the still-pending tool, now below the
+    # watermark — must coalesce-then-freeze into a NEW tail message, never
+    # rewrite the one already covered by prefix_2.
+    await tools_data.record_progress(info, "c1", "still working…", dispatcher)
+    # The tool finishes late — its placeholder is frozen, so the result must
+    # arrive via check_status, not by rewriting anything prefix_2 covers.
+    tracker = _LoopToolFailureTracker(3, ToolLoopRuntimeState())
+    await tools_data.process_completed_task(
+        task=task,
+        consecutive_failures=tracker,
+        outer_handle_container=[None],
+        assistant_meta=assistant_meta,
+        msg_dispatcher=dispatcher,
+    )
+
+    # Turn 3: dispatch again.
+    await generate_with_preprocess(client, None)
+
+    prefix_3 = captured[2]
+    assert prefix_3[: len(prefix_2)] == prefix_2, (
+        "turn 3's request must reproduce turn 2's byte-for-byte (including "
+        "the frozen placeholder and progress message from turn 1/2), with "
+        "only the new progress message, check_status pair, etc. appended"
+    )
+    # And transitively, turn 1 is still a prefix of turn 3.
+    assert prefix_3[: len(prefix_1)] == prefix_1
+
+
+# ---------------------------------------------------------------------------
+# 12. Patient/legacy-blocking mode: a dispatch that returns *after* a tool
+#     result should already have been consumed by the next turn must not
+#     retroactively touch anything the prior (already-serialized) request
+#     covered — the watermark/hash machinery doesn't know or care which mode
+#     dispatched it, but this pins that patient mode's specific ordering
+#     (finish the in-flight step, then ingest results, per loop.py's own
+#     comment on why order matters there) doesn't accidentally bypass it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patient_mode_ordering_does_not_violate_watermark():
+    client = _FakeClient([{"role": "user", "content": "start"}])
+    dispatcher = _FakeMsgDispatcher(client)
+    tools_data = ToolsData(tools={}, client=client, logger=_FakeLogger())
+    tools_data._visibility_guidance_injected = True
+    assistant_meta = {}
+
+    async def fake_generate(**kwargs):
+        return "ok"
+
+    client.generate = fake_generate
+
+    # Turn 1 dispatches with the tool already scheduled and placeholdered —
+    # patient mode's defining trait is that the step is awaited to completion
+    # even if a tool result becomes available while it's in flight.
+    asst_msg = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "slow_tool", "arguments": "{}"},
+            },
+        ],
+    }
+    client.messages.append(asst_msg)
+
+    async def slow_tool():
+        return "slow result"
+
+    task = asyncio.create_task(slow_tool())
+    info = _make_metadata(assistant_msg=asst_msg)
+    tools_data.save_task(task, info)
+    await ensure_placeholders_for_pending(
+        tools_data=tools_data,
+        assistant_meta=assistant_meta,
+        client=client,
+        msg_dispatcher=dispatcher,
+    )
+
+    await generate_with_preprocess(client, None)  # the "in-flight step"
+
+    # Patient mode's own documented ordering: the step is awaited FIRST
+    # (already happened above), THEN the result is ingested — never the
+    # reverse, which loop.py's comment says would misattribute a synthetic
+    # check_status pair's tool message as the step's own turn.
+    await task
+    tracker = _LoopToolFailureTracker(3, ToolLoopRuntimeState())
+    await tools_data.process_completed_task(
+        task=task,
+        consecutive_failures=tracker,
+        outer_handle_container=[None],
+        assistant_meta=assistant_meta,
+        msg_dispatcher=dispatcher,
+    )
+
+    # The result landed below the watermark (frozen by turn 1's dispatch) —
+    # delivered via check_status, stub untouched — so a further dispatch
+    # must not trip the integrity check.
+    await generate_with_preprocess(client, None)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# 13. Interrupt-mode dispatch race: a tool completes *while* an LLM request
+#     for the next turn is already in flight — the loop cancels that request
+#     (loop.py's `llm_task.cancel()` branch) and re-dispatches with the fresh
+#     result. The cancelled dispatch must still have advanced the watermark
+#     (cancellation ≠ rollback — see the cancellation test in this file), so
+#     the re-dispatch's integrity check compares against the *cancelled*
+#     dispatch's baseline, not a stale earlier one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_interrupt_mode_dispatch_race_survives_cancelled_then_redispatched():
+    client = _FakeClient([{"role": "user", "content": "start"}])
+    dispatcher = _FakeMsgDispatcher(client)
+    tools_data = ToolsData(tools={}, client=client, logger=_FakeLogger())
+    tools_data._visibility_guidance_injected = True
+    assistant_meta = {}
+
+    release = asyncio.Event()
+
+    async def slow_generate(**kwargs):
+        await release.wait()
+        return "late answer"
+
+    client.generate = slow_generate
+
+    # Turn 1: dispatch the "reasoning step" as a background task, exactly as
+    # interrupt mode does (loop.py: `llm_task = asyncio.create_task(...)`).
+    llm_task = asyncio.create_task(generate_with_preprocess(client, None))
+    await asyncio.sleep(0)  # let it reach the await point inside slow_generate
+    assert client._sent_watermark == 1  # advanced synchronously before the await
+
+    # A tool finishes mid-flight — interrupt mode cancels the half-finished
+    # reasoning step rather than let it use stale context.
+    llm_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await llm_task
+    release.set()  # let the cancelled coroutine's generate() unblock/exit cleanly
+
+    # Ingest the tool's result — this is new content appended above the
+    # (cancelled-but-still-advanced) watermark, always legal to splice.
+    asst_msg = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "fast_tool", "arguments": "{}"},
+            },
+        ],
+    }
+    client.messages.append(asst_msg)
+    task = asyncio.create_task(asyncio.sleep(0, result="fast result"))
+    info = _make_metadata(assistant_msg=asst_msg)
+    tools_data.save_task(task, info)
+    await ensure_placeholders_for_pending(
+        tools_data=tools_data,
+        assistant_meta=assistant_meta,
+        client=client,
+        msg_dispatcher=dispatcher,
+    )
+    await task
+    tracker = _LoopToolFailureTracker(3, ToolLoopRuntimeState())
+    await tools_data.process_completed_task(
+        task=task,
+        consecutive_failures=tracker,
+        outer_handle_container=[None],
+        assistant_meta=assistant_meta,
+        msg_dispatcher=dispatcher,
+    )
+
+    # Re-dispatch (the fresh turn interrupt mode issues after cancelling) —
+    # must not raise: the cancelled dispatch's baseline must have accounted
+    # for everything genuinely below the mark at that point.
+    async def fake_generate(**kwargs):
+        return "ok"
+
+    client.generate = fake_generate
+    await generate_with_preprocess(client, None)
