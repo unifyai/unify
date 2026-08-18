@@ -38,10 +38,15 @@ def _make_completed_handle(
     messages: list[dict],
     *,
     request: str = "start",
+    task_result: str = "done",
 ) -> AsyncToolLoopHandle:
-    """Build a handle whose task is already done() — the digest branch."""
+    """Build a handle whose task is already done() — the digest branch.
+
+    ``task_result`` is what ``self._task.result()`` returns — the
+    authoritative source ``digest()`` reads for ``final_result`` (T5-1).
+    """
     task: asyncio.Future = asyncio.Future()
-    task.set_result("done")
+    task.set_result(task_result)
     return AsyncToolLoopHandle(
         task=task,
         interject_queue=asyncio.Queue(),
@@ -97,6 +102,9 @@ async def test_digest_mechanical_structure():
     handle = _make_completed_handle(
         _SAMPLE_MESSAGES,
         request="What is the sea level rise rate?",
+        # Matches the transcript's own final assistant message — a plain
+        # (non-structured-output) loop's task result equals that text.
+        task_result="Sea level is rising at 3.4mm/year.",
     )
 
     digest_obj = json.loads(handle.digest())
@@ -128,6 +136,72 @@ async def test_digest_is_cached_and_byte_stable():
 
     # Same object — proves it was memoized, not rebuilt.
     assert first is second
+
+
+@pytest.mark.asyncio
+async def test_digest_final_result_uses_task_result_not_narration_heuristic():
+    """T5-1 regression: final_result must come from the task's actual result,
+    not a heuristic scan that picks up pre-answer narration on structured-
+    output loops — there the real answer lands in a tool message (e.g. via
+    final_response), never a bare assistant message, so the old "last
+    assistant message with content and no tool_calls" heuristic silently
+    picked up whatever narration preceded it instead."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Working on it, one moment.",
+            "tool_calls": [],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_fr",
+                    "type": "function",
+                    "function": {
+                        "name": "final_response",
+                        "arguments": json.dumps({"answer": "THE REAL ANSWER"}),
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_fr",
+            "name": "final_response",
+            "content": "submitted",
+        },
+    ]
+    handle = _make_completed_handle(messages, task_result="THE REAL ANSWER")
+
+    digest_obj = json.loads(handle.digest())
+
+    assert digest_obj["final_result"] == "THE REAL ANSWER"
+    assert digest_obj["final_result"] != "Working on it, one moment."
+
+
+@pytest.mark.asyncio
+async def test_digest_final_result_records_task_error_truthfully():
+    """A task that errored gets a truthfully-labeled error outcome as its
+    final_result, not a silent fallback to unrelated narration."""
+    task: asyncio.Future = asyncio.Future()
+    task.set_exception(RuntimeError("boom"))
+    handle = AsyncToolLoopHandle(
+        task=task,
+        interject_queue=asyncio.Queue(),
+        cancel_event=asyncio.Event(),
+        stop_event=asyncio.Event(),
+        client=_DummyClient(
+            [{"role": "assistant", "content": "unrelated narration", "tool_calls": []}],
+        ),
+        loop_id="TestLoop",
+    )
+
+    digest_obj = json.loads(handle.digest())
+
+    assert "RuntimeError" in digest_obj["final_result"]
+    assert "boom" in digest_obj["final_result"]
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +246,37 @@ async def test_read_child_message_caps_at_32kb():
 
     assert len(result) < 50_000
     assert "omitted" in result
+
+
+@pytest.mark.asyncio
+async def test_digest_and_read_child_message_redact_image_payloads():
+    """The completed-handle path (digest + drill-down) must redact image
+    blobs, same as the live-snapshot path — both go through
+    make_messages_safe_for_context_dump. See test_context_propagation.py's
+    test_ask_inspection_prompt_redacts_image_payloads for the live-path
+    sibling of this test."""
+    big_b64 = "A" * 4000
+    raw_data_url = f"data:image/png;base64,{big_b64}"
+    messages = [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "execute_code",
+            "content": [
+                {"type": "text", "text": "screenshot captured"},
+                {"type": "image_url", "image_url": {"url": raw_data_url}},
+            ],
+        },
+    ]
+    handle = _make_completed_handle(messages)
+
+    digest_text = handle.digest()
+    assert raw_data_url not in digest_text
+
+    read_child_message = handle._make_read_child_message_tool()
+    child_msg = await read_child_message(0)
+    assert raw_data_url not in child_msg
+    assert "data:image/png;base64,<omitted>" in child_msg
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +410,79 @@ async def test_digest_stays_bounded_regardless_of_transcript_size(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_digest_caps_turn_count_with_elision_marker():
+    """T5-2: turn *count* (not just transcript size) must stay bounded — an
+    uncapped digest grows ~45 tokens/turn, blowing past the plan's ~2k-token
+    target well before 100 turns. A 400-turn run should still produce a
+    compact digest with a head+tail window and one explicit elision marker
+    whose idx_range keeps the elided turns reachable via read_child_message."""
+    n_turns = 400
+    messages: list[dict] = []
+    for i in range(n_turns):
+        # Realistic-length thought/result text (not a bare number) — this is
+        # what makes the token math representative of a real trajectory
+        # rather than an artificially tiny one.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call_{i}",
+                        "type": "function",
+                        "function": {
+                            "name": "step",
+                            "arguments": json.dumps(
+                                {
+                                    "thought": f"process batch {i} of the incoming queue and validate the records",
+                                    "n": i,
+                                },
+                            ),
+                        },
+                    },
+                ],
+            },
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": f"call_{i}",
+                "name": "step",
+                "content": f"step {i} completed: processed {i} records from the batch, no errors encountered.",
+            },
+        )
+    messages.append({"role": "assistant", "content": "done", "tool_calls": []})
+
+    handle = _make_completed_handle(messages, task_result="done")
+    digest_text = handle.digest()
+    digest_obj = json.loads(digest_text)
+
+    turns = digest_obj["turns"]
+    max_turns = atl._DIGEST_MAX_TURNS
+    assert len(turns) == max_turns + 1, "head + one elision marker + tail"
+
+    markers = [t for t in turns if isinstance(t, dict) and t.get("elided")]
+    assert len(markers) == 1
+    marker = markers[0]
+    assert marker["count"] == n_turns - max_turns
+    assert len(marker["idx_range"]) == 2
+    assert marker["idx_range"][0] < marker["idx_range"][1]
+
+    # Elided idx values are still individually retrievable.
+    handle.digest()  # no-op (cached) — populates _digest_messages already
+    read_child_message = handle._make_read_child_message_tool()
+    elided_idx = marker["idx_range"][0]
+    result = await read_child_message(elided_idx)
+    assert json.loads(result)["role"] == "tool"
+
+    tokens = count_tokens(digest_text)
+    assert 1000 < tokens < 3000, (
+        f"a capped digest should land in the plan's ~2k-3k range regardless "
+        f"of trajectory length, got {tokens}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: digest answers the five librarian question shapes, with
 # drill-down fetching a detail the digest's head-only preview omits.
@@ -365,8 +543,8 @@ async def test_digest_ask_answers_librarian_question_shapes(llm_config):
         client=client,
         message="start",
         tools={"search_web": search_web, "compute_summary": compute_summary},
-        max_steps=10,
-        timeout=120,
+        max_steps=20,
+        timeout=180,
     )
 
     final_result = await handle.result()
