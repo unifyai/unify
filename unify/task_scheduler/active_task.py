@@ -414,6 +414,21 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
     def done(self) -> bool:
         return self._actor_handle.done()
 
+    async def wait_until_done(self) -> None:
+        """Block until the run and any post-run review have both finished.
+
+        ``result()`` returns as soon as the run itself has an answer, which is
+        what a caller relaying that answer wants. A caller that also owns the
+        actor's lifetime -- a one-run process, say -- must not exit on it: the
+        review is still using the actor's pools and sandboxes, and closing them
+        underneath it orphans work the run legitimately started.
+        """
+
+        waiter = getattr(self._actor_handle, "wait_until_done", None)
+        if waiter is None:
+            return
+        await waiter()
+
     async def _persist_task_run_terminal_state(
         self,
         *,
