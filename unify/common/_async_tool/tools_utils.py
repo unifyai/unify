@@ -21,6 +21,15 @@ class ToolCallMetadata:
     waiting_for_clarification: bool = False
     tool_reply_msg: dict | None = None
     clarify_placeholder: dict | None = None
+    # Coalesce-then-freeze progress delivery: the current [progress <call_id>]
+    # tail message, tracked separately from tool_reply_msg so the final
+    # result never shares a slot with transient progress text.
+    progress_msg: dict | None = None
+    # Coalesce-then-freeze clarification-question delivery: the current
+    # [clarification <call_id>] tail message. Separate from tool_reply_msg
+    # (the pending stub, never rewritten) and progress_msg (status-only,
+    # not something the model is expected to answer).
+    clarify_msg: dict | None = None
     handle: Any | None = None
     interject_queue: asyncio.Queue[dict | str] | None = None
     clar_up_queue: asyncio.Queue[str] | None = None
