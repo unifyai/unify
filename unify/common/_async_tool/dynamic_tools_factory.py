@@ -778,7 +778,13 @@ class DynamicToolFactory:
         )
 
     def generate(self):
-        for task in list(self.tools_data.pending):
+        # Sort by call_idx for deterministic emission order matching the
+        # original tool_calls array order, regardless of set iteration
+        # (mirrors ensure_placeholders_for_pending in messages.py).
+        for task in sorted(
+            list(self.tools_data.pending),
+            key=lambda t: getattr(self.tools_data.info.get(t), "call_idx", 0),
+        ):
             self._process_task(task)
         # Expose a single global `wait` helper when anything is in flight
         if self.tools_data.pending:
