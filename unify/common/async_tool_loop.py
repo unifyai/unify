@@ -487,7 +487,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             "## Inspected Loop Transcript",
             transcript_description,
             "",
-            json.dumps(loop_chat_context_transformed, indent=2),
+            json.dumps(loop_chat_context_transformed, separators=(",", ":")),
         ]
 
         # If inner-handle ask_* tools are available, hint the LLM about them
