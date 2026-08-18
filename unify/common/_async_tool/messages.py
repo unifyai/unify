@@ -836,14 +836,18 @@ async def prune_wait_tool_call(
             # A missing param here must never silently fall through to the
             # pop/in-place edit below — that's precisely the mutation this
             # branch exists to prevent. Fail loudly instead of corrupting
-            # an already-dispatched message.
-            raise ValueError(
+            # an already-dispatched message. Logged explicitly because every
+            # known caller wraps this in a broad suppress/except-pass, which
+            # would otherwise swallow the raise along with the failure.
+            _msg = (
                 "prune_wait_tool_call: asst_msg is already below the sent "
                 "watermark, so popping or editing its tool_calls in place "
                 "would mutate already-dispatched bytes — but assistant_meta "
                 "and msg_dispatcher (needed to route the ack through the "
-                "escape hatch) were not both provided.",
+                "escape hatch) were not both provided."
             )
+            LOGGER.error(f"{DEFAULT_ICON} {_msg}")
+            raise ValueError(_msg)
         await acknowledge_helper_call(
             asst_msg,
             call_id,

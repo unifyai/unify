@@ -72,7 +72,7 @@ USER_VISIBILITY_GUIDANCE = (
     "to incorporate or respond to.\n\n"
     "user-role messages prefixed with `[clarification <call_id>]` are also not from "
     "the user — they are a pending tool asking you a question it needs answered to "
-    "continue. Answer them by calling the corresponding clarify_<call_id> helper, "
+    "continue. Answer them by calling the clarify_* helper for that call, "
     "not by responding to the user or treating the question itself as a request."
 )
 
@@ -472,6 +472,17 @@ class ToolsData:
         gating solely on that (the pre-fixup behavior) left every sub-agent
         and unattended task without the guidance that tells the model these
         messages are not requests to incorporate.
+
+        The check-await-set pattern below assumes a single coroutine calls
+        this per ``ToolsData`` instance at a time (true today — the async
+        tool loop drives one turn at a time even with concurrent tools in
+        flight, since notification/clarification handling and the
+        interjection drain are not themselves run concurrently with each
+        other). Two truly concurrent callers could both read
+        ``_visibility_guidance_injected`` as ``False`` before either sets it,
+        double-injecting the guidance — harmless (an idempotent system
+        message, not a correctness issue) but worth knowing if that
+        assumption ever stops holding.
         """
         if self._visibility_guidance_injected:
             return
@@ -525,8 +536,9 @@ class ToolsData:
 
         Mirrors ``record_progress``, but tracked separately in
         ``info.clarify_msg`` and prefixed ``[clarification <call_id>]`` so
-        the model recognizes it wants a ``clarify_<call_id>`` reply, unlike
-        a status-only ``[progress ...]`` message. ``info.tool_reply_msg``
+        the model recognizes it wants a reply via the clarify_* helper for
+        that call (named ``clarify_{fn_name}_{safe_call_id}``, not a bare
+        call_id), unlike a status-only ``[progress ...]`` message. ``info.tool_reply_msg``
         (the pending stub) is never touched here — the tool's eventual
         final result still lands there, or on ``clarify_placeholder`` once
         the model answers, never on this tail message.
@@ -635,11 +647,16 @@ class ToolsData:
         if not tcs:
             return
         if not is_mutable(self._client, asst_msg):
-            raise ValueError(
+            # Logged explicitly: known callers (preflight repair, the
+            # persist-mode branch) wrap this in suppress/except-pass, which
+            # would otherwise swallow the raise along with the failure.
+            _msg = (
                 "prune_over_quota_tool_calls: asst_msg is already below the "
                 "sent watermark; an in-place tool_calls edit would mutate "
-                "already-dispatched bytes.",
+                "already-dispatched bytes."
             )
+            self._logger.error(_msg, prefix="🚨")
+            raise ValueError(_msg)
 
         # Track counts locally to handle multiple calls in this single batch
         # without permanently modifying self.call_counts yet (that happens on schedule).
