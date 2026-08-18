@@ -120,3 +120,49 @@ def test_abspath_maps_managed_vm_paths_into_the_workspace(tmp_path):
     assert ad.get_file("/Unity/Local/Outputs/shot.jpg").name == "shot.jpg"
     # Workspace identities from _relativize keep re-rooting as before.
     assert ad._abspath("/Outputs/shot.jpg") == root / "Outputs" / "shot.jpg"
+
+
+def test_abspath_maps_the_desktop_downloads_symlink(tmp_path):
+    """``/Unity/Downloads/...`` addresses the same bytes as the synced tree.
+
+    Only ``/Unity/Local`` is bisynced to the pod, so a browser download saved to
+    the XDG default at ``/Unity/Downloads`` was reachable from the desktop and
+    from nowhere else -- the assistant could drive a browser, fetch a file, and
+    then be unable to read or ingest what it had just downloaded. The VM now
+    symlinks that path into ``/Unity/Local/Downloads``, which means the browser,
+    every file dialog and the assistant all name the file by the shorter path
+    while the bytes live in the synced tree. Both spellings have to resolve, or
+    the file reads as missing under the only name it was ever given.
+    """
+    root = tmp_path / "root"
+    (root / "Downloads").mkdir(parents=True)
+    (root / "Downloads" / "repairs.csv").write_bytes(b"a,b\n1,2\n")
+    ad = LocalFileSystemAdapter(root.as_posix())
+
+    expected = root / "Downloads" / "repairs.csv"
+    assert ad._abspath("/Unity/Downloads/repairs.csv") == expected
+    assert ad._abspath("/Unity/Local/Downloads/repairs.csv") == expected
+    assert ad.get_file("/Unity/Downloads/repairs.csv").name == "repairs.csv"
+
+
+def test_a_nested_download_keeps_its_subdirectory(tmp_path):
+    """Browsers create per-site subfolders; the mapping must not flatten them."""
+    root = tmp_path / "root"
+    (root / "Downloads" / "extract").mkdir(parents=True)
+    (root / "Downloads" / "extract" / "van.csv").write_bytes(b"x\n")
+    ad = LocalFileSystemAdapter(root.as_posix())
+
+    assert (
+        ad._abspath("/Unity/Downloads/extract/van.csv")
+        == root / "Downloads" / "extract" / "van.csv"
+    )
+
+
+def test_a_workspace_path_named_downloads_is_untouched(tmp_path):
+    """The rewrite is anchored to the VM prefix, not to the word "Downloads"."""
+    root = tmp_path / "root"
+    (root / "Downloads").mkdir(parents=True)
+    (root / "Downloads" / "own.csv").write_bytes(b"y\n")
+    ad = LocalFileSystemAdapter(root.as_posix())
+
+    assert ad._abspath("Downloads/own.csv") == root / "Downloads" / "own.csv"
