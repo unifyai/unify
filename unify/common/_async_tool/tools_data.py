@@ -574,6 +574,12 @@ class ToolsData:
         carry implicitly (its mere presence in the schema meant "X is now
         steerable"); with the static schema that signal has to live in the
         transcript instead.
+
+        When the call's handle exposes custom methods beyond the core
+        steering surface, they're listed here too (name, signature, one-line
+        docstring) — the only place that information can live now that
+        `action="call"` methods are validated at execution time instead of
+        minted as their own self-documenting tool.
         """
         try:
             arg_repr = ", ".join(
@@ -582,6 +588,34 @@ class ToolsData:
         except Exception:
             arg_repr = info.raw_arguments_json
         content = f"[steerable {info.call_id}] {info.name}({arg_repr}) started."
+
+        if info.handle is not None:
+            with suppress(Exception):
+                # Deferred import: dynamic_tools_factory imports this module
+                # at top level, so importing it back here at call time (not
+                # module load time) avoids a circular import.
+                from .dynamic_tools_factory import DynamicToolFactory
+
+                custom_methods = DynamicToolFactory._discover_custom_public_methods(
+                    info.handle,
+                )
+                lines = []
+                for meth_name, bound in sorted(custom_methods.items()):
+                    try:
+                        sig = inspect.signature(bound)
+                    except Exception:
+                        sig = "(...)"
+                    doc = (inspect.getdoc(bound) or "").strip().splitlines()
+                    first_line = doc[0] if doc else ""
+                    suffix = f" — {first_line}" if first_line else ""
+                    lines.append(f"  - {meth_name}{sig}{suffix}")
+                if lines:
+                    content += (
+                        f' Custom methods reachable via steer(call_id="{info.call_id}", '
+                        'action="call", method=<name>, payload=<JSON object>):\n'
+                        + "\n".join(lines)
+                    )
+
         await msg_dispatcher.append_msgs(
             [{"role": "user", "content": content, "_lifecycle_msg": True}],
         )

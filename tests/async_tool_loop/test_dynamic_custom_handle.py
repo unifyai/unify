@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import inspect
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -12,16 +11,28 @@ from unify.common.async_tool_loop import (
     AsyncToolLoopHandle,
     start_async_tool_loop,
 )
+from unify.common._async_tool.tools_utils import ToolCallMetadata
 from tests.helpers import _handle_project
 from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
-    _wait_for_condition,
 )
 
 
 class CustomArgsHandle(SteerableToolHandle):
-    """A handle that records all steering calls with extra args."""
+    """A handle that records steering calls, including a custom method that
+    takes structured args beyond what the core steer() actions can carry.
+
+    stop/pause/resume/interject here intentionally take only what
+    steer()'s single string `payload` can express (an optional reason /
+    message) — a custom handle can no longer extend those *specific*
+    actions' signatures with extra structured kwargs (that capability was
+    real pre-steer(), via per-call-id minted tools adopting the override's
+    full signature). Extra structured kwargs are still fully supported, but
+    only for genuinely custom methods reached via
+    steer(action="call", method=..., payload=<JSON object>) — see
+    `escalate` below.
+    """
 
     def __init__(self) -> None:
         self._done_ev = asyncio.Event()
@@ -31,51 +42,35 @@ class CustomArgsHandle(SteerableToolHandle):
         self.resume_calls: List[Dict[str, Any]] = []
         self.stop_calls: List[Dict[str, Any]] = []
         self.ask_calls: List[Dict[str, Any]] = []
+        self.escalate_calls: List[Dict[str, Any]] = []
         # Mark custom write-only helpers
         self.write_only_methods = ["abort"]
 
-    async def ask(
-        self,
-        question: str,
-        *,
-        style: str = "short",
-    ) -> "SteerableToolHandle":
-        self.ask_calls.append({"question": question, "style": style})
+    async def ask(self, question: str) -> "SteerableToolHandle":
+        self.ask_calls.append({"question": question})
         return self
 
-    async def interject(
-        self,
-        message: str,
-        *,
-        priority: int = 1,
-        metadata: Dict[str, str] | None = None,
-    ) -> Optional[str]:
-        self.interject_calls.append(
-            {"message": message, "priority": priority, "metadata": metadata or {}},
-        )
+    async def interject(self, message: str) -> Optional[str]:
+        self.interject_calls.append({"message": message})
         return None
 
-    def stop(
-        self,
-        *,
-        reason: Optional[str] = None,
-        abandon: bool = False,
-    ) -> None:
-        self.stop_calls.append({"reason": reason, "abandon": abandon})
+    def stop(self, reason: Optional[str] = None) -> None:
+        self.stop_calls.append({"reason": reason})
         self._done_ev.set()
 
-    async def pause(
-        self,
-        *,
-        reason: str,
-        log_to_backend: bool = False,
-    ) -> Optional[str]:
-        self.pause_calls.append({"reason": reason, "log_to_backend": log_to_backend})
+    async def pause(self) -> Optional[str]:
+        self.pause_calls.append({})
         return "paused"
 
-    async def resume(self, *, resume_token: Optional[str] = None) -> Optional[str]:
-        self.resume_calls.append({"resume_token": resume_token})
+    async def resume(self) -> Optional[str]:
+        self.resume_calls.append({})
         return "resumed"
+
+    # Custom method with structured args beyond a single string — reachable
+    # only via steer(action="call", method="escalate", payload=<JSON object>).
+    def escalate(self, level: int, note: str = "") -> str:
+        self.escalate_calls.append({"level": level, "note": note})
+        return f"escalated:{level}:{note}"
 
     # Write-only helper: terminate with an "aborted" result. This method is
     # intentionally write-only (no returned value used by the loop); the loop
@@ -118,11 +113,12 @@ def client(llm_config):
 @_handle_project
 async def test_dynamic_helper_args_are_exposed_and_forwarded(client):
     """
-    End-to-end: the LLM should (a) see full helper args in tool schemas and (b)
-    invoke helpers with extra kwargs that reach the underlying handle methods.
+    End-to-end: the LLM should discover the custom `escalate` method (from
+    the "[steerable ...]" started announcement) and invoke it via
+    steer(action="call", method="escalate", payload=<JSON object>) with
+    structured args that reach the underlying handle method.
     """
 
-    # Initial instruction: only spawn the custom handle
     client.set_system_message(
         "Call `spawn_custom_handle` to start a task that exposes dynamic helpers.",
     )
@@ -138,65 +134,42 @@ async def test_dynamic_helper_args_are_exposed_and_forwarded(client):
     # Ensure the spawn tool has been requested so helpers will be exposed
     await _wait_for_tool_request(client, "spawn_custom_handle")
 
-    # Interject a single instruction to use the stop helper with custom arguments
     await outer.interject(
-        'Now, stop the task with reason="user_request", abandon=true. '
-        "Then respond only with: done",
+        'Now, call the custom method `escalate` with level=3, note="user_request" '
+        'via steer(action="call"). Then respond only with: done',
     )
 
-    # Let the model drive; it should call interject_ / pause_ / resume_ / stop_ with kwargs
     final = await outer.result()
     assert final is not None, "Loop should complete with a response"
 
-    # Retrieve the live handle instance from the spawned task info
-    # Walk messages to locate the helper tool-call arguments for validation.
     msgs = client.messages or []
 
-    # 1) Validate that the assistant included the extra args in tool calls
-    def _extract_first_args(prefix: str) -> Dict[str, Any]:
+    def _extract_first_steer_call_payload() -> Dict[str, Any]:
         for m in msgs:
             if m.get("role") != "assistant":
                 continue
             for tc in m.get("tool_calls") or []:
-                fn = tc.get("function", {}).get("name", "")
-                if isinstance(fn, str) and fn.startswith(prefix):
+                fn = tc.get("function", {}) or {}
+                if fn.get("name") != "steer":
+                    continue
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    continue
+                if args.get("action") == "call" and args.get("method") == "escalate":
                     try:
-                        return json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        return json.loads(args.get("payload") or "{}")
                     except Exception:
                         return {}
         return {}
 
-    stop_args = _extract_first_args("stop_")
+    payload = _extract_first_steer_call_payload()
 
-    # The LLM should have passed our custom stop kwargs
-    assert stop_args.get("reason") in {"user_request", "user request", "User request"}
-    # Some models may encode booleans as strings – accept both
-    assert stop_args.get("abandon") in {True, "true", "True"}
-
-    # No multi-step checks – only validate the stop helper args
-
-    # 2) Validate that the underlying handle methods actually received kwargs
-    # Find the most recent CustomArgsHandle recorded by intercepting spawn
-    # Since we returned a new instance, we can infer values by scanning tool messages
-    # However, the more robust check is to verify the semantics via tool responses:
-    # The loop does not expose internals; instead, infer from ordering that each helper
-    # was called at least once by checking tool messages inserted by the loop.
-
-    # Count the helper invocations visible in the transcript
-    def _assistant_calls_prefix(prefix: str) -> int:
-        count = 0
-        for m in msgs:
-            if m.get("role") != "assistant":
-                continue
-            tcs = m.get("tool_calls") or []
-            count += sum(
-                1
-                for tc in tcs
-                if tc.get("function", {}).get("name", "").startswith(prefix)
-            )
-        return count
-
-    assert _assistant_calls_prefix("stop_") >= 1
+    # The LLM should have passed the custom kwargs as a JSON object payload.
+    assert payload.get("level") in {3, "3"}
+    assert str(payload.get("note", "")).lower().replace(" ", "_") in {
+        "user_request",
+    }
 
 
 @pytest.mark.asyncio
@@ -204,9 +177,10 @@ async def test_dynamic_helper_args_are_exposed_and_forwarded(client):
 @_handle_project
 async def test_custom_abort_finishes_nested(client):
     """
-    End-to-end: expose a write-only custom helper `abort` on the spawned handle.
-    The model should call the helper, we acknowledge immediately, and the nested
-    handle should resolve with the "aborted" message allowing the outer loop to finish.
+    End-to-end: expose a write-only custom method `abort` on the spawned
+    handle, reachable via steer(action="call", method="abort"). The model
+    should call it, we acknowledge immediately, and the nested handle should
+    resolve with the "aborted" message allowing the outer loop to finish.
     """
 
     client.set_system_message(
@@ -225,9 +199,11 @@ async def test_custom_abort_finishes_nested(client):
     # Ensure the spawn tool has been requested so helpers will be exposed
     await _wait_for_tool_request(client, "spawn_custom_handle")
 
-    # Instruct the model to call abort and then reply with 'done'
+    # Instruct the model to call abort (a custom method reachable via
+    # steer(action="call", method="abort")) and then reply with 'done'
     await outer.interject(
-        "Now, call the abort helper immediately, then respond only with: done",
+        'Now, call the custom method `abort` via steer(action="call") '
+        "immediately, then respond only with: done",
     )
 
     final = await outer.result()
@@ -292,18 +268,24 @@ async def test_custom_outer_handle_instantiated(client):
     await outer.result()
 
 
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_dynamic_helpers_use_base_docstrings(client):
+def test_steer_docstring_is_constant_regardless_of_live_handle_overrides():
     """
-    Verify that when a custom handle does not provide docstrings for standard
-    steering methods (pause/resume/interject/ask/stop), the dynamic helpers
-    adopt informative base docstrings from the abstract/base classes.
+    Pre-steer(), a handle overriding pause/resume/interject/ask/stop's
+    docstring (or adding extra kwargs) got its own per-call-id minted tool
+    whose schema/docstring reflected that override — verified by
+    `test_dynamic_helpers_use_base_docstrings` and
+    `test_dynamic_helpers_use_overridden_docstrings`. That capability is
+    gone by design: steer's docstring is now one frozen string
+    (STEER_DOC) so the schema stays byte-identical no matter which handle
+    is live — this is the flip side of the same fix that killed issues
+    01/05/06. This asserts that invariant directly: two wildly different
+    handles (no override vs. fully custom docstrings/signatures) produce
+    the exact same generated `steer` docstring.
     """
+    from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from unify.common._async_tool.tools_data import ToolsData
 
     class BaseLikeHandle(SteerableToolHandle):
-        # No docstrings on purpose – rely on base docstrings via MRO fallback
         def __init__(self) -> None:
             self._done = asyncio.Event()
 
@@ -338,79 +320,7 @@ async def test_dynamic_helpers_use_base_docstrings(client):
         async def answer_clarification(self, call_id: str, answer: str) -> None:
             return None
 
-    async def spawn_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
-        return BaseLikeHandle()
-
-    # Spy dynamic registrations to capture effective docstrings
-    from unify.common._async_tool import dynamic_tools_factory as _dtf
-
-    registered_docs: Dict[str, str] = {}
-    orig_register_tool = _dtf.DynamicToolFactory._register_tool
-
-    def _spy_register_tool(self, func_name: str, fallback_doc: str, fn):  # type: ignore[no-redef]
-        doc = inspect.getdoc(fn) or ""
-        registered_docs[func_name] = doc
-        return orig_register_tool(self, func_name, fallback_doc, fn)
-
-    setattr(_dtf.DynamicToolFactory, "_register_tool", _spy_register_tool)
-
-    client.set_system_message("Call `spawn_handle` to start a nested handle.")
-    outer = start_async_tool_loop(
-        client,
-        message="start",
-        tools={"spawn_handle": spawn_handle},
-        timeout=120,
-    )
-
-    await _wait_for_tool_request(client, "spawn_handle")
-
-    # Trigger an immediate assistant turn so helpers are exposed/registered
-    await outer.interject("probe helpers")
-
-    async def _helpers_registered() -> bool:
-        return any(
-            any(k.startswith(p) for k in registered_docs.keys())
-            for p in ("pause_", "resume_", "interject_", "ask_", "stop_")
-        )
-
-    await _wait_for_condition(_helpers_registered, poll=0.05, timeout=30.0)
-
-    # Assertions: base docstrings should be visible (substrings)
-    # pause
-    for k, v in registered_docs.items():
-        if k.startswith("pause_"):
-            assert "Pause this task temporarily" in v
-    # resume
-    for k, v in registered_docs.items():
-        if k.startswith("resume_"):
-            assert "Resume a task that was previously paused" in v
-    # interject
-    for k, v in registered_docs.items():
-        if k.startswith("interject_"):
-            assert "Provide additional information or instructions" in v
-    # ask (from SteerableToolHandle.ask)
-    for k, v in registered_docs.items():
-        if k.startswith("ask_"):
-            assert "Ask about status/progress if the task is still running" in v
-    # stop – either base or explicit; ensure it's non-empty and informative
-    for k, v in registered_docs.items():
-        if k.startswith("stop_"):
-            assert isinstance(v, str) and len(v.strip()) > 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_dynamic_helpers_use_overridden_docstrings(client):
-    """
-    Verify that when a custom handle overrides docstrings (or adds extra kwargs),
-    the dynamic helpers expose those overridden docstrings in their schema.
-    """
-
-    class OverrideDocHandle(SteerableToolHandle):
-        def __init__(self) -> None:
-            self._done = asyncio.Event()
-
+    class OverrideDocHandle(BaseLikeHandle):
         async def ask(self, question: str) -> "SteerableToolHandle":
             """Ask override doc: consult safe cache only."""
             return self
@@ -430,89 +340,55 @@ async def test_dynamic_helpers_use_overridden_docstrings(client):
             """Resume override doc: resume with a session token if required."""
             return "resumed"
 
-        def done(self) -> bool:
-            return self._done.is_set()
-
-        async def result(self) -> str:
-            await self._done.wait()
-            return "ok"
-
-        async def next_clarification(self) -> dict:
-            return {}
-
-        async def next_notification(self) -> dict:
-            return {}
-
-        async def answer_clarification(self, call_id: str, answer: str) -> None:
-            return None
-
-    async def spawn_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
-        return OverrideDocHandle()
-
-    from unify.common._async_tool import dynamic_tools_factory as _dtf
-
-    registered_docs: Dict[str, str] = {}
-    orig_register_tool = _dtf.DynamicToolFactory._register_tool
-
-    def _spy_register_tool(self, func_name: str, fallback_doc: str, fn):  # type: ignore[no-redef]
-        doc = inspect.getdoc(fn) or ""
-        registered_docs[func_name] = doc
-        return orig_register_tool(self, func_name, fallback_doc, fn)
-
-    setattr(_dtf.DynamicToolFactory, "_register_tool", _spy_register_tool)
-
-    client.set_system_message(
-        "You are running inside an automated test.\n"
-        "1️⃣  Call `spawn_handle` with no arguments.\n"
-        "2️⃣  Wait for further instructions.",
-    )
-    outer = start_async_tool_loop(
-        client,
-        message="start",
-        tools={"spawn_handle": spawn_handle},
-        timeout=120,
-        max_steps=10,
-    )
-
-    await _wait_for_tool_request(client, "spawn_handle")
-    await outer.interject("expose helpers now")
-
-    async def _helpers_registered() -> bool:
-        return any(
-            any(k.startswith(p) for k in registered_docs.keys())
-            for p in ("pause_", "resume_", "interject_", "ask_", "stop_")
+    def _steer_doc_for(handle) -> str:
+        tools_data = ToolsData({}, client=None, logger=None)
+        task = object()
+        tools_data.info[task] = ToolCallMetadata(
+            name="dummy",
+            call_id="c1",
+            call_dict={"function": {"arguments": "{}"}},
+            call_idx=0,
+            chat_context=None,
+            assistant_msg={},
+            is_interjectable=False,
+            tool_schema={},
+            llm_arguments={},
+            raw_arguments_json="{}",
+            handle=handle,
         )
+        tools_data.pending.add(task)
+        factory = DynamicToolFactory(tools_data)
+        factory.generate()
+        return factory.dynamic_tools["steer"].__doc__
 
-    await _wait_for_condition(_helpers_registered, poll=0.05, timeout=30.0)
-
-    # Assertions: overridden text should appear
-    for k, v in registered_docs.items():
-        if k.startswith("pause_"):
-            assert "Pause override doc: only pause if XYZ precondition holds." in v
-        if k.startswith("resume_"):
-            assert "Resume override doc: resume with a session token if required." in v
-        if k.startswith("interject_"):
-            assert "Interject override doc: only interject if importance >= 1." in v
-        if k.startswith("ask_"):
-            assert "Ask override doc: consult safe cache only." in v
-        if k.startswith("stop_"):
-            assert "Stop override doc: stop only if safe to cancel." in v
+    assert _steer_doc_for(BaseLikeHandle()) == _steer_doc_for(OverrideDocHandle())
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_dynamic_helpers_adopt_custom_method_docstring(client):
+async def test_custom_method_docstring_surfaces_in_started_announcement():
     """
-    Verify a brand-new custom steering method on the handle has its docstring
-    adopted by the dynamically generated helper.
+    A custom method's docstring is no longer adopted by a per-call-id minted
+    tool (that mechanism is gone) — it now surfaces in the "[steerable ...]
+    started" tail message instead (ToolsData.record_tool_started), which is
+    the only place the model can still discover a custom method's signature
+    and docstring ahead of calling steer(action="call", method=...).
     """
+
+    class _FakeClient:
+        def __init__(self):
+            self.messages = []
+
+    class _FakeMsgDispatcher:
+        def __init__(self, client):
+            self._client = client
+
+        async def append_msgs(self, msgs, origin=None, **_kw):
+            self._client.messages += msgs
 
     class CustomMethodHandle(SteerableToolHandle):
         def __init__(self) -> None:
             self._done = asyncio.Event()
 
-        # Standard methods (minimal, no docstrings needed here)
         async def ask(self, question: str) -> "SteerableToolHandle":
             return self
 
@@ -544,51 +420,36 @@ async def test_dynamic_helpers_adopt_custom_method_docstring(client):
         async def answer_clarification(self, call_id: str, answer: str) -> None:
             return None
 
-        # New custom steering method
         def escalate(self, level: int) -> str:
             """Escalate override doc: raise escalation to the specified level."""
             return f"escalated:{level}"
 
-    async def spawn_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
-        return CustomMethodHandle()
+    client = _FakeClient()
+    dispatcher = _FakeMsgDispatcher(client)
+    from unify.common._async_tool.tools_data import ToolsData
 
-    from unify.common._async_tool import dynamic_tools_factory as _dtf
-
-    registered_docs: Dict[str, str] = {}
-    orig_register_tool = _dtf.DynamicToolFactory._register_tool
-
-    def _spy_register_tool(self, func_name: str, fallback_doc: str, fn):  # type: ignore[no-redef]
-        doc = inspect.getdoc(fn) or ""
-        registered_docs[func_name] = doc
-        return orig_register_tool(self, func_name, fallback_doc, fn)
-
-    setattr(_dtf.DynamicToolFactory, "_register_tool", _spy_register_tool)
-
-    client.set_system_message("Call `spawn_handle` to start a nested handle.")
-    outer = start_async_tool_loop(
-        client,
-        message="start",
-        tools={"spawn_handle": spawn_handle},
-        timeout=120,
+    tools_data = ToolsData({}, client=client, logger=None)
+    info = ToolCallMetadata(
+        name="spawn_handle",
+        call_id="call_abc",
+        call_dict={"function": {"arguments": "{}"}},
+        call_idx=0,
+        chat_context=None,
+        assistant_msg={},
+        is_interjectable=False,
+        tool_schema={},
+        llm_arguments={},
+        raw_arguments_json="{}",
+        handle=CustomMethodHandle(),
     )
 
-    await _wait_for_tool_request(client, "spawn_handle")
-    await outer.interject("expose custom methods")
+    await tools_data.record_tool_started(info, dispatcher)
 
-    async def _custom_registered() -> bool:
-        return any(k.startswith("escalate_") for k in registered_docs.keys())
-
-    await _wait_for_condition(_custom_registered, poll=0.05, timeout=30.0)
-
-    # Assert the custom helper's docstring matches the original method docstring
-    found = False
-    for k, v in registered_docs.items():
-        if k.startswith("escalate_"):
-            assert (
-                "Escalate override doc: raise escalation to the specified level." in v
-            )
-            found = True
-    assert found, "expected an escalate_* helper to be registered"
+    assert len(client.messages) == 1
+    content = client.messages[0]["content"]
+    assert "[steerable call_abc]" in content
+    assert "escalate" in content
+    assert "Escalate override doc: raise escalation to the specified level." in content
 
 
 async def spawn_custom_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
@@ -596,21 +457,23 @@ async def spawn_custom_handle() -> SteerableToolHandle:  # type: ignore[name-def
     return CustomArgsHandle()
 
 
-@pytest.mark.asyncio
-@_handle_project
-async def test_dynamic_helper_preserves_annotations_for_public_methods(llm_config):
+def test_custom_call_discovery_preserves_annotations_for_public_methods():
     """
-    Lower-level factory test: ensure public-method helpers preserve annotations
-    so their generated tool schema exposes correct JSON types (e.g., integer).
-    This test is independent of the task scheduler and queue logic.
+    steer(action="call", method=...) validates its JSON-object payload against
+    the target method's real signature (loop.py binds
+    `inspect.signature(bound).bind(**parsed)`), so the signature
+    `_discover_custom_public_methods` returns must preserve real annotations
+    (e.g. int) — this is what makes a wrong-typed payload get caught as a
+    schema-error result rather than silently coerced. No per-method minted
+    tool exists anymore to inspect via method_to_schema, so this checks the
+    discovery function directly, and separately confirms method_to_schema
+    still renders an integer type when applied ad hoc to a discovered method
+    (still a meaningful check: schema derivation itself hasn't regressed,
+    even though no tool is actually minted from it at runtime now).
     """
-    import asyncio
     import inspect
-    from contextlib import suppress
 
     from unify.common.async_tool_loop import SteerableToolHandle
-    from unify.common._async_tool.tools_data import ToolsData
-    from unify.common._async_tool.tools_utils import ToolCallMetadata
     from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
     from unify.common.llm_helpers import method_to_schema
 
@@ -651,60 +514,12 @@ async def test_dynamic_helper_preserves_annotations_for_public_methods(llm_confi
         async def answer_clarification(self, call_id: str, answer: str) -> None:  # type: ignore[override]
             return None
 
-    class _DummyLogger:
-        log_steps = False
+    handle = _AnnotatedHandle()
+    custom_methods = DynamicToolFactory._discover_custom_public_methods(handle)
+    assert "set_value" in custom_methods, sorted(custom_methods)
+    bound = custom_methods["set_value"]
 
-        def info(self, *a, **kw): ...
-
-        def error(self, *a, **kw): ...
-
-    class _DummyClient:
-        def __init__(self):
-            self.messages = []
-
-    tools_data = ToolsData({}, client=_DummyClient(), logger=_DummyLogger())
-
-    pending_task = asyncio.create_task(asyncio.sleep(10))
-    call_id = "abc123"
-    asst_msg = {
-        "role": "assistant",
-        "tool_calls": [
-            {
-                "id": call_id,
-                "type": "function",
-                "function": {"name": "dummy_base", "arguments": "{}"},
-            },
-        ],
-        "content": "",
-    }
-    meta = ToolCallMetadata(
-        name="dummy_base",
-        call_id=call_id,
-        call_dict=asst_msg["tool_calls"][0],
-        call_idx=0,
-        chat_context=None,
-        assistant_msg=asst_msg,
-        is_interjectable=False,
-        tool_schema={},
-        llm_arguments={},
-        raw_arguments_json=asst_msg["tool_calls"][0]["function"]["arguments"],
-        handle=_AnnotatedHandle(),
-        interject_queue=None,
-        clar_up_queue=None,
-        clar_down_queue=None,
-        notification_queue=None,
-        pause_event=None,
-    )
-    tools_data.save_task(pending_task, meta)
-
-    factory = DynamicToolFactory(tools_data)
-    factory.generate()
-
-    keys = [k for k in factory.dynamic_tools.keys() if k.startswith("set_value_")]
-    assert keys, "expected set_value helper to be generated"
-    helper = factory.dynamic_tools[keys[0]]
-
-    sig = inspect.signature(helper)
+    sig = inspect.signature(bound)
     assert "task_id" in sig.parameters
     ann = sig.parameters["task_id"].annotation
     if ann is not inspect._empty:
@@ -715,7 +530,13 @@ async def test_dynamic_helper_preserves_annotations_for_public_methods(llm_confi
             or (getattr(ann, "__name__", None) == "int")
         )
 
-    schema = method_to_schema(helper, include_class_name=False)
+    # A correctly-typed payload binds cleanly (mirrors loop.py's validation)...
+    sig.bind(task_id=1, note="x")
+    # ...a wrong-shaped one is rejected the same way loop.py would reject it.
+    with pytest.raises(TypeError):
+        sig.bind(not_a_real_param=1)
+
+    schema = method_to_schema(bound, include_class_name=False)
     params = schema["function"]["parameters"]
     assert "task_id" in params["properties"]
     prop = params["properties"]["task_id"]
@@ -727,24 +548,16 @@ async def test_dynamic_helper_preserves_annotations_for_public_methods(llm_confi
     assert is_integer, f"expected integer type for task_id, got: {prop}"
     assert "task_id" in params.get("required", [])
 
-    with suppress(BaseException):
-        pending_task.cancel()
-        await pending_task
 
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_dynamic_factory_ignores_internal_introspection_methods(llm_config):
+def test_custom_call_discovery_ignores_internal_introspection_methods():
     """
-    Regression test: Ensure `DynamicToolFactory` does NOT generate tools for
-    internal introspection methods (e.g. `get_wrapped_handles`, `_get_wrapped_handles`)
-    even if they are public on the handle class, while correctly exposing other
-    public methods.
+    Regression test: `_discover_custom_public_methods` — the mechanism
+    steer(action="call", method=...) consults at execution time — must not
+    surface internal introspection methods (e.g. `get_wrapped_handles`,
+    `_get_wrapped_handles`) even when they are public on the handle class,
+    while still correctly exposing other public methods.
     """
-    from contextlib import suppress
     from unify.common.async_tool_loop import SteerableToolHandle
-    from unify.common._async_tool.tools_data import ToolsData
-    from unify.common._async_tool.tools_utils import ToolCallMetadata
     from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
     from unify.common.handle_wrappers import HandleWrapperMixin
 
@@ -792,54 +605,15 @@ async def test_dynamic_factory_ignores_internal_introspection_methods(llm_config
         async def answer_clarification(self, cid, ans):
             pass
 
-    # Setup dummy environment
-    class _DummyLogger:
-        log_steps = False
+    handle = IntrospectiveHandle()
+    custom_methods = DynamicToolFactory._discover_custom_public_methods(handle)
 
-        def info(self, *a, **kw): ...
-        def error(self, *a, **kw): ...
+    # Check 1: public_action should be discoverable
+    assert "public_action" in custom_methods, sorted(custom_methods)
 
-    class _DummyClient:
-        def __init__(self):
-            self.messages = []
-
-    tools_data = ToolsData({}, client=_DummyClient(), logger=_DummyLogger())
-    pending_task = asyncio.create_task(asyncio.sleep(10))
-
-    meta = ToolCallMetadata(
-        name="dummy_tool",
-        call_id="call_123",
-        call_dict={"id": "call_123", "function": {"name": "dummy", "arguments": "{}"}},
-        call_idx=0,
-        chat_context=None,
-        assistant_msg={},
-        is_interjectable=False,
-        tool_schema={},
-        llm_arguments={},
-        raw_arguments_json="{}",
-        handle=IntrospectiveHandle(),
-        interject_queue=None,
-        clar_up_queue=None,
-        clar_down_queue=None,
-        notification_queue=None,
-        pause_event=None,
-    )
-    tools_data.save_task(pending_task, meta)
-
-    # Generate tools
-    factory = DynamicToolFactory(tools_data)
-    factory.generate()
-
-    tools = factory.dynamic_tools
-
-    # Check 1: public_action should be present
-    public_keys = [k for k in tools.keys() if k.startswith("public_action_")]
-    assert public_keys, "Expected public_action to be exposed"
-
-    # Check 2: _get_wrapped_handles (from mixin) should NOT be present
-    internal_keys = [k for k in tools.keys() if "get_wrapped_handles" in k]
-    assert not internal_keys, f"Introspection method leaked: {internal_keys}"
-
-    with suppress(BaseException):
-        pending_task.cancel()
-        await pending_task
+    # Check 2: introspection methods (private, or from the wrapper mixin)
+    # should NOT be discoverable.
+    assert "_internal_method" not in custom_methods
+    assert not any(
+        "get_wrapped_handles" in name for name in custom_methods
+    ), f"Introspection method leaked: {sorted(custom_methods)}"
