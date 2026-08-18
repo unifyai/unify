@@ -1,1 +1,1 @@
-"""Actor test suite (CodeActActor, SingleFunctionActor, and shared actor behavior)."""
+"""Actor test suite (CodeActActor and shared actor behavior)."""

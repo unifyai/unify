@@ -31,6 +31,8 @@ def _storage_actor_stub(*, with_knowledge: bool = True):
         delete_venv=_tool_stub,
         set_function_venv=_tool_stub,
         get_function_venv=_tool_stub,
+        confirm_side_effect_class=_tool_stub,
+        set_verification_policy=_tool_stub,
     )
     from unify.guidance_manager.simulated import SimulatedGuidanceManager
 

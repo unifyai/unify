@@ -211,6 +211,18 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
             ConversationManager,
         )
     )
+    cm.assistant_desktop_watched_from_call = (
+        ConversationManager.assistant_desktop_watched_from_call.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+    cm.drop_stale_call_screen_share_viewers = (
+        ConversationManager.drop_stale_call_screen_share_viewers.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
 
     # Create a SimulatedContactManager and populate with sample contacts
     contact_manager = SimulatedContactManager()
@@ -2875,15 +2887,34 @@ class TestMeetInteractionEventHandlers:
         await EventHandler.handle_event(event, mock_cm)
 
         # Verify FastBrainNotification was published to the fast brain channel
-        calls = mock_cm.event_broker.publish.call_args_list
-        guidance_calls = [c for c in calls if c.args[0] == "app:call:notification"]
-        assert len(guidance_calls) == 1
-        # The guidance text should contain behavioral instructions
         import json as _json
 
-        data = _json.loads(guidance_calls[0].args[1])
-        content = data.get("payload", {}).get("message", "")
-        assert "screen sharing" in content.lower()
+        from unify.conversation_manager.medium_scripts.common import (
+            CALL_DESKTOP_SHARE_SURFACE,
+        )
+
+        calls = mock_cm.event_broker.publish.call_args_list
+        payloads = [
+            _json.loads(c.args[1]).get("payload", {})
+            for c in calls
+            if c.args[0] == "app:call:notification"
+        ]
+
+        # Two publishes with two different jobs. The guidance tells the assistant
+        # how to behave and is suppressed when the state has not moved; the state
+        # sync tells the room what to mount and is restated every time, because
+        # each client's copy can only be corrected by being told again.
+        spoken = [p for p in payloads if p.get("message")]
+        assert len(spoken) == 1
+        assert "screen sharing" in spoken[0]["message"].lower()
+
+        synced = [
+            p
+            for p in payloads
+            if CALL_DESKTOP_SHARE_SURFACE in (p.get("meet_surface_state") or {})
+        ]
+        assert len(synced) == 1
+        assert synced[0]["message"] == ""
 
     @pytest.mark.asyncio
     async def test_meet_event_no_fast_brain_guidance_in_text_mode(

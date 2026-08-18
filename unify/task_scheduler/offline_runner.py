@@ -542,13 +542,6 @@ class _OfflineTaskExecutionDelegate:
 
         task_guidelines = kwargs.pop("guidelines", None)
         entrypoint_kwargs = dict(kwargs.pop("entrypoint_kwargs", {}) or {})
-        entrypoint_repair_attempts = int(
-            kwargs.pop(
-                "entrypoint_repair_attempts",
-                1 if entrypoint is not None else 0,
-            )
-            or 0,
-        )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
         destination = kwargs.pop("destination", None)
         if destination is None:
@@ -601,7 +594,6 @@ class _OfflineTaskExecutionDelegate:
             entrypoint_kwargs=entrypoint_kwargs if entrypoint is not None else None,
             clarification_enabled=False,
             persist=False,
-            entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
             destination=destination,
         )

@@ -264,8 +264,9 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         was described. Entrypoint persistence should follow an explicit user
         request or a successful execution reviewed as stable enough to store.
         Stored functions may still use focused ``query_llm(...)`` calls for bounded
-        semantic judgment, but future offline promotion requires separate
-        certification that the stored executor preserves the observed procedure.
+        semantic judgment. A stored entrypoint runs under verification until it
+        and every function it calls have earned trust from independent verdicts;
+        offline promotion follows from that trust, never from an attestation.
 
         All parameters mirror :pymeth:`ask`; refer there for detailed
         semantics.

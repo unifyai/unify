@@ -848,6 +848,61 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self._assistant_screen_share_viewers.discard(key)
         return bool(self._assistant_screen_share_viewers)
 
+    def assistant_desktop_watched_from_call(self, call_session_id: str = "") -> bool:
+        """True when someone is watching the assistant's desktop *from a call*.
+
+        Narrower than ``assistant_screen_share_active``, deliberately. That flag
+        is desktop-scoped: a standalone Desktop tab holds it true across call
+        boundaries, which is right for everything that reads it -- prompt state,
+        screenshot capture, the computer fast path -- because somebody really is
+        looking at the desktop.
+
+        It is the wrong question for the room. Mounting the desktop on a call's
+        stage shows it to *every* participant, so one person's Desktop tab must
+        not decide it, and neither must a viewer left behind by an earlier call.
+        Only viewers under ``CALL_VIEWER_SOURCE`` count here, and passing
+        ``call_session_id`` narrows that to the call doing the asking.
+        """
+        prefix = (
+            f"{CALL_VIEWER_SOURCE}:{call_session_id}:"
+            if call_session_id
+            else f"{CALL_VIEWER_SOURCE}:"
+        )
+        return any(
+            key.startswith(prefix) for key in self._assistant_screen_share_viewers
+        )
+
+    def drop_stale_call_screen_share_viewers(self, call_session_id: str) -> None:
+        """Drop call viewers belonging to any call other than this one.
+
+        A new call cleaning up after its predecessors, because nothing else
+        reliably does. A viewer can only be closed by a stop event naming the
+        call it came from, and the call it came from is gone. Both resets that
+        would otherwise catch it can be skipped in the same sequence: the
+        call-start one when a dispatch arrives while the previous session is
+        still winding down, and the call-end one when the stale-session guard
+        drops a departed call's ``Ended`` event -- correctly, since a dying call
+        must not clobber a live one, but it takes that call's cleanup with it.
+        Left alone the viewer is immortal for the life of the pod, holding the
+        desktop open on every later call with no way to take it down.
+
+        Keyed on the call id rather than the ``call:`` namespace, so viewers this
+        call has already registered survive: the Console can start a share before
+        the runtime's own call-started event lands.
+        """
+        if not call_session_id:
+            return
+        keep_prefix = f"{CALL_VIEWER_SOURCE}:{call_session_id}:"
+        drop_prefix = f"{CALL_VIEWER_SOURCE}:"
+        self._assistant_screen_share_viewers = {
+            key
+            for key in self._assistant_screen_share_viewers
+            if key.startswith(keep_prefix) or not key.startswith(drop_prefix)
+        }
+        self.assistant_screen_share_active = bool(
+            self._assistant_screen_share_viewers,
+        )
+
     def drop_assistant_screen_share_viewers(self, source: str) -> bool:
         """Drop every viewer watching through ``source``; return who is left.
 

@@ -69,9 +69,6 @@ class _ConversationTaskExecutionDelegate:
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
         entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
-        entrypoint_repair_attempts = int(
-            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
-        )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
         destination = kwargs.pop("destination", None)
         if kwargs:
@@ -85,7 +82,6 @@ class _ConversationTaskExecutionDelegate:
             guidelines=task_guidelines,
             entrypoint=entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
             destination=destination,
             _parent_chat_context=parent_chat_context,
