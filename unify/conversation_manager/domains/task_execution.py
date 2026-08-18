@@ -691,7 +691,14 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             error_message,
             error_type="scheduled_task_start_failed",
         )
-        return False
+        # Ask for a turn. The caller only runs the slow brain when this
+        # returns True, and returning False on the failure path meant a run
+        # the user was waiting on could be lost with the assistant never
+        # noticing -- the notification just written above sat unread until
+        # some unrelated later turn, and on a pod with no actor there is
+        # none. A person is owed the news that their scheduled work did not
+        # happen, and this is the only moment anything knows it.
+        return True
 
     cm.notifications_bar.push_notif(
         "Tasks",
@@ -776,7 +783,9 @@ async def _handle_task_trigger_requested_event(
             error_message,
             error_type="rest_task_trigger_start_failed",
         )
-        return False
+        # A turn, for the same reason as the scheduled path: somebody asked
+        # for this run and is owed the news that it did not start.
+        return True
 
     cm.notifications_bar.push_notif(
         "Tasks",
