@@ -919,6 +919,13 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
         self._client._messages = result.system_msgs
         self._client._system_message = None
+        # A compression rebuild is a deliberate full-cache sacrifice: the
+        # transcript it replaces no longer exists, so nothing in the new one
+        # was ever dispatched. Reset explicitly rather than relying on the
+        # rebuilt list happening to be shorter than the old watermark.
+        self._client._sent_watermark = 0
+        if __debug__:
+            self._client._sent_watermark_hash = None
         self._runtime_state.message_count_offset += n_archived - len(
             result.system_msgs,
         )
