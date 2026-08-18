@@ -268,8 +268,9 @@ async def test_ask_inspection_loop_context_without_parent(monkeypatch) -> None:
         def __init__(self):
             self.messages = [{"role": "user", "content": "loop transcript message"}]
 
+    # Deliberately left unresolved — see the sibling tests below for why:
+    # this test's docstring is about the live transcript path.
     task = asyncio.Future()
-    task.set_result("done")
 
     handle = atl.AsyncToolLoopHandle(
         task=task,
@@ -332,8 +333,11 @@ async def test_ask_inspection_loop_with_parent_context(monkeypatch) -> None:
                 {"role": "assistant", "content": "doing it"},
             ]
 
+    # Deliberately left unresolved: ask() picks the live-snapshot transcript
+    # path only for a still-running handle (checked via done() at invocation
+    # time), which is what this test's assertions are about. A completed
+    # handle gets the digest-first path instead (see test_inspection_digest.py).
     task = asyncio.Future()
-    task.set_result("done")
 
     handle = atl.AsyncToolLoopHandle(
         task=task,
@@ -399,8 +403,12 @@ async def test_ask_inspection_prompt_redacts_image_payloads(monkeypatch) -> None
                 },
             ]
 
+    # Deliberately left unresolved: ask() picks the live-snapshot transcript
+    # path only for a still-running handle (checked via done() at invocation
+    # time), which is what this test's assertions are about (the digest path
+    # is redaction-safe too, via the same make_messages_safe_for_context_dump
+    # helper, but is covered separately in test_inspection_digest.py).
     task = asyncio.Future()
-    task.set_result("done")
 
     handle = atl.AsyncToolLoopHandle(
         task=task,
