@@ -486,6 +486,34 @@ def real_tool_messages(msgs: List[dict], tool_name: str | None = None) -> List[d
     return results
 
 
+def any_tool_message_content_contains(msgs: List[dict], snippet: str) -> bool:
+    """True if *snippet* appears in any tool-role message's content, including
+    synthetic check_status_* replies.
+
+    Post-watermark, a below-mark result (single-tool or a multi-handle
+    child's terminal result) is delivered via an appended check_status pair
+    rather than by rewriting the original (possibly already-dispatched)
+    placeholder — real_tool_messages() deliberately excludes those, so tests
+    asserting on "the final result landed somewhere" should use this instead
+    of filtering to only the named placeholder.
+    """
+    for m in msgs or []:
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content")
+        if isinstance(content, str) and snippet in content:
+            return True
+        if isinstance(content, list):
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and isinstance(block.get("text"), str)
+                    and snippet in block["text"]
+                ):
+                    return True
+    return False
+
+
 def nth_real_assistant_tool_turn(msgs: List[dict], n: int) -> dict:
     """Return the nth (0-indexed) real assistant turn with tool_calls.
 
