@@ -161,29 +161,6 @@ def _compositional_contexts() -> list[str]:
     ]
 
 
-_LOG_PAGE = 1000
-
-
-def _iter_all_logs(context: str):
-    """Every row in *context*, a page at a time.
-
-    ``get_logs`` caps at a thousand rows and says nothing when it truncates,
-    so a single call reads as "that is all of them" on a store of any size.
-    A caller deciding what to delete cannot work from a silently short
-    answer.
-    """
-
-    offset = 0
-    while True:
-        page = unisdk.get_logs(context=context, limit=_LOG_PAGE, offset=offset)
-        if not page:
-            return
-        yield from page
-        if len(page) < _LOG_PAGE:
-            return
-        offset += _LOG_PAGE
-
-
 def function_id_resolves(function_id: int) -> bool:
     """Whether a stored id still points at a compositional function.
 
@@ -208,18 +185,13 @@ def function_id_resolves(function_id: int) -> bool:
     return False
 
 
-def link_function_to_workflow(*, function_id: int, slug: str) -> bool:
-    """Record that *slug* references this function, without claiming it.
+def function_managed_by(function_id: int) -> str | None:
+    """Which reconcile source owns this function row, if any.
 
-    Membership is additive and idempotent: a function distilled from one
-    workflow's task can legitimately be reached by another, and re-attaching
-    the same entrypoint must not accumulate duplicates.
-
-    Deliberately not ``managed_by``. That field says who may overwrite and
-    prune a row, and a runtime-authored function is in no bundle's source --
-    so granting it would make the next reconcile delete the function as a row
-    whose key had left the source, which is worse than the orphan it was
-    meant to fix.
+    ``None`` for a function no source authored -- one a user wrote, or one a
+    run distilled from its own trajectory. Callers use it to tell "this row
+    belongs to a bundle and its surface will prune it" from "this row belongs
+    to nobody and would otherwise be left behind".
     """
 
     for context in _compositional_contexts():
@@ -228,51 +200,33 @@ def link_function_to_workflow(*, function_id: int, slug: str) -> bool:
             filter=f"function_id == {int(function_id)}",
             limit=1,
         )
-        if not logs:
-            continue
-        refs = list((logs[0].entries or {}).get("workflow_refs") or [])
-        if slug in refs:
-            return False
-        unisdk.update_logs(
-            context=context,
-            logs=[logs[0].id],
-            entries={"workflow_refs": [*refs, slug]},
-        )
-        return True
-    return False
+        if logs:
+            return (logs[0].entries or {}).get("managed_by") or None
+    return None
 
 
-def release_workflow_functions(*, slug: str) -> list[int]:
-    """Drop *slug*'s membership, deleting functions no other workflow keeps.
+def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
+    """Delete compositional functions by id, returning the ids actually removed.
 
-    Called when a workflow is uninstalled. A function distilled from its task
-    exists only because that workflow did, so leaving it behind leaves an
-    unreferenced row nothing can explain -- but one shared with another
-    installed workflow must survive, which is why membership is multi-valued
-    rather than a single owner.
-
-    Returns the ids actually deleted.
+    For a caller that has already decided which functions should go and needs
+    them gone -- an uninstall clearing what its workflow's runs distilled.
+    Deciding *which* is the caller's problem; this only carries it out.
     """
 
+    if not function_ids:
+        return []
     deleted: list[int] = []
     for context in _compositional_contexts():
-        for log in _iter_all_logs(context):
-            entries = log.entries or {}
-            refs = list(entries.get("workflow_refs") or [])
-            if slug not in refs:
+        for function_id in function_ids:
+            logs = unisdk.get_logs(
+                context=context,
+                filter=f"function_id == {int(function_id)}",
+                limit=1,
+            )
+            if not logs:
                 continue
-            remaining = [ref for ref in refs if ref != slug]
-            if remaining:
-                unisdk.update_logs(
-                    context=context,
-                    logs=[log.id],
-                    entries={"workflow_refs": remaining},
-                )
-                continue
-            unisdk.delete_logs(context=context, logs=[log.id])
-            function_id = entries.get("function_id")
-            if function_id is not None:
-                deleted.append(int(function_id))
+            unisdk.delete_logs(context=context, logs=[logs[0].id])
+            deleted.append(int(function_id))
     return deleted
 
 
