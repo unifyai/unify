@@ -8,6 +8,7 @@ shape of any one function.
 
 from __future__ import annotations
 
+import base64
 import json
 
 import httpx
@@ -15,9 +16,18 @@ import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
-from unify.llm_broker.app import _assistant_id, build_app
+from unify.llm_broker.app import (
+    _assistant_id,
+    _billing_label,
+    _billing_source,
+    build_app,
+)
 from unify.llm_broker.settings import BrokerSettings
-from unify.llm_broker.usage import usage_from_stream_tail
+from unify.llm_broker.usage import (
+    generation_id_from_body,
+    generation_id_from_stream_tail,
+    usage_from_stream_tail,
+)
 
 _SETTINGS = BrokerSettings(
     host="127.0.0.1",
@@ -209,6 +219,18 @@ class TestUsageIsReportedNotPriced:
 
         assert recorder.provider_calls[0]["body"]["usage"] == {"include": True}
 
+    def test_a_non_streamed_settle_carries_the_generation_id(self):
+        recorder = _Recorder(
+            provider_body={"id": "gen-body-1", "usage": {"cost": 0.00042}},
+        )
+        _client(recorder).post(
+            "/llm/chat/completions",
+            headers=_AUTH,
+            json={"model": "openai/gpt-5.6-sol", "messages": []},
+        )
+
+        assert recorder.settle_calls[0]["generation_id"] == "gen-body-1"
+
     def test_a_failed_provider_call_is_not_settled(self):
         """Nothing was served, so there is nothing to charge for."""
 
@@ -261,6 +283,21 @@ class TestStreaming:
 
         assert recorder.settle_calls[0]["usage"]["cost"] == pytest.approx(0.00123)
 
+    def test_a_stream_settles_with_the_generation_id_from_its_tail(self):
+        body = (
+            b'data: {"id":"gen-stream-1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+            b'data: {"id":"gen-stream-1","usage":{"cost":0.00123}}\n\n'
+            b"data: [DONE]\n\n"
+        )
+        recorder = _Recorder(stream=body)
+        _client(recorder).post(
+            "/llm/chat/completions",
+            headers=_AUTH,
+            json={"model": "openai/gpt-5.6-sol", "messages": [], "stream": True},
+        )
+
+        assert recorder.settle_calls[0]["generation_id"] == "gen-stream-1"
+
 
 class TestUsageExtraction:
     def test_anthropic_counts_split_across_events_are_merged(self):
@@ -282,6 +319,81 @@ class TestUsageExtraction:
 
     def test_a_stream_with_no_usage_reports_nothing(self):
         assert usage_from_stream_tail('data: {"choices":[]}\n\n') is None
+
+    def test_cached_tokens_are_lifted_out_of_prompt_tokens_details(self):
+        """The scalar-only merge would otherwise drop this on the floor.
+
+        ``prompt_tokens_details`` is a nested breakdown, so the general
+        scalar merge skips it -- but ``cached_tokens`` inside it is the one
+        per-call cache signal a provider reports, so it is hoisted out into
+        the merged scalars explicitly.
+        """
+        tail = (
+            'data: {"usage":{"prompt_tokens":100,"completion_tokens":20,'
+            '"prompt_tokens_details":{"cached_tokens":64}}}\n\n'
+        )
+        assert usage_from_stream_tail(tail) == {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "cached_tokens": 64,
+        }
+
+    def test_cached_tokens_lift_survives_across_split_events(self):
+        """Anthropic-style split events: a later event still contributes the lift."""
+        tail = (
+            'data: {"usage":{"prompt_tokens":50}}\n\n'
+            'data: {"usage":{"prompt_tokens_details":{"cached_tokens":10}}}\n\n'
+        )
+        assert usage_from_stream_tail(tail) == {
+            "prompt_tokens": 50,
+            "cached_tokens": 10,
+        }
+
+    def test_a_non_dict_prompt_tokens_details_is_ignored(self):
+        tail = 'data: {"usage":{"prompt_tokens":5,"prompt_tokens_details":null}}\n\n'
+        assert usage_from_stream_tail(tail) == {"prompt_tokens": 5}
+
+    def test_a_missing_cached_tokens_key_is_not_invented(self):
+        tail = 'data: {"usage":{"prompt_tokens":5,"prompt_tokens_details":{}}}\n\n'
+        assert usage_from_stream_tail(tail) == {"prompt_tokens": 5}
+
+
+class TestGenerationIdExtraction:
+    """The provider's own response id, so a ledger row can be cross-checked."""
+
+    def test_from_a_non_streamed_body(self):
+        assert (
+            generation_id_from_body({"id": "gen-abc123", "usage": {}}) == "gen-abc123"
+        )
+
+    def test_from_a_body_with_no_id(self):
+        assert generation_id_from_body({"usage": {}}) is None
+
+    def test_from_a_body_that_is_not_a_dict(self):
+        assert generation_id_from_body(None) is None
+
+    def test_an_empty_string_id_counts_as_absent(self):
+        assert generation_id_from_body({"id": ""}) is None
+
+    def test_from_an_openai_compatible_stream_tail(self):
+        """OpenAI-compatible chunks repeat the same id on every event."""
+        tail = (
+            'data: {"id":"gen-xyz","choices":[{"delta":{"content":"He"}}]}\n\n'
+            'data: {"id":"gen-xyz","usage":{"cost":0.001}}\n\ndata: [DONE]\n\n'
+        )
+        assert generation_id_from_stream_tail(tail) == "gen-xyz"
+
+    def test_from_an_anthropic_message_start_event(self):
+        """Anthropic carries the id once, nested under ``message``."""
+        tail = (
+            'data: {"type":"message_start","message":{"id":"msg_01abc",'
+            '"usage":{"input_tokens":900}}}\n\n'
+            'data: {"type":"message_delta","usage":{"output_tokens":120}}\n\n'
+        )
+        assert generation_id_from_stream_tail(tail) == "msg_01abc"
+
+    def test_a_stream_with_no_id_anywhere_reports_nothing(self):
+        assert generation_id_from_stream_tail('data: {"choices":[]}\n\n') is None
 
 
 class TestAssistantAttribution:
@@ -331,6 +443,115 @@ class TestAssistantAttribution:
 
     def test_no_id_anywhere_is_simply_unattributed(self):
         assert _assistant_id(self._request(), {}) is None
+
+
+class TestLabelAndSourceAttribution:
+    """The act/source label, threaded from the caller's billing context.
+
+    Carried as a base64url-encoded header (label) and a plain header
+    (source) rather than body fields, mirroring assistant attribution: the
+    body is provider-shaped and forwarded verbatim.
+    """
+
+    def _request(self, headers=None):
+        scope = {
+            "type": "http",
+            "headers": [
+                (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
+            ],
+        }
+        return Request(scope)
+
+    def _b64(self, text: str) -> str:
+        return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
+
+    def test_a_plain_ascii_label_round_trips(self):
+        got = _billing_label(
+            self._request({"X-Unify-Label": self._b64("Researching leads")}),
+        )
+        assert got == "Researching leads"
+
+    def test_a_chinese_label_round_trips(self):
+        """UTF-8 text must survive the header, which is otherwise latin-1."""
+        label = "研究客户需求"
+        got = _billing_label(self._request({"X-Unify-Label": self._b64(label)}))
+        assert got == label
+
+    def test_a_mixed_utf8_label_round_trips(self):
+        label = "Checking 天气 for São Paulo 🌦"
+        got = _billing_label(self._request({"X-Unify-Label": self._b64(label)}))
+        assert got == label
+
+    def test_no_label_header_is_simply_absent(self):
+        assert _billing_label(self._request()) is None
+
+    def test_a_malformed_label_header_is_dropped_not_raised(self):
+        """A broken header must not fail the call it is only metadata for."""
+        assert _billing_label(self._request({"X-Unify-Label": "not-base64!!"})) is None
+
+    def test_the_source_header_is_read_verbatim(self):
+        assert _billing_source(self._request({"X-Unify-Source": "tool"})) == "tool"
+
+    def test_no_source_header_is_simply_absent(self):
+        assert _billing_source(self._request()) is None
+
+    def test_round_trips_through_unillm_s_own_encoder(self):
+        """End-to-end: what unillm's billing-context read actually sends.
+
+        Encodes with unillm's ``_gateway_attribution_headers`` (the
+        "unillm billing-context read" half of this change) and decodes with
+        the broker's own reader, so the two sides are proven compatible
+        rather than merely both individually correct against base64.
+        """
+        import unillm
+        from unillm.billing_context import set_billing_context
+        from unillm.clients.uni_llm import _gateway_attribution_headers
+
+        set_billing_context(
+            assistant_id=7366,
+            source="chat",
+            label="正在研究客户的 NotebookLM 连接选项",
+        )
+        try:
+            headers = _gateway_attribution_headers()
+        finally:
+            # Do not leak billing context into later tests in the process.
+            unillm.set_billing_context()
+
+        request = self._request(headers)
+        assert _billing_label(request) == "正在研究客户的 NotebookLM 连接选项"
+        assert _billing_source(request) == "chat"
+
+
+class TestLabelAndSourceReachSettle:
+    """The label/source travel all the way through to the settle call."""
+
+    def test_a_streamed_call_settles_with_label_and_source(self):
+        recorder = _Recorder(
+            stream=b'data: {"usage":{"cost":0.001}}\n\ndata: [DONE]\n\n',
+        )
+        label = base64.urlsafe_b64encode("客户研究".encode("utf-8")).decode("ascii")
+        _client(recorder).post(
+            "/llm/chat/completions",
+            headers={**_AUTH, "X-Unify-Label": label, "X-Unify-Source": "tool"},
+            json={"model": "openai/gpt-5.6-sol", "messages": [], "stream": True},
+        )
+
+        settled = recorder.settle_calls[0]
+        assert settled["label"] == "客户研究"
+        assert settled["source"] == "tool"
+
+    def test_a_call_with_no_billing_context_settles_with_no_label(self):
+        recorder = _Recorder()
+        _client(recorder).post(
+            "/llm/chat/completions",
+            headers=_AUTH,
+            json={"model": "openai/gpt-5.6-sol", "messages": []},
+        )
+
+        settled = recorder.settle_calls[0]
+        assert "label" not in settled
+        assert "source" not in settled
 
 
 class TestHealthz:
