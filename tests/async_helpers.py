@@ -456,6 +456,20 @@ def last_plain_assistant_message(msgs: List[dict]) -> dict:
     raise AssertionError("No plain assistant message (without tool_calls) found")
 
 
+def first_assistant_steer_call(msgs: List[dict], action: str) -> tuple[dict, dict]:
+    """Return (assistant_message, tool_call) for the first assistant turn that
+    calls steer(action=<action>, ...). Extends first_assistant_tool_call_by_prefix
+    for the post-steer() shape, where the action lives in parsed arguments
+    rather than the tool name."""
+    for m in msgs:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if _steer_call_action(tc) == action:
+                return m, tc
+    raise AssertionError(f"Assistant steer(action={action!r}) call not found")
+
+
 def first_tool_message_by_name_prefix(msgs: List[dict], prefix: str) -> dict:
     """Return the first tool message whose name startswith prefix."""
     for m in msgs:
