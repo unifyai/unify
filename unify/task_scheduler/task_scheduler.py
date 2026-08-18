@@ -1664,6 +1664,15 @@ class TaskScheduler(BaseTaskScheduler):
         runtime bound (``max_runtime_seconds``), and an enabled flag.
         Returns a ``ToolOutcome`` containing the newly assigned ``task_id``.
 
+        A successful create is the arming: an enabled task with a schedule
+        or recurrence fires without any further step. Run rows are
+        materialized separately by the deployment's scheduler and may not
+        appear until the first run starts, so an empty run ledger right
+        after creation is normal and is not evidence the task is disarmed.
+        Never recreate or disable a task because no run row is visible yet;
+        to confirm arming, read the definition back — ``enabled`` plus its
+        schedule and recurrence.
+
         ``_sync_identity`` carries the custom-sync row identity
         (``custom_key``/``custom_hash`` and sync-owned extras) so
         deployment-owned rows are born with their identity in the same
@@ -2176,6 +2185,12 @@ class TaskScheduler(BaseTaskScheduler):
         unless a new ``repeat`` is set in the same call — a cadence has
         nothing to anchor to without a schedule). Converting a scheduled task
         to a triggered one is a single call: ``trigger=..., start_at=None``.
+
+        Schedule, recurrence and ``enabled`` edits re-arm the series by
+        rewriting the definition; the deployment's scheduler picks them up
+        when it next materializes a run. As with creation, no ``scheduled``
+        run row may be visible in the meantime — that is not evidence the
+        edit failed to take.
         """
 
         if not _root_applied:
@@ -3122,8 +3137,13 @@ class TaskScheduler(BaseTaskScheduler):
         ``cancelled``), ``scheduled_for`` (the moment it belongs to),
         ``started_at`` / ``completed_at``, ``result_summary`` for what the run
         produced, and ``error`` when it failed. A single ``scheduled`` entry
-        dated ahead is the next run; its absence means nothing is currently
-        armed for this task.
+        dated ahead is the next run. Its absence does not mean the task is
+        disarmed: run rows are materialized by the deployment's scheduler,
+        not by task creation, and for a task that has never run the first
+        one may appear only when that run starts. Whether a task is armed
+        is answered by its definition (``enabled`` plus its schedule or
+        trigger); this listing answers what actually happened, and — once a
+        ``scheduled`` row exists — exactly when the next run is due.
 
         ``run_key`` identifies one run, and is what
         ``get_run_event_children`` needs to walk that run's internals when a
