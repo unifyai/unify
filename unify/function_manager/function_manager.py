@@ -196,6 +196,89 @@ if TYPE_CHECKING:  # pragma: no cover
     )
 
 
+def _compositional_contexts() -> list[str]:
+    """Every compositional functions context readable from here."""
+
+    from unify.common.context_registry import ContextRegistry
+
+    return [
+        f"{root.strip('/')}/{FUNCTIONS_COMPOSITIONAL_TABLE}"
+        for root in ContextRegistry.read_roots(
+            FunctionManager,
+            FUNCTIONS_COMPOSITIONAL_TABLE,
+        )
+    ]
+
+
+def function_id_resolves(function_id: int) -> bool:
+    """Whether a stored id still points at a compositional function.
+
+    For callers holding an id and asking only about referential integrity --
+    a task's stored ``entrypoint``, say. An id rather than a manager handle
+    because the question is asked from stores that keep one and have no
+    reason to hold a FunctionManager.
+
+    Asked per id rather than by listing every function and testing
+    membership: ``get_logs`` pages at a thousand rows, so an enumeration
+    would report perfectly good ids as missing on any deployment past that,
+    and callers reading this as "gone" would act on it.
+    """
+
+    for context in _compositional_contexts():
+        if unisdk.get_logs(
+            context=context,
+            filter=f"function_id == {int(function_id)}",
+            limit=1,
+        ):
+            return True
+    return False
+
+
+def function_managed_by(function_id: int) -> str | None:
+    """Which reconcile source owns this function row, if any.
+
+    ``None`` for a function no source authored -- one a user wrote, or one a
+    run distilled from its own trajectory. Callers use it to tell "this row
+    belongs to a bundle and its surface will prune it" from "this row belongs
+    to nobody and would otherwise be left behind".
+    """
+
+    for context in _compositional_contexts():
+        logs = unisdk.get_logs(
+            context=context,
+            filter=f"function_id == {int(function_id)}",
+            limit=1,
+        )
+        if logs:
+            return (logs[0].entries or {}).get("managed_by") or None
+    return None
+
+
+def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
+    """Delete compositional functions by id, returning the ids actually removed.
+
+    For a caller that has already decided which functions should go and needs
+    them gone -- an uninstall clearing what its workflow's runs distilled.
+    Deciding *which* is the caller's problem; this only carries it out.
+    """
+
+    if not function_ids:
+        return []
+    deleted: list[int] = []
+    for context in _compositional_contexts():
+        for function_id in function_ids:
+            logs = unisdk.get_logs(
+                context=context,
+                filter=f"function_id == {int(function_id)}",
+                limit=1,
+            )
+            if not logs:
+                continue
+            unisdk.delete_logs(context=context, logs=[logs[0].id])
+            deleted.append(int(function_id))
+    return deleted
+
+
 class _LineageTrackedFunction:
     """Boundary wrapper for FunctionManager callables injected into CodeActActor sandboxes.
 

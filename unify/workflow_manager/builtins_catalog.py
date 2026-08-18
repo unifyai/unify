@@ -102,7 +102,20 @@ def human_schedule(entry: Mapping[str, Any]) -> str:
     first = repeat[0] if isinstance(repeat[0], Mapping) else {}
     frequency = str(first.get("frequency") or "").lower()
     weekdays = [str(d).upper() for d in (first.get("weekdays") or [])]
-    at = str(first.get("time_of_day") or "")[:5]
+    zone = str(first.get("timezone") or "")
+
+    # Every slot, not just the first. A pattern list is how a task expresses
+    # more than one occurrence a day, and describing only `repeat[0]` told a
+    # user installing a twice-daily job that it runs once — the second run
+    # then arrives as a surprise, on a card that said it would not.
+    times = sorted(
+        {
+            str(slot.get("time_of_day") or "")[:5]
+            for slot in repeat
+            if isinstance(slot, Mapping) and slot.get("time_of_day")
+        },
+    )
+    at = " and ".join(times)
 
     if frequency == "weekly" and weekdays:
         if set(weekdays) == {"MO", "TU", "WE", "TH", "FR"}:
@@ -132,7 +145,12 @@ def human_schedule(entry: Mapping[str, Any]) -> str:
     else:
         return ""
 
-    return f"{cadence} at {at}" if at else cadence
+    if not at:
+        return cadence
+    # Name the clock when the schedule does. Without it "at 17:30" reads as
+    # the reader's own evening, which for a zoned schedule it usually is not.
+    suffix = f" {zone}" if zone else ""
+    return f"{cadence} at {at}{suffix}"
 
 
 def bundle_sets(bundle: WorkflowBundle) -> Dict[str, Any]:

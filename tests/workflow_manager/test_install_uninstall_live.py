@@ -277,6 +277,11 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
             "task_id": int(task_row["task_id"]),
             "name": task_row["name"],
             "enabled": False,
+            # None until a run distils this task into one. Reported because
+            # it is the only record of which functions a source's tasks
+            # reference, which an uninstall reads to find what its own runs
+            # left behind.
+            "entrypoint": None,
         },
     ]
 
@@ -299,6 +304,7 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
             "task_id": int(task_row["task_id"]),
             "name": task_row["name"],
             "enabled": True,
+            "entrypoint": None,
         },
     ]
 

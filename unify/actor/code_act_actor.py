@@ -8,6 +8,7 @@ import re
 import sys
 import traceback
 import uuid
+import weakref
 from secrets import token_hex as _token_hex
 import logging
 from typing import (
@@ -1994,6 +1995,48 @@ class _StorageCheckHandle(SteerableToolHandle):
         except Exception:
             pass
 
+    async def abandon_storage_review(self, *, reason: str) -> None:
+        """End the storage phase now, without waiting for the review to finish.
+
+        Called when the actor the review depends on is closing. A review needs
+        that actor's venv pool, shell pool and sandboxes to do anything useful,
+        so once they are torn down the review cannot succeed -- it can only
+        keep retrying against them. Five offline task pods on staging stayed
+        busy for eight days that way, still issuing inference for runs recorded
+        as finished the week before, because nothing connected the two
+        lifetimes: the actor closed its pools and walked away from the review.
+
+        The bound this gives a review is its actor's lifetime, not a clock. A
+        review that is genuinely working is never interrupted -- the process
+        that owns the run owns the actor, and only ends it when the run is
+        done with it.
+
+        ``stop`` is cooperative and a loop wedged in a retry against something
+        already gone never notices, so the lifecycle task is cancelled after
+        it. That is what actually ends the inference.
+        """
+
+        if self._completion_event.is_set():
+            return
+        handle = self._storage_handle
+        if handle is not None:
+            try:
+                await handle.stop(reason=reason)
+            except Exception:
+                pass
+        lifecycle = self._lifecycle_task
+        if lifecycle is not None and not lifecycle.done():
+            lifecycle.cancel()
+            try:
+                await lifecycle
+            except (asyncio.CancelledError, Exception):
+                pass
+        # The lifecycle task owns these; setting them here covers the case
+        # where it was cancelled before reaching its own ``finally``.
+        self._phase = "done"
+        self._task_done_event.set()
+        self._completion_event.set()
+
     async def _cancel_relay(self) -> None:
         """Cancel the active notification relay task, if any."""
         relay = self._active_relay
@@ -2315,6 +2358,18 @@ class _StorageCheckHandle(SteerableToolHandle):
 
     def done(self) -> bool:
         return self._completion_event.is_set()
+
+    async def wait_until_done(self) -> None:
+        """Block until both phases have finished.
+
+        ``result()`` deliberately resolves at the end of phase 1 so callers are
+        not made to wait on a review they did not ask for. A caller that owns
+        the actor's lifetime needs the other guarantee -- that the review has
+        finished before the resources it runs on are torn down -- and this is
+        how it waits for it.
+        """
+
+        await self._completion_event.wait()
 
     async def result(self) -> str:
         await self._task_done_event.wait()
@@ -2659,6 +2714,12 @@ class CodeActActor(BaseCodeActActor):
         # Actor-level session cap (global across languages for this actor instance).
         self._max_sessions_total: int = 20
         self._next_session_id: dict[tuple[str, Optional[int]], int] = {}
+        # Storage reviews started by this actor and not yet finished, so
+        # ``close()`` can end them rather than leave them running against
+        # pools it is about to tear down.
+        self._live_storage_handles: "weakref.WeakSet[_StorageCheckHandle]" = (
+            weakref.WeakSet()
+        )
 
         self.can_compose: bool = bool(can_compose)
         self.can_store: bool = bool(can_store)
@@ -5986,11 +6047,26 @@ class CodeActActor(BaseCodeActActor):
                 post_run_review_context=post_run_review_context,
                 meter=run_meter,
             )
+            # Tracked so ``close()`` can end a review still in flight. The
+            # set is weak: a finished handle the caller has dropped must not
+            # be kept alive by this bookkeeping.
+            self._live_storage_handles.add(handle)
 
         return handle
 
     async def close(self):
         """Shuts down the actor and its associated resources gracefully."""
+        # End any storage review still running before the resources it needs
+        # are torn down below. Left alone, a review outlives the actor: it
+        # keeps issuing inference against a closed venv pool and dead
+        # sandboxes, which is how offline task pods stayed busy for days after
+        # their run had already been recorded as finished.
+        for storage_handle in list(self._live_storage_handles):
+            await storage_handle.abandon_storage_review(
+                reason="The actor running this review is shutting down.",
+            )
+        self._live_storage_handles.clear()
+
         # Close any in-process session sandboxes owned by the session executor.
         try:
             await self._session_executor.close()

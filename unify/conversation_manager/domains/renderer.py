@@ -2045,6 +2045,17 @@ class Renderer:
                 task_description = handle_data.get("task_description")
                 if task_description:
                     out += f"<task_description>{task_description}</task_description>\n"
+                # The author's instruction about delivery, e.g. "Deliver the
+                # briefing as one chat message". Rendered here because this is
+                # the turn that can act on it: without it the decision to relay
+                # a finished run or stay silent was taken with no statement of
+                # intent in view, and went both ways on identical inputs.
+                response_policy = handle_data.get("response_policy")
+                if response_policy:
+                    out += (
+                        f"<task_response_policy>{response_policy}"
+                        "</task_response_policy>\n"
+                    )
 
                 if terminal_event is not None:
                     if terminal_event.get("success") is False:
