@@ -547,7 +547,7 @@ async def test_visibility_guidance_injects_on_first_progress_message_not_just_in
     assert guidance_msg.get("_visibility_guidance") is True
     assert "[progress <call_id>]" in guidance_msg["content"]
     assert "[clarification <call_id>]" in guidance_msg["content"]
-    assert "clarify_* helper" in guidance_msg["content"]
+    assert 'steer(call_id=<call_id>, action="clarify"' in guidance_msg["content"]
     assert "[loop " not in guidance_msg["content"]  # dead prefix, dropped
     assert progress_msg["content"] == "[progress c1] working…"
     assert tools_data._visibility_guidance_injected is True

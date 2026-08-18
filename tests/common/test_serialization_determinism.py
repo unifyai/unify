@@ -49,10 +49,14 @@ def _make_tools_data_with_pending(order):
     return tools_data
 
 
-def test_generate_emits_tools_sorted_by_call_idx_regardless_of_pending_order():
+def test_generate_emits_static_surface_regardless_of_pending_order():
     # Same three pending calls, inserted into the set in two different orders
     # (mirrors two turns whose underlying `Set[asyncio.Task]` iterates
-    # differently after completions are discarded/re-added).
+    # differently after completions are discarded/re-added). Per-call-id
+    # sort-order sensitivity (issue 06) is moot post-steer(): DynamicToolFactory
+    # no longer mints any per-call tool, so the outer-visible surface is
+    # trivially order-independent — this asserts that invariant explicitly
+    # rather than relying on it being an accident of the current schema.
     calls = [(3, "toolC"), (1, "toolA"), (2, "toolB")]
 
     tools_data_a = _make_tools_data_with_pending(calls)
@@ -64,17 +68,13 @@ def test_generate_emits_tools_sorted_by_call_idx_regardless_of_pending_order():
     factory_b = DynamicToolFactory(tools_data_b)
     factory_b.generate()
 
-    stop_tools_a = [k for k in factory_a.dynamic_tools if k.startswith("stop_")]
-    stop_tools_b = [k for k in factory_b.dynamic_tools if k.startswith("stop_")]
-
-    # Both passes serialize identically...
-    assert stop_tools_a == stop_tools_b
-    # ...and match ascending call_idx order (1, 2, 3 -> toolA, toolB, toolC).
-    assert stop_tools_a == [
-        "stop_toolA_1",
-        "stop_toolB_2",
-        "stop_toolC_3",
-    ]
+    expected = {"wait", "steer", "ask_about_completed_tool"}
+    assert set(factory_a.dynamic_tools.keys()) == expected
+    assert set(factory_b.dynamic_tools.keys()) == expected
+    # No per-call-id key (e.g. "stop_toolA_1") ever leaks into the
+    # outer-visible dynamic_tools dict, and insertion order is identical too
+    # (fixed emission order inside generate(), independent of pending order).
+    assert list(factory_a.dynamic_tools.keys()) == list(factory_b.dynamic_tools.keys())
 
 
 # ---------------------------------------------------------------------------
