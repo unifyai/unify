@@ -164,7 +164,36 @@ class ComputerEnvironment(BaseEnvironment):
 
     def get_prompt_context(self) -> str:
         """Generate prompt context with desktop + web factory guidance."""
+        from unify.session_details import SESSION_DETAILS
+
         parts: list[str] = []
+
+        if not SESSION_DETAILS.assistant.managed_desktop_entitled:
+            # Say so before describing any of it. The methods below exist on the
+            # namespace whether or not a machine backs them, so an actor told
+            # only what they do will reach for one and be refused -- and it will
+            # read as a fault rather than as an add-on this assistant does not
+            # have. Naming the routes that do work is what stops it retrying.
+            parts.append(
+                "### Computer Control -- NOT AVAILABLE\n\n"
+                "This assistant has no managed desktop, so nothing under "
+                "`primitives.computer.desktop` or `primitives.computer.web` "
+                "can run: calls fail immediately rather than waiting.  Do not "
+                "attempt them, and do not treat this as a transient error.\n\n"
+                "Routes that need no desktop and cover most of what a browser "
+                "would have been used for:\n"
+                "- `primitives.web.fetch(url)` -- download a public URL, "
+                "including a folder or file shared as 'anyone with the link', "
+                "and return a local path ready to parse or ingest.\n"
+                "- The connected workspace (Microsoft 365 / Google) for "
+                "anything the account can already see, including content "
+                "shared into it by another organisation.\n"
+                "- Connected integration apps for content held in them.\n\n"
+                "If a task genuinely requires driving a graphical application, "
+                "say that the Desktop Computer add-on is needed rather than "
+                "attempting a workaround.",
+            )
+            return "\n\n".join(parts)
 
         parts.append(
             "### Computer Control\n\n"
