@@ -25,6 +25,7 @@ import pytest
 
 from unify.common.async_tool_loop import start_async_tool_loop
 from unify.common.llm_client import new_llm_client
+from unify.common._async_tool.loop import _extract_final_answer_text
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_tool_request, _wait_for_condition
 
@@ -277,3 +278,314 @@ async def test_true_empty_answer_retries_then_fails_loudly(
         and m.get("content") == "Produce your final answer as text."
     )
     assert nudge_count == 1
+
+
+def test_extract_final_answer_text_treats_whitespace_and_empty_blocks_as_empty() -> (
+    None
+):
+    """Direct coverage of the text-extraction helper: whitespace-only
+    content in either shape is empty, and a substantive content-block list
+    yields its extracted text rather than the raw list."""
+    assert _extract_final_answer_text(None) is None
+    assert _extract_final_answer_text("") is None
+    assert _extract_final_answer_text("   \n  ") is None
+    assert _extract_final_answer_text([]) is None
+    assert _extract_final_answer_text([{"type": "text", "text": ""}]) is None
+    assert _extract_final_answer_text([{"type": "text", "text": "   \n  "}]) is None
+    assert _extract_final_answer_text([{"type": "image", "url": "x"}]) is None
+
+    assert _extract_final_answer_text("The answer is 42.") == "The answer is 42."
+    assert (
+        _extract_final_answer_text(
+            [
+                {"type": "text", "text": "Part one. "},
+                {"type": "text", "text": "Part two."},
+            ],
+        )
+        == "Part one. Part two."
+    )
+
+
+async def _quick_tool() -> str:
+    return "quick-done"  # resolves on its own, no gate
+
+
+_quick_tool.__name__ = "quick_tool"
+_quick_tool.__qualname__ = "quick_tool"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_whitespace_only_terminal_turn_falls_back_to_prior_answer(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A terminal turn whose content is whitespace-only must be treated as
+    empty by the finalization guard, not returned verbatim."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"quick_tool": _quick_tool},
+        interrupt_llm_with_interjections=False,  # legacy blocking mode; no racing needed
+        max_steps=40,
+        timeout=30,
+    )
+
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "tool_calls": [_tool_call("call_q", "quick_tool", {})],
+        },
+    )
+    await turn_queue.put({"role": "assistant", "content": "   \n  ", "tool_calls": []})
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "The answer is 42."
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_empty_content_block_list_falls_back_to_prior_answer(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A terminal turn whose content is a content-block list with only
+    whitespace text must be treated as empty by the finalization guard."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"quick_tool": _quick_tool},
+        interrupt_llm_with_interjections=False,
+        max_steps=40,
+        timeout=30,
+    )
+
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "tool_calls": [_tool_call("call_q", "quick_tool", {})],
+        },
+    )
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "   "}],
+            "tool_calls": [],
+        },
+    )
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "The answer is 42."
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_substantive_content_block_list_returns_extracted_text(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A terminal turn whose content is a substantive content-block list
+    must return the extracted text, never the raw list."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={},
+        interrupt_llm_with_interjections=False,
+        max_steps=40,
+        timeout=30,
+    )
+
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Part one. "},
+                {"type": "text", "text": "Part two."},
+            ],
+            "tool_calls": [],
+        },
+    )
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "Part one. Part two."
+    assert isinstance(final, str)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_lifecycle_announcement_between_answer_and_empty_recovers(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A [steerable]/[askable] lifecycle announcement landing between the
+    real answer and a later empty terminal turn must not block the
+    walk-back from recovering the answer."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+    dispatch_count = 0
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"quick_tool": _quick_tool},
+        interrupt_llm_with_interjections=False,  # legacy blocking mode; no racing needed
+        max_steps=40,
+        timeout=30,
+    )
+
+    async def _dispatched_at_least(n: int) -> bool:
+        return dispatch_count >= n
+
+    # Turn 1: the real answer, alongside a tool call so the turn isn't
+    # terminal yet and a second turn gets dispatched.
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "tool_calls": [_tool_call("call_q", "quick_tool", {})],
+        },
+    )
+
+    # Wait for the second dispatch to start (quick_tool's completion has
+    # already been ingested by then, since dispatch is gated on pending
+    # tools draining), then splice in a lifecycle announcement the same
+    # shape record_tool_completed_askable appends in production, before
+    # handing the loop its empty terminal turn.
+    await _wait_for_condition(lambda: _dispatched_at_least(2), poll=0.02, timeout=10.0)
+    client.messages.append(
+        {
+            "role": "user",
+            "content": "[askable call_q] quick_tool completed and is askable.",
+            "_lifecycle_msg": True,
+        },
+    )
+    await turn_queue.put(_final_msg(""))
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "The answer is 42."
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_nudge_message_does_not_become_boundary_on_retry(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A nudge tail message must be recognized as loop-authored, not a
+    genuine user turn boundary, so a retry's walk-back can still reach
+    past it to a substantive answer."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+    dispatch_count = 0
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"quick_tool": _quick_tool},
+        interrupt_llm_with_interjections=False,
+        max_steps=40,
+        timeout=30,
+    )
+
+    async def _dispatched_at_least(n: int) -> bool:
+        return dispatch_count >= n
+
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "tool_calls": [_tool_call("call_q", "quick_tool", {})],
+        },
+    )
+
+    # Splice in a message shaped exactly like the loop's own nudge tail
+    # message before handing over the empty terminal turn, to isolate
+    # whether the marker alone (regardless of how it got there) is
+    # correctly recognized as non-boundary.
+    await _wait_for_condition(lambda: _dispatched_at_least(2), poll=0.02, timeout=10.0)
+    client.messages.append(
+        {
+            "role": "user",
+            "content": "Produce your final answer as text.",
+            "_nudge_msg": True,
+        },
+    )
+    await turn_queue.put(_final_msg(""))
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "The answer is 42."
