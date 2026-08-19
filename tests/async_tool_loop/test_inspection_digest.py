@@ -43,7 +43,7 @@ def _make_completed_handle(
     """Build a handle whose task is already done() — the digest branch.
 
     ``task_result`` is what ``self._task.result()`` returns — the
-    authoritative source ``digest()`` reads for ``final_result`` (T5-1).
+    authoritative source ``digest()`` reads for ``final_result``.
     """
     task: asyncio.Future = asyncio.Future()
     task.set_result(task_result)
@@ -161,7 +161,7 @@ async def test_digest_on_unfinished_handle_raises():
 
 @pytest.mark.asyncio
 async def test_digest_final_result_uses_task_result_not_narration_heuristic():
-    """T5-1 regression: final_result must come from the task's actual result,
+    """final_result must come from the task's actual result,
     not a heuristic scan that picks up pre-answer narration on structured-
     output loops — there the real answer lands in a tool message (e.g. via
     final_response), never a bare assistant message, so the old "last
@@ -433,9 +433,9 @@ async def test_digest_stays_bounded_regardless_of_transcript_size(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_digest_caps_turn_count_with_elision_marker():
-    """T5-2: turn *count* (not just transcript size) must stay bounded — an
-    uncapped digest grows ~45 tokens/turn, blowing past the plan's ~2k-token
-    target well before 100 turns. A 400-turn run should still produce a
+    """Turn *count* (not just transcript size) must stay bounded — an
+    uncapped digest grows ~45 tokens/turn, blowing past the ~2k-token design
+    budget for digests well before 100 turns. A 400-turn run should still produce a
     compact digest with a head+tail window and one explicit elision marker
     whose idx_range keeps the elided turns reachable via read_child_message."""
     n_turns = 400
@@ -499,7 +499,7 @@ async def test_digest_caps_turn_count_with_elision_marker():
 
     tokens = count_tokens(digest_text)
     assert 1000 < tokens < 3000, (
-        f"a capped digest should land in the plan's ~2k-3k range regardless "
+        f"a capped digest should land in the ~2k-3k token design budget regardless "
         f"of trajectory length, got {tokens}"
     )
 

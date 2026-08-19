@@ -18,10 +18,9 @@ from ..context_dump import make_messages_safe_for_context_dump
 #
 # A message is immutable once it has been included in any dispatched LLM
 # request; everything from the watermark index onward is still free to
-# mutate. See plan-append-only-transcript for the full rationale — provider
-# prefix caching matches serialized requests byte-for-byte from position 0,
-# so any edit below the watermark invalidates the cached prefix for every
-# subsequent request.
+# mutate. Provider prefix caching matches serialized requests byte-for-byte
+# from position 0, so any edit below the watermark invalidates the cached
+# prefix for every subsequent request.
 
 
 def _message_index(client, msg: dict) -> Optional[int]:

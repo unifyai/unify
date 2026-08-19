@@ -141,7 +141,7 @@ def extract_assistant_and_tool_steps(
             continue
         if allowed_tools is not None:
             # Allow clarification wrappers to pass even if not in tool registry.
-            # "clarification_request_*" tool messages are pre-T3 history —
+            # "clarification_request_*" tool messages are legacy history —
             # ToolsData.record_clarification now delivers the question as a
             # "[clarification <call_id>]" user-role tail message instead, but
             # a transcript persisted before that change can still have one.
@@ -256,10 +256,9 @@ def extract_clarifications(
     """
     Build a clarifications summary from the transcript's coalesced
     "[clarification <call_id>]" user-role tail messages (see
-    plan-append-only-transcript / ToolsData.record_clarification — a pending
-    tool's clarification question is delivered there, not by rewriting a
-    tool-role placeholder in place). Uses callid_to_tool_name to attach the
-    base tool name.
+    ToolsData.record_clarification — a pending tool's clarification question
+    is delivered there, not by rewriting a tool-role placeholder in place).
+    Uses callid_to_tool_name to attach the base tool name.
 
     Invariants:
     - Each entry contains {call_id, tool, question} where `question` is the

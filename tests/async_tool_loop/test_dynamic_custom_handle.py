@@ -375,7 +375,7 @@ async def test_custom_method_docstring_surfaces_in_capability_delta_announcement
     ahead of calling steer(action="call", method=...).
 
     record_tool_started itself (the "started" announcement) carries no
-    arguments and no handle-derived content at all (T4-2) — it fires before
+    arguments and no handle-derived content at all — it fires before
     a handle exists in the schedule_base_tool_call path, and this test
     exercises it directly with a handle already attached (mirroring
     adopt_multi_nested's composite-child path, the one case where

@@ -1,12 +1,12 @@
 """Unit tests for the sent-watermark append-only transcript invariant.
 
 Covers the mechanism itself (is_mutable, generate_with_preprocess's watermark
-advancement and dev-mode integrity assertion) plus every gated call site from
-plan-append-only-transcript: the placeholder result write, notification
-delivery, clarification delivery, insert_tool_message_after_assistant's
-below-watermark gate, prune_wait_tool_call's below-watermark ack path, and
-multi-handle child-result delivery. No LLM calls — these are symbolic tests of
-the transcript-manipulation infrastructure, not of model behaviour.
+advancement and dev-mode integrity assertion) plus every below-watermark
+gated call site: the placeholder result write, notification delivery,
+clarification delivery, insert_tool_message_after_assistant's below-watermark
+gate, prune_wait_tool_call's below-watermark ack path, and multi-handle
+child-result delivery. No LLM calls — these are symbolic tests of the
+transcript-manipulation infrastructure, not of model behaviour.
 """
 
 from __future__ import annotations
@@ -182,8 +182,8 @@ async def test_dev_mode_assertion_fires_on_below_watermark_mutation():
     await generate_with_preprocess(client, None)
     assert client._sent_watermark == 1
 
-    # Simulate exactly the bug this ticket fixes: an already-dispatched
-    # message mutated in place.
+    # Simulate the mid-history rewrite this invariant forbids: an
+    # already-dispatched message mutated in place.
     client.messages[0]["content"] = "mutated after being sent"
     client.messages.append({"role": "assistant", "content": "reply"})
 
@@ -319,9 +319,9 @@ async def test_insert_below_watermark_with_bypass_splices_adjacently():
     client.generate = fake_generate
 
     # A real prior dispatch, so both the watermark AND its stored hash
-    # baseline reflect asst_msg genuinely having been sent — reproduces the
-    # coordinator's F1 probe (backfill/restore splice after a real dispatch),
-    # not just a hand-set watermark with no hash to violate.
+    # baseline reflect asst_msg genuinely having been sent — reproduces a
+    # real backfill/restore splice after a genuine dispatch, not just a
+    # hand-set watermark with no hash to violate.
     await generate_with_preprocess(client, None)
     assert client._sent_watermark == 2
 
@@ -342,9 +342,7 @@ async def test_insert_below_watermark_with_bypass_splices_adjacently():
 
     # The escape-hatch splice must re-baseline the stored watermark hash —
     # without it, the next dispatch's integrity check would read this
-    # sanctioned, legal splice as an unsanctioned mutation and raise (this
-    # is exactly the bug an escape-hatch splice without re-baselining
-    # produces — reported and fixed as F1).
+    # sanctioned, legal splice as an unsanctioned mutation and raise.
     await generate_with_preprocess(client, None)  # must not raise
 
 
@@ -526,9 +524,9 @@ async def test_record_clarification_coalesces_and_never_touches_stub():
 
 @pytest.mark.asyncio
 async def test_visibility_guidance_injects_on_first_progress_message_not_just_interjection():
-    """F3: most loops never get a real user interjection, so gating the
-    guidance solely on that (the pre-fixup behavior) left every sub-agent and
-    unattended task without it — the model would see [progress ...] under the
+    """Most loops never get a real user interjection, so gating the
+    guidance solely on that left every sub-agent and unattended task without
+    it — the model would see [progress ...] under the
     standing "incorporate ALL user interjections" instruction with nothing
     telling it that prefix is exempt. Injection must fire on the first
     [progress]/[clarification] message too, and at most once overall.
@@ -675,7 +673,8 @@ async def test_process_completed_task_freezes_stub_below_mark_uses_check_status(
     stub_content_at_dispatch = stub["content"]
 
     # Simulate the placeholder having been sent in a request before the tool
-    # actually finishes — the realistic interrupt-mode shape this ticket fixes.
+    # actually finishes — the realistic interrupt-mode shape below-watermark
+    # gating must handle.
     client._sent_watermark = len(client.messages)
 
     await task
@@ -752,9 +751,9 @@ async def test_process_completed_task_writes_in_place_above_mark():
 
 
 # ---------------------------------------------------------------------------
-# 11. Wire-level: the plan's literal acceptance #1 — serialize consecutive
-#     requests, assert the common byte-prefix covers everything except
-#     appended tail content. Message-granular (each element individually
+# 11. Wire-level: serialize consecutive requests, assert the common
+#     byte-prefix covers everything except appended tail content.
+#     Message-granular (each element individually
 #     re-serialized), which is the correct proxy: a provider's own request
 #     serialization concatenates discrete JSON message objects, so a changed
 #     byte inside message i is exactly what shows up as a mismatch at index i.

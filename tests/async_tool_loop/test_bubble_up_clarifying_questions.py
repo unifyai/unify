@@ -121,8 +121,7 @@ async def test_clarification_bubbles_up_two_tiers(llm_config) -> None:
     # 1) Wait until assistant schedules send_email
     await _wait_for_tool_request(outer_client, "send_email", timeout=120.0)
     # 2) Wait until the coalesced clarification tail message appears (the
-    # pending stub tool message is never rewritten with the question anymore —
-    # see plan-append-only-transcript).
+    # pending stub tool message is never rewritten with the question).
     await _wait_for_user_message_prefix(
         outer_client,
         "[clarification ",

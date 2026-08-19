@@ -1,13 +1,14 @@
-"""Loop-level tools-bytes test (T4-6 fixup).
+"""Loop-level tools-bytes test.
 
 The unit tests in test_tools_bytes_stability.py exercise DynamicToolFactory/
 ToolsData directly and can never observe the tools array loop.py actually
-assembles (`tmp_tools`, what becomes `gen_kwargs["tools"]`) — which is
-exactly where T4-4 (the response tool masking on pending<->idle) slipped
-through review. This file drives a real `start_async_tool_loop` with a fully
+assembles (`tmp_tools`, what becomes `gen_kwargs["tools"]`) — schema entries
+the loop adds or filters after factory construction, such as masking the
+response tool during a pending<->idle transition, are invisible to those
+tests. This file drives a real `start_async_tool_loop` with a fully
 scripted fake in place of `generate_with_preprocess` (no LLM calls, no
-network) and captures the tools array on every dispatch via a spy, the way
-the reviewer specified.
+network) and captures the ASSEMBLED tools array on every dispatch via a spy,
+asserting on exactly what gets sent to the provider.
 
 Scenario, one scripted assistant turn at a time: spawn a steerable tool ->
 attempt the response tool while it's pending (refused) -> recover with an

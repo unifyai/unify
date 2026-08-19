@@ -106,7 +106,7 @@ async def _wait_for_tool_result(
 
     - a ``check_status_<call_id>`` tool message: the sole below-watermark
       delivery path for a final result once the original placeholder has
-      already been dispatched (see plan-append-only-transcript);
+      already been dispatched;
     - a coalesced ``[progress ...]`` / ``[clarification ...]`` user-role
       tail message: what nested-handle adoption (or any notification) now
       writes instead of rewriting a frozen placeholder in place.

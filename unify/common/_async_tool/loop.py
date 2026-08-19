@@ -2249,7 +2249,7 @@ async def async_tool_loop_inner(
             # Inject the response-submission tool whenever response_format is
             # set — schema presence no longer depends on whether other tools
             # are in-flight (that used to mask it out and back in on every
-            # pending<->idle transition, a prefix break each time; see T4-4).
+            # pending<->idle transition, a prefix break each time).
             # This tool is semantically "end the current turn" (the
             # tool-call analogue of a bare text response). Calling it while
             # tools are still pending is refused at execution time instead —
