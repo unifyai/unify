@@ -293,8 +293,8 @@ async def test_composite_dict_return_with_handle(llm_config):
     # The handle's final result lands either in the placeholder (if it was
     # still mutable when the handle completed) or in a per-child
     # check_status pair (if the placeholder had already been dispatched in
-    # an earlier request while the model kept waiting) — see
-    # plan-append-only-transcript. Either way it must be in the transcript.
+    # an earlier request while the model kept waiting). Either way it must
+    # be in the transcript.
     assert any_tool_message_content_contains(client.messages, "inner-complete"), (
         "Expected the handle's final result ('inner-complete') to appear "
         "somewhere in the transcript (placeholder or check_status pair)"
@@ -588,7 +588,7 @@ async def test_multi_handle_return_completes(llm_config):
 
     # Each handle's terminal result lands either in the shared placeholder
     # (while still mutable) or its own per-child check_status pair (once
-    # the placeholder has been dispatched) — see plan-append-only-transcript.
+    # the placeholder has been dispatched).
     assert any_tool_message_content_contains(client.messages, "alpha-result"), (
         "Expected alpha-result somewhere in the transcript (placeholder or "
         "check_status pair)"
@@ -687,8 +687,7 @@ async def test_composite_tuple_return(llm_config):
     assert final is not None, "Loop should complete"
 
     # The handle's terminal result lands either in the placeholder (while
-    # still mutable) or its own check_status pair (once dispatched) — see
-    # plan-append-only-transcript.
+    # still mutable) or its own check_status pair (once dispatched).
     assert any_tool_message_content_contains(client.messages, "tuple-handle-done"), (
         "Expected the handle's result ('tuple-handle-done') somewhere in "
         "the transcript (placeholder or check_status pair)"

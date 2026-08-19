@@ -87,11 +87,12 @@ _DIGEST_SOURCES_CAP = 20
 _DIGEST_RESULT_HEAD_CHARS = 240
 
 # Long trajectories would otherwise grow the digest unboundedly (measured:
-# ~45 tokens/turn, so an uncapped digest blows past the plan's ~2k-token
-# target well before 100 turns and the 20k inspection-request ceiling around
-# 340). Cap turns at head+tail with an explicit elision marker in between —
-# elided turns keep their original transcript `idx`, so they stay reachable
-# via read_child_message even though they're not listed individually.
+# ~45 tokens/turn, so an uncapped digest blows past the ~2k-token design
+# budget for digests well before 100 turns and the 20k inspection-request
+# ceiling around 340). Cap turns at head+tail with an explicit elision
+# marker in between — elided turns keep their original transcript `idx`, so
+# they stay reachable via read_child_message even though they're not listed
+# individually.
 _DIGEST_TURNS_HEAD = 17
 _DIGEST_TURNS_TAIL = 17
 _DIGEST_MAX_TURNS = _DIGEST_TURNS_HEAD + _DIGEST_TURNS_TAIL

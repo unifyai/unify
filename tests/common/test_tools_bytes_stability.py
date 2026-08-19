@@ -1,10 +1,9 @@
 """Unit tests for the byte-stable tools schema (steer() dispatcher).
 
-Covers the core invariant plan-stable-tools-and-inspection's acceptance #1
-asks for: the outer loop's tools array stops being a rendering of live
-per-call state. These are symbolic tests of DynamicToolFactory/ToolsData
-directly — no LLM calls — mirroring test_serialization_determinism.py and
-test_append_only_transcript.py's style.
+Covers the core invariant: the outer loop's tools array stops being a
+rendering of live per-call state. These are symbolic tests of
+DynamicToolFactory/ToolsData directly — no LLM calls — mirroring
+test_serialization_determinism.py and test_append_only_transcript.py's style.
 
 These tests exercise DynamicToolFactory/ToolsData in isolation and cannot
 observe the tools array loop.py actually assembles and sends

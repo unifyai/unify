@@ -1,4 +1,4 @@
-"""Forced-compression watermark reset — plan-append-only-transcript acceptance #1.
+"""Forced-compression watermark reset.
 
 A compression rebuild is a deliberate full-cache sacrifice: the transcript it
 replaces no longer exists, so nothing in the rebuilt one was ever dispatched.

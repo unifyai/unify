@@ -1,5 +1,5 @@
 """Unit tests for transcript_ops.extract_clarifications against the coalesced
-[clarification <call_id>] tail-message shape (plan-append-only-transcript).
+[clarification <call_id>] tail-message shape.
 """
 
 from __future__ import annotations

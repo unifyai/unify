@@ -478,7 +478,7 @@ class ToolsData:
         flag) so the guidance lands exactly once, whichever trigger — a real
         user interjection, or the first ``[progress]``/``[clarification]``
         message — fires first. Most loops never see a user interjection, so
-        gating solely on that (the pre-fixup behavior) left every sub-agent
+        gating solely on that (the previous behavior) left every sub-agent
         and unattended task without the guidance that tells the model these
         messages are not requests to incorporate.
 
@@ -618,7 +618,7 @@ class ToolsData:
 
         Deliberately carries no argument payload — the adjacent assistant
         `tool_calls` entry already has the full arguments; duplicating them
-        here would freeze a second copy into the prefix forever (T4-2).
+        here would freeze a second copy into the prefix forever.
         Custom-method discoverability, when a handle is already attached,
         lives in `record_tool_capability_delta` instead, so a call that
         never gets a handle never pays for that either.
@@ -676,7 +676,7 @@ class ToolsData:
         Deliberately carries no argument payload, same as
         ``record_tool_started`` — the adjacent assistant `tool_calls` entry
         already has the full arguments; duplicating them here would freeze a
-        second copy into the prefix forever (T4-2).
+        second copy into the prefix forever.
         """
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
