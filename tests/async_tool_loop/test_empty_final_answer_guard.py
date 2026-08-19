@@ -26,6 +26,10 @@ import pytest
 from unify.common.async_tool_loop import start_async_tool_loop
 from unify.common.llm_client import new_llm_client
 from unify.common._async_tool.loop import _extract_final_answer_text
+from unify.common._async_tool.tools_data import (
+    is_loop_authored_message,
+    loop_user_notice,
+)
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_tool_request, _wait_for_condition
 
@@ -514,11 +518,10 @@ async def test_lifecycle_announcement_between_answer_and_empty_recovers(
     # handing the loop its empty terminal turn.
     await _wait_for_condition(lambda: _dispatched_at_least(2), poll=0.02, timeout=10.0)
     client.messages.append(
-        {
-            "role": "user",
-            "content": "[askable call_q] quick_tool completed and is askable.",
-            "_lifecycle_msg": True,
-        },
+        loop_user_notice(
+            "[askable call_q] quick_tool completed and is askable.",
+            _lifecycle_msg=True,
+        ),
     )
     await turn_queue.put(_final_msg(""))
 
@@ -579,11 +582,150 @@ async def test_nudge_message_does_not_become_boundary_on_retry(
     # correctly recognized as non-boundary.
     await _wait_for_condition(lambda: _dispatched_at_least(2), poll=0.02, timeout=10.0)
     client.messages.append(
+        loop_user_notice("Produce your final answer as text.", _nudge_msg=True),
+    )
+    await turn_queue.put(_final_msg(""))
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "The answer is 42."
+
+
+def test_loop_user_notice_output_is_recognized_as_loop_authored() -> None:
+    """Every message the constructor builds must satisfy the predicate it
+    exists to feed — the pairing the rest of this file's loop-level probes
+    depend on — while a hand-built user message without the marker (a
+    stand-in for a genuine interjection) must not."""
+    notice = loop_user_notice("Context window is nearly full.")
+    assert notice["role"] == "user"
+    assert notice["content"] == "Context window is nearly full."
+    assert is_loop_authored_message(notice)
+
+    # Extra purpose-specific markers pass through and still satisfy the
+    # predicate via the constructor's own stamp.
+    marked = loop_user_notice("some status", _lifecycle_msg=True)
+    assert marked["_lifecycle_msg"] is True
+    assert is_loop_authored_message(marked)
+
+    genuine_interjection = {
+        "role": "user",
+        "content": "actually, do X instead",
+        "_interjection": True,
+    }
+    assert not is_loop_authored_message(genuine_interjection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_compression_threshold_notice_between_answer_and_empty_recovers(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A 'context window nearly full' notice landing between the real
+    answer and a later empty terminal turn must not block the walk-back
+    from recovering the answer."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+    dispatch_count = 0
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"quick_tool": _quick_tool},
+        interrupt_llm_with_interjections=False,  # legacy blocking mode; no racing needed
+        max_steps=40,
+        timeout=30,
+    )
+
+    async def _dispatched_at_least(n: int) -> bool:
+        return dispatch_count >= n
+
+    await turn_queue.put(
         {
-            "role": "user",
-            "content": "Produce your final answer as text.",
-            "_nudge_msg": True,
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "tool_calls": [_tool_call("call_q", "quick_tool", {})],
         },
+    )
+
+    await _wait_for_condition(lambda: _dispatched_at_least(2), poll=0.02, timeout=10.0)
+    client.messages.append(
+        loop_user_notice(
+            "Context window is nearly full. You must call `compress_context` now.",
+        ),
+    )
+    await turn_queue.put(_final_msg(""))
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "The answer is 42."
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_quota_pruning_notice_between_answer_and_empty_recovers(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """A quota-pruning system notification landing between the real answer
+    and a later empty terminal turn must not block the walk-back from
+    recovering the answer."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+    dispatch_count = 0
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"quick_tool": _quick_tool},
+        interrupt_llm_with_interjections=False,
+        max_steps=40,
+        timeout=30,
+    )
+
+    async def _dispatched_at_least(n: int) -> bool:
+        return dispatch_count >= n
+
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "The answer is 42.",
+            "tool_calls": [_tool_call("call_q", "quick_tool", {})],
+        },
+    )
+
+    await _wait_for_condition(lambda: _dispatched_at_least(2), poll=0.02, timeout=10.0)
+    client.messages.append(
+        loop_user_notice(
+            "System notification: The tool calls in your last response were "
+            "blocked due to quota limits. Please modify your plan or conclude.",
+        ),
     )
     await turn_queue.put(_final_msg(""))
 

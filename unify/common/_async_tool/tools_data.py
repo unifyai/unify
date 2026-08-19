@@ -373,24 +373,41 @@ def compute_context_injection(
     return extra_kwargs, should_inject_ctx
 
 
-def is_loop_authored_message(msg: dict) -> bool:
-    """True for a ``role="user"`` message the loop itself appended —
-    a progress/clarification/lifecycle status tail message, or a parent
-    chat context continuation chunk — never a genuine new user turn.
+def loop_user_notice(content: Any, **extra: Any) -> dict:
+    """Build a ``role="user"`` message the loop itself authors — status,
+    threshold, quota, or context-continuation notices — never a genuine
+    user turn.
 
-    Every consumer that needs to tell "the user said something" apart
-    from "the loop said something" (e.g. a boundary check that must not
-    treat loop-authored status as the start of a new request) should key
-    off this single predicate instead of listing marker keys itself, so
-    a new marker family only needs to be added here once.
+    This is the only place that stamps ``_loop_authored``, the marker
+    ``is_loop_authored_message`` checks. Every loop-authored user-role
+    message must be built here rather than as an inline dict literal, so
+    the marker can never be forgotten at a new call site the way it was
+    at three of them before this existed. ``extra`` still accepts the
+    older, purpose-specific markers (``_progress_msg``, ``_clarify_msg``,
+    ``_lifecycle_msg``, ``_ctx_header``) for callers that also need those
+    for their own coalescing/filtering logic — ``_loop_authored`` is
+    stamped regardless, so the boundary check never depends on which of
+    those a given caller remembered to pass.
+
+    A genuine user interjection (``_interjection``) is built directly at
+    its call site, never through here — that asymmetry is what makes it
+    a real turn boundary.
     """
-    return bool(
-        msg.get("_progress_msg")
-        or msg.get("_clarify_msg")
-        or msg.get("_lifecycle_msg")
-        or msg.get("_ctx_header")
-        or msg.get("_nudge_msg"),
-    )
+    return {"role": "user", "content": content, "_loop_authored": True, **extra}
+
+
+def is_loop_authored_message(msg: dict) -> bool:
+    """True for a ``role="user"`` message the loop itself appended, never
+    a genuine new user turn.
+
+    Every message built by ``loop_user_notice`` carries ``_loop_authored``,
+    so this checks a single flag rather than an inline list of marker
+    keys. Every consumer that needs to tell "the user said something"
+    apart from "the loop said something" (e.g. a boundary check that must
+    not treat loop-authored status as the start of a new request) should
+    use this predicate.
+    """
+    return bool(msg.get("_loop_authored"))
 
 
 class ToolsData:
@@ -550,7 +567,7 @@ class ToolsData:
         if existing is not None and self._mutable(existing):
             existing["content"] = content
             return
-        new_msg = {"role": "user", "content": content, "_progress_msg": True}
+        new_msg = loop_user_notice(content, _progress_msg=True)
         await msg_dispatcher.append_msgs([new_msg])
         info.progress_msg = new_msg
 
@@ -583,7 +600,7 @@ class ToolsData:
         if existing is not None and self._mutable(existing):
             existing["content"] = content
             return
-        new_msg = {"role": "user", "content": content, "_clarify_msg": True}
+        new_msg = loop_user_notice(content, _clarify_msg=True)
         await msg_dispatcher.append_msgs([new_msg])
         info.clarify_msg = new_msg
 
@@ -646,7 +663,7 @@ class ToolsData:
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = f"[steerable {info.call_id}] {info.name} started."
         await msg_dispatcher.append_msgs(
-            [{"role": "user", "content": content, "_lifecycle_msg": True}],
+            [loop_user_notice(content, _lifecycle_msg=True)],
         )
 
     async def record_tool_capability_delta(
@@ -677,7 +694,7 @@ class ToolsData:
         if handle is not None:
             content += self._describe_custom_methods(handle, info.call_id)
         await msg_dispatcher.append_msgs(
-            [{"role": "user", "content": content, "_lifecycle_msg": True}],
+            [loop_user_notice(content, _lifecycle_msg=True)],
         )
 
     async def record_tool_completed_askable(
@@ -704,7 +721,7 @@ class ToolsData:
             f'ask_about_completed_tool(tool_id="{call_id}", question=...).'
         )
         await msg_dispatcher.append_msgs(
-            [{"role": "user", "content": content, "_lifecycle_msg": True}],
+            [loop_user_notice(content, _lifecycle_msg=True)],
         )
 
     def resolve_call_id(
