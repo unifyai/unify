@@ -30,6 +30,7 @@ class _Forwarder:
         body,
         *,
         follow_redirects=False,
+        resource_tenant=None,
     ):
         self.calls.append((provider, method, rest_path))
         if rest_path == "v1.0/$batch":
