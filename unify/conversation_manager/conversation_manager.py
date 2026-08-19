@@ -148,6 +148,17 @@ DESKTOP_SCOPED_MEET_SURFACES = (
 # namespace alone is what a call boundary closes. Kept in step with
 # ``console/src/lib/assistants/desktopViewer.ts``.
 CALL_VIEWER_SOURCE = "call"
+# Stands in for the whole room in a call viewer's key, in place of the person who
+# happened to press the button. A call's stage is one switch, not a tally: it puts
+# the desktop in front of *everyone* on the call, so anybody there may turn it on
+# and anybody there may turn it off again. Keyed per person instead, a second
+# participant's "stop" would discard a key they never held and the desktop would
+# stay up with the button doing nothing.
+#
+# The standalone Desktop tab keeps per-person keys, where the tally is the point:
+# two people with the pane open are two viewers, and one closing it must not take
+# it from the other.
+CALL_VIEWER_IDENTITY = "room"
 
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
@@ -491,12 +502,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # ``*_MEET_SURFACES`` tuples above, which decide what a call boundary
         # closes.
         self.assistant_screen_share_active: bool = False
-        # Who currently has the assistant's desktop open, as
-        # ``"<source>:<user_id>"``. ``assistant_screen_share_active`` above is
-        # this set's emptiness, cached so the ~15 readers of the flag (and the
-        # generic ``_MEET_STATE_FLAGS`` setattr path) keep working unchanged.
-        # Membership, not the last event, decides: several people watch the same
-        # desktop at once, and one of them closing their tab must not tell the
+        # What currently has the assistant's desktop open, as
+        # ``"<source>:<identity>"`` -- one key per Desktop tab, and one per call
+        # for the whole room. ``assistant_screen_share_active`` above is this
+        # set's emptiness, cached so the ~15 readers of the flag (and the generic
+        # ``_MEET_STATE_FLAGS`` setattr path) keep working unchanged.
+        # Membership, not the last event, decides: a call and a Desktop tab watch
+        # the same desktop at once, and either one closing must not tell the
         # assistant that nobody is looking.
         self._assistant_screen_share_viewers: set[str] = set()
         self.user_screen_share_active: bool = False
@@ -826,11 +838,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def assistant_screen_share_viewer_key(user_id: str, source: str) -> str:
         """Identify one viewer of the assistant's desktop.
 
+        A call collapses to one key for the whole room and ``user_id`` is ignored
+        -- see ``CALL_VIEWER_IDENTITY`` for why the person who pressed the button
+        is not the identity that matters there.
+
         A client that predates viewer tracking sends neither field; it collapses
         to a single legacy key so its start/stop pair still opens and closes the
         surface. Without that, an un-upgraded Console would add a viewer it could
         never remove and pin the desktop open for the rest of the session.
         """
+        if source.startswith(f"{CALL_VIEWER_SOURCE}:"):
+            return f"{source}:{CALL_VIEWER_IDENTITY}"
         return f"{source or 'legacy'}:{user_id or 'legacy'}"
 
     def note_assistant_screen_share_viewer(
@@ -840,7 +858,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         source: str,
         watching: bool,
     ) -> bool:
-        """Add or remove one viewer; return whether anyone is watching now."""
+        """Add or remove one viewer; return whether anything is watching now.
+
+        ``user_id`` names the viewer for a Desktop tab and is ignored for a call,
+        where the key stands for the room rather than the person acting -- so any
+        participant's stop closes the share any other participant opened.
+        """
         key = self.assistant_screen_share_viewer_key(user_id, source)
         if watching:
             self._assistant_screen_share_viewers.add(key)
