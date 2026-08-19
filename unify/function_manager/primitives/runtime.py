@@ -1189,6 +1189,38 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
             self._desktop_ns = _ComputerNamespace(self, "desktop")
         return self._desktop_ns
 
+    async def collect_downloads(self) -> list[str]:
+        """Pull everything the desktop has downloaded into this workspace.
+
+        The managed desktop saves browser downloads to ``/Unity/Downloads``,
+        which is a symlink into the synced tree, so the files reach this
+        workspace under ``Downloads/`` -- but only once a sync has run. Sync
+        otherwise happens around desktop *execution*, so a download followed
+        immediately by a read or an ingestion can race it and the file reads as
+        missing. Call this after downloading and before using what you fetched.
+
+        Returns the absolute local paths now present under ``Downloads/``,
+        newest first. Each one can be passed straight to
+        ``primitives.files.parse`` or ``primitives.ingestion.submit``.
+        """
+        from pathlib import Path
+
+        from unify.file_manager.settings import get_local_root
+        from unify.manager_registry import ManagerRegistry
+
+        fm = ManagerRegistry.get_file_manager()
+        adapter = getattr(fm, "_adapter", None)
+        sync_mgr = getattr(adapter, "_sync_manager", None)
+        if sync_mgr is not None and getattr(sync_mgr, "_started", False):
+            await sync_mgr.sync_remote_changes()
+
+        downloads = Path(get_local_root()) / "Downloads"
+        if not downloads.is_dir():
+            return []
+        files = [f for f in downloads.rglob("*") if f.is_file()]
+        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        return [str(f) for f in files]
+
     @property
     def web(self) -> _WebSessionFactory:
         """Factory for independent browser sessions.

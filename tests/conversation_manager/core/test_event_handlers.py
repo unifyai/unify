@@ -2116,16 +2116,17 @@ class TestMeetInteractionEventHandlers:
         assert mock_cm.assistant_screen_share_active is False
 
     @pytest.mark.asyncio
-    async def test_one_viewer_leaving_keeps_the_desktop_open_for_the_others(
+    async def test_a_call_share_is_one_switch_anyone_on_the_call_can_flip(
         self,
         mock_cm,
     ):
-        """Membership decides the surface, not the last event to arrive.
+        """A call shows the desktop to everyone, so it is not a tally of people.
 
-        Everyone on a room call mounts the liveview for themselves, so the
-        assistant is only unwatched once the last of them closes it. Deriving
-        the flag from the newest event instead would let whoever leaves first
-        tell the assistant nobody is looking.
+        The desktop goes up on the stage of a call every participant is watching,
+        which makes it one piece of shared state rather than a view each person
+        holds. Counted per person, the second participant to reach for the switch
+        would be turning off a share they never started: the discard would miss,
+        the desktop would stay up, and the control would do nothing.
         """
         call = "call:sess-1"
         for user_id in ("user-1", "user-2"):
@@ -2137,14 +2138,9 @@ class TestMeetInteractionEventHandlers:
                 mock_cm,
             )
         assert mock_cm.assistant_screen_share_active is True
-        # The second arrival is counted without re-announcing a live share.
+        # The second press is the same switch, not a second thing to turn off,
+        # and a live share is not announced to the assistant twice.
         assert len(mock_cm.notifications_bar.notifications) == 1
-
-        await EventHandler.handle_event(
-            AssistantScreenShareStopped(viewer_user_id="user-1", viewer_source=call),
-            mock_cm,
-        )
-        assert mock_cm.assistant_screen_share_active is True
 
         await EventHandler.handle_event(
             AssistantScreenShareStopped(viewer_user_id="user-2", viewer_source=call),

@@ -541,6 +541,22 @@ def _new_communication_env_builder(
     return env
 
 
+def _assert_matches_golden(new: dict[str, str], old: dict[str, str]) -> None:
+    """The new composition equals the golden dict, modulo the documented
+    UNITY_OFFLINE_* transition aliases the shared builder emits until
+    pre-rename runner images are gone."""
+    assert {
+        key: value for key, value in new.items() if not key.startswith("UNITY_OFFLINE_")
+    } == old
+    assert {
+        key: value for key, value in new.items() if key.startswith("UNITY_OFFLINE_")
+    } == {
+        key.replace("UNIFY_", "UNITY_", 1): value
+        for key, value in new.items()
+        if key.startswith("UNIFY_OFFLINE_")
+    }
+
+
 class TestCommunicationEnvBuilderEquivalence:
     """The new shared+hosted composition matches the old monolithic builder."""
 
@@ -606,7 +622,7 @@ class TestCommunicationEnvBuilderEquivalence:
             run_key="offline:scheduled:assistant-123:101:rev:once",
             job_name="unity-offline-abc",
         )
-        assert new == old
+        _assert_matches_golden(new, old)
 
     def test_triggered_attempt_envs_match_field_for_field(self):
         request, activation, assistant_data = self._scenario(
@@ -633,7 +649,7 @@ class TestCommunicationEnvBuilderEquivalence:
             run_key="offline:triggered:assistant-123:101:rev:contact-77",
             job_name="unity-offline-xyz",
         )
-        assert new == old
+        _assert_matches_golden(new, old)
 
     def test_entrypoint_override_envs_match(self):
         request, activation, assistant_data = self._scenario(
@@ -654,7 +670,7 @@ class TestCommunicationEnvBuilderEquivalence:
             run_key="k",
             job_name="j",
         )
-        assert new == old
+        _assert_matches_golden(new, old)
         assert old["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
     def test_missing_assistant_identity_envs_match(self):
@@ -674,4 +690,4 @@ class TestCommunicationEnvBuilderEquivalence:
             run_key="k",
             job_name="j",
         )
-        assert new == old
+        _assert_matches_golden(new, old)
