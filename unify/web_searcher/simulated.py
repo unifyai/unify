@@ -382,6 +382,21 @@ class SimulatedWebSearcher(BaseWebSearcher):
 
         return handle
 
+    @functools.wraps(BaseWebSearcher.fetch, updated=())
+    async def fetch(self, url: str) -> str:
+        from pathlib import Path
+
+        from unify.file_manager.settings import get_local_root
+        from unify.web_searcher.url_fetch import assert_fetchable, filename_for
+
+        # The guard still runs: a simulated searcher that accepted addresses the
+        # real one refuses would let a rejection surface first in production.
+        assert_fetchable(url)
+        target = Path(get_local_root()) / "Downloads" / filename_for(url)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"simulated download\n")
+        return str(target)
+
     @functools.wraps(BaseWebSearcher.clear, updated=())
     def clear(self) -> None:
         sched = maybe_tool_log_scheduled(

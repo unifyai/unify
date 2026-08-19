@@ -112,6 +112,41 @@ class BaseWebSearcher(BaseStateManager, metaclass=SingletonABCMeta):
         raise NotImplementedError
 
     @abstractmethod
+    async def fetch(self, url: str) -> str:
+        """Download a public URL and return the local path it was saved to.
+
+        Purpose
+        -------
+        For retrieving the *bytes* at an address rather than reading about it:
+        a CSV export link, a PDF, a dataset, or a folder shared with "anyone
+        with the link", which is an ordinary public URL however it was created.
+        Use ``ask`` instead when the question is about content and the answer is
+        prose.
+
+        The returned path is an ordinary file in the workspace, so it can be
+        passed straight to file parsing or to ingestion without any further
+        step.
+
+        Scope
+        -----
+        The public internet only. Addresses that resolve inside a private
+        network are refused, as are schemes other than http and https, and
+        credentials embedded in the URL. A page that requires signing in
+        returns whatever an anonymous visitor would get -- usually a login
+        page, not the file -- so this is not a route to gated content; reach
+        that through the connected workspace or integration instead.
+
+        Very large downloads and slow servers are cut off rather than allowed
+        to run indefinitely.
+
+        Returns
+        -------
+        str
+            Absolute path to the downloaded file.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def clear(self) -> None:
         raise NotImplementedError
 
