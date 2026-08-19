@@ -55,13 +55,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # package regardless of invocation style, without touching the shared venv.
 sys.path.insert(0, str(REPO_ROOT))
 
-# The exact question the production twin (agent 526) answered — verbatim,
-# so a byte-for-byte-comparable request shape reaches the model.
-QUESTION = (
+# Action #1 (twin 526's message-1 repro) — verbatim, so a byte-for-byte-
+# comparable request shape reaches the model. Default request; override with
+# --request for a different action.
+ACTION1_QUESTION = (
     "Research the current NotebookLM connector requirements. Determine "
     "whether the connector can connect directly to a standard personal "
     "Google account's NotebookLM, or whether it requires NotebookLM "
     "Enterprise and/or a Google Cloud project. Read-only research."
+)
+
+# Action #2 — the ticketed action, where prod decomposed into 3 PARALLEL
+# primitives.actor.act lanes (official/community/alternatives) via
+# asyncio.gather. Baseline: 245 calls, $43.89 raw sol, 7.4 min.
+ACTION2_QUESTION = (
+    "Research the current practical options for connecting a standard "
+    "consumer/personal Google NotebookLM account to an external assistant "
+    "via MCP or any supported API"
 )
 
 # Budget guard: abort the run rather than let a runaway fan-out burn the
@@ -175,6 +185,12 @@ def _derive_phase(lineage: list[str]) -> str:
     joined = "->".join(lineage)
     if "StorageCheck" in joined or "ProactiveStorage" in joined:
         return "post_act_storage"
+    # SteerableToolHandle.ask()'s digest/inspection sub-loop, loop_id
+    # f"Question({parent_label})" — a *sibling* of the loop it inspects, not
+    # a child, per async_tool_loop.py:632. Must be checked before the
+    # WebSearcher/CodeActActor counts below since it can inspect either.
+    if "Question(" in joined:
+        return "inspection"
     if "WebSearcher" in joined:
         return "web_ask"
     n_actor_loops = joined.count("CodeActActor.act")
@@ -360,6 +376,7 @@ def build_summary(
     label: str,
     wall_clock_s: float,
     model: str,
+    request: str = ACTION1_QUESTION,
 ) -> str:
     lines: list[str] = []
     total_calls = len(recorder.records)
@@ -380,6 +397,7 @@ def build_summary(
     sol_equiv_cost = total_cost_raw * sol_multiplier
 
     lines.append(f"=== local_act_replay summary — run '{label}' ===")
+    lines.append(f"request: {request[:120]}{'...' if len(request) > 120 else ''}")
     lines.append(f"model: {model}")
     lines.append(f"wall clock: {wall_clock_s:.1f}s")
     lines.append(f"total calls: {total_calls}")
@@ -429,24 +447,91 @@ def build_summary(
         lines.append(
             f"  {len(by_sub_agent)} distinct sub-agent(s) spawned via primitives.actor.act",
         )
+        # Overlap check: do any two sub-agents' elapsed_s windows intersect?
+        # That is the only way to tell "concurrent lanes" (asyncio.gather)
+        # apart from "sequential spawns" from wall-clock data alone.
+        windows = [
+            (min(r.elapsed_s for r in recs), max(r.elapsed_s for r in recs), key)
+            for key, recs in by_sub_agent.items()
+        ]
+        windows.sort()
+        concurrent_pairs = [
+            (windows[i][2], windows[i + 1][2])
+            for i in range(len(windows) - 1)
+            if windows[i + 1][0] < windows[i][1]
+        ]
+        lines.append(
+            "  concurrency: "
+            + (
+                f"{len(concurrent_pairs)} overlapping window pair(s) — lanes ran in parallel"
+                if concurrent_pairs
+                else "no overlapping windows observed — lanes ran sequentially"
+            ),
+        )
         for key, recs in by_sub_agent.items():
             sub_prompt = sum(r.prompt_tokens for r in recs)
             sub_cached = sum(r.cached_tokens for r in recs)
             sub_cost = sum(r.cost_usd for r in recs)
             sub_hit = (sub_cached / sub_prompt) if sub_prompt else 0.0
             first = recs[0]
+            hit_sequence = ",".join(
+                f"{(r.cached_tokens / r.prompt_tokens if r.prompt_tokens else 0.0):.0%}"
+                for r in recs
+            )
             lines.append(
                 f"  {key}: calls={len(recs)}  prompt_tok={sub_prompt:,}  "
                 f"cache_hit={sub_hit:.1%}  cost=${sub_cost:.4f}  "
+                f"window=[{recs[0].elapsed_s:.1f}s,{recs[-1].elapsed_s:.1f}s]  "
                 f"first_call={first.prompt_tokens:,}tok/{first.cached_tokens:,}cached "
                 "(fat-prompt respawn check)",
             )
+            lines.append(f"      per-call cache-hit sequence: {hit_sequence}")
+
+            # Parent-loop resume: the first main_act_loop call whose elapsed_s
+            # is after this sub-agent's last call — the baseline's parent went
+            # 0% cache across exactly this spawn/wait/resume boundary.
+            resume = next(
+                (
+                    p
+                    for p in sorted(recorder.records, key=lambda r: r.elapsed_s)
+                    if p.phase == "main_act_loop" and p.elapsed_s > recs[-1].elapsed_s
+                ),
+                None,
+            )
+            if resume is not None:
+                resume_hit = (
+                    (resume.cached_tokens / resume.prompt_tokens)
+                    if resume.prompt_tokens
+                    else 0.0
+                )
+                lines.append(
+                    f"      parent resume after this sub-agent: "
+                    f"prompt={resume.prompt_tokens:,}  cache_hit={resume_hit:.1%}  "
+                    f"cost=${resume.cost_usd:.4f}  "
+                    f"gap={resume.elapsed_s - recs[-1].elapsed_s:.1f}s",
+                )
         lines.append("")
     else:
         lines.append(
             "--- sub-agent fan-out analysis --- \n"
             "  no primitives.actor.act sub-agent spawn observed in this run "
             "(0 calls tagged sub_agent_actor)",
+        )
+        lines.append("")
+
+    inspection_records = [r for r in recorder.records if r.phase == "inspection"]
+    if inspection_records:
+        insp_prompt = sum(r.prompt_tokens for r in inspection_records)
+        insp_cached = sum(r.cached_tokens for r in inspection_records)
+        insp_cost = sum(r.cost_usd for r in inspection_records)
+        insp_hit = (insp_cached / insp_prompt) if insp_prompt else 0.0
+        max_insp = max(inspection_records, key=lambda r: r.prompt_tokens)
+        lines.append("--- inspection (ask_about_completed_tool / digest) calls ---")
+        lines.append(
+            f"  calls={len(inspection_records)}  prompt_tok={insp_prompt:,}  "
+            f"cache_hit={insp_hit:.1%}  cost=${insp_cost:.4f}  "
+            f"max_single_call={max_insp.prompt_tokens:,}tok "
+            "(T5 digest budget target: ~2k-3k tok; the old mega-read pathology was ~204k)",
         )
         lines.append("")
 
@@ -499,20 +584,35 @@ def build_summary(
     )
     lines.append("")
 
-    lines.append("--- vs. production baseline (santos2124 post-diet twin) ---")
+    is_action2 = request.strip() == ACTION2_QUESTION.strip()
     lines.append(
-        "  baseline: $10.91 billed / $9.09 raw, 72 calls, 2.84M prompt tokens, "
-        "parent-loop 0% cache after turn 2 (model: gpt-5.6-sol)",
+        "--- vs. production baseline (santos2124 "
+        + ("Action #2, the ticketed action" if is_action2 else "Action #1, twin 526")
+        + ") ---",
     )
+    if is_action2:
+        lines.append(
+            "  baseline: $43.89 raw sol, 245 calls, 7.4 min, peak 78 calls/min, "
+            "3 PARALLEL primitives.actor.act lanes (official/community/alternatives) "
+            "via asyncio.gather — run standalone here, NOT after Action #1's answer "
+            "was already in context as it was in prod (fidelity caveat)",
+        )
+    else:
+        lines.append(
+            "  baseline: $10.91 billed / $9.09 raw, 72 calls, 2.84M prompt tokens, "
+            "parent-loop 0% cache after turn 2, 1 sequential primitives.actor.act "
+            "sub-agent (model: gpt-5.6-sol)",
+        )
     lines.append(
         f"  this run: ${total_cost_raw:.4f} raw {model} "
         f"(${sol_equiv_cost:.4f} sol-equivalent), {total_calls} calls, "
         f"{total_prompt:,} prompt tokens, parent-loop cache-hit {main_loop_hit:.1%}",
     )
+    baseline_raw = 43.89 if is_action2 else 9.09
     if sol_equiv_cost > 0:
         lines.append(
-            f"  sol-equivalent cost delta vs $9.09 raw baseline: "
-            f"{(sol_equiv_cost / 9.09 - 1) * 100:+.1f}%",
+            f"  sol-equivalent cost delta vs ${baseline_raw:.2f} raw baseline: "
+            f"{(sol_equiv_cost / baseline_raw - 1) * 100:+.1f}%",
         )
     lines.append("")
 
@@ -530,6 +630,8 @@ async def run_once(
     model: str,
     out_dir: Path,
     abort_usd: float = RAW_COST_ABORT_THRESHOLD_USD,
+    request: str = ACTION1_QUESTION,
+    guidelines: str | None = None,
 ) -> None:
     import unify
     from unify.session_details import SESSION_DETAILS
@@ -593,7 +695,8 @@ async def run_once(
     t_start = time.time()
     try:
         handle = await actor.act(
-            QUESTION,
+            request,
+            guidelines=guidelines,
             clarification_enabled=False,
             can_store=True,
         )
@@ -646,6 +749,7 @@ async def run_once(
         label=label,
         wall_clock_s=wall_clock_s,
         model=model,
+        request=request,
     )
     if aborted:
         summary += "\n*** RUN ABORTED BY BUDGET GUARD ***\n"
@@ -688,6 +792,21 @@ def main() -> None:
         default=RAW_COST_ABORT_THRESHOLD_USD,
         help=f"Raw-cost budget guard threshold (default: ${RAW_COST_ABORT_THRESHOLD_USD:.2f}).",
     )
+    parser.add_argument(
+        "--request",
+        default=None,
+        help="Request text to send to act(). Default: Action #1 (twin-526 repro).",
+    )
+    parser.add_argument(
+        "--action2",
+        action="store_true",
+        help="Shorthand for --request=<Action #2, the ticketed 3-lane-fan-out action>.",
+    )
+    parser.add_argument(
+        "--guidelines",
+        default=None,
+        help="Optional guidelines string passed through to actor.act(guidelines=...).",
+    )
     args = parser.parse_args()
 
     _bootstrap_env(args.model)
@@ -698,11 +817,20 @@ def main() -> None:
         else REPO_ROOT / "logs" / "local_act_replay" / args.label
     )
 
+    if args.request is not None:
+        request = args.request
+    elif args.action2:
+        request = ACTION2_QUESTION
+    else:
+        request = ACTION1_QUESTION
+
     asyncio.run(
         run_once(
             label=args.label,
             model=args.model,
             out_dir=out_dir,
+            request=request,
+            guidelines=args.guidelines,
             abort_usd=args.abort_usd,
         ),
     )
