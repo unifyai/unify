@@ -54,7 +54,12 @@ from .messages import (
     schedule_missing_for_message,
     is_mutable,
 )
-from .tools_data import ToolsData, compute_context_injection, is_loop_authored_message
+from .tools_data import (
+    ToolsData,
+    compute_context_injection,
+    is_loop_authored_message,
+    loop_user_notice,
+)
 from .dynamic_tools_factory import DynamicToolFactory
 from .time_context import create_time_context, TimeContext
 from .context_compression import (
@@ -1928,11 +1933,7 @@ async def async_tool_loop_inner(
                         f"{json.dumps(ctx_cont_transformed, indent=2)}"
                     )
                     msgs_to_append.append(
-                        {
-                            "role": "user",
-                            "_ctx_header": True,
-                            "content": ctx_cont_content,
-                        },
+                        loop_user_notice(ctx_cont_content, _ctx_header=True),
                     )
                 # Only append user message if there's actual content
                 if _msg_text:
@@ -2222,7 +2223,7 @@ async def async_tool_loop_inner(
                             prefix=ICONS["summarize"],
                         )
                     await _msg_dispatcher.append_msgs(
-                        [{"role": "user", "content": _threshold_msg}],
+                        [loop_user_notice(_threshold_msg)],
                     )
                 else:
                     # Over threshold, no pending → compress_context plus
@@ -2254,7 +2255,7 @@ async def async_tool_loop_inner(
                             prefix=ICONS["summarize"],
                         )
                     await _msg_dispatcher.append_msgs(
-                        [{"role": "user", "content": _threshold_msg}],
+                        [loop_user_notice(_threshold_msg)],
                     )
             else:
                 # Schema constancy beats schema minimalism: tools stay visible
@@ -2939,10 +2940,11 @@ async def async_tool_loop_inner(
                     msg.get("content") or "",
                 ):
                     # Use 'user' role to ensure robust alternation for all providers
-                    sys_notice = {
-                        "role": "user",
-                        "content": "System notification: The tool calls in your last response were blocked due to quota limits. Please modify your plan or conclude.",
-                    }
+                    sys_notice = loop_user_notice(
+                        "System notification: The tool calls in your last response "
+                        "were blocked due to quota limits. Please modify your plan "
+                        "or conclude.",
+                    )
                     await _msg_dispatcher.append_msgs([sys_notice])
 
                 for idx, call in enumerate(msg["tool_calls"]):  # capture index
@@ -4250,11 +4252,10 @@ async def async_tool_loop_inner(
                     _empty_final_answer_retries += 1
                     await _msg_dispatcher.append_msgs(
                         [
-                            {
-                                "role": "user",
-                                "content": "Produce your final answer as text.",
-                                "_nudge_msg": True,
-                            },
+                            loop_user_notice(
+                                "Produce your final answer as text.",
+                                _nudge_msg=True,
+                            ),
                         ],
                     )
                     continue
