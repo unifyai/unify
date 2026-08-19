@@ -222,6 +222,31 @@ def _copy_session_method_metadata(wrapper, method_name: str) -> None:
         pass
 
 
+def _require_desktop_entitlement(surface: str) -> None:
+    """Refuse immediately when this assistant has no managed desktop add-on.
+
+    Both the desktop and browser namespaces otherwise block on ``_vm_ready``
+    for five minutes and then raise "Managed VM did not become ready", which on
+    an assistant that never had the add-on is a long stall ending in a message
+    about a VM the user did not provision. Entitlement is knowable up front, so
+    say so up front.
+
+    ``managed_desktop_entitled`` is the right gate rather than
+    ``has_managed_desktop``: the latter also requires a bound URL, which is
+    precisely what waiting is meant to obtain.
+    """
+    from unify.session_details import SESSION_DETAILS
+
+    if SESSION_DETAILS.assistant.managed_desktop_entitled:
+        return
+    raise RuntimeError(
+        f"No managed desktop is provisioned for this assistant, so {surface} "
+        "is unavailable. Enable the Desktop Computer add-on in Console, or use "
+        "a route that does not need one -- connected workspace and integration "
+        "APIs read files without a desktop.",
+    )
+
+
 def _make_session_method(
     method_name: str,
     owner: "ComputerPrimitives",
@@ -264,6 +289,7 @@ def _make_session_method(
             kwargs.pop("_clarification_up_q", None)
             kwargs.pop("_clarification_down_q", None)
             if not _vm_ready.is_set():
+                _require_desktop_entitlement(f"{mode}.{method_name}")
                 ready = await asyncio.to_thread(_vm_ready.wait, 300)
                 if not ready:
                     raise RuntimeError(
@@ -297,6 +323,7 @@ def _make_session_method(
         kwargs.pop("_clarification_up_q", None)
         kwargs.pop("_clarification_down_q", None)
         if not _vm_ready.is_set():
+            _require_desktop_entitlement(f"{mode}.{method_name}")
             _w_log.debug(f"⏱️ [desktop.{method_name} +{_w_ms()}] waiting for _vm_ready")
             ready = await asyncio.to_thread(_vm_ready.wait, 300)
             _w_log.debug(
