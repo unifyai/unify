@@ -368,7 +368,16 @@ def build_summary(
     total_cached = sum(r.cached_tokens for r in recorder.records)
     total_cost_raw = sum(r.cost_usd for r in recorder.records)
     overall_hit_rate = (total_cached / total_prompt) if total_prompt else 0.0
-    sol_equiv_cost = total_cost_raw * SOL_EQUIVALENT_MULTIPLIER
+    # terra is exactly half sol's rates; a run already on sol needs no
+    # multiplier (applying x2 there would double-count). Anything else is
+    # reported unmultiplied with a note, rather than silently assuming terra.
+    if "gpt-5.6-terra" in model:
+        sol_multiplier = SOL_EQUIVALENT_MULTIPLIER
+    elif "gpt-5.6-sol" in model:
+        sol_multiplier = 1.0
+    else:
+        sol_multiplier = 1.0
+    sol_equiv_cost = total_cost_raw * sol_multiplier
 
     lines.append(f"=== local_act_replay summary — run '{label}' ===")
     lines.append(f"model: {model}")
@@ -379,9 +388,12 @@ def build_summary(
     lines.append(f"total cached (cache-read) tokens: {total_cached:,}")
     lines.append(f"overall cache-hit rate: {overall_hit_rate:.1%}")
     lines.append(f"total cost (raw, {model}): ${total_cost_raw:.4f}")
-    lines.append(
-        f"total cost (sol-equivalent, x{SOL_EQUIVALENT_MULTIPLIER:.0f}): ${sol_equiv_cost:.4f}",
-    )
+    if sol_multiplier != 1.0:
+        lines.append(
+            f"total cost (sol-equivalent, x{sol_multiplier:.0f}): ${sol_equiv_cost:.4f}",
+        )
+    else:
+        lines.append("total cost (sol-equivalent): same as raw — already sol pricing")
     lines.append("")
 
     lines.append("--- per-phase breakdown ---")
@@ -399,6 +411,44 @@ def build_summary(
             f"cost=${stats['cost']:.4f}",
         )
     lines.append("")
+
+    sub_agent_records = [r for r in recorder.records if r.phase == "sub_agent_actor"]
+    if sub_agent_records:
+        lines.append("--- sub-agent fan-out analysis ---")
+        by_sub_agent: dict[str, list[CallRecord]] = {}
+        for r in sub_agent_records:
+            # The distinct sub-agent instance is its own "CodeActActor.act(xxx)"
+            # lineage segment — the last one, since a sub-agent can itself
+            # spawn deeper sub-agents.
+            segments = r.lineage.split("->")
+            sub_agent_segments = [
+                s for s in segments if s.startswith("CodeActActor.act(")
+            ]
+            key = sub_agent_segments[-1] if sub_agent_segments else "unknown"
+            by_sub_agent.setdefault(key, []).append(r)
+        lines.append(
+            f"  {len(by_sub_agent)} distinct sub-agent(s) spawned via primitives.actor.act",
+        )
+        for key, recs in by_sub_agent.items():
+            sub_prompt = sum(r.prompt_tokens for r in recs)
+            sub_cached = sum(r.cached_tokens for r in recs)
+            sub_cost = sum(r.cost_usd for r in recs)
+            sub_hit = (sub_cached / sub_prompt) if sub_prompt else 0.0
+            first = recs[0]
+            lines.append(
+                f"  {key}: calls={len(recs)}  prompt_tok={sub_prompt:,}  "
+                f"cache_hit={sub_hit:.1%}  cost=${sub_cost:.4f}  "
+                f"first_call={first.prompt_tokens:,}tok/{first.cached_tokens:,}cached "
+                "(fat-prompt respawn check)",
+            )
+        lines.append("")
+    else:
+        lines.append(
+            "--- sub-agent fan-out analysis --- \n"
+            "  no primitives.actor.act sub-agent spawn observed in this run "
+            "(0 calls tagged sub_agent_actor)",
+        )
+        lines.append("")
 
     lines.append("--- worst 5 calls by cost ---")
     worst = sorted(recorder.records, key=lambda r: -r.cost_usd)[:5]
@@ -455,7 +505,7 @@ def build_summary(
         "parent-loop 0% cache after turn 2 (model: gpt-5.6-sol)",
     )
     lines.append(
-        f"  this run: ${total_cost_raw:.4f} raw terra "
+        f"  this run: ${total_cost_raw:.4f} raw {model} "
         f"(${sol_equiv_cost:.4f} sol-equivalent), {total_calls} calls, "
         f"{total_prompt:,} prompt tokens, parent-loop cache-hit {main_loop_hit:.1%}",
     )
@@ -474,7 +524,13 @@ def build_summary(
 # ---------------------------------------------------------------------------
 
 
-async def run_once(*, label: str, model: str, out_dir: Path) -> None:
+async def run_once(
+    *,
+    label: str,
+    model: str,
+    out_dir: Path,
+    abort_usd: float = RAW_COST_ABORT_THRESHOLD_USD,
+) -> None:
     import unify
     from unify.session_details import SESSION_DETAILS
 
@@ -517,12 +573,12 @@ async def run_once(*, label: str, model: str, out_dir: Path) -> None:
         nonlocal aborted
         while True:
             await asyncio.sleep(2.0)
-            if recorder.total_cost() > RAW_COST_ABORT_THRESHOLD_USD:
+            if recorder.total_cost() > abort_usd:
                 aborted = True
                 print(
                     f"[local_act_replay] BUDGET GUARD: raw cost "
                     f"${recorder.total_cost():.2f} exceeded "
-                    f"${RAW_COST_ABORT_THRESHOLD_USD:.2f} — stopping run '{label}'.",
+                    f"${abort_usd:.2f} — stopping run '{label}'.",
                     file=sys.stderr,
                 )
                 try:
@@ -626,6 +682,12 @@ def main() -> None:
         default=None,
         help="Output directory (default: logs/local_act_replay/<label>/).",
     )
+    parser.add_argument(
+        "--abort-usd",
+        type=float,
+        default=RAW_COST_ABORT_THRESHOLD_USD,
+        help=f"Raw-cost budget guard threshold (default: ${RAW_COST_ABORT_THRESHOLD_USD:.2f}).",
+    )
     args = parser.parse_args()
 
     _bootstrap_env(args.model)
@@ -636,7 +698,14 @@ def main() -> None:
         else REPO_ROOT / "logs" / "local_act_replay" / args.label
     )
 
-    asyncio.run(run_once(label=args.label, model=args.model, out_dir=out_dir))
+    asyncio.run(
+        run_once(
+            label=args.label,
+            model=args.model,
+            out_dir=out_dir,
+            abort_usd=args.abort_usd,
+        ),
+    )
 
 
 if __name__ == "__main__":
