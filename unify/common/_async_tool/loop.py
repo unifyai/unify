@@ -54,7 +54,7 @@ from .messages import (
     schedule_missing_for_message,
     is_mutable,
 )
-from .tools_data import ToolsData, compute_context_injection
+from .tools_data import ToolsData, compute_context_injection, is_loop_authored_message
 from .dynamic_tools_factory import DynamicToolFactory
 from .time_context import create_time_context, TimeContext
 from .context_compression import (
@@ -349,6 +349,35 @@ def _check_valid_response_format(response_format: Any) -> dict[str, Any]:
     if normalized is None:
         raise TypeError("response_format is required")
     return normalized.answer_json_schema
+
+
+def _extract_final_answer_text(content: Any) -> Optional[str]:
+    """Normalize assistant content to the text a user would read, for
+    deciding whether a terminal turn has a substantive answer.
+
+    Handles both a plain string and a multimodal content-block list (only
+    ``"text"`` blocks contribute); returns ``None`` when the result is
+    empty or whitespace-only in either shape, so callers can use a plain
+    ``is None`` check rather than relying on truthiness — which passes a
+    whitespace-only string and misreports a non-empty block list as
+    substantive even when every block's text is blank. When a block list
+    does carry substantive text, the extracted text is returned rather
+    than the raw list, since every consumer downstream treats the final
+    answer as plain text.
+    """
+    if isinstance(content, str):
+        return content if content.strip() else None
+    if isinstance(content, list):
+        texts = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ]
+        joined = "".join(texts)
+        return joined if joined.strip() else None
+    return None
 
 
 async def async_tool_loop_inner(
@@ -4183,22 +4212,20 @@ async def async_tool_loop_inner(
                     f"max_steps ({max_steps}) exceeded",
                 )
 
-            final_content = msg["content"]
+            final_content = _extract_final_answer_text(msg["content"])
 
-            # An empty/null terminal turn must never override a substantive
-            # answer already sitting in the transcript — a model that has
-            # nothing left to add after answering can still return empty
-            # content on a later turn, and that must not erase the answer.
-            # Every consumer below (multi-handle, persist, the plain return)
-            # reads final_content after this point, so resolving it once
-            # here covers all of them.
-            if not final_content:
+            # An empty/null/whitespace-only terminal turn must never override
+            # a substantive answer already sitting in the transcript — a
+            # model that has nothing left to add after answering can still
+            # return empty content on a later turn, and that must not erase
+            # the answer. Every consumer below (multi-handle, persist, the
+            # plain return) reads final_content after this point, so
+            # resolving it once here covers all of them.
+            if final_content is None:
                 _substantive_content = None
                 for _hist_msg in reversed(client.messages):
                     _hist_role = _hist_msg.get("role")
-                    if _hist_role == "user" and not (
-                        _hist_msg.get("_progress_msg") or _hist_msg.get("_clarify_msg")
-                    ):
+                    if _hist_role == "user" and not is_loop_authored_message(_hist_msg):
                         # A genuine user turn boundary (not a loop-authored
                         # status message) — don't reach past it into an
                         # earlier request/interjection cycle for an answer
@@ -4206,8 +4233,8 @@ async def async_tool_loop_inner(
                         break
                     if _hist_role != "assistant":
                         continue
-                    _hist_content = _hist_msg.get("content")
-                    if _hist_content:
+                    _hist_content = _extract_final_answer_text(_hist_msg.get("content"))
+                    if _hist_content is not None:
                         _substantive_content = _hist_content
                         break
 
@@ -4217,13 +4244,16 @@ async def async_tool_loop_inner(
                     # No substantive answer exists anywhere in this cycle
                     # either — give the model a bounded number of chances to
                     # produce one before giving up loudly. Appended at the
-                    # tail; nothing already dispatched is touched.
+                    # tail; nothing already dispatched is touched. Marked
+                    # loop-authored so it can never masquerade as a genuine
+                    # user turn boundary on the retry pass above.
                     _empty_final_answer_retries += 1
                     await _msg_dispatcher.append_msgs(
                         [
                             {
                                 "role": "user",
                                 "content": "Produce your final answer as text.",
+                                "_nudge_msg": True,
                             },
                         ],
                     )

@@ -373,6 +373,26 @@ def compute_context_injection(
     return extra_kwargs, should_inject_ctx
 
 
+def is_loop_authored_message(msg: dict) -> bool:
+    """True for a ``role="user"`` message the loop itself appended —
+    a progress/clarification/lifecycle status tail message, or a parent
+    chat context continuation chunk — never a genuine new user turn.
+
+    Every consumer that needs to tell "the user said something" apart
+    from "the loop said something" (e.g. a boundary check that must not
+    treat loop-authored status as the start of a new request) should key
+    off this single predicate instead of listing marker keys itself, so
+    a new marker family only needs to be added here once.
+    """
+    return bool(
+        msg.get("_progress_msg")
+        or msg.get("_clarify_msg")
+        or msg.get("_lifecycle_msg")
+        or msg.get("_ctx_header")
+        or msg.get("_nudge_msg"),
+    )
+
+
 class ToolsData:
     def __init__(
         self,
