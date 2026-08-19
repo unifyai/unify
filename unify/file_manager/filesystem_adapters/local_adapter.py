@@ -144,7 +144,14 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
             # than appended to it: appending produced <root>/Unity/Local/... and
             # reported the file missing while it sat in the workspace all along.
             text = str(p)
-            if text.startswith("/Unity/Local/"):
+            # ``/Unity/Downloads`` is a symlink to ``/Unity/Local/Downloads`` on
+            # the VM, so the browser, every file dialog and the assistant all
+            # name the file by the shorter path. Both spellings address the same
+            # bytes and both have to resolve here, or a file the assistant just
+            # downloaded reads as missing under the only name it ever saw.
+            if text.startswith("/Unity/Downloads/"):
+                text = "Downloads/" + text[len("/Unity/Downloads/") :]
+            elif text.startswith("/Unity/Local/"):
                 text = text[len("/Unity/Local/") :]
             candidate = (self._root / text.lstrip("/")).resolve()
             try:
