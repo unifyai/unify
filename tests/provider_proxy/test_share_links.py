@@ -141,6 +141,7 @@ class _Forwarder:
         body,
         *,
         follow_redirects=False,
+        resource_tenant=None,
     ):
         self.calls.append(
             {
