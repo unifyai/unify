@@ -937,6 +937,65 @@ class SlackChannelMessageSent(Event):
 
 
 @dataclass
+class TelegramMessageReceived(Event):
+    """A direct message received from a user via a Telegram bot."""
+
+    topic: ClassVar[str | None] = "app:comms:telegram_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    chat_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class TelegramGroupMessageReceived(Event):
+    """A message received in a Telegram group chat via the bot."""
+
+    topic: ClassVar[str | None] = "app:comms:telegram_group_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    chat_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class TelegramMessageSent(Event):
+    """A direct message sent to a user via a Telegram bot."""
+
+    topic: ClassVar[str | None] = "app:comms:telegram_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
+
+
+@dataclass
+class TelegramGroupMessageSent(Event):
+    """A message sent to a Telegram group chat via the bot."""
+
+    topic: ClassVar[str | None] = "app:comms:telegram_group_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    chat_id: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
+
+
+@dataclass
 class MsTeamsBotMessageSent(Event):
     """A proactive reply sent through the org-installed Unify Teams bot app.
 

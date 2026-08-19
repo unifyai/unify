@@ -648,6 +648,7 @@ def _build_channels_str(
     assistant_has_teams: bool = False,
     assistant_has_ms_teams_bot: bool = False,
     assistant_has_slack: bool = False,
+    assistant_has_telegram: bool = False,
 ) -> str:
     """Build a human-readable comma-separated list of available channels."""
     available_channels: list[str] = ["unify messages"]
@@ -670,6 +671,11 @@ def _build_channels_str(
         available_channels.insert(
             available_channels.index("unify messages"),
             "Slack",
+        )
+    if assistant_has_telegram:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Telegram",
         )
     if assistant_has_teams:
         available_channels.insert(
@@ -705,6 +711,7 @@ def _build_comms_tool_listing(
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
     assistant_has_slack: bool = False,
+    assistant_has_telegram: bool = False,
     assistant_has_teams: bool = False,
     assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
@@ -864,6 +871,16 @@ def _build_comms_tool_listing(
             "original message (for a top-level @mention it is that message's "
             "own id and starts the thread). Use when the inbound thread is "
             "`slack_channel_message`.",
+        )
+    if assistant_has_telegram:
+        lines.append(
+            "- `send_telegram_message`: Send a Telegram DM to a contact "
+            "(use when the inbound thread is `telegram_message`)",
+        )
+        lines.append(
+            "- `send_telegram_group_message`: Post into a Telegram group "
+            "chat. Pass `chat_id` from the inbound annotation. Use when the "
+            "inbound thread is `telegram_group_message`.",
         )
     if assistant_has_ms_teams_bot:
         lines.append(
@@ -1898,7 +1915,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - If a message depends on tool outcomes from the same turn, avoid claiming those outcomes until the evidence exists.
 - If I include a same-turn acknowledgment with action tools, it must be intent-only and never a completion claim.
 - **Outbound messages are "sent", never "arrived", until proof.** Calling a send tool (`send_whatsapp`, `send_sms`, `send_email`, `send_unify_message`, ...) does not confirm the message reached the contact in this turn. In the SAME turn I send, anything I say or guide must be intent-only ("I'm sending that to your WhatsApp now") — I never say it has arrived, is waiting, or is in their inbox. I confirm receipt ONLY after the proof transcript row appears (e.g. `[You WhatsApped <name>]`). WhatsApp specifically: if that proof row reads `[You WhatsApped <name> (not delivered directly)]`, only a generic placeholder reached them and my real text is queued to resend after they reply — so I tell them to reply to the placeholder first, and I do NOT claim the actual message arrived.
-- **Plain-text formatting on outbound channels** (`send_email`, `send_sms`, `send_whatsapp`, `send_unify_message`, `send_teams_message`, `send_slack_message`, `send_discord_message`, etc.): write prose as continuous lines that reflow naturally — do not hard-wrap near 80 columns. Use a blank line between paragraphs. For bullet or numbered lists, put each item on its own line (`- item`, `1. item`, etc.); do not fold list items into one wrapped paragraph.
+- **Plain-text formatting on outbound channels** (`send_email`, `send_sms`, `send_whatsapp`, `send_unify_message`, `send_teams_message`, `send_slack_message`, `send_discord_message`, `send_telegram_message`, etc.): write prose as continuous lines that reflow naturally — do not hard-wrap near 80 columns. Use a blank line between paragraphs. For bullet or numbered lists, put each item on its own line (`- item`, `1. item`, etc.); do not fold list items into one wrapped paragraph.
 
 **When to speak vs wait**:
 - NEW unify_message from user → respond with `send_unify_message` (one short message), then `wait`. Never `wait` while their chat line is still unanswered. On a live call, "respond" means `guide_voice_agent(message="...")` with the actual reply — I never `wait` silently on a user message that wants a response, because the Voice Agent only said a filler phrase. EXCEPTION: if a recent line of mine already fully answers their message and they are not asking me to recall or restate anything, it is handled — I `wait` or move to new content.
@@ -2474,6 +2491,7 @@ def _build_available_outbound_tool_names(
     assistant_has_whatsapp: bool,
     assistant_has_discord: bool,
     assistant_has_slack: bool,
+    assistant_has_telegram: bool,
     assistant_has_teams: bool,
     assistant_has_ms_teams_bot: bool,
     is_coordinator: bool,
@@ -2517,6 +2535,11 @@ def _build_available_outbound_tool_names(
         available_tool_names.insert(idx, "send_slack_message")
         if not is_coordinator:
             available_tool_names.insert(idx + 1, "send_slack_channel_message")
+    if assistant_has_telegram:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_telegram_message")
+        if not is_coordinator:
+            available_tool_names.insert(idx + 1, "send_telegram_group_message")
     if assistant_has_ms_teams_bot:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_ms_teams_bot_message")
@@ -2628,6 +2651,7 @@ def build_system_prompt(
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
     assistant_has_slack: bool = False,
+    assistant_has_telegram: bool = False,
     assistant_has_teams: bool = False,
     assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
@@ -2809,6 +2833,7 @@ def build_system_prompt(
         assistant_has_whatsapp=assistant_has_whatsapp,
         assistant_has_discord=assistant_has_discord,
         assistant_has_slack=assistant_has_slack,
+        assistant_has_telegram=assistant_has_telegram,
         assistant_has_teams=assistant_has_teams,
         assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
         is_coordinator=private_coordinator,
@@ -2823,6 +2848,7 @@ def build_system_prompt(
         assistant_has_whatsapp,
         assistant_has_discord,
         assistant_has_slack,
+        assistant_has_telegram,
         assistant_has_teams,
         assistant_has_ms_teams_bot,
         private_coordinator,
@@ -3016,6 +3042,7 @@ Messages from the current turn have **NEW** tag prepended:
         assistant_has_teams=assistant_has_teams,
         assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
         assistant_has_slack=assistant_has_slack,
+        assistant_has_telegram=assistant_has_telegram,
     )
 
     # 8. Tool-usage decision guides.
@@ -3130,6 +3157,10 @@ Messages from the current turn have **NEW** tag prepended:
         if assistant_has_slack:
             inline_detail_examples.append(
                 '`send_slack_message(contact_id=5, content="Hi", team_id="T01ABC", slack_user_id="U01ABC234")`',
+            )
+        if assistant_has_telegram:
+            inline_detail_examples.append(
+                '`send_telegram_message(contact_id=5, content="Hi", telegram_id="123456789")`',
             )
         if assistant_has_teams:
             inline_detail_examples.append(

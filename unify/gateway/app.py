@@ -55,6 +55,7 @@ from unify.gateway.channels.phone import (
 from unify.gateway.channels.sharepoint import router as sharepoint_router
 from unify.gateway.channels.slack import auth_router as slack_auth_router
 from unify.gateway.channels.social import router as social_router
+from unify.gateway.channels.telegram import auth_router as telegram_auth_router
 from unify.gateway.channels.teams import router as teams_router
 from unify.gateway.channels.unillm import router as unillm_router
 from unify.gateway.channels.whatsapp import (
@@ -74,6 +75,7 @@ from unify.gateway.adapters import (
     microsoft_router,
     ms_teams_bot_adapter_router,
     slack_adapter_router,
+    telegram_adapter_router,
     twilio_router,
 )
 
@@ -298,6 +300,11 @@ def create_app(
         dependencies=admin_or_user_auth_dependency,
     )
     app.include_router(
+        telegram_auth_router,
+        prefix="/telegram",
+        dependencies=admin_or_user_auth_dependency,
+    )
+    app.include_router(
         internal_router,
         dependencies=admin_or_user_auth_dependency,
         tags=["internal-adapters"],
@@ -312,6 +319,10 @@ def create_app(
     app.include_router(
         ms_teams_bot_adapter_router,
         tags=["ms-teams-bot-adapters"],
+    )
+    app.include_router(
+        telegram_adapter_router,
+        tags=["telegram-adapters"],
     )
     app.include_router(twilio_router, tags=["twilio-adapters"])
 
@@ -365,6 +376,8 @@ def create_app(
             "whatsapp": twilio_wa,
             # Slack Events ingress.
             "slack": configured("SLACK_SIGNING_SECRET"),
+            # Telegram Bot webhook ingress.
+            "telegram": configured("TELEGRAM_BOT_TOKEN"),
             # User-side phone / WhatsApp verification codes (Twilio social verify).
             "social_verify_phone": twilio,
             "social_verify_whatsapp": twilio_wa,

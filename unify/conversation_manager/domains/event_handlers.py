@@ -2694,6 +2694,10 @@ def _credit_gate_reply_context(
         MsTeamsBotMessageReceived,
         MsTeamsBotChannelMessageSent,
         MsTeamsBotChannelMessageReceived,
+        TelegramMessageReceived,
+        TelegramMessageSent,
+        TelegramGroupMessageReceived,
+        TelegramGroupMessageSent,
     ),
 )
 async def _(event, cm: "ConversationManager", *args, **kwargs):
@@ -3058,6 +3062,55 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             cm._session_logger.info(
                 "slack_channel_message_received",
                 f"Slack channel from {sender_name}: {event.content}",
+            )
+        case TelegramMessageSent():
+            medium = Medium.TELEGRAM_MESSAGE
+            message_content = event.content
+            notif_content = f"Telegram DM sent to {sender_name}"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "telegram_message_sent",
+                f"Telegram DM to {sender_name}: {event.content}",
+            )
+        case TelegramMessageReceived():
+            cm.assistant_has_telegram = True
+            medium = Medium.TELEGRAM_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            chat_id = getattr(event, "chat_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            notif_content = f"Telegram DM from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "telegram_message_received",
+                f"Telegram DM from {sender_name}: {event.content}",
+            )
+        case TelegramGroupMessageSent():
+            medium = Medium.TELEGRAM_GROUP_MESSAGE
+            message_content = event.content
+            chat_id = getattr(event, "chat_id", "") or None
+            notif_content = "Telegram group message sent"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "telegram_group_message_sent",
+                f"Telegram group message: {event.content}",
+            )
+        case TelegramGroupMessageReceived():
+            cm.assistant_has_telegram = True
+            medium = Medium.TELEGRAM_GROUP_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            chat_id = getattr(event, "chat_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            notif_content = f"Telegram group message from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "telegram_group_message_received",
+                f"Telegram group from {sender_name}: {event.content}",
             )
         case TeamsMessageSent():
             medium = Medium.TEAMS_MESSAGE

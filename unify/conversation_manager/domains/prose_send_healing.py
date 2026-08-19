@@ -39,6 +39,10 @@ _SEND_TOOL_BY_MEDIUM: dict[Medium, tuple[str, str]] = {
         "send_ms_teams_bot_message",
         "send_ms_teams_bot_message_to_boss",
     ),
+    Medium.TELEGRAM_MESSAGE: (
+        "send_telegram_message",
+        "send_telegram_message_to_boss",
+    ),
 }
 
 _CHANNEL_SEND_TOOL_BY_MEDIUM: dict[Medium, str] = {
@@ -46,6 +50,7 @@ _CHANNEL_SEND_TOOL_BY_MEDIUM: dict[Medium, str] = {
     Medium.SLACK_CHANNEL_MESSAGE: "send_slack_channel_message",
     Medium.TEAMS_CHANNEL_MESSAGE: "send_teams_message",
     Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE: "send_ms_teams_bot_channel_message",
+    Medium.TELEGRAM_GROUP_MESSAGE: "send_telegram_group_message",
 }
 
 

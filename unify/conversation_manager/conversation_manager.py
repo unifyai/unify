@@ -316,6 +316,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_slack_bot_user_id: str = "",
         assistant_slack_team_id: str = "",
         assistant_has_ms_teams_bot: bool = False,
+        assistant_has_telegram: bool = False,
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -348,6 +349,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # ``assistant_has_teams`` MS365 mailbox capability). Sourced from the
         # assistant profile and adopted at runtime from inbound bot activities.
         self.assistant_has_ms_teams_bot = assistant_has_ms_teams_bot
+        self.assistant_has_telegram = assistant_has_telegram
         # Global onboarding scaffolding gate, mirrored from Orchestra's
         # ``Coordinator/State`` and refreshed on a short TTL. When False the
         # slow-brain drops all onboarding scaffolding. Defaults to True until
@@ -2053,6 +2055,19 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 channel_id=reply_context["channel_id"],
                 team_id=reply_context.get("team_id") or "",
                 thread_ts=reply_context.get("thread_ts"),
+                contact_id=contact_id,
+                content=content,
+            )
+        elif medium == Medium.TELEGRAM_MESSAGE.value and contact_id is not None:
+            await tools.send_telegram_message(
+                contact_id=contact_id,
+                content=content,
+            )
+        elif medium == Medium.TELEGRAM_GROUP_MESSAGE.value and reply_context.get(
+            "chat_id",
+        ):
+            await tools.send_telegram_group_message(
+                chat_id=reply_context["chat_id"],
                 contact_id=contact_id,
                 content=content,
             )
