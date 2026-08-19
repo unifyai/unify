@@ -4348,21 +4348,21 @@ async def _(
         (AssistantScreenShareStarted, AssistantScreenShareStopped),
     ):
         # Membership decides this surface, so the viewer set is updated even when
-        # the derived flag does not move: the second person to open the desktop
-        # has to be counted, or their own close would take it away from the
-        # first. The flag check below then suppresses the notification, which is
-        # right -- nothing changed that the assistant needs telling about.
+        # the derived flag does not move: a Desktop tab opened beside a call has
+        # to be counted, or closing it would take the desktop away from the call.
+        # The flag check below then suppresses the notification, which is right --
+        # nothing changed that the assistant needs telling about.
         value = cm.note_assistant_screen_share_viewer(
             user_id=event.viewer_user_id,
             source=event.viewer_source,
             watching=value,
         )
         # The room's copy is restated on every one of these, including the ones
-        # the flag check below drops. What a call stages is decided by its own
-        # viewers, which move independently of the desktop-scoped flag: closing
-        # the last call viewer while a Desktop tab stays open leaves that flag
-        # true, so an edge-triggered broadcast would have no edge to fire on and
-        # would strand the desktop on every participant's stage.
+        # the flag check below drops. What a call stages is its own switch, which
+        # moves independently of the desktop-scoped flag: turning the call's share
+        # off while a Desktop tab stays open leaves that flag true, so an
+        # edge-triggered broadcast would have no edge to fire on and would strand
+        # the desktop on every participant's stage.
         await _publish_call_desktop_share_state(cm)
 
     # Restating the current state carries no new information: notifying again

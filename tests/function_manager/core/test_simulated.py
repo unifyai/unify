@@ -272,16 +272,26 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
 
     CodeActActor.__init__ collects function_ids from environments and sets
     them on the FM via setters. This must not crash for SimulatedFunctionManager.
+    A filtered environment inlines its method docs, so the actor excludes
+    exactly those tools from search; an unfiltered one documents nothing
+    inline and leaves every primitive discoverable.
     """
     from unify.actor.code_act_actor import CodeActActor
     from unify.actor.environments.state_managers import StateManagerEnvironment
 
     fm = SimulatedFunctionManager(description="test")
 
-    # Constructing a CodeActActor with environments that have function_ids
-    # should set exclusions on the FM via setters, not replace it.
+    # Constructing a CodeActActor with a filtered environment should set
+    # exclusions on the FM via setters, not replace it.
     actor = CodeActActor(
-        environments=[StateManagerEnvironment()],
+        environments=[
+            StateManagerEnvironment(
+                allowed_methods={
+                    "primitives.contacts.ask",
+                    "primitives.tasks.update",
+                },
+            ),
+        ],
         function_manager=fm,
         timeout=30,
     )
@@ -292,6 +302,17 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
     # Exclusion IDs should have been set via the setter.
     assert fm.exclude_primitive_ids is not None
     assert len(fm.exclude_primitive_ids) > 0
+
+    # An unfiltered environment documents nothing inline, so nothing is
+    # excluded and the setter is never called.
+    fm_unfiltered = SimulatedFunctionManager(description="test")
+    actor_unfiltered = CodeActActor(
+        environments=[StateManagerEnvironment()],
+        function_manager=fm_unfiltered,
+        timeout=30,
+    )
+    assert actor_unfiltered.function_manager is fm_unfiltered
+    assert fm_unfiltered.exclude_primitive_ids is None
 
 
 def test_setters_update_system_message():
