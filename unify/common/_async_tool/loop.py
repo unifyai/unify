@@ -1481,6 +1481,10 @@ async def async_tool_loop_inner(
     # the LLM is already thinking, remember to grant exactly one extra LLM step
     # after the current step completes (unless another event already triggers a turn).
     deferred_llm_turn = False
+    # Bounded retries for a terminal turn that returns empty content with no
+    # substantive answer anywhere else in the conversation to fall back on.
+    _empty_final_answer_retries = 0
+    _MAX_EMPTY_FINAL_ANSWER_RETRIES = 1
 
     # Loop returns immediately upon the final assistant message (no persist mode)
     logger.debug(f"[setup +{_setup_elapsed()}] entering main loop")
@@ -2490,6 +2494,16 @@ async def async_tool_loop_inner(
                     # required tools that must be callable in one assistant turn.
                     _gen_kwargs["parallel_tool_calls"] = True
 
+                # The prompt this dispatch sends is about to be snapshotted
+                # from the current transcript, so it provably contains every
+                # result ingested so far — the obligation deferred_llm_turn
+                # exists to enforce is satisfied by this dispatch alone.
+                # Clearing here, not when the step completes, is what keeps
+                # a result that lands *during* this same dispatch's flight
+                # correctly deferred to the turn after it: the set sites run
+                # after this point, so they still land after the clear.
+                deferred_llm_turn = False
+
                 llm_task = asyncio.create_task(
                     generate_with_preprocess(
                         client,
@@ -2763,6 +2777,12 @@ async def async_tool_loop_inner(
                         _gen_kwargs["parallel_tool_calls"] = max_parallel_tool_calls > 1
                     elif _policy_eager:
                         _gen_kwargs["parallel_tool_calls"] = True
+
+                    # See the matching comment at the interrupt-mode dispatch
+                    # above: clearing here (not at step completion) means the
+                    # prompt this dispatch is about to snapshot provably
+                    # contains everything ingested so far.
+                    deferred_llm_turn = False
 
                     _full_completion = await generate_with_preprocess(
                         client,
@@ -4165,6 +4185,72 @@ async def async_tool_loop_inner(
 
             final_content = msg["content"]
 
+            # An empty/null terminal turn must never override a substantive
+            # answer already sitting in the transcript — a model that has
+            # nothing left to add after answering can still return empty
+            # content on a later turn, and that must not erase the answer.
+            # Every consumer below (multi-handle, persist, the plain return)
+            # reads final_content after this point, so resolving it once
+            # here covers all of them.
+            if not final_content:
+                _substantive_content = None
+                for _hist_msg in reversed(client.messages):
+                    _hist_role = _hist_msg.get("role")
+                    if _hist_role == "user" and not (
+                        _hist_msg.get("_progress_msg") or _hist_msg.get("_clarify_msg")
+                    ):
+                        # A genuine user turn boundary (not a loop-authored
+                        # status message) — don't reach past it into an
+                        # earlier request/interjection cycle for an answer
+                        # that belongs to a different question.
+                        break
+                    if _hist_role != "assistant":
+                        continue
+                    _hist_content = _hist_msg.get("content")
+                    if _hist_content:
+                        _substantive_content = _hist_content
+                        break
+
+                if _substantive_content is not None:
+                    final_content = _substantive_content
+                elif _empty_final_answer_retries < _MAX_EMPTY_FINAL_ANSWER_RETRIES:
+                    # No substantive answer exists anywhere in this cycle
+                    # either — give the model a bounded number of chances to
+                    # produce one before giving up loudly. Appended at the
+                    # tail; nothing already dispatched is touched.
+                    _empty_final_answer_retries += 1
+                    await _msg_dispatcher.append_msgs(
+                        [
+                            {
+                                "role": "user",
+                                "content": "Produce your final answer as text.",
+                            },
+                        ],
+                    )
+                    continue
+                else:
+                    # Retries exhausted and nothing substantive was ever
+                    # produced — fail loudly rather than return an empty
+                    # result silently.
+                    notice = {
+                        "role": "assistant",
+                        "content": (
+                            "No final answer was produced: the model returned "
+                            "empty content after "
+                            f"{_MAX_EMPTY_FINAL_ANSWER_RETRIES} nudge attempt(s), "
+                            "with no substantive answer anywhere in this "
+                            "conversation."
+                        ),
+                    }
+                    await _msg_dispatcher.append_msgs([notice])
+                    logger.error(
+                        "Empty final answer after "
+                        f"{_MAX_EMPTY_FINAL_ANSWER_RETRIES} nudge attempt(s); no "
+                        "substantive assistant content exists in this conversation.",
+                        prefix=ICONS["llm_error"],
+                    )
+                    return notice["content"]
+
             # ── multi-handle mode: check if all requests are done ──
             if multi_handle_coordinator is not None:
                 if multi_handle_coordinator.should_terminate():
@@ -4174,7 +4260,10 @@ async def async_tool_loop_inner(
                         prefix=ICONS["completed"],
                     )
                     multi_handle_coordinator.close()
-                    return final_content  # Return last assistant content (may be empty)
+                    # final_content is resolved above: the last assistant
+                    # content, or a substantive earlier answer if this turn's
+                    # own content was empty.
+                    return final_content
                 else:
                     # Still have pending requests - continue waiting
                     logger.info(
@@ -4288,6 +4377,8 @@ async def async_tool_loop_inner(
                 timer.reset()
                 continue  # Back to top of loop to process the interjection
 
+            # final_content was already resolved to non-empty content (or the
+            # function returned earlier with a loud error) above.
             return final_content  # DONE!
 
     except asyncio.CancelledError:  # graceful shutdown
