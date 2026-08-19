@@ -550,7 +550,10 @@ def _build_filesystem_context() -> str:
 
         GUI files on the managed desktop live under `/Unity/...` (home
         `HOME=/Unity`, Downloads `/Unity/Downloads`, synced tree
-        `/Unity/Local`) — Computer Control paths only;
+        `/Unity/Local`) — Computer Control paths only.  Downloads is a
+        symlink into the synced tree, so anything the browser saves there
+        arrives in this workspace under `Downloads/` once synced, and is
+        ingestible from that path;
         do not treat them as this pod workspace's cwd or open them with
         ordinary local file IO (see Computer Control →
         Managed desktop filesystem).  Do not treat the desktop panel name
