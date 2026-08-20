@@ -1074,8 +1074,15 @@ class SessionExecutor:
         if language == "python":
             # Special-case: session 0 is the *current bound sandbox* when present.
             if state_mode == "stateful" and venv_id is None and session_id == 0:
+                # Only a missing binding falls through to the executor-managed
+                # session 0; a failure while executing in the bound sandbox
+                # must stay loud rather than silently re-running the cell in
+                # a fresh session.
                 try:
                     sb0 = _CURRENT_SANDBOX.get()
+                except LookupError:
+                    sb0 = None
+                if sb0 is not None:
                     self._inject_fm_globals(sb0)
                     _se_log.debug(
                         f"⏱️ [SessionExecutor.execute +{_se_ms()}] bound sandbox (session 0), executing",
@@ -1095,9 +1102,6 @@ class SessionExecutor:
                             (datetime.now(timezone.utc).timestamp() - t0) * 1000,
                         ),
                     }
-                except Exception:
-                    # If no sandbox is bound, fall back to executor-managed session 0.
-                    pass
             # Stateless: fresh in-process sandbox per call.
             if state_mode == "stateless" and venv_id is None:
                 _se_log.debug(
