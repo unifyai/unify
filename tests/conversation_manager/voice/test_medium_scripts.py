@@ -1000,6 +1000,9 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
             self._chat_ctx = llm.ChatContext()
             self.call_received = True
             self.user_turn_generating = False
+            # This opening reaches the utterance-publish path, which tells
+            # co-assistants what they could not hear. There are none here.
+            self.peer_turns = None
 
         def set_call_received(self):
             self.call_received = True
@@ -1683,6 +1686,8 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
         _user_turn_seq=0,
         _opening_pending=False,
         _first_user_turn=asyncio.Event(),
+        # Telephony wires no speaker provider, so no name is stamped on the turn.
+        _speaker_name_provider=None,
     )
     new_message = SimpleNamespace(text_content="hi there")
 
@@ -1712,6 +1717,8 @@ async def test_on_user_turn_completed_without_bridge_is_normal():
         _user_turn_seq=0,
         _opening_pending=False,
         _first_user_turn=asyncio.Event(),
+        # Telephony wires no speaker provider, so no name is stamped on the turn.
+        _speaker_name_provider=None,
     )
     new_message = SimpleNamespace(text_content="hello")
 

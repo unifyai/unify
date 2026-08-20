@@ -1029,7 +1029,7 @@ def test_peer_turns_block_lists_what_teammates_said():
         peer_assistants=["A-DA"],
         peer_turns=["A-DA: I've sent the quote over."],
     )
-    assert "What your teammates have just said" in text
+    assert "What your teammates have said on this call" in text
     assert "- A-DA: I've sent the quote over." in text
 
 

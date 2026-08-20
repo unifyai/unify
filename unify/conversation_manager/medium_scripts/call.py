@@ -752,7 +752,9 @@ class Assistant(Agent):
                     self._previous_line_at(chat_ctx),
                 )
             else:
-                peer_turns_since, peer_turns_earlier = [], []
+                # Empty as a tuple, matching how every other absent roster
+                # provider below reports "nobody".
+                peer_turns_since, peer_turns_earlier = (), ()
             # Attributed for the fast brain only. "Was this aimed at me?" has no
             # answer without knowing who said it, but `user_text` also carries
             # the turn to the slow brain, which gets the speaker on its own path
