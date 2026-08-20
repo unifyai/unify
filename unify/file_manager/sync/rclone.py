@@ -373,7 +373,31 @@ set_modtime = false
         operation: str,
         max_retries: Optional[int] = None,
     ) -> SyncResult:
-        """Run rclone command with retry logic."""
+        """Run rclone command with retry logic, declared as live work.
+
+        Every transfer funnels through here, and one is declared for as long as
+        it runs. The 30s poll loop that schedules them is deliberately *not*
+        declared -- a desktop-attached pod would then never retire. What must not
+        happen is a shutdown mid-transfer: cleanup stops the sync, and the
+        desktop's writes are what the next session reads.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+
+        active_work = ACTIVE_WORK.begin(
+            label="file_sync_transfer",
+            metadata={"operation": operation},
+        )
+        try:
+            return await self._run_with_retry_inner(cmd, operation, max_retries)
+        finally:
+            active_work.end()
+
+    async def _run_with_retry_inner(
+        self,
+        cmd: List[str],
+        operation: str,
+        max_retries: Optional[int] = None,
+    ) -> SyncResult:
         retries = max_retries if max_retries is not None else self.config.max_retries
         last_error = None
 
