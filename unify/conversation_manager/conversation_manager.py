@@ -4313,6 +4313,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 conversation_turns,
                 brain_spec.system_prompt.flatten(),
                 action_context=action_context,
+                other_participants=tuple(
+                    self.call_manager.other_call_participant_names,
+                ),
+                peer_assistants=tuple(self.call_manager.other_call_assistant_names),
             )
 
             if _superseded():

@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from unify.common.llm_client import new_slow_brain_llm_client
+from unify.conversation_manager.events import GROUP_CALL_MIN_PARTICIPANTS
 
 
 class ProactiveDecision(BaseModel):
@@ -103,14 +104,52 @@ Output JSON matching the ProactiveDecision schema.\
 """
 
 
+GROUP_CALL_CONTEXT = """\
+[system] This is a group call, not a 1:1. Also on it: {others}.
+
+A silence here is usually the room's, not yours to fill. People read, think, \
+work, and talk among themselves, and none of that is waiting on you. Breaking \
+in costs more than staying quiet, so the long delays described above are the \
+normal answer on this call — minutes, not seconds.
+
+The short-delay case needs a specific trigger you can point at in the \
+transcript: somebody asked YOU something and is visibly waiting. Your own \
+unanswered greeting or check-in is not that trigger. A greeting nobody replied \
+to means the room was busy, and following it with "are you there?" or "can you \
+still hear me?" is the single most out-of-place thing you can say on a call \
+where several people are mid-conversation. Never ask whether you can be \
+heard.{peers}"""
+
+GROUP_CALL_PEERS_CONTEXT = """
+
+Other assistants are on this call too ({peers}). Anything asked of them is \
+theirs to answer, and you will not hear their reply — so a question that has \
+gone quiet is not evidence it went unanswered. Do not pick it up."""
+
+# Floor applied to the model's `delay` on a group call. The prompt asks for long
+# delays there, but a check-in that lands seconds into a lull is the failure this
+# path actually produces, and one bad decision is enough to be heard. Long enough
+# that no natural conversational pause is interrupted; short enough that a
+# genuine "we asked you something and you went quiet" is still followed up.
+GROUP_CALL_MIN_DELAY_S = 45
+
+
 class ProactiveSpeech:
     async def decide(
         self,
         chat_history: list[dict],
         system_prompt: str,
         action_context: str | None = None,
+        other_participants: tuple[str, ...] = (),
+        peer_assistants: tuple[str, ...] = (),
     ) -> tuple[ProactiveDecision, str]:
         """Decide when to break the silence and what to say.
+
+        ``other_participants`` and ``peer_assistants`` are the live roster as
+        the call manager reports it, and the group threshold is applied here so
+        it matches the one both brains gate on. One other person and no peers is
+        a 1:1 — a phone call, or a meet the boss is alone in — where every
+        silence really is the assistant's to fill and nothing below applies.
 
         Returns (decision, llm_log_path) where llm_log_path is the unillm
         request+response file for the LLM call that produced this decision.
@@ -127,6 +166,24 @@ class ProactiveSpeech:
             {"role": "system", "content": f"{system_prompt}\n\n{PROACTIVE_PROMPT}"},
             *chat_history,
         ]
+        several_people = len(other_participants) >= GROUP_CALL_MIN_PARTICIPANTS
+        group_call = several_people or bool(peer_assistants)
+        if group_call:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": GROUP_CALL_CONTEXT.format(
+                        others=", ".join((*other_participants, *peer_assistants)),
+                        peers=(
+                            GROUP_CALL_PEERS_CONTEXT.format(
+                                peers=", ".join(peer_assistants),
+                            )
+                            if peer_assistants
+                            else ""
+                        ),
+                    ),
+                },
+            )
         if action_context:
             messages.append(
                 {"role": "system", "content": action_context},
@@ -136,4 +193,7 @@ class ProactiveSpeech:
         pending = getattr(client, "_pending_thinking_log", None)
         if pending is not None:
             log_path = pending.last_path or ""
-        return ProactiveDecision.model_validate_json(response), log_path
+        decision = ProactiveDecision.model_validate_json(response)
+        if group_call and decision.delay < GROUP_CALL_MIN_DELAY_S:
+            decision.delay = GROUP_CALL_MIN_DELAY_S
+        return decision, log_path
