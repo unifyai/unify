@@ -132,19 +132,19 @@ def _bootstrap_env(model: str) -> None:
     # so FunctionManager/GuidanceManager/KnowledgeManager persist to local
     # Orchestra instead of an in-memory stub.
     for var in (
-        "UNITY_CONTACT_IMPL",
-        "UNITY_TRANSCRIPT_IMPL",
-        "UNITY_TASK_IMPL",
-        "UNITY_KNOWLEDGE_IMPL",
-        "UNITY_GUIDANCE_IMPL",
-        "UNITY_SECRET_IMPL",
-        "UNITY_WEB_IMPL",
-        "UNITY_FILE_IMPL",
-        "UNITY_DATA_IMPL",
-        "UNITY_FUNCTION_IMPL",
-        "UNITY_CONVERSATION_IMPL",
-        "UNITY_MEMORY_IMPL",
-        "UNITY_CONFIG_IMPL",
+        "UNIFY_CONTACT_IMPL",
+        "UNIFY_TRANSCRIPT_IMPL",
+        "UNIFY_TASK_IMPL",
+        "UNIFY_KNOWLEDGE_IMPL",
+        "UNIFY_GUIDANCE_IMPL",
+        "UNIFY_SECRET_IMPL",
+        "UNIFY_WEB_IMPL",
+        "UNIFY_FILE_IMPL",
+        "UNIFY_DATA_IMPL",
+        "UNIFY_FUNCTION_IMPL",
+        "UNIFY_CONVERSATION_IMPL",
+        "UNIFY_MEMORY_IMPL",
+        "UNIFY_CONFIG_IMPL",
     ):
         os.environ.setdefault(var, "real")
 
