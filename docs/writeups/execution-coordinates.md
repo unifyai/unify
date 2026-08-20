@@ -14,7 +14,7 @@ The obvious fix is a persistent interpreter, and it swaps one problem for a wors
 
 ## Three modes, not two
 
-Both of those are the right answer sometimes, which is the actual insight. So `execute_code` takes a `state_mode`, and the model chooses it per call. `stateless` is the default: a fresh sandbox, closed the moment it returns. `stateful` runs in a named session where variables and imports survive.
+Both of those are the right answer sometimes, which is the actual insight. So `execute_code` takes a `state_mode`, and the model chooses it per call. `stateful` runs in a session where variables and imports survive — for a local Python cell it is the default, targeting the sandbox that lives and dies with the surrounding act. `stateless` is a fresh sandbox, closed the moment it returns.
 
 The third one is the interesting one. `read_only` takes an existing session, copies its globals into a throwaway sandbox, runs there, and discards everything the code wrote. You can look at what's in a session and compute against it, and nothing you do can damage it.
 

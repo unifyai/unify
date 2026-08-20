@@ -732,8 +732,8 @@ class PythonExecutionSession:
                 # Steering only exists while a call is in flight. The session
                 # arrives by context rather than on this object, because the
                 # sandbox that runs a block is often not the one that was
-                # current when the tool started — stateless mode, the default,
-                # builds a fresh one per call. Binding it here means every
+                # current when the tool started — stateless mode builds a
+                # fresh one per call. Binding it here means every
                 # in-process Python path picks it up, whichever sandbox that
                 # turns out to be.
                 steering = active_session()

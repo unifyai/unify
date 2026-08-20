@@ -3219,9 +3219,9 @@ class CodeActActor(BaseCodeActActor):
                 patch_author=build_patch_author() if interject_q is not None else None,
                 pause_event=pause_event,
             )
-            # Carried by context rather than installed on this sandbox: only
-            # one execution mode actually runs here, and the default
-            # (stateless) builds a fresh sandbox that would never see it.
+            # Carried by context rather than installed on this sandbox:
+            # stateless cells build a fresh sandbox per call that would
+            # never see anything installed here.
             try:
                 with use_session(steering):
                     yield steering
@@ -3246,7 +3246,7 @@ class CodeActActor(BaseCodeActActor):
             code: Optional[str] = None,
             *,
             language: str,
-            state_mode: str = "stateless",
+            state_mode: str | None = None,
             session_id: int | None = None,
             session_name: str | None = None,
             venv_id: int | None = None,
@@ -3278,10 +3278,15 @@ class CodeActActor(BaseCodeActActor):
               ``user_id`` when more than one is linked). Remote surfaces are
               **stateless one-shots**: ``state_mode`` must be "stateless"
               and ``session_id`` / ``session_name`` / ``venv_id`` omitted.
-            - **state_mode**: "stateless" (default; fresh run, environment
-              globals and FunctionManager-discovered functions still
-              available), "stateful" (state accumulates), "read_only"
-              (reads an existing session without persisting).
+            - **state_mode**: omit it and a local venv-less Python cell
+              runs **stateful in session 0** — the current per-call
+              Python sandbox, so variables persist across cells — while
+              shell, venv, and remote cells run stateless. Pass
+              "stateless" for an isolated fresh run (environment globals
+              and FunctionManager-discovered functions still available),
+              "read_only" to read an existing session without
+              persisting, or "stateful" with a session selector to
+              target a named or shell/venv session.
             - **session_id/session_name**: stateful/read_only only.
               Stateful defaults to **session_id=0** — inside a running
               act() loop, the current per-call Python sandbox. Create an
@@ -3322,6 +3327,14 @@ class CodeActActor(BaseCodeActActor):
             that may need correcting partway through.
             """
             _ = thought  # Thought is logged by the LLM; not used programmatically.
+            if state_mode is None:
+                # An omitted state_mode resolves per cell type: only local
+                # venv-less Python cells get the persistent per-call sandbox.
+                state_mode = (
+                    "stateful"
+                    if surface == "local" and language == "python" and venv_id is None
+                    else "stateless"
+                )
             if code is None or code.strip() == "":
                 return {
                     "stdout": "",
@@ -4045,7 +4058,8 @@ class CodeActActor(BaseCodeActActor):
                 the FunctionManager store by exact name; otherwise a
                 ``NameError`` is raised. ``language`` / ``state_mode`` /
                 ``session_id`` / ``session_name`` keep ``execute_code``
-                semantics.
+                semantics, except ``state_mode`` here defaults to
+                ``"stateless"``.
 
                 Parameters
                 ----------

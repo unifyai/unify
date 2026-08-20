@@ -101,7 +101,7 @@ Models behave badly when their context changes silently underneath them. They be
 
 ## Honest limits
 
-Sessions are in-process. The handle and its sandbox live in the runtime's memory, so a persistent session survives across hours of conversation but not across a process restart. Durable state still has to be written somewhere real, and the actor does that explicitly. Python variables persist across `execute_code` calls only when stateful execution is requested; the default is a clean slate per call, which is usually what you want.
+Sessions are in-process. The handle and its sandbox live in the runtime's memory, so a persistent session survives across hours of conversation but not across a process restart. Durable state still has to be written somewhere real, and the actor does that explicitly. Python variables persist across `execute_code` calls in the default per-act session; a stateless cell is a clean slate per call, for when isolation is what you want.
 
 Persistence also has a footprint. A session holds its sandbox open, so a runtime that never stops its sessions slowly accumulates them. We chose to make the outer model responsible for `stop_*`, with the same first-class tooling as everything else.
 
