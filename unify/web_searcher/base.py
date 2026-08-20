@@ -83,7 +83,9 @@ class BaseWebSearcher(BaseStateManager, metaclass=SingletonABCMeta):
         Clarifications
         --------------
         Do not ask the user questions in the final answer. When a clarification
-        channel is provided via request_clarification, route any follow-ups there.
+        channel is provided via request_clarification, route any follow-ups
+        there — including when the question depends on context missing from the
+        request itself: ask rather than guess.
         If no clarification channel exists, proceed with sensible defaults or
         best-guess values and state assumptions in the final answer when relevant.
 
