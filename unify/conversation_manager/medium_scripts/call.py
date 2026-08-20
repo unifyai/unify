@@ -2972,7 +2972,17 @@ async def entrypoint(ctx: agents.JobContext):
     if call_session_id and channel == "unify_meet":
 
         def _peer_assistant_names() -> list[str]:
+            """Assistants other than this one, by display name.
+
+            Self-exclusion is by id, falling back to display name when the
+            roster crossed the wire without one. Listing itself here is the
+            failure that matters: a peer being present is what puts the fast
+            brain's unusable-decision fallbacks on silence, so an assistant that
+            counts itself would start dropping turns on a call where every turn
+            is its own.
+            """
             own_id = SESSION_DETAILS.assistant.agent_id
+            own_name = (SESSION_DETAILS.assistant.name or "").strip()
             names: list[str] = []
             for member in unify_meet_roster:
                 if member.get("kind") != "assistant":
@@ -2982,7 +2992,7 @@ async def entrypoint(ctx: agents.JobContext):
                     if str(member_id) == str(own_id):
                         continue
                 name = (member.get("display_name") or "").strip()
-                if name:
+                if name and name != own_name:
                     names.append(name)
             return names
 
