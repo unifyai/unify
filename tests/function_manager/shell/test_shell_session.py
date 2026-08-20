@@ -7,6 +7,7 @@ shell sessions that maintain state across command executions.
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -1013,3 +1014,31 @@ async def test_shell_session_restore_does_not_affect_source():
     finally:
         await session1.close()
         await session2.close()
+
+
+@_handle_project
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_shell_session_concurrent_commands_do_not_interleave():
+    """Concurrent commands on one session queue instead of interleaving.
+
+    Commands share one stdin/stdout pipe pair and the marker-based
+    completion protocol, so each command must see only its own output.
+    """
+    session = ShellSession(language="bash")
+    await session.start()
+    try:
+        task_a = asyncio.create_task(session.execute("sleep 0.3; echo first"))
+        # Let command A start before submitting command B.
+        await asyncio.sleep(0.05)
+        task_b = asyncio.create_task(session.execute("echo second"))
+        result_a, result_b = await asyncio.gather(task_a, task_b)
+
+        assert result_a.error is None
+        assert result_a.exit_code == 0
+        assert result_a.stdout.strip() == "first"
+        assert result_b.error is None
+        assert result_b.exit_code == 0
+        assert result_b.stdout.strip() == "second"
+    finally:
+        await session.close()
