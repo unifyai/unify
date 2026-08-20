@@ -647,8 +647,9 @@ Entrypoint vs description-driven execution
   metadata. Put the operative context into the description.
 - Do not attach an untested entrypoint at creation. Entrypoint
   persistence should follow an explicit user request or a successful
-  run reviewed as stable enough to store; offline promotion additionally
-  requires separate certification.
+  run reviewed as stable enough to store; the stored function then earns
+  trust from independent verification, and offline promotion follows once
+  every function it calls is trusted.
 - Stored entrypoints: prefer `async def` + `await`; never nest
   `asyncio.run(...)` (offline Jobs already own the loop — use
   `run_coro_sync` for a sync façade); keep expressive stdlib `logging`

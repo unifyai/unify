@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import tempfile
-import uuid
 from contextlib import suppress
 from typing import Any, List, Optional, Protocol, Union, runtime_checkable
 import json
@@ -21,21 +21,20 @@ def _spill_full_tool_text(text: str) -> Optional[str]:
     Returns the file path on success, or ``None`` on any failure — spilling
     must never break the tool-result path.
 
-    The spill directory is per-process (keyed by PID) because no session
-    identifier reaches this module-level helper; callers in ``tools_data.py``
-    invoke ``serialize_tool_content`` without session context, and plumbing
-    one through would widen a shared signature for no functional gain.
+    The filename is a content hash rather than a random uuid, and the spill
+    directory is shared (not PID-keyed): identical content always spills to
+    the identical path, so the truncation marker naming it is byte-stable
+    across processes and repeated calls, and re-spilling the same content is
+    an idempotent overwrite rather than a fresh file.
     """
     # No cleanup beyond OS tmp reaping — unbounded tmp growth in long-lived
     # pods is the ceiling here. Upgrade path: delete the spill dir when the
     # owning tool loop closes.
     try:
-        spill_dir = os.path.join(
-            tempfile.gettempdir(),
-            f"unify-tool-results-{os.getpid()}",
-        )
+        spill_dir = os.path.join(tempfile.gettempdir(), "unify-tool-results")
         os.makedirs(spill_dir, mode=0o700, exist_ok=True)
-        path = os.path.join(spill_dir, f"{uuid.uuid4()}.txt")
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        path = os.path.join(spill_dir, f"{content_hash}.txt")
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
         return path

@@ -14,9 +14,9 @@ class ChatContextPropagation(Enum):
         Never pass parent chat context, even to tools that accept it.
 
     LLM_DECIDES
-        Expose an ``include_parent_chat_context: bool = True`` parameter in the
-        tool schema. The LLM can set this to ``false`` to skip context propagation
-        for a specific tool call. If omitted, defaults to ``True`` (context included).
+        Expose an ``include_parent_chat_context: bool = False`` parameter in the
+        tool schema. The LLM can set this to ``true`` to opt a specific tool call
+        into context propagation. If omitted, defaults to ``False`` (no context).
     """
 
     ALWAYS = "always"

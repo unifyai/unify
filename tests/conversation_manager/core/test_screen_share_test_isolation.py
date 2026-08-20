@@ -42,6 +42,7 @@ def test_reset_screen_share_state_helper_clears_buffer():
     cm = SimpleNamespace(
         _frontend_reported_meet_surfaces={surfaces[0]},
         _screenshot_buffer=[_screenshot_entry()],
+        _assistant_screen_share_viewers={"call:c1:u1", "desktop_pane:u1"},
         **{name: True for name in surfaces},
     )
     driver = SimpleNamespace(cm=cm)
@@ -52,6 +53,10 @@ def test_reset_screen_share_state_helper_clears_buffer():
         assert getattr(cm, name) is False, name
     assert cm._frontend_reported_meet_surfaces == set()
     assert cm._screenshot_buffer == []
+    # The viewer set backs the desktop surface and decides what a call stages,
+    # so a reset that leaves it populated hands the next test a desktop that
+    # somebody is still watching.
+    assert cm._assistant_screen_share_viewers == set()
 
 
 @pytest.mark.requires_orchestra

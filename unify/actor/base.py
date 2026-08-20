@@ -311,7 +311,6 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         entrypoint: Optional[int] = None,
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
-        entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
         destination: Optional[str] = None,
         persist: Optional[bool] = None,
@@ -323,11 +322,10 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
 
         Args:
             request: Natural-language or structured request describing the work.
-            entrypoint_repair_attempts: How many times a failing symbolic
-                entrypoint may be repaired and retried before surfacing the
-                failure.
             entrypoint_repair_context: Optional structured context passed into
-                the symbolic-entrypoint repair loop.
+                the repair loop of a failing stored function (task request and
+                run context). How many times a symbolic run may rewind and
+                repair is the verification setting ``max_rewinds_per_run``.
             destination: Optional FunctionManager Compositional root for symbolic
                 entrypoint resolution (``None`` / ``"personal"`` or ``"team:<id>"``).
                 Required for correct ``function_id`` lookup when the same id exists

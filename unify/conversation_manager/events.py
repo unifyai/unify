@@ -347,6 +347,13 @@ FAST_BRAIN_TURN_SMALLTALK = "smalltalk"
 FAST_BRAIN_TURN_SILENCE = "silence"
 FAST_BRAIN_TURN_CONTINUATION = "continuation"
 FAST_BRAIN_TURN_HANG_UP = "hang_up"
+# Derived by the runtime, never chosen by the model: the fast brain reached no
+# usable decision on a call carrying another assistant. Nothing is spoken, but
+# unlike ``silence`` the slow brain still gets the turn — it is the one that can
+# tell whether the turn was this assistant's, and it can answer in full or call
+# ``wait``. Distinct from ``silence`` because a silent turn is a decision to let
+# the turn go, and the slow brain is deliberately not woken for one.
+FAST_BRAIN_TURN_UNDECIDED = "undecided"
 
 # How many other participants make a call a *group* call, where a turn may
 # belong to someone other than the assistant. Two, because with exactly one
@@ -1309,6 +1316,11 @@ class FastBrainNotification(Event):
     # applies these directly: ``message`` is prose written for an LLM and is
     # rewritten freely, so inferring state from its wording silently breaks the
     # moment the copy changes.
+    #
+    # ``CALL_DESKTOP_SHARE_SURFACE`` is the one key that names no attribute. It
+    # is derived per call rather than stored, because who is watching the
+    # assistant's desktop outlives any one call while what a call puts on its
+    # stage must not.
     meet_surface_state: dict = field(default_factory=dict)
 
 

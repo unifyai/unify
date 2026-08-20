@@ -1,5 +1,6 @@
 from tavily import TavilyClient
 import functools
+from pathlib import Path
 import os
 from typing import List, Dict, Any, Optional, Type
 from pydantic import BaseModel
@@ -172,6 +173,21 @@ class WebSearcher(BaseWebSearcher):
             self._last_crawls: Dict[str, Any] = {}
         if not hasattr(self, "_last_maps"):
             self._last_maps: Dict[str, Any] = {}
+
+    @functools.wraps(BaseWebSearcher.fetch, updated=())
+    async def fetch(self, url: str) -> str:
+        from unify.file_manager.settings import get_local_root
+        from unify.web_searcher.url_fetch import fetch_to_directory
+
+        # Fetched bytes land in their own directory rather than loose in the
+        # workspace: their name and content come from outside, so keeping them
+        # separable from the assistant's own files is what makes them
+        # reviewable later.
+        target = await fetch_to_directory(
+            url,
+            Path(get_local_root()) / "Downloads",
+        )
+        return str(target)
 
     @functools.wraps(BaseWebSearcher.clear, updated=())
     def clear(self) -> None:

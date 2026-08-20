@@ -88,8 +88,9 @@ jobs:
       # Brain default model is gpt-5.6-sol@openai (OpenAI). OPENAI_API_KEY
       # above covers slow-brain auth; DEEPSEEK remains for DeepSeek-specific tests.
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_CI_API_KEY }}
-      # Communication service URL (org secret is still named UNIFY_COMMS_URL).
-      UNIFY_COMMS_URL: ${{ secrets.UNIFY_COMMS_URL }}
+      # UNIFY_COMMS_URL stays unset: it keeps the in-process
+      # LocalActivationScheduler on and outbound comms off the hosted
+      # Communication service (see unify/task_scheduler/settings.py).
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_LOCATION: ${{ vars.GCP_LOCATION }}
       ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}

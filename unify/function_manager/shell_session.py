@@ -9,9 +9,13 @@ to VenvPool's persistent connections but for shell languages.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 ShellLanguage = Literal["bash", "zsh", "sh", "powershell"]
 
@@ -65,6 +69,10 @@ class ShellSession:
         self._process: Optional[asyncio.subprocess.Process] = None
         self._marker = f"__UNIFY_SHELL_DONE_{uuid.uuid4().hex[:8]}__"
         self._started = False
+        # The session is one subprocess with a single stdin/stdout pipe pair;
+        # interleaved commands would corrupt the marker-based completion
+        # protocol, so ``execute`` serializes on this lock.
+        self._execution_lock = asyncio.Lock()
 
     def _get_shell_command(self) -> List[str]:
         """Get the shell interpreter command for the configured language.
@@ -130,6 +138,10 @@ class ShellSession:
         """
         Execute a command in the persistent session.
 
+        Concurrent calls are serialized: commands share one stdin/stdout pipe
+        pair and the marker protocol below, so exactly one command runs at a
+        time and queued commands run in arrival order.
+
         Uses a marker-based approach to detect command completion:
         1. Send the command
         2. Send an echo of a unique marker with the exit code
@@ -147,6 +159,26 @@ class ShellSession:
         Raises:
             RuntimeError: If the session is not started.
         """
+        queued_at = time.perf_counter()
+        async with self._execution_lock:
+            lock_wait_ms = (time.perf_counter() - queued_at) * 1000
+            if lock_wait_ms >= 1:
+                logger.debug(
+                    "shell session %s (%s): command waited %.0fms for the "
+                    "session execution lock",
+                    self._marker[-8:],
+                    self.language,
+                    lock_wait_ms,
+                )
+            return await self._execute_exclusively(command, timeout=timeout)
+
+    async def _execute_exclusively(
+        self,
+        command: str,
+        *,
+        timeout: Optional[float],
+    ) -> ShellExecutionResult:
+        """Run one command on the session pipes; the caller holds ``_execution_lock``."""
         if not self._started or self._process is None:
             raise RuntimeError("Session not started. Call start() first.")
 

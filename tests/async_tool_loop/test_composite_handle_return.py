@@ -28,8 +28,9 @@ from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_tool_result,
-    _wait_for_assistant_call_prefix,
+    _wait_for_assistant_steer_action,
     real_tool_messages,
+    any_tool_message_content_contains,
 )
 
 pytestmark = pytest.mark.llm_call
@@ -195,7 +196,7 @@ async def test_composite_dict_return_with_handle(llm_config):
     The outer loop should:
     1. Extract the handle and adopt it for steering.
     2. Present the intermediate data (with sentinel) as progress to the LLM.
-    3. Expose dynamic steering helpers (stop_*, etc.).
+    3. Remain steerable via steer(call_id=..., action=...).
     4. Eventually complete with the handle's final result.
     """
 
@@ -289,14 +290,15 @@ async def test_composite_dict_return_with_handle(llm_config):
     final = await outer_handle.result()
     assert final is not None, "Loop should complete with a response"
 
-    # After completion, the tool message should contain the handle's final result
-    tool_msgs_final = real_tool_messages(client.messages, tool_name="composite_tool")
-    assert tool_msgs_final, "Expected final tool message for composite_tool"
-    # The final content replaces the progress placeholder
-    final_content = tool_msgs_final[0].get("content", "")
-    assert (
-        "inner-complete" in final_content
-    ), f"Final tool result should contain the handle's result; got: {final_content}"
+    # The handle's final result lands either in the placeholder (if it was
+    # still mutable when the handle completed) or in a per-child
+    # check_status pair (if the placeholder had already been dispatched in
+    # an earlier request while the model kept waiting). Either way it must
+    # be in the transcript.
+    assert any_tool_message_content_contains(client.messages, "inner-complete"), (
+        "Expected the handle's final result ('inner-complete') to appear "
+        "somewhere in the transcript (placeholder or check_status pair)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,8 +308,8 @@ async def test_composite_dict_return_with_handle(llm_config):
 
 @pytest.mark.asyncio
 async def test_composite_return_stop_steering(llm_config):
-    """Tool returns composite data + handle. The outer loop should expose
-    ``stop_*`` helpers that propagate to the inner handle.
+    """Tool returns composite data + handle. The outer loop should stay
+    steerable via steer(action="stop") propagating to the inner handle.
     """
 
     stop_called = {"count": 0}
@@ -359,8 +361,9 @@ async def test_composite_return_stop_steering(llm_config):
     client.set_system_message(
         "You are running inside an automated test.\n"
         "1️⃣  Call `lookup_tool` with no arguments.\n"
-        "2️⃣  If the user says 'stop', immediately call the helper whose name "
-        "starts with `stop_` (e.g. `stop_lookup_tool_<id>`) exactly once.\n"
+        "2️⃣  If the user says 'stop', immediately call "
+        'steer(call_id=<the id from the "[steerable ...]" announcement for '
+        'this call>, action="stop") exactly once.\n'
         "3️⃣  Once stopped, reply with exactly 'stopped'.",
     )
 
@@ -375,9 +378,9 @@ async def test_composite_return_stop_steering(llm_config):
     await _wait_for_tool_request(client, "lookup_tool")
     await _wait_for_tool_result(client, tool_name="lookup_tool", min_results=1)
 
-    # Interject to trigger the stop helper
+    # Interject to trigger the stop action
     await outer_handle.interject("stop")
-    await _wait_for_assistant_call_prefix(client, "stop_")
+    await _wait_for_assistant_steer_action(client, "stop")
 
     final = await outer_handle.result()
     assert final is not None, "Loop should complete"
@@ -583,15 +586,17 @@ async def test_multi_handle_return_completes(llm_config):
     final = await outer_handle.result()
     assert final is not None, "Loop should complete"
 
-    # Final placeholder should contain both handle results
-    tool_msgs_final = real_tool_messages(client.messages, tool_name="dual_tool")
-    final_content = tool_msgs_final[0].get("content", "")
-    assert (
-        "alpha-result" in final_content
-    ), f"Expected alpha-result in final placeholder; got: {final_content}"
-    assert (
-        "beta-result" in final_content
-    ), f"Expected beta-result in final placeholder; got: {final_content}"
+    # Each handle's terminal result lands either in the shared placeholder
+    # (while still mutable) or its own per-child check_status pair (once
+    # the placeholder has been dispatched).
+    assert any_tool_message_content_contains(client.messages, "alpha-result"), (
+        "Expected alpha-result somewhere in the transcript (placeholder or "
+        "check_status pair)"
+    )
+    assert any_tool_message_content_contains(client.messages, "beta-result"), (
+        "Expected beta-result somewhere in the transcript (placeholder or "
+        "check_status pair)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -681,9 +686,9 @@ async def test_composite_tuple_return(llm_config):
     final = await outer_handle.result()
     assert final is not None, "Loop should complete"
 
-    # Final tool result should contain the handle's result
-    tool_msgs_final = real_tool_messages(client.messages, tool_name="tuple_tool")
-    final_content = tool_msgs_final[0].get("content", "")
-    assert (
-        "tuple-handle-done" in final_content
-    ), f"Final result should contain handle result; got: {final_content}"
+    # The handle's terminal result lands either in the placeholder (while
+    # still mutable) or its own check_status pair (once dispatched).
+    assert any_tool_message_content_contains(client.messages, "tuple-handle-done"), (
+        "Expected the handle's result ('tuple-handle-done') somewhere in "
+        "the transcript (placeholder or check_status pair)"
+    )

@@ -14,6 +14,8 @@ Orchestra, and neither waits on the model.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import time
 from typing import Any, AsyncIterator, Optional
@@ -25,6 +27,8 @@ from starlette.responses import JSONResponse, StreamingResponse
 from unify.llm_broker.settings import BrokerSettings, load_settings
 from unify.llm_broker.usage import (
     USAGE_TAIL_LIMIT,
+    generation_id_from_body,
+    generation_id_from_stream_tail,
     usage_from_body,
     usage_from_stream_tail,
 )
@@ -100,6 +104,33 @@ def _assistant_id(request: Request, body: dict) -> Optional[int]:
         return None
 
 
+def _billing_label(request: Request) -> Optional[str]:
+    """The action label attached to this call, if any.
+
+    Carried as a base64url-encoded header rather than plain text: labels are
+    free-form (e.g. an act label written in Chinese), and raw HTTP header
+    values are latin-1 -- forwarding one unencoded would mangle or crash on
+    the wire. Decoded here so Orchestra receives it as plain text.
+    """
+    raw = request.headers.get("x-unify-label")
+    if not raw:
+        return None
+    try:
+        return base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        LOGGER.warning("LLM broker: unusable label header; dropping")
+        return None
+
+
+def _billing_source(request: Request) -> Optional[str]:
+    """What triggered this call (``chat``, ``tool``, ...), if the caller set one.
+
+    Unlike the label, this is a short internal tag rather than free text, so
+    it travels as a plain header.
+    """
+    return request.headers.get("x-unify-source") or None
+
+
 def _refusal(status_code: int, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail})
 
@@ -171,6 +202,9 @@ class Broker:
         model: str,
         usage: Optional[dict],
         assistant_id: Optional[int],
+        generation_id: Optional[str] = None,
+        label: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> None:
         """Report a completed call's usage.
 
@@ -183,15 +217,22 @@ class Broker:
         if usage is None:
             LOGGER.warning("LLM broker: no usage to report (model=%s)", model)
             return
+        payload: dict[str, Any] = {
+            "model": model,
+            "usage": usage,
+            "assistant_id": assistant_id,
+        }
+        if generation_id is not None:
+            payload["generation_id"] = generation_id
+        if label is not None:
+            payload["label"] = label
+        if source is not None:
+            payload["source"] = source
         try:
             response = await self._control.post(
                 self.settings.settle_url,
                 headers={"Authorization": f"Bearer {caller_key}"},
-                json={
-                    "model": model,
-                    "usage": usage,
-                    "assistant_id": assistant_id,
-                },
+                json=payload,
             )
         except httpx.RequestError as exc:
             LOGGER.error(
@@ -218,6 +259,8 @@ class Broker:
         assistant_id: Optional[int],
         caller_key: str,
         stream: bool,
+        label: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> Any:
         """Send the call to the provider and report what it used."""
         if not stream:
@@ -233,6 +276,9 @@ class Broker:
                     model=model,
                     usage=usage_from_body(payload),
                     assistant_id=assistant_id,
+                    generation_id=generation_id_from_body(payload),
+                    label=label,
+                    source=source,
                 )
             return JSONResponse(status_code=response.status_code, content=payload)
 
@@ -265,6 +311,9 @@ class Broker:
                 model=model,
                 usage=usage_from_stream_tail(tail),
                 assistant_id=assistant_id,
+                generation_id=generation_id_from_stream_tail(tail),
+                label=label,
+                source=source,
             )
 
         return StreamingResponse(_stream(), media_type="text/event-stream")
@@ -324,6 +373,8 @@ def build_router(broker: Broker) -> APIRouter:
             assistant_id=assistant_id,
             caller_key=caller_key,
             stream=stream,
+            label=_billing_label(request),
+            source=_billing_source(request),
         )
 
     @router.post("/llm/anthropic/v1/messages")
@@ -377,6 +428,8 @@ def build_router(broker: Broker) -> APIRouter:
             assistant_id=assistant_id,
             caller_key=caller_key,
             stream=stream,
+            label=_billing_label(request),
+            source=_billing_source(request),
         )
 
     @router.get("/healthz")

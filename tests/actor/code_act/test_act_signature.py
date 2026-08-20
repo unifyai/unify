@@ -24,8 +24,9 @@ def _assert_closed_act_signature(sig: inspect.Signature) -> None:
     assert not any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
     ), f"act must not accept **kwargs; got {sig}"
-    assert "entrypoint_repair_attempts" in sig.parameters
     assert "entrypoint_repair_context" in sig.parameters
+    # The rewind budget is a verification setting, never a per-call knob.
+    assert "entrypoint_repair_attempts" not in sig.parameters
 
 
 def test_base_and_code_act_signatures_are_closed():
@@ -47,7 +48,7 @@ def test_act_schema_is_closed():
         f"{params.get('additionalProperties')!r}"
     )
     assert "kwargs" not in props
-    assert "entrypoint_repair_attempts" in props
+    assert "entrypoint_repair_attempts" not in props
     assert "entrypoint_repair_context" in props
     # Underscored internals are hidden from the LLM-visible schema.
     assert "_parent_chat_context" not in props

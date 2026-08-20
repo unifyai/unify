@@ -15,6 +15,7 @@ import unisdk
 import json
 import asyncio
 import datetime as dt
+import time
 from collections import defaultdict, deque
 from datetime import datetime
 from typing import (
@@ -334,7 +335,12 @@ class EventBus:
     # ConversationManager's inactivity check to detect that internal work
     # (LLM calls, tool-loop turns, manager methods, …) is still happening
     # even when no external pubsub messages are arriving.
-    last_publish_monotonic: float = 0.0
+    #
+    # Seeded at import rather than 0.0. `time.monotonic()` counts from *node*
+    # boot on Linux, so a zero sentinel made "never published" read as the
+    # node's uptime: minutes on a fresh node (which spuriously protected a pod
+    # that had published nothing) and days on an old one.
+    last_publish_monotonic: float = time.monotonic()
 
     # ── Pub/Sub streaming for Live Actions ────────────────────────────────
     _GCP_PROJECT: str | None = None

@@ -1501,6 +1501,7 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
             is_ready_for_outbound_call=False,
             hang_up_gate_reason=None,
             other_call_participant_names=[],
+            other_call_assistant_names=[],
         ),
         assistant_job_title=(
             "Coordinator" if scenario.is_coordinator else "Customer Success"

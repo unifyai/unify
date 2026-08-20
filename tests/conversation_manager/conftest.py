@@ -385,6 +385,10 @@ def _reset_screen_share_state(cm: "CMStepDriver") -> None:
 
     for surface in (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES):
         setattr(cm.cm, surface, False)
+    # The viewer set backs ``assistant_screen_share_active`` and decides what a
+    # call stages, so clearing the flag alone leaves the two disagreeing and
+    # hands the next test in the file a desktop somebody is still watching.
+    cm.cm._assistant_screen_share_viewers.clear()
     cm.cm._frontend_reported_meet_surfaces.clear()
     cm.cm._screenshot_buffer.clear()
 

@@ -8,6 +8,7 @@ import re
 import sys
 import traceback
 import uuid
+import weakref
 from secrets import token_hex as _token_hex
 import logging
 from typing import (
@@ -51,6 +52,7 @@ from unify.common.task_execution_context import (
 )
 from unify.events.event_bus import EVENT_BUS, Event
 from unify.common.llm_client import new_llm_client
+from unify.common.llm_meter import RunMeter, current_run_meter, new_run_meter
 from unify.common.act_llm_profiles import (
     CURRENT_ACT_LLM_PROFILE,
     resolve_act_llm_profile,
@@ -58,8 +60,22 @@ from unify.common.act_llm_profiles import (
 from unify.common.llm_helpers import methods_to_tool_dict
 from unify.common.tool_spec import ToolSpec, llm_soft_required
 from unify.function_manager.base import BaseFunctionManager
+from unify.function_manager.function_manager import strip_ledger_internals
 from unify.function_manager.primitives import ComputerPrimitives
 from unify.actor.prompt_builders import build_code_act_prompt
+from unify.actor.verification_runtime import (
+    EntrypointOutcome,
+    Frame,
+    HeldOutcome,
+    RepairRefused,
+    RewindRequested,
+    VerifierPasses,
+    closure_rows,
+    install_wrappers,
+    rederive_trust,
+    run_probe,
+    run_verified_entrypoint,
+)
 from unify.events.manager_event_logging import log_manager_call
 from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
 from unify.common.hierarchical_logger import log_boundary_event
@@ -442,35 +458,78 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         entrypoint_id: int,
         execution_task: asyncio.Task[Any],
         on_finally: Optional[Callable[[], Awaitable[None]]] = None,
+        meter: Optional[RunMeter] = None,
     ) -> None:
         self._entrypoint_id = int(entrypoint_id)
         self._execution_task = execution_task
+        self._meter = meter
         self._completion_event = asyncio.Event()
         self._result_str: Optional[str] = None
         self._error: Optional[BaseException] = None
         self._stopped = False
         self._on_finally = on_finally
+        self._notification_q: asyncio.Queue[dict] = asyncio.Queue()
+        self._follow_up: Optional[asyncio.Task[Any]] = None
+        # Set when the run finished without performing an effect because a
+        # verdict it depended on failed, timed out or could not be settled.
+        self.held_outcome: Optional[HeldOutcome] = None
+        # Verification accounting for the execution row.
+        self.run_stats: dict[str, Any] = {}
 
         asyncio.create_task(self._monitor_execution())
 
     async def _monitor_execution(self) -> None:
         try:
             out = await self._execution_task
-            if not self._stopped:
+            if isinstance(out, EntrypointOutcome):
+                self.held_outcome = out.held
+                self.run_stats = {
+                    "verdicts": dict(out.verdict_counts),
+                    "rewinds": int(out.rewinds),
+                    "verifier_tasks": int(out.verifier_tasks),
+                    "held_reason": (
+                        f"{out.held.code}: {out.held.reason}" if out.held else None
+                    ),
+                    "tokens": (
+                        self._meter.snapshot()["tokens"] if self._meter else None
+                    ),
+                }
+                self._follow_up = out.follow_up
+                if not self._stopped:
+                    if out.held is not None:
+                        self._result_str = out.held.message
+                    else:
+                        self._result_str = (
+                            str(out.result) if out.result is not None else ""
+                        )
+            elif not self._stopped:
                 self._result_str = str(out) if out is not None else ""
         except asyncio.CancelledError:
             self._stopped = True
-            self._result_str = f"Entrypoint {self._entrypoint_id} was cancelled."
+            if self._result_str is None:
+                self._result_str = f"Entrypoint {self._entrypoint_id} was cancelled."
         except Exception as e:
             self._error = e
             self._result_str = f"Error: {e}"
         finally:
+            self._completion_event.set()
+            if self._follow_up is not None:
+                try:
+                    await self._follow_up
+                except Exception:
+                    pass
             if self._on_finally is not None:
                 try:
                     await self._on_finally()
                 except Exception:
                     pass
-            self._completion_event.set()
+            self._notification_q.put_nowait({})
+
+    async def push_notification(self, message: str) -> None:
+        """Deliver an owner-facing follow-up (a correction after early delivery)."""
+        await self._notification_q.put(
+            {"type": "notification", "message": message, "completed": True},
+        )
 
     async def ask(
         self,
@@ -479,7 +538,7 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         _parent_chat_context: list[dict] | None = None,
     ) -> SteerableToolHandle:
         status = "completed" if self.done() else "still running"
-        client = new_llm_client()
+        client = new_llm_client(purpose="planning", origin="EntrypointHandle.ask")
         client.set_system_message(
             "You are an AI assistant answering a status question about an in-flight entrypoint execution. "
             "Be brief and factual.",
@@ -543,8 +602,7 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         return {}
 
     async def next_notification(self) -> dict:
-        await asyncio.Event().wait()
-        return {}
+        return await self._notification_q.get()
 
     async def answer_clarification(self, call_id: str, answer: str) -> None:
         return None
@@ -572,9 +630,6 @@ class _CodeActTaskExecutionDelegate:
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
         entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
-        entrypoint_repair_attempts = int(
-            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
-        )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
         destination = kwargs.pop("destination", None)
         if kwargs:
@@ -591,12 +646,65 @@ class _CodeActTaskExecutionDelegate:
             _clarification_down_q=clarification_down_q,
             entrypoint=entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
             destination=destination,
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Verification tools shared by the storage and repair loops
+# ---------------------------------------------------------------------------
+
+
+def _verification_librarian_tools(fm: Any) -> Dict[str, Callable]:
+    """``confirm_side_effect_class`` and ``set_verification_policy`` bound to ``fm``.
+
+    Both shape how much verification a stored function needs; neither can
+    grant trust, and the ledger is written only by the runtime.
+    """
+    if fm is None:
+        return {}
+
+    async def confirm_side_effect_class(
+        function_id: int,
+        side_effect_class: str,
+        rationale: str,
+    ) -> str:
+        return str(
+            fm.confirm_side_effect_class(
+                function_id=int(function_id),
+                side_effect_class=str(side_effect_class),
+                rationale=str(rationale),
+            ),
+        )
+
+    async def set_verification_policy(
+        function_id: int,
+        always_verify: bool | None = None,
+        required_passes: int | None = None,
+        min_distinct_inputs: int | None = None,
+        fixture_only: bool | None = None,
+        spot_check_rate: float | None = None,
+    ) -> str:
+        return str(
+            fm.set_verification_policy(
+                function_id=int(function_id),
+                always_verify=always_verify,
+                required_passes=required_passes,
+                min_distinct_inputs=min_distinct_inputs,
+                fixture_only=fixture_only,
+                spot_check_rate=spot_check_rate,
+            ),
+        )
+
+    confirm_side_effect_class.__doc__ = fm.confirm_side_effect_class.__doc__
+    set_verification_policy.__doc__ = fm.set_verification_policy.__doc__
+    return {
+        "confirm_side_effect_class": confirm_side_effect_class,
+        "set_verification_policy": set_verification_policy,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +716,6 @@ _DEFAULT_STORAGE_REVIEW_INSTRUCTIONS = (
     "Review the trajectory and store any reusable functions, "
     "compositional guidance, and durable knowledge claims."
 )
-MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS = 2
 
 
 def _signature_compatible_kwargs(
@@ -725,8 +832,9 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "dead exploratory `print`s, duplicated setup, or formatting noise, "
     "but never remove validation gates, recovery branches, or diagnostic "
     "logging that explains why a path returned early or returned empty. "
-    "Store non-executor helpers and guidance freely; offline executor "
-    "promotion requires separate certification.\n\n"
+    "Store non-executor helpers and guidance freely; a stored executor earns "
+    "trust from independent verification of its runs, and offline promotion "
+    "follows from that trust.\n\n"
     "### Async / event-loop safety in stored functions\n\n"
     "Offline TaskScheduler Jobs already own an event loop via "
     "`asyncio.run`. Nested `asyncio.run(...)` inside a sync helper then "
@@ -736,6 +844,49 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "required, call the injected `run_coro_sync(factory)` helper (also "
     "`from unify.common.asyncio_compat import run_coro_sync`) instead of "
     "nesting `asyncio.run`.\n\n"
+    "### Verifiable functions\n\n"
+    "A stored function is not trusted when it is stored. Every call of it "
+    "runs under independent verification — a static review of its source, "
+    "an argument review, a precondition probe before any effect, and a "
+    "post-execution review — until enough independent verdicts have "
+    "accumulated for its effect class; only then does it run bare. You "
+    "cannot grant that trust and you never write the verification ledger. "
+    "What you can do is store functions that are cheap to verify and hard "
+    "to get wrong:\n\n"
+    "- **Thin effects.** A function that performs an irreversible effect "
+    "(send, post, delete, pay, drive a desktop) must do only that. Compute "
+    "in one function, perform the effect in another, and let the root "
+    "compose them. This is what makes a failed verdict cheap to repair and "
+    "blame precise: the computation can be re-run and corrected without "
+    "the effect ever having happened. Example — instead of one "
+    "`send_weekly_summary(week)` that fetches, totals and posts, store "
+    "`compute_weekly_summary(week) -> dict` (read-only, verifiable "
+    "against its inputs) and `post_summary(channel: str, text: str) -> "
+    "dict` (the one effect), with a root that calls the first, then the "
+    "second.\n"
+    "- **Type hints on every parameter and the return.** The input and "
+    "output contracts a call is checked against are derived from them; an "
+    "unhinted function has no deterministic contract.\n"
+    "- **A docstring whose first sentence is a checkable postcondition** "
+    '("Return the sum of `amount` over the rows, in minor units, as an '
+    'int"), not a paraphrase of the name. Where the postcondition is '
+    "expressible as an expression over `result` and `kwargs`, author it "
+    "via `FunctionManager_add_functions(contracts={name: "
+    "{'postconditions': [...]}})` so it is checked on every call.\n"
+    "- **Fixtures for pure functions.** When the trajectory contains "
+    "concrete inputs and the exact output a pure (`safe_noop`) function "
+    "reproduces, store them via `FunctionManager_add_functions(fixtures="
+    "{name: [{'args': {...}, 'result': ...}]})`; they are replayed "
+    "whenever the function changes and reject silent regressions.\n"
+    "- **Confirm the effect class.** Detection from the source is a lower "
+    "bound (safe_noop < read_only < idempotent_effectful < "
+    "unsafe_effectful). When you know a function's real class — an effect "
+    "the source does not reveal, or a third-party import that only reads "
+    "— call `confirm_side_effect_class(function_id, side_effect_class, "
+    "rationale)`; raising is always allowed, lowering stops at the "
+    "detected bound. Use `set_verification_policy(function_id, ...)` to "
+    "demand more verification for unusually consequential functions; it "
+    "can only raise the bar.\n\n"
     "### Third-party package dependencies\n\n"
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
@@ -793,7 +944,11 @@ _STORAGE_THREE_STORES = (
     "(`FunctionManager_delete_venv`) virtual environments for "
     "functions with third-party dependencies. Link a function to a "
     "venv via `FunctionManager_set_function_venv` or pass `venv_id` "
-    "directly to `FunctionManager_add_functions`.\n\n"
+    "directly to `FunctionManager_add_functions`.\n"
+    "- **Shape verification** of a stored function: confirm its effect "
+    "class within the detected bound (`confirm_side_effect_class`) and "
+    "raise its trust bar (`set_verification_policy`). Neither grants "
+    "trust; verdicts from independent verification do.\n\n"
     "Do NOT store trivial one-liners, test scaffolding, or functions "
     "that are too task-specific to be reusable.\n\n"
     "### Guidance Store — the *how*\n\n"
@@ -1177,6 +1332,7 @@ def _build_storage_tools(
             *storage_methods,
             include_class_name=True,
         ),
+        **_verification_librarian_tools(fm),
     }
 
     # ── Wire ask_about_completed_tool from snapshot ───────────────────
@@ -1305,9 +1461,7 @@ def _build_storage_tools(
 
     if task_entrypoint_review:
         attach_entrypoint = task_entrypoint_review.get("attach_entrypoint")
-        promote_entrypoint_offline = task_entrypoint_review.get(
-            "promote_entrypoint_offline",
-        )
+        promote_task_offline_hook = task_entrypoint_review.get("promote_task_offline")
         metadata = dict(task_entrypoint_review.get("metadata") or {})
         task_id = metadata.get("task_id")
         task_name = metadata.get("task_name") or metadata.get("name") or "the task"
@@ -1315,18 +1469,17 @@ def _build_storage_tools(
         async def attach_entrypoint_to_recurring_task(
             function_id: int,
             rationale: str,
-            equivalence_manifest: dict[str, Any] | None = None,
-            anti_oversimplification_checklist: dict[str, Any] | None = None,
         ) -> str:
-            """Record a stored FunctionManager entrypoint candidate for future runs.
+            """Bind a stored function as the executor of future runs of this task.
 
             Use this only after you have reviewed the completed trajectory and
             decided that the stored function captures a stable reusable procedure
-            that preserves the observed operational contract. Calling this tool
-            records the function as a symbolic executor candidate on future
-            non-terminal instances; it does not promote those instances to
-            offline delivery. Leaving the task description-driven is valid when
-            future runs still need broad planning or tool discovery.
+            that preserves the observed operational contract. Binding does not
+            grant trust: future runs execute the function under independent
+            verification, trust is earned from those verdicts, and offline
+            delivery follows once every function it calls is trusted. Leaving
+            the task description-driven is valid when future runs still need
+            broad planning or tool discovery.
             """
 
             if not callable(attach_entrypoint):
@@ -1360,190 +1513,39 @@ def _build_storage_tools(
                 attach_entrypoint(
                     function_id=int(function_id),
                     rationale=str(rationale),
-                    certification_metadata={
-                        "equivalence_manifest": equivalence_manifest or {},
-                        "anti_oversimplification_checklist": (
-                            anti_oversimplification_checklist or {}
-                        ),
-                    },
                 ),
             )
 
         attach_entrypoint_to_recurring_task.__doc__ += (
             f"\n\nCurrent task: {task_name} (task_id={task_id}). "
-            "The tool only patches future non-terminal instances; it never "
-            "rewrites the completed run or flips delivery to offline."
+            "The tool only patches future runs; it never rewrites the "
+            "completed run, grants trust, or flips delivery to offline."
         )
         tools["attach_entrypoint_to_recurring_task"] = (
             attach_entrypoint_to_recurring_task
         )
 
-        certification_revision_attempts = 0
+        async def promote_task_offline() -> str:
+            """Move this task to offline (headless) delivery if its executor is trusted.
 
-        async def submit_offline_certification_evidence(
-            function_id: int,
-            certification_evidence: dict[str, Any],
-            promotion_rationale: str | None = None,
-        ) -> str:
-            """Submit evidence for offline promotion of a symbolic task executor.
-
-            Purpose:
-            - Ask the scheduler-owned promotion gate whether a previously
-              recorded FunctionManager entrypoint is safe and equivalent enough
-              for future recurring task instances to run offline.
-            - Submit structured evidence only. This tool does not certify by
-              replaying work.
-
-            Hard semantic rule:
-            - This tool does not execute the entrypoint.
-            - Do not use this tool to execute the entrypoint, replay live task
-              steps, perform a dry-run, send messages, mutate external systems,
-              fetch fresh expensive data, or make verification calls. The tool
-              only passes evidence to the scheduler gate.
-
-            Use this tool only when all of the following are true:
-            - `attach_entrypoint_to_recurring_task(...)` has already recorded
-              the symbolic executor candidate for future non-terminal instances.
-            - You can provide complete evidence for the candidate's input,
-              equivalence, side-effect, idempotency, cost, failure, observability,
-              and managed-primitive contracts.
-            - The candidate preserves the live run's managed primitive surface
-              and operational behavior closely enough for offline delivery.
-
-            Do not use this tool when:
-            - The candidate is broad or still needs live planning, open-ended
-              tool discovery, or user clarification.
-            - Side effects are unclear, unsafe, not idempotent, or not covered
-              by a concrete contract.
-            - Verification would require token-heavy, costly, or effectful
-              replay.
-            - The function changes primitives, ordering, validation, recovery,
-              output shape, failure behavior, or external data sources.
-            - Evidence is incomplete or contradictory.
-
-            Required evidence shape:
-            `certification_evidence` must include:
-            - `risk_classification`: one of `safe_noop`, `read_only`,
-              `idempotent_effectful`, or `unsafe_effectful`.
-            - `input_contract`: required runtime inputs and how future offline
-              runs provide them.
-            - `equivalence_contract`: mapping from the live task steps to the
-              stored function paths, including result shape.
-            - `managed_primitive_contract`: managed surfaces used by the live
-              run and the candidate. It must include `preserved=True` and no
-              `ad_hoc_replacements`.
-            - `side_effect_contract`: side effects, ordering, and duplicate-run
-              behavior.
-            - `idempotency_contract`: why repeated/offline execution is safe or
-              how duplicate effects are prevented.
-            - `cost_contract`: bounded token/network/runtime cost. Include
-              `bounded=True`.
-            - `failure_contract`: preserved blocker, retry, validation, and
-              recovery behavior.
-            - `observability_contract`: what the offline run logs or returns so
-              failures remain diagnosable.
-            - `attestations`: booleans confirming no hardcoded live observations,
-              no removed validation gates, no reordered side effects, no
-              discarded recovery branches, no static runtime assumptions, and no
-              ad hoc replacement of managed primitives.
-
-            Managed primitive preservation rule:
-            - Replacing live primitives with ad hoc logic is not equivalent and
-              is not acceptable. For example, replacing `primitives.web.ask(...)`
-              with custom `urllib` scraping, replacing contact/task/knowledge
-              primitives with direct storage pokes, or bypassing validation and
-              recovery primitives with local shortcuts must fail certification.
-            - Positive pattern: wrap the same primitive sequence with stable
-              parameters, expose only genuinely variable inputs, preserve side
-              effect ordering, keep validation/recovery branches, and leave
-              managed surfaces under their manager-owned primitives.
-            - Antipatterns: hardcoding observations from the live run, flattening
-              a multi-step primitive sequence into one request, using raw
-              HTTP/storage access instead of manager APIs, dropping blocker
-              handling, changing output shape, hiding side effects in helpers, or
-              swapping in cheaper but behaviorally different data sources.
-
-            Feedback and retries:
-            - Rejection returns structured reasons. Use them to revise the stored
-              function candidate or evidence, then resubmit only within the
-              bounded review budget.
-            - This post-run review allows at most two certification evidence
-              submissions. When the budget is exhausted, leave future instances
-              live. The symbolic candidate may remain recorded only if it is
-              still useful as a helper.
-
-            Fail-closed behavior:
-            - Missing, contradictory, unsafe, high-risk, or primitive-changing
-              evidence is rejected. Rejection never promotes offline delivery.
+            Eligibility is read from the verification ledger: the task must
+            have a bound entrypoint and every function in that entrypoint's
+            transitive closure must have earned trust (verify=False). This
+            tool never grants trust and takes no evidence; when the closure is
+            not yet trusted it reports which function ids still stand in the
+            way. Promotion also happens automatically at the end of the run in
+            which the last member of the closure earns trust, so calling this
+            is only needed to promote a task whose closure was already trusted.
             """
 
-            nonlocal certification_revision_attempts
-            if not callable(promote_entrypoint_offline):
+            if not callable(promote_task_offline_hook):
                 return "No task offline-promotion hook is available."
-            if (
-                certification_revision_attempts
-                >= MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
-            ):
-                return str(
-                    {
-                        "outcome": "certification_revision_attempts_exhausted",
-                        "task_id": task_id,
-                        "function_id": int(function_id),
-                        "max_revision_attempts": (
-                            MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
-                        ),
-                        "next_action": (
-                            "Leave future instances live unless a later task "
-                            "run produces a better candidate."
-                        ),
-                    },
-                )
+            return str(promote_task_offline_hook())
 
-            certification_revision_attempts += 1
-            certification_metadata = {
-                "certification_evidence": certification_evidence,
-                "promotion_rationale": promotion_rationale or "",
-                "certification_attempt": certification_revision_attempts,
-                "max_revision_attempts": (MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS),
-            }
-            certification_result = {
-                "evidence_based": True,
-                "executed_entrypoint": False,
-                "attempt": certification_revision_attempts,
-                "max_revision_attempts": (MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS),
-            }
-            outcome = promote_entrypoint_offline(
-                function_id=int(function_id),
-                certification_metadata=certification_metadata,
-                certification_result=certification_result,
-            )
-            remaining_attempts = max(
-                0,
-                MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
-                - certification_revision_attempts,
-            )
-            outcome["certification_attempt"] = certification_revision_attempts
-            outcome["remaining_revision_attempts"] = remaining_attempts
-            if outcome.get("outcome") == "certification_rejected":
-                outcome["feedback"] = (
-                    "Use rejection_reasons to revise the candidate function or "
-                    "evidence. Do not execute the candidate through certification."
-                )
-                if remaining_attempts == 0:
-                    outcome["certification_feedback_status"] = (
-                        "revision_attempts_exhausted"
-                    )
-                    outcome["next_action"] = "Keep future task instances live."
-            return str(outcome)
-
-        submit_offline_certification_evidence.__doc__ += (
-            f"\n\nCurrent task: {task_name} (task_id={task_id}). "
-            "This tool may patch future non-terminal instances to offline "
-            "delivery only after evidence-based certification passes."
+        promote_task_offline.__doc__ += (
+            f"\n\nCurrent task: {task_name} (task_id={task_id})."
         )
-        tools["submit_offline_certification_evidence"] = (
-            submit_offline_certification_evidence
-        )
+        tools["promote_task_offline"] = promote_task_offline
 
     return tools, storage_active_lines, dormant_lines
 
@@ -1712,37 +1714,29 @@ def _start_storage_check_loop(
             "source selection.\n\n"
             "If you store a FunctionManager function and decide it is a stable "
             "candidate for future runs, call "
-            "`attach_entrypoint_to_recurring_task(function_id=..., "
-            "rationale=..., equivalence_manifest=..., "
-            "anti_oversimplification_checklist=...)`. Calling that tool records "
-            "a symbolic executor candidate on future non-terminal instances; it "
-            "does not promote them to offline delivery. Do not call it unless "
-            "the function has already been persisted and you have the numeric "
-            "function_id.\n\n"
-            "Executor candidates require an equivalence manifest. Include: "
-            "required inputs; managed primitives/helpers/managers used; external "
-            "capabilities; side effects and ordering; expected result shape; "
-            "failure semantics; and a live-step to function-code-path mapping. "
-            "The anti-oversimplification checklist must confirm there are no "
-            "hardcoded observations from live tool results unless they are true "
-            "task constants, no removed validation gates, no reordered side "
-            "effects, no discarded recovery branches, and no replacement of "
+            "`attach_entrypoint_to_recurring_task(function_id=..., rationale=...)`. "
+            "Binding records the function as the executor of future runs; it "
+            "does not grant trust and does not promote the task to offline "
+            "delivery. Do not call it unless the function has already been "
+            "persisted and you have the numeric function_id.\n\n"
+            "An executor candidate must preserve the observed live execution "
+            "chain: the managed primitives and helpers used, the side effects "
+            "and their ordering, the result shape, and the failure semantics. "
+            "It must not hardcode observations from live tool results unless "
+            "they are true task constants, remove validation gates, reorder "
+            "side effects, discard recovery branches, or replace "
             "runtime-dependent decisions with static assumptions. If the "
             "candidate materially changes primitives, inputs, ordering, or "
             "failure behavior, store it as a helper/guidance only and do not "
-            "record it as the task executor candidate.\n\n"
-            "Offline promotion is a separate evidence-based certification "
-            "decision. Only call `submit_offline_certification_evidence(...)` "
-            "after the candidate is recorded and you can provide complete "
-            "evidence for equivalence, inputs, side effects, idempotency, cost, "
-            "failure behavior, observability, and managed primitive "
-            "preservation. The certification tool does not execute the "
-            "entrypoint or replay live task steps. Replacing managed primitives "
-            "with ad hoc logic is not equivalent: for example, do not replace "
-            "`primitives.web.ask(...)` with custom scraping or manager-owned "
-            "primitives with raw storage/HTTP shortcuts. Failed certification "
-            "keeps future runs live while preserving the stored artifact for "
-            "reuse.\n\n"
+            "bind it.\n\n"
+            "Trust and offline delivery are earned, not attested. Once bound, "
+            "the function runs under independent verification: each call is "
+            "checked before and after it runs, verdicts accumulate on the "
+            "function's ledger, and the function is trusted only when the "
+            "policy for its effect class is met. When every function the "
+            "entrypoint calls is trusted, the task is promoted to offline "
+            "delivery automatically; `promote_task_offline()` only re-checks "
+            "that eligibility. There is no evidence to submit.\n\n"
             "Task metadata:\n"
             f"```json\n{metadata_json}\n```\n\n"
         )
@@ -1771,7 +1765,7 @@ def _start_storage_check_loop(
         f"{original_result}"
     )
 
-    client = new_llm_client(actor._model)
+    client = new_llm_client(actor._model, purpose="planning", origin="StorageCheck")
     client.set_system_message(system_prompt)
 
     return start_async_tool_loop(
@@ -1896,7 +1890,7 @@ def _start_proactive_storage_loop(
         f"{trajectory_json}"
     )
 
-    client = new_llm_client(actor._model)
+    client = new_llm_client(actor._model, purpose="planning", origin="ProactiveStorage")
     client.set_system_message(system_prompt)
 
     return start_async_tool_loop(
@@ -1941,10 +1935,12 @@ class _StorageCheckHandle(SteerableToolHandle):
         inner: "AsyncToolLoopHandle",
         actor: "CodeActActor",
         post_run_review_context: PostRunReviewContext | None = None,
+        meter: Optional[RunMeter] = None,
     ) -> None:
         self._inner = inner
         self._actor = actor
         self._post_run_review_context = post_run_review_context
+        self._meter = meter
         self._notification_q: asyncio.Queue[dict] = asyncio.Queue()
         self._task_done_event = asyncio.Event()
         self._completion_event = asyncio.Event()
@@ -1958,6 +1954,13 @@ class _StorageCheckHandle(SteerableToolHandle):
 
         # Start the two-phase lifecycle manager.
         self._lifecycle_task = asyncio.create_task(self._run_lifecycle())
+
+    @property
+    def run_stats(self) -> dict[str, Any]:
+        """Token accounting for the execution row (planning tokens for an agentic run)."""
+        if self._meter is None:
+            return {}
+        return {"tokens": self._meter.snapshot()["tokens"]}
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -1992,6 +1995,48 @@ class _StorageCheckHandle(SteerableToolHandle):
         except Exception:
             pass
 
+    async def abandon_storage_review(self, *, reason: str) -> None:
+        """End the storage phase now, without waiting for the review to finish.
+
+        Called when the actor the review depends on is closing. A review needs
+        that actor's venv pool, shell pool and sandboxes to do anything useful,
+        so once they are torn down the review cannot succeed -- it can only
+        keep retrying against them. Five offline task pods on staging stayed
+        busy for eight days that way, still issuing inference for runs recorded
+        as finished the week before, because nothing connected the two
+        lifetimes: the actor closed its pools and walked away from the review.
+
+        The bound this gives a review is its actor's lifetime, not a clock. A
+        review that is genuinely working is never interrupted -- the process
+        that owns the run owns the actor, and only ends it when the run is
+        done with it.
+
+        ``stop`` is cooperative and a loop wedged in a retry against something
+        already gone never notices, so the lifecycle task is cancelled after
+        it. That is what actually ends the inference.
+        """
+
+        if self._completion_event.is_set():
+            return
+        handle = self._storage_handle
+        if handle is not None:
+            try:
+                await handle.stop(reason=reason)
+            except Exception:
+                pass
+        lifecycle = self._lifecycle_task
+        if lifecycle is not None and not lifecycle.done():
+            lifecycle.cancel()
+            try:
+                await lifecycle
+            except (asyncio.CancelledError, Exception):
+                pass
+        # The lifecycle task owns these; setting them here covers the case
+        # where it was cancelled before reaching its own ``finally``.
+        self._phase = "done"
+        self._task_done_event.set()
+        self._completion_event.set()
+
     async def _cancel_relay(self) -> None:
         """Cancel the active notification relay task, if any."""
         relay = self._active_relay
@@ -2007,6 +2052,9 @@ class _StorageCheckHandle(SteerableToolHandle):
 
     async def _run_lifecycle(self) -> None:
         """Manage the two-phase lifecycle: task -> storage check -> done."""
+        if self._meter is not None:
+            # The librarian's calls are planning tokens of this run.
+            current_run_meter.set(self._meter)
         try:
             # ── Phase 1: task execution ───────────────────────────────
             self._active_relay = asyncio.create_task(
@@ -2251,7 +2299,7 @@ class _StorageCheckHandle(SteerableToolHandle):
             "ask_about_skill_storage": ask_about_skill_storage,
         }
 
-        routing_client = new_llm_client()
+        routing_client = new_llm_client(purpose="planning", origin="StorageCheck.ask")
         routing_client.set_system_message(
             "You are answering a question about an agent that has completed "
             "its primary task and is now reviewing its execution trajectory "
@@ -2310,6 +2358,18 @@ class _StorageCheckHandle(SteerableToolHandle):
 
     def done(self) -> bool:
         return self._completion_event.is_set()
+
+    async def wait_until_done(self) -> None:
+        """Block until both phases have finished.
+
+        ``result()`` deliberately resolves at the end of phase 1 so callers are
+        not made to wait on a review they did not ask for. A caller that owns
+        the actor's lifetime needs the other guarantee -- that the review has
+        finished before the resources it runs on are torn down -- and this is
+        how it waits for it.
+        """
+
+        await self._completion_event.wait()
 
     async def result(self) -> str:
         await self._task_done_event.wait()
@@ -2654,6 +2714,12 @@ class CodeActActor(BaseCodeActActor):
         # Actor-level session cap (global across languages for this actor instance).
         self._max_sessions_total: int = 20
         self._next_session_id: dict[tuple[str, Optional[int]], int] = {}
+        # Storage reviews started by this actor and not yet finished, so
+        # ``close()`` can end them rather than leave them running against
+        # pools it is about to tear down.
+        self._live_storage_handles: "weakref.WeakSet[_StorageCheckHandle]" = (
+            weakref.WeakSet()
+        )
 
         self.can_compose: bool = bool(can_compose)
         self.can_store: bool = bool(can_store)
@@ -3153,9 +3219,9 @@ class CodeActActor(BaseCodeActActor):
                 patch_author=build_patch_author() if interject_q is not None else None,
                 pause_event=pause_event,
             )
-            # Carried by context rather than installed on this sandbox: only
-            # one execution mode actually runs here, and the default
-            # (stateless) builds a fresh sandbox that would never see it.
+            # Carried by context rather than installed on this sandbox:
+            # stateless cells build a fresh sandbox per call that would
+            # never see anything installed here.
             try:
                 with use_session(steering):
                     yield steering
@@ -3180,7 +3246,7 @@ class CodeActActor(BaseCodeActActor):
             code: Optional[str] = None,
             *,
             language: str,
-            state_mode: str = "stateless",
+            state_mode: str | None = None,
             session_id: int | None = None,
             session_name: str | None = None,
             venv_id: int | None = None,
@@ -3212,10 +3278,15 @@ class CodeActActor(BaseCodeActActor):
               ``user_id`` when more than one is linked). Remote surfaces are
               **stateless one-shots**: ``state_mode`` must be "stateless"
               and ``session_id`` / ``session_name`` / ``venv_id`` omitted.
-            - **state_mode**: "stateless" (default; fresh run, environment
-              globals and FunctionManager-discovered functions still
-              available), "stateful" (state accumulates), "read_only"
-              (reads an existing session without persisting).
+            - **state_mode**: omit it and a local venv-less Python cell
+              runs **stateful in session 0** — the current per-call
+              Python sandbox, so variables persist across cells — while
+              shell, venv, and remote cells run stateless. Pass
+              "stateless" for an isolated fresh run (environment globals
+              and FunctionManager-discovered functions still available),
+              "read_only" to read an existing session without
+              persisting, or "stateful" with a session selector to
+              target a named or shell/venv session.
             - **session_id/session_name**: stateful/read_only only.
               Stateful defaults to **session_id=0** — inside a running
               act() loop, the current per-call Python sandbox. Create an
@@ -3256,6 +3327,14 @@ class CodeActActor(BaseCodeActActor):
             that may need correcting partway through.
             """
             _ = thought  # Thought is logged by the LLM; not used programmatically.
+            if state_mode is None:
+                # An omitted state_mode resolves per cell type: only local
+                # venv-less Python cells get the persistent per-call sandbox.
+                state_mode = (
+                    "stateful"
+                    if surface == "local" and language == "python" and venv_id is None
+                    else "stateless"
+                )
             if code is None or code.strip() == "":
                 return {
                     "stdout": "",
@@ -3640,7 +3719,7 @@ class CodeActActor(BaseCodeActActor):
                     self._session_executor.register_fm_globals(
                         {k: sb.global_state[k] for k in new_keys},
                     )
-                return result["metadata"]
+                return strip_ledger_internals(result["metadata"])
 
             FunctionManager_filter_functions.__doc__ = (
                 BaseFunctionManager.filter_functions.__doc__
@@ -3979,7 +4058,8 @@ class CodeActActor(BaseCodeActActor):
                 the FunctionManager store by exact name; otherwise a
                 ``NameError`` is raised. ``language`` / ``state_mode`` /
                 ``session_id`` / ``session_name`` keep ``execute_code``
-                semantics.
+                semantics, except ``state_mode`` here defaults to
+                ``"stateless"``.
 
                 Parameters
                 ----------
@@ -5023,67 +5103,36 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
-    @staticmethod
-    async def _run_repair_diagnostic_probe(code: str) -> str:
-        """Execute a short read-only Python diagnosis snippet in a fresh subprocess.
-
-        Use this to observe the CURRENT behavior of the external interfaces a
-        failing function reads — for example, fetch the endpoint it ingests
-        and print the response's shape, keys, and a sample record — so the
-        repair is grounded in observed reality rather than in assumptions or
-        in the function's own error messages. The snippet runs in a fresh
-        isolated interpreter with the standard library only and must print
-        its observations to stdout.
-
-        Strictly read-only diagnosis: fetch and inspect inputs only. Never
-        perform the failing function's side effects (no writes, deliveries,
-        or state mutations on external systems). Output is truncated after
-        20,000 characters; the subprocess is killed after 60 seconds.
-        """
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            "-c",
-            str(code),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        try:
-            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return "Probe timed out after 60 seconds and was killed."
-        output = raw.decode("utf-8", errors="replace")
-        if len(output) > 20_000:
-            output = output[:20_000] + "\n... (output truncated)"
-        return (
-            f"exit_code={proc.returncode}\n{output}"
-            if output.strip()
-            else f"exit_code={proc.returncode} (no output printed)"
-        )
-
-    async def _repair_symbolic_entrypoint(
+    async def _repair_function(
         self,
         *,
-        entrypoint_id: int,
+        function_id: int,
         request: str | dict | list[str | dict],
         entrypoint_kwargs: dict[str, Any],
-        failure: BaseException,
+        failure: BaseException | None,
+        verdict: Any = None,
+        frames: tuple[Frame, ...] = (),
         repair_context: dict[str, Any] | None,
         destination: str | None = None,
     ) -> str:
-        """Run a bounded review loop that can repair a failing symbolic executor."""
+        """Run a bounded review loop that repairs one failing stored function in place.
+
+        The target is the leaf a verdict blamed (or the innermost stored
+        function in a traceback). Deployment-owned functions (``custom_hash``
+        set) are never rewritten here: their bodies are re-synced from the
+        bundle, so an in-place rewrite would silently diverge from it and
+        mask the failure. ``RepairRefused`` is raised instead.
+        """
 
         fm = self.function_manager
         if fm is None:
-            raise RuntimeError(
-                "Cannot repair symbolic entrypoint without FunctionManager.",
+            raise RepairRefused(
+                "Cannot repair a stored function without a FunctionManager.",
             )
 
         snapshot_namespace: dict[str, Any] = {}
         snapshot_result = fm.filter_functions(
-            filter=f"function_id == {int(entrypoint_id)}",
+            filter=f"function_id == {int(function_id)}",
             destination=destination,
             _return_callable=True,
             _namespace=snapshot_namespace,
@@ -5094,18 +5143,16 @@ class CodeActActor(BaseCodeActActor):
             if isinstance(snapshot_result, dict)
             else snapshot_result
         )
-        # Deployment-synced functions (custom_hash set) are owned by the
-        # client bundle: their bodies are re-synced by deployment reconcile,
-        # and an in-place LLM rewrite would silently diverge from the bundle
-        # and mask the underlying failure. Surface the failure instead.
         for row in function_snapshot or []:
             if isinstance(row, dict) and row.get("custom_hash"):
-                raise RuntimeError(
-                    f"Symbolic entrypoint {entrypoint_id} is deployment-owned "
-                    "(custom_hash set); refusing LLM repair. Fix the bundle "
-                    "source and re-sync via deployment reconcile. Original "
-                    f"failure: {type(failure).__name__}: {failure}",
-                ) from failure
+                raise RepairRefused(
+                    f"Function {row.get('name')!r} (id {function_id}) is "
+                    "deployment-owned (custom_hash set); refusing repair. Fix the "
+                    "bundle source and re-sync via deployment reconcile.",
+                )
+        snapshot_for_prompt = strip_ledger_internals(
+            [row for row in (function_snapshot or []) if isinstance(row, dict)],
+        )
         tools = methods_to_tool_dict(
             fm.search_functions,
             fm.filter_functions,
@@ -5121,50 +5168,83 @@ class CodeActActor(BaseCodeActActor):
             fm.get_function_venv,
             include_class_name=True,
         )
-        tools["run_diagnostic_probe"] = self._run_repair_diagnostic_probe
-        client = new_llm_client(self._model)
+        tools["run_diagnostic_probe"] = run_probe
+        tools.update(self._verification_librarian_tools())
+        client = new_llm_client(self._model, purpose="repair")
         client.set_system_message(
-            "You are repairing a stored symbolic task executor. The contract "
-            "you must preserve is the task's OUTCOME: what it computes, the "
-            "semantics and exactness of those values, which side effects it "
-            "performs, where it delivers them, in what order, and how it fails "
-            "when the outcome is truly unachievable. How the function READS its "
-            "external inputs is not contract: external interfaces evolve after "
-            "a function is stored (fields get renamed or nested, endpoints get "
-            "versioned), and adapting ingestion to the environment's current "
-            "shape while keeping the outcome exactly equivalent is precisely "
-            "what repair is for. Diagnose before you rewrite: when the failure "
-            "implicates an external input surface, first use "
-            "run_diagnostic_probe to observe what that interface actually "
-            "returns right now (its shape, keys, and a sample record) and base "
-            "the repair on that observation. Probes are strictly read-only "
-            "diagnosis — never perform the function's side effects through "
-            "them. The task description records the environment "
-            "as it looked when the task was created; when observed reality "
-            "contradicts it, trust the observation over the description's "
-            "input details. Bear in mind that the function's own validation "
-            "messages describe its assumptions, not what the environment "
-            "actually returned — a missing expected field usually means the "
-            "interface changed shape, not that the data is corrupt, so prefer "
-            "ingestion that reads the observed current shape over rejecting "
-            "the input. Never weaken the "
-            "outcome to make the error disappear: do not fabricate values, "
-            "skip required side effects, or coerce genuinely invalid data. "
-            "Update the existing function in place with overwrite=True so its "
-            "function_id stays stable; never delete and re-add it, because "
-            "references such as task entrypoints hold the id. Do not replace "
-            "managed primitives with ad hoc weaker implementations.",
+            "You are repairing a stored function that runs as part of a "
+            "recurring task. The contract you must preserve is the task's "
+            "OUTCOME: what it computes, the semantics and exactness of those "
+            "values, which side effects it performs, where it delivers them, in "
+            "what order, and how it fails when the outcome is truly "
+            "unachievable. How the function READS its external inputs is not "
+            "contract: external interfaces evolve after a function is stored "
+            "(fields get renamed or nested, endpoints get versioned), and "
+            "adapting ingestion to the environment's current shape while "
+            "keeping the outcome exactly equivalent is precisely what repair is "
+            "for. Diagnose before you rewrite: when the failure implicates an "
+            "external input surface, first use run_diagnostic_probe to observe "
+            "what that interface actually returns right now (its shape, keys, "
+            "and a sample record) and base the repair on that observation. "
+            "Probes are strictly read-only diagnosis — never perform the "
+            "function's side effects through them. The task description "
+            "records the environment as it looked when the task was created; "
+            "when observed reality contradicts it, trust the observation over "
+            "the description's input details. Bear in mind that the function's "
+            "own validation messages describe its assumptions, not what the "
+            "environment actually returned — a missing expected field usually "
+            "means the interface changed shape, not that the data is corrupt, "
+            "so prefer ingestion that reads the observed current shape over "
+            "rejecting the input. Never weaken the outcome to make the error "
+            "disappear: do not fabricate values, skip required side effects, "
+            "or coerce genuinely invalid data. Update the existing function in "
+            "place with overwrite=True so its function_id stays stable; never "
+            "delete and re-add it, because references such as task entrypoints "
+            "hold the id. Do not replace managed primitives with ad hoc weaker "
+            "implementations. When an independent verifier failed the function, "
+            "its verdict and the chain of calls that led to it are below: the "
+            "verdict names what was wrong and whether the fault sits in this "
+            "function (leaf) or in how its caller used it. A repaired pure "
+            "function is replayed against its recorded fixtures before it is "
+            "accepted; keep every recorded input/output pair reproducing. Trust "
+            "in the repaired function is earned again by independent "
+            "verification — you cannot grant it.",
         )
+        failure_line = (
+            f"Failure: {type(failure).__name__}: {failure}"
+            if failure is not None
+            else "Failure: verifier verdict (below)."
+        )
+        verdict_block = ""
+        if verdict is not None:
+            verdict_block = (
+                "Verifier verdict:\n"
+                f"```json\n{json.dumps(getattr(verdict, 'model_dump', lambda **_: verdict)(mode='json') if hasattr(verdict, 'model_dump') else verdict, indent=2, default=str)}\n```\n\n"
+            )
+        chain_block = ""
+        if frames:
+            chain_lines = []
+            for index, frame in enumerate(frames, start=1):
+                chain_lines.append(
+                    f"{index}. {frame.name} [{frame.effect_class}] — "
+                    f"{(frame.docstring or '').strip().splitlines()[0] if (frame.docstring or '').strip() else '(no docstring)'}",
+                )
+                if frame.call_site_line:
+                    chain_lines.append(f"   called as: {frame.call_site_line.strip()}")
+            chain_block = (
+                "Call chain (root → failing call):\n" + "\n".join(chain_lines) + "\n\n"
+            )
         message = (
-            "A symbolic task executor failed certification or execution.\n\n"
+            "A stored function failed during a symbolic task run.\n\n"
             f"Task request:\n{request}\n\n"
             "Deterministic entrypoint kwargs:\n"
             f"```json\n{json.dumps(entrypoint_kwargs, indent=2, default=str)}\n```\n\n"
             "Function snapshot:\n"
-            f"```json\n{json.dumps(function_snapshot, indent=2, default=str)}\n```\n\n"
+            f"```json\n{json.dumps(snapshot_for_prompt, indent=2, default=str)}\n```\n\n"
             "Repair context:\n"
             f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
-            f"Failure: {type(failure).__name__}: {failure}\n\n"
+            f"{verdict_block}{chain_block}"
+            f"{failure_line}\n\n"
             "Diagnose the failure — observing the current behavior of any "
             "implicated external input surface via run_diagnostic_probe "
             "(read-only) before deciding — then repair the stored function in "
@@ -5179,11 +5259,15 @@ class CodeActActor(BaseCodeActActor):
             client=client,
             message=message,
             tools=tools,
-            loop_id=f"SymbolicEntrypointRepair({entrypoint_id})",
+            loop_id=f"FunctionRepair({function_id})",
             max_consecutive_failures=2,
         )
         result = await handle.result()
         return str(result)
+
+    def _verification_librarian_tools(self) -> Dict[str, Callable]:
+        """Tools that let a librarian or repair loop shape verification policy (never trust)."""
+        return _verification_librarian_tools(self.function_manager)
 
     @functools.wraps(BaseCodeActActor.act, updated=())
     @log_manager_call(
@@ -5208,7 +5292,6 @@ class CodeActActor(BaseCodeActActor):
         entrypoint: Optional[int] = None,
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
-        entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
         destination: Optional[str] = None,
         persist: Optional[bool] = None,
@@ -5231,8 +5314,6 @@ class CodeActActor(BaseCodeActActor):
         from unify.runtime.drain_gate import refuse_if_draining
 
         refuse_if_draining()
-
-        entrypoint_repair_attempts = int(entrypoint_repair_attempts or 0)
 
         effective_can_compose = (
             self.can_compose if can_compose is None else bool(can_compose)
@@ -5436,14 +5517,61 @@ class CodeActActor(BaseCodeActActor):
             entrypoint_id = int(entrypoint)
             args = list(entrypoint_args or [])
             kwargs_for_entrypoint = dict(entrypoint_kwargs or {})
+            fm = self.function_manager
+            if fm is None:
+                raise RuntimeError(
+                    "CodeActActor cannot execute entrypoint: function_manager is None",
+                )
+            verification_settings = fm.verification_settings
+            repair_context = (
+                entrypoint_repair_context
+                if isinstance(entrypoint_repair_context, dict)
+                else None
+            )
+            task_name = str(
+                (repair_context or {}).get("task_name")
+                or (repair_context or {}).get("task_run_context", {}).get("task_name")
+                or f"task {kwargs_for_entrypoint.get('task_id', '')}".strip()
+                or "the task",
+            )
+            run_key = kwargs_for_entrypoint.get("run_key")
+            task_id_value = kwargs_for_entrypoint.get("task_id")
+            goal_text = (
+                request
+                if isinstance(request, str)
+                else json.dumps(request, default=str)
+            )
 
-            async def _run_entrypoint_once() -> Any:
-                fm = self.function_manager
-                if fm is None:
-                    raise RuntimeError(
-                        "CodeActActor cannot execute entrypoint: function_manager is None",
+            def _resolve_closure() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+                rows = fm.filter_functions(
+                    filter=f"function_id == {entrypoint_id}",
+                    destination=destination,
+                    include_implementations=True,
+                )
+                if not rows:
+                    raise ValueError(
+                        f"Entrypoint function_id {entrypoint_id} not found in FunctionManager.",
                     )
+                root_row = dict(rows[0])
+                fn_name = root_row.get("name")
+                if not isinstance(fn_name, str) or not fn_name.strip():
+                    raise ValueError(
+                        f"Entrypoint {entrypoint_id} has no valid function name.",
+                    )
+                closure = closure_rows(fm, root_row)
+                # The stored flag can lag a change elsewhere in the closure;
+                # the run sees the derived value.
+                rederive_trust(fm, closure, settings=verification_settings)
+                root_row["verify"] = closure[str(fn_name)]["verify"]
+                last_closure_ids[0] = [
+                    int(row["function_id"]) for row in closure.values()
+                ]
+                return root_row, closure
 
+            async def _invoke_root(
+                rows_by_name: dict[str, dict[str, Any]],
+                supervisor: Any,
+            ) -> Any:
                 out = fm.filter_functions(
                     filter=f"function_id == {entrypoint_id}",
                     destination=destination,
@@ -5451,26 +5579,27 @@ class CodeActActor(BaseCodeActActor):
                     _namespace=sandbox.global_state,
                     _also_return_metadata=True,
                 )
-                metadata = []
-                if isinstance(out, dict):
-                    metadata = list(out.get("metadata") or [])
+                metadata = (
+                    list(out.get("metadata") or []) if isinstance(out, dict) else []
+                )
                 if not metadata:
                     raise ValueError(
                         f"Entrypoint function_id {entrypoint_id} not found in FunctionManager.",
                     )
-                fn_name = metadata[0].get("name")
-                if not isinstance(fn_name, str) or not fn_name.strip():
-                    raise ValueError(
-                        f"Entrypoint {entrypoint_id} has no valid function name.",
+                fn_name = str(metadata[0].get("name"))
+                if supervisor is not None:
+                    install_wrappers(
+                        sandbox.global_state,
+                        rows_by_name=rows_by_name,
+                        supervisor=supervisor,
                     )
                 fn = sandbox.global_state.get(fn_name)
                 if fn is None:
                     raise ValueError(
                         f"Entrypoint {entrypoint_id} ({fn_name}) was not injected into the sandbox namespace.",
                     )
-
                 compatible_kwargs = _signature_compatible_kwargs(
-                    fn,
+                    getattr(fn, "__wrapped__", fn),
                     kwargs_for_entrypoint,
                 )
                 # Async entrypoints stay on this loop. Sync entrypoints run
@@ -5485,50 +5614,92 @@ class CodeActActor(BaseCodeActActor):
                         res = await res
                 return res
 
-            async def _run_entrypoint() -> Any:
-                attempts_remaining = max(0, entrypoint_repair_attempts)
-                while True:
-                    try:
-                        return await _run_entrypoint_once()
-                    except Exception as exc:
-                        if attempts_remaining <= 0:
-                            raise
-                        attempts_remaining -= 1
-                        try:
-                            await self._repair_symbolic_entrypoint(
-                                entrypoint_id=entrypoint_id,
-                                request=request,
-                                entrypoint_kwargs=kwargs_for_entrypoint,
-                                failure=exc,
-                                repair_context=(
-                                    entrypoint_repair_context
-                                    if isinstance(entrypoint_repair_context, dict)
-                                    else None
-                                ),
-                                destination=destination,
-                            )
-                        except Exception as repair_exc:
-                            # The entrypoint failure is the actionable
-                            # record; a broken or refused repair pass must
-                            # not displace it in the execution row.
-                            logger.warning(
-                                "Symbolic entrypoint repair for %s failed: %s",
-                                entrypoint_id,
-                                repair_exc,
-                            )
-                            raise exc from repair_exc
+            def _make_passes() -> VerifierPasses:
+                return VerifierPasses(
+                    function_manager=fm,
+                    guidance_manager=self.guidance_manager,
+                    goal=goal_text,
+                    run_key=run_key,
+                    task_id=int(task_id_value) if task_id_value is not None else None,
+                    model=verification_settings.model,
+                )
 
+            async def _repair(rewind: RewindRequested) -> None:
+                if rewind.target_function_id is None:
+                    raise RepairRefused(
+                        "No stored function could be identified to repair.",
+                    )
+                await self._repair_function(
+                    function_id=int(rewind.target_function_id),
+                    request=request,
+                    entrypoint_kwargs=kwargs_for_entrypoint,
+                    failure=rewind.exception,
+                    verdict=rewind.verdict,
+                    frames=rewind.frames,
+                    repair_context=repair_context,
+                    destination=destination,
+                )
+
+            entry_handle_ref: list[Any] = []
+            last_closure_ids: list[list[int]] = [[]]
+
+            async def _notify_owner(message: str) -> None:
+                if entry_handle_ref:
+                    await entry_handle_ref[0].push_notification(message)
+
+            def _settle_ledger_and_promote() -> None:
+                """Fold this run's verdicts synchronously; promote the task if its closure is trusted."""
+                closure_ids = list(last_closure_ids[0])
+                all_trusted = bool(closure_ids)
+                for function_id in closure_ids:
+                    if fm.refresh_trust(function_id) is not False:
+                        all_trusted = False
+                if (
+                    not verification_settings.auto_promote_offline
+                    or task_id_value is None
+                    or not all_trusted
+                ):
+                    return
+                from unify.manager_registry import ManagerRegistry
+
+                scheduler = ManagerRegistry.get_task_scheduler()
+                try:
+                    scheduler.promote_task_offline(task_id=int(task_id_value))
+                except ValueError:
+                    # The run's task_id does not name a definition this
+                    # scheduler holds (ad hoc entrypoint runs); nothing to promote.
+                    return
+
+            async def _run_entrypoint() -> EntrypointOutcome:
+                outcome = await run_verified_entrypoint(
+                    settings=verification_settings,
+                    task_name=task_name,
+                    resolve=_resolve_closure,
+                    invoke=_invoke_root,
+                    make_passes=_make_passes,
+                    repair=_repair,
+                    notify=_notify_owner,
+                )
+                if outcome.held is None and outcome.follow_up is None:
+                    await asyncio.to_thread(_settle_ledger_and_promote)
+                return outcome
+
+            run_meter = new_run_meter()
             delegate_token = current_task_execution_delegate.set(
                 task_execution_delegate,
             )
+            meter_token = current_run_meter.set(run_meter)
             try:
                 entry_task = asyncio.create_task(_run_entrypoint())
                 entry_handle = _CodeActEntrypointHandle(
                     entrypoint_id=entrypoint_id,
                     execution_task=entry_task,
                     on_finally=_cleanup,
+                    meter=run_meter,
                 )
+                entry_handle_ref.append(entry_handle)
             finally:
+                current_run_meter.reset(meter_token)
                 current_task_execution_delegate.reset(delegate_token)
             return entry_handle
 
@@ -5714,7 +5885,12 @@ class CodeActActor(BaseCodeActActor):
         # Build an LLM client for this act() call. The profile is per-call so
         # concurrent runs on the same actor can use different models safely.
         client_model = act_llm_profile.model or self._model
-        client = new_llm_client(client_model, **act_llm_profile.client_kwargs)
+        client = new_llm_client(
+            client_model,
+            purpose="planning",
+            origin="CodeActActor.act",
+            **act_llm_profile.client_kwargs,
+        )
         if system_prompt:
             client.set_system_message(system_prompt)
 
@@ -5799,7 +5975,9 @@ class CodeActActor(BaseCodeActActor):
                 pass
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] starting async tool loop")
+        run_meter = new_run_meter()
         delegate_token = current_task_execution_delegate.set(task_execution_delegate)
+        meter_token = current_run_meter.set(run_meter)
         try:
             handle = start_async_tool_loop(
                 client,
@@ -5824,7 +6002,9 @@ class CodeActActor(BaseCodeActActor):
                 on_notify=_on_notify,
             )
         finally:
+            current_run_meter.reset(meter_token)
             current_task_execution_delegate.reset(delegate_token)
+        handle.run_meter = run_meter  # type: ignore[attr-defined]
         logger.debug(
             f"⏱️ [CodeActActor.act +{_act_ms()}] loop started, returning handle",
         )
@@ -5879,12 +6059,28 @@ class CodeActActor(BaseCodeActActor):
                 inner=handle,
                 actor=self,
                 post_run_review_context=post_run_review_context,
+                meter=run_meter,
             )
+            # Tracked so ``close()`` can end a review still in flight. The
+            # set is weak: a finished handle the caller has dropped must not
+            # be kept alive by this bookkeeping.
+            self._live_storage_handles.add(handle)
 
         return handle
 
     async def close(self):
         """Shuts down the actor and its associated resources gracefully."""
+        # End any storage review still running before the resources it needs
+        # are torn down below. Left alone, a review outlives the actor: it
+        # keeps issuing inference against a closed venv pool and dead
+        # sandboxes, which is how offline task pods stayed busy for days after
+        # their run had already been recorded as finished.
+        for storage_handle in list(self._live_storage_handles):
+            await storage_handle.abandon_storage_review(
+                reason="The actor running this review is shutting down.",
+            )
+        self._live_storage_handles.clear()
+
         # Close any in-process session sandboxes owned by the session executor.
         try:
             await self._session_executor.close()

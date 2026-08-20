@@ -211,6 +211,18 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
             ConversationManager,
         )
     )
+    cm.assistant_desktop_watched_from_call = (
+        ConversationManager.assistant_desktop_watched_from_call.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
+    cm.drop_stale_call_screen_share_viewers = (
+        ConversationManager.drop_stale_call_screen_share_viewers.__get__(
+            cm,
+            ConversationManager,
+        )
+    )
 
     # Create a SimulatedContactManager and populate with sample contacts
     contact_manager = SimulatedContactManager()
@@ -1617,6 +1629,37 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
+    async def test_fast_brain_turn_completed_runs_for_undecided(self, mock_cm):
+        """The third gate an undecided turn has to clear.
+
+        The handler drops ``silence`` outright (above). ``undecided`` is silent
+        too but must NOT be dropped: nothing was spoken, so the slow brain is the
+        only thing left that can answer a turn that was in fact this
+        assistant's, and it is also the only thing that can tell.
+        """
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_UNDECIDED,
+            FastBrainTurnCompleted,
+        )
+
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="A-DA, where did we land on pricing?",
+            classification=FAST_BRAIN_TURN_UNDECIDED,
+            intended_speech="",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.handle_voice_user_turn.assert_called_once()
+        # The guidance note is what tells the slow brain nothing was said; a
+        # dropped note would leave it continuing a line that never existed.
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        assert "NOTHING was said aloud" in msgs[0].content
+
+    @pytest.mark.asyncio
     async def test_fast_brain_turn_completed_skips_empty_user_content(self, mock_cm):
         from unify.conversation_manager.events import (
             FAST_BRAIN_TURN_DEFER,
@@ -2104,16 +2147,17 @@ class TestMeetInteractionEventHandlers:
         assert mock_cm.assistant_screen_share_active is False
 
     @pytest.mark.asyncio
-    async def test_one_viewer_leaving_keeps_the_desktop_open_for_the_others(
+    async def test_a_call_share_is_one_switch_anyone_on_the_call_can_flip(
         self,
         mock_cm,
     ):
-        """Membership decides the surface, not the last event to arrive.
+        """A call shows the desktop to everyone, so it is not a tally of people.
 
-        Everyone on a room call mounts the liveview for themselves, so the
-        assistant is only unwatched once the last of them closes it. Deriving
-        the flag from the newest event instead would let whoever leaves first
-        tell the assistant nobody is looking.
+        The desktop goes up on the stage of a call every participant is watching,
+        which makes it one piece of shared state rather than a view each person
+        holds. Counted per person, the second participant to reach for the switch
+        would be turning off a share they never started: the discard would miss,
+        the desktop would stay up, and the control would do nothing.
         """
         call = "call:sess-1"
         for user_id in ("user-1", "user-2"):
@@ -2125,14 +2169,9 @@ class TestMeetInteractionEventHandlers:
                 mock_cm,
             )
         assert mock_cm.assistant_screen_share_active is True
-        # The second arrival is counted without re-announcing a live share.
+        # The second press is the same switch, not a second thing to turn off,
+        # and a live share is not announced to the assistant twice.
         assert len(mock_cm.notifications_bar.notifications) == 1
-
-        await EventHandler.handle_event(
-            AssistantScreenShareStopped(viewer_user_id="user-1", viewer_source=call),
-            mock_cm,
-        )
-        assert mock_cm.assistant_screen_share_active is True
 
         await EventHandler.handle_event(
             AssistantScreenShareStopped(viewer_user_id="user-2", viewer_source=call),
@@ -2875,15 +2914,34 @@ class TestMeetInteractionEventHandlers:
         await EventHandler.handle_event(event, mock_cm)
 
         # Verify FastBrainNotification was published to the fast brain channel
-        calls = mock_cm.event_broker.publish.call_args_list
-        guidance_calls = [c for c in calls if c.args[0] == "app:call:notification"]
-        assert len(guidance_calls) == 1
-        # The guidance text should contain behavioral instructions
         import json as _json
 
-        data = _json.loads(guidance_calls[0].args[1])
-        content = data.get("payload", {}).get("message", "")
-        assert "screen sharing" in content.lower()
+        from unify.conversation_manager.medium_scripts.common import (
+            CALL_DESKTOP_SHARE_SURFACE,
+        )
+
+        calls = mock_cm.event_broker.publish.call_args_list
+        payloads = [
+            _json.loads(c.args[1]).get("payload", {})
+            for c in calls
+            if c.args[0] == "app:call:notification"
+        ]
+
+        # Two publishes with two different jobs. The guidance tells the assistant
+        # how to behave and is suppressed when the state has not moved; the state
+        # sync tells the room what to mount and is restated every time, because
+        # each client's copy can only be corrected by being told again.
+        spoken = [p for p in payloads if p.get("message")]
+        assert len(spoken) == 1
+        assert "screen sharing" in spoken[0]["message"].lower()
+
+        synced = [
+            p
+            for p in payloads
+            if CALL_DESKTOP_SHARE_SURFACE in (p.get("meet_surface_state") or {})
+        ]
+        assert len(synced) == 1
+        assert synced[0]["message"] == ""
 
     @pytest.mark.asyncio
     async def test_meet_event_no_fast_brain_guidance_in_text_mode(
@@ -3570,16 +3628,34 @@ class TestTaskDueEventHandlers:
             patch(
                 "unify.conversation_manager.domains.task_execution.publish_system_error",
             ) as mock_publish_system_error,
+            patch(
+                "unify.conversation_manager.domains.task_execution."
+                "update_task_run_record",
+            ) as mock_record_failure,
         ):
             should_request_llm = await _handle_task_due_event(event, mock_cm)
 
-        assert should_request_llm is False
+        # A turn is requested so the assistant can say the run did not
+        # happen. Returning False here left the notification written below
+        # unread until some unrelated later turn, and a run the user was
+        # waiting on vanished with nothing said by any channel.
+        assert should_request_llm is True
         assert len(mock_cm.notifications_bar.notifications) == 1
         notification = mock_cm.notifications_bar.notifications[0].content
         assert "failed to start through TaskScheduler.execute" in notification
         assert "delegate mismatch" in notification
         assert "started automatically" not in notification
-        mock_cm.request_llm_run.assert_not_called()
+
+        # The occurrence is terminalized with the real reason. Left open, it
+        # keeps its seat as the definition's head and projection never mints
+        # a successor -- one failure to start would end the series.
+        mock_record_failure.assert_called_once()
+        reference, entries = mock_record_failure.call_args.args
+        assert reference.run_key == "42:101"
+        assert reference.source_task_log_id == 555
+        assert entries["state"] == "failed"
+        assert "delegate mismatch" in entries["error"]
+        assert entries["completed_at"]
         mock_publish_system_error.assert_called_once()
 
     @pytest.mark.asyncio

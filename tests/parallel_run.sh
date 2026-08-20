@@ -406,8 +406,13 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     # Local orchestra defaults its admin bearer to "local-admin-key"
     # (scripts/local.sh); the test process needs the same value so reserved
     # Builtins-project seeding can swap it in (builtins_seed_key_override).
-    # CI sets this explicitly; default it here for local runs.
-    export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-local-admin-key}"
+    # Unconditional, like UNIFY_KEY below: a developer .env commonly carries
+    # a real hosted ORCHESTRA_ADMIN_KEY (for cross-tenant Orchestra ops
+    # against the hosted backend), which would otherwise silently override
+    # this and make every admin-gated call (e.g. Builtins-project seeding)
+    # 401 against the freshly-seeded local instance. CI passes the same
+    # "local-admin-key" value explicitly, so this changes nothing for CI.
+    export ORCHESTRA_ADMIN_KEY="local-admin-key"
 
     # Set up OTEL log directory for cross-repo trace correlation (logs/all/).
     # Note: ORCHESTRA_LOG_DIR (per-request JSON traces to logs/orchestra/) is

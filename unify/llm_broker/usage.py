@@ -71,4 +71,35 @@ def usage_from_stream_tail(tail: str) -> Optional[dict]:
                 # key-by-key across events would interleave unrelated shapes.
                 if isinstance(value, (int, float)):
                     merged[name] = value
+            # ``cached_tokens`` is the one nested field worth keeping: it is
+            # the only per-call cache signal the provider reports, and the
+            # scalar-only merge above would otherwise drop it on the floor.
+            details = source.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                cached = details.get("cached_tokens")
+                if isinstance(cached, (int, float)):
+                    merged["cached_tokens"] = cached
     return merged or None
+
+
+def generation_id_from_body(body: Any) -> Optional[str]:
+    """The provider's top-level response id, for a non-streamed body."""
+    if not isinstance(body, dict):
+        return None
+    value = body.get("id")
+    return value if isinstance(value, str) and value else None
+
+
+def generation_id_from_stream_tail(tail: str) -> Optional[str]:
+    """The provider's response id, read from whichever SSE payload carries it.
+
+    An OpenAI-compatible stream repeats the same ``id`` on every chunk;
+    Anthropic carries it once, on ``message.id`` of the ``message_start``
+    event. Every payload in the tail is checked rather than just the last,
+    since not every event necessarily carries it.
+    """
+    for obj in _iter_sse_payloads(tail):
+        value = obj.get("id") or (obj.get("message") or {}).get("id")
+        if isinstance(value, str) and value:
+            return value
+    return None

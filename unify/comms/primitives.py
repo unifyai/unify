@@ -4,7 +4,7 @@
 communication behavior. Two different runtime surfaces delegate into this same
 module:
 
-- `primitives.comms.*` inside CodeAct, `SingleFunctionActor`, and the offline
+- `primitives.comms.*` inside CodeAct and the offline
   task runner
 - `ConversationManagerBrainActionTools` inside the live assistant runtime
 
