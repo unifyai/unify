@@ -1571,3 +1571,76 @@ class TestManagersDeclareTheirOwnPoolWork:
         assert seen["count"] == 1
         assert seen["labels"] == ["file_sync_transfer"]
         assert ACTIVE_WORK.snapshot().active_count == 0
+
+
+class TestTheBusyReasonNamesWhatIsHoldingThePod:
+    """The reason string is a debugging contract, not decoration.
+
+    It is what the idle log carries as ``busy=``, and it is the only thing that
+    turns "a declaration is holding this pod" into "*which* subsystem declared
+    it". The count alone was not enough: the first deployed pod reported
+    ``active_work(1)`` and nothing in the log could say whether that was a plan
+    step, an ingestion run or a file transfer.
+    """
+
+    def _cm(self, event_broker):
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        return ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=asyncio.Event(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_active_work_is_reported_by_label(self, event_broker):
+        from unify.events.active_work import ACTIVE_WORK
+
+        cm = self._cm(event_broker)
+        handle = ACTIVE_WORK.begin(label="ingestion_dispatch_upload")
+        try:
+            assert cm._busy_snapshot() == (
+                True,
+                "active_work(1:ingestion_dispatch_upload)",
+            )
+        finally:
+            handle.end()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_records_collapse_by_label(self, event_broker):
+        """Distinct labels, not one entry per record.
+
+        A run that fans out over chunks would otherwise turn one fact into a
+        log line that scrolls.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+
+        cm = self._cm(event_broker)
+        handles = [
+            ACTIVE_WORK.begin(label="ingestion_inline"),
+            ACTIVE_WORK.begin(label="ingestion_inline"),
+            ACTIVE_WORK.begin(label="file_sync_transfer"),
+        ]
+        try:
+            # Count is every record; labels are the distinct set, sorted so the
+            # string is stable to compare across checks.
+            assert cm._busy_snapshot() == (
+                True,
+                "active_work(3:file_sync_transfer,ingestion_inline)",
+            )
+        finally:
+            for handle in handles:
+                handle.end()
