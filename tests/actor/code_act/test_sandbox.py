@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from pydantic import TypeAdapter
 
@@ -580,3 +582,67 @@ async def test_sandbox_builtin_open_available(tmp_path):
         result["error"] is None
     ), f"open() should be available in the sandbox but got: {result['error']}"
     assert "hello world" in parts_to_text(result["stdout"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_sandbox_concurrent_cells_serialize_in_arrival_order():
+    """Cells submitted concurrently to one session run one at a time, in order.
+
+    Cells share the session's module dict, display hook, and primitives
+    binding, so a cell that awaits mid-body must not interleave with a
+    later-submitted cell, and each cell's captured output stays its own.
+    """
+    sandbox = PythonExecutionSession()
+    seed = await sandbox.execute("order = []")
+    assert seed["error"] is None
+
+    task_a = asyncio.create_task(
+        sandbox.execute(
+            "import asyncio\n"
+            "await asyncio.sleep(0.2)\n"
+            "print('from-A')\n"
+            "order.append('A')",
+        ),
+    )
+    # Let cell A start (and hit its await) before submitting cell B.
+    await asyncio.sleep(0.05)
+    task_b = asyncio.create_task(
+        sandbox.execute("print('from-B')\norder.append('B')"),
+    )
+    result_a, result_b = await asyncio.gather(task_a, task_b)
+
+    assert result_a["error"] is None
+    assert result_b["error"] is None
+    # A finishes before B despite sleeping mid-cell: execution is exclusive
+    # and arrival-ordered, not interleaved at await points.
+    final = await sandbox.execute("order")
+    assert final["result"] == ["A", "B"]
+    # Output capture is per-cell, not crosstalked through the shared session.
+    assert parts_to_text(result_a["stdout"]) == "from-A\n"
+    assert parts_to_text(result_b["stdout"]) == "from-B\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_sandbox_distinct_sessions_do_not_contend():
+    """A cell in one session runs while another session's cell is in flight."""
+    session_a = PythonExecutionSession()
+    session_b = PythonExecutionSession()
+
+    # Cell A blocks on an event only the test can set, so it is guaranteed
+    # to still be executing while session B's cell runs to completion.
+    gate = asyncio.Event()
+    session_a.global_state["gate"] = gate
+    task_a = asyncio.create_task(session_a.execute("await gate.wait()"))
+    # Let session A's cell start before running session B's cell.
+    await asyncio.sleep(0.05)
+    result_b = await session_b.execute("value = 41 + 1\nvalue")
+
+    assert result_b["error"] is None
+    assert result_b["result"] == 42
+    # B completed while A was still executing: no cross-session contention.
+    assert not task_a.done()
+    gate.set()
+    result_a = await task_a
+    assert result_a["error"] is None
