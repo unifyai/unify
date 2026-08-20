@@ -144,6 +144,11 @@ _UNANSWERED_TURN_CHARS = 200
 # would have the assistant sitting out a call it was eventually asked to join.
 _ADDRESSEE_TURNS = 3
 
+# Where the resolved speaker is stashed on a chat item. The framework owns these
+# items; ``extra`` is the field it leaves for callers, so the label rides along
+# with the turn instead of being held in a side map that has to be kept aligned.
+_SPEAKER_EXTRA_KEY = "unify_speaker"
+
 # How often to re-read the screen a meeting participant is sharing. Recall sends
 # frames at 2fps and the relay stores one a second, so polling faster only costs
 # round trips; polling much slower would leave the frame behind the conversation
@@ -353,6 +358,10 @@ class Assistant(Agent):
         # group when someone joins has to pick the etiquette up mid-call, and one
         # that empties back out has to drop it again.
         self._other_participants_provider: Callable[[], list[str]] | None = None
+        # Who is speaking right now, by display name. Wired on multi-party
+        # channels only: telephony carries one other person, so labelling every
+        # turn with their name tells the brains nothing they do not already have.
+        self._speaker_name_provider: Callable[[], str] | None = None
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -478,6 +487,16 @@ class Assistant(Agent):
         for item in reversed(chat_ctx.items):
             if getattr(item, "role", None) == "user":
                 return item.text_content or ""
+        return ""
+
+    @staticmethod
+    def _latest_user_speaker(chat_ctx: llm.ChatContext) -> str:
+        """The stamped speaker of the most recent user turn, or ""."""
+        for item in reversed(chat_ctx.items):
+            if getattr(item, "role", None) != "user":
+                continue
+            extra = getattr(item, "extra", None) or {}
+            return str(extra.get(_SPEAKER_EXTRA_KEY) or "").strip()
         return ""
 
     @staticmethod
@@ -610,6 +629,16 @@ class Assistant(Agent):
             schedule_bridge = self._pending_opening_bridge
             self._pending_opening_bridge = None
             schedule_bridge()
+        # Stamp who spoke onto the turn itself. Deciding whether a line was aimed
+        # at you is unanswerable without knowing who said it, and the resolved
+        # name is otherwise only attached to the published utterance event — a
+        # different path, which the brains never read. Stamped here because this
+        # runs before generation, while the active speaker is still current.
+        provider = self._speaker_name_provider
+        if provider is not None:
+            speaker = (provider() or "").strip()
+            if speaker:
+                new_message.extra[_SPEAKER_EXTRA_KEY] = speaker
         text = new_message.text_content or ""
         if text:
             _log.user_speech(text)
@@ -724,8 +753,16 @@ class Assistant(Agent):
                 )
             else:
                 peer_turns_since, peer_turns_earlier = [], []
+            # Attributed for the fast brain only. "Was this aimed at me?" has no
+            # answer without knowing who said it, but `user_text` also carries
+            # the turn to the slow brain, which gets the speaker on its own path
+            # — prefixing there would label it twice.
+            speaker = self._latest_user_speaker(chat_ctx)
+            attributed_text = user_text
+            if speaker and user_text.strip() and self._is_multi_party_call():
+                attributed_text = f"{speaker}: {user_text}"
             resolved = await select_fast_brain_turn(
-                user_text=user_text,
+                user_text=attributed_text,
                 system_prompt=self._fast_brain_system_prompt,
                 history_messages=history_messages,
                 pending_continuation=pending,
@@ -2215,6 +2252,19 @@ async def entrypoint(ctx: agents.JobContext):
         is_multiplayer=SESSION_DETAILS.is_multiplayer,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNIFY_CONSOLE_UI,
+        # The roster the call was dispatched with. This prompt is built once, so
+        # a call that becomes a group later is covered by the per-turn blocks
+        # rather than here; a browser meet learns its roster from polling and so
+        # has none of this yet either.
+        call_participant_names=[
+            name
+            for name in (
+                (member.get("display_name") or "").strip()
+                for member in unify_meet_roster
+                if member.get("kind") == "human"
+            )
+            if name
+        ],
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
@@ -3114,6 +3164,17 @@ async def entrypoint(ctx: agents.JobContext):
 
         assistant._other_participants_provider = _other_participant_names
 
+        def _current_speaker_name() -> str:
+            """Who the current utterance is from, by display name.
+
+            Resolved through the same ordering the published utterance uses, so
+            the brains and the transcript agree on who spoke.
+            """
+            _resolved, label, _sid, _source = _resolve_speaker()
+            return (label or "").strip()
+
+        assistant._speaker_name_provider = _current_speaker_name
+
     # --- Multi-assistant speaking floor (org meets only) ---
     # Assistants in a shared org room coordinate playout over the data channel
     # so they never talk over each other. Solo calls skip the claim window via
@@ -3801,6 +3862,7 @@ async def entrypoint(ctx: agents.JobContext):
         *,
         strip_images: bool = False,
         tail: int | None = None,
+        attribute_speakers: bool = False,
     ) -> list[dict]:
         """Convert a LiveKit ChatContext into a list of message dicts for direct LLM calls.
 
@@ -3813,6 +3875,11 @@ async def entrypoint(ctx: agents.JobContext):
         tail : int | None
             When set, only the last *tail* messages are returned (after any
             image stripping).  Useful for keeping the context compact.
+        attribute_speakers : bool
+            When True, prefix each user message with the speaker stamped on its
+            item, so a reader can tell who said what.  Opt-in: on a 1:1 every
+            user line is the same person and the prefix is noise, and the
+            greeting sidecar shares this function.
         """
         from livekit.agents.llm import ImageContent
 
@@ -3848,6 +3915,11 @@ async def entrypoint(ctx: agents.JobContext):
                 text = getattr(item, "text_content", None)
                 if not text:
                     continue
+                if attribute_speakers and role == "user":
+                    extra = getattr(item, "extra", None) or {}
+                    who = str(extra.get(_SPEAKER_EXTRA_KEY) or "").strip()
+                    if who:
+                        text = f"{who}: {text}"
                 messages.append({"role": role, "content": text})
         if tail is not None and len(messages) > tail:
             messages = messages[-tail:]
@@ -4238,10 +4310,17 @@ async def entrypoint(ctx: agents.JobContext):
         return await greeting_client.generate(messages=greeting_messages)
 
     assistant._fast_brain_system_prompt = system_prompt
-    assistant._fast_brain_history_provider = lambda: _extract_chat_messages(
-        session.history,
-        tail=8,
-    )
+
+    def _fast_brain_history() -> list[dict]:
+        # Attribution is decided per call, not per session: a meet that starts
+        # 1:1 and becomes a group has to start labelling mid-call.
+        return _extract_chat_messages(
+            session.history,
+            tail=8,
+            attribute_speakers=assistant._is_multi_party_call(),
+        )
+
+    assistant._fast_brain_history_provider = _fast_brain_history
 
     opening_mode = opening_config["mode"]
 

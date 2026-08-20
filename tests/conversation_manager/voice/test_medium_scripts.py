@@ -3776,6 +3776,142 @@ class TestFastBrainSmalltalk:
         assert a._standing_addressee == ""
 
     @pytest.mark.asyncio
+    async def test_the_turn_reaches_the_fast_brain_attributed(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """ "Was this aimed at me?" is unanswerable without who said it.
+
+        The resolved speaker was previously only attached to the published
+        utterance event, a path neither brain reads.
+        """
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+        a._speaker_name_provider = lambda: "Bo"
+
+        captured: dict = {}
+
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["and when does it expire?"])
+        await a.on_user_turn_completed(ctx, ctx.items[-1])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert captured["user_text"] == "Bo: and when does it expire?"
+        # The slow brain gets the speaker on its own path; labelling it here too
+        # would attribute the line twice.
+        a._publish_fast_brain_turn_completed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_one_to_one_turn_is_not_attributed(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """One other person means the name adds nothing the prompt lacks, and
+        prefixing it would change every phone call's fast-brain input."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._speaker_name_provider = lambda: "Dana"
+
+        captured: dict = {}
+
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One moment.",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["did you send it?"])
+        await a.on_user_turn_completed(ctx, ctx.items[-1])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert captured["user_text"] == "did you send it?"
+
+    @pytest.mark.asyncio
+    async def test_the_speaker_is_stamped_on_the_turn_item(
+        self,
+        boss_contact,
+    ):
+        """Stamped on the item so it travels with the turn into history.
+
+        A side map keyed on text would have to be kept aligned with a context
+        the framework owns and rewrites.
+        """
+        from livekit.agents import llm
+
+        from unify.conversation_manager.medium_scripts.call import (
+            _SPEAKER_EXTRA_KEY,
+        )
+
+        a = self._assistant(boss_contact)
+        a._speaker_name_provider = lambda: "Bo"
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["hello"])
+        await a.on_user_turn_completed(ctx, ctx.items[-1])
+
+        assert ctx.items[-1].extra[_SPEAKER_EXTRA_KEY] == "Bo"
+
+    @pytest.mark.asyncio
+    async def test_no_speaker_stamp_without_a_provider(self, boss_contact):
+        """Telephony wires none, so nothing is stamped and nothing changes."""
+        from livekit.agents import llm
+
+        from unify.conversation_manager.medium_scripts.call import (
+            _SPEAKER_EXTRA_KEY,
+        )
+
+        a = self._assistant(boss_contact)
+        assert a._speaker_name_provider is None
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["hello"])
+        await a.on_user_turn_completed(ctx, ctx.items[-1])
+
+        assert _SPEAKER_EXTRA_KEY not in (ctx.items[-1].extra or {})
+
+    @pytest.mark.asyncio
     async def test_bare_acknowledgement_stays_silent(
         self,
         boss_contact,
