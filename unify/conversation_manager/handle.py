@@ -26,6 +26,12 @@ T = TypeVar("T", bound=[BaseModel, Enum])
 
 logger = logging.getLogger(__name__)
 
+# How long a spoken question waits for the user before the loop is told the
+# question went unanswered. Long enough to cover a person thinking, taking a
+# breath, or being talked over mid-call; short enough that a caller who walked
+# away does not hold the loop open indefinitely.
+USER_REPLY_TIMEOUT_S = 120
+
 
 class ConversationManagerHandle(BaseConversationManagerHandle):
     """
@@ -180,21 +186,27 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
                 DirectMessageEvent(content=text).to_json(),
             )
 
-            try:
-                # If an interjection already provided the answer (patient mode),
-                # return it immediately instead of creating a new future.
-                if user_reply_future.done():
-                    user_msg = user_reply_future.result()
-                    # Reset for potential future questions
+            # An interjection may already have delivered the answer before the
+            # question was spoken (patient mode); otherwise wait for the next.
+            if not user_reply_future.done():
+                try:
+                    await asyncio.wait_for(
+                        user_reply_future,
+                        timeout=USER_REPLY_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    # The wait leaves the future cancelled. Hand the next
+                    # question a fresh one: reading a cancelled future raises
+                    # CancelledError, which would surface as this whole loop
+                    # having been cancelled rather than as one unanswered
+                    # question.
                     user_reply_future = asyncio.Future()
-                    return f"User replied: {user_msg}"
+                    return "Timed out waiting for user reply."
 
-                user_msg = await asyncio.wait_for(user_reply_future, timeout=120)
-                # Reset for potential future questions
-                user_reply_future = asyncio.Future()
-                return f"User replied: {user_msg}"
-            except asyncio.TimeoutError:
-                return "Timed out waiting for user reply."
+            user_msg = user_reply_future.result()
+            # Reset for potential future questions
+            user_reply_future = asyncio.Future()
+            return f"User replied: {user_msg}"
 
         tools = {
             "ask_question": ask_question,

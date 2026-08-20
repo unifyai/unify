@@ -59,6 +59,13 @@ pytestmark = pytest.mark.eval
 # Helper Functions for Deterministic Waiting
 # =============================================================================
 
+# Ceiling for one ``ask()`` loop to reach its final answer. A cold cache means
+# several real reasoning turns, plus any nested manager ask, each of which can
+# take tens of seconds; a replayed cache finishes the same loop in milliseconds.
+# The ceiling therefore only ever binds on cache-refresh runs, where it must be
+# generous enough not to read a slow provider as a broken loop.
+_ASK_RESULT_TIMEOUT = 300.0
+
 
 async def _wait_for_condition(predicate, *, timeout: float = 30.0, poll: float = 0.05):
     """Poll predicate() until it returns True or timeout expires."""
@@ -70,6 +77,30 @@ async def _wait_for_condition(predicate, *, timeout: float = 30.0, poll: float =
             return True
         await asyncio.sleep(poll)
     return False
+
+
+def _capture_questions(cm) -> list[str]:
+    """Record every question ``ask_question`` speaks, in order.
+
+    The direct-speech publish is what marks PATH 2 as genuinely under way:
+    it happens inside ``ask_question``, immediately before it blocks on a
+    reply. Waiting on the returned list is therefore the trigger that says
+    "the assistant has asked, an interjection will now be consumed as its
+    answer" — and it holds whether the turn took a cached millisecond or a
+    live minute.
+    """
+    questions: list[str] = []
+    original_publish = cm.cm.event_broker.publish
+
+    async def _tracking_publish(channel, message):
+        if channel == "app:comms:direct_speech":
+            evt = Event.from_json(message)
+            if isinstance(evt, DirectMessageEvent):
+                questions.append(evt.content)
+        return await original_publish(channel, message)
+
+    cm.cm.event_broker.publish = _tracking_publish
+    return questions
 
 
 # =============================================================================
@@ -381,19 +412,27 @@ class TestHandleLifecycle:
 @pytest.mark.asyncio
 async def test_ask_question_resets_future_after_await():
     """
-    ask_question has two code paths that consume user_reply_future.
-    Both MUST reset the future after consuming it so that a subsequent
-    ask_question call blocks for fresh user input rather than returning
-    stale data from a previous reply.
+    ask_question has three code paths that finish with user_reply_future.
+    All of them MUST leave behind a fresh, pending future so that a
+    subsequent ask_question call blocks for new user input rather than
+    returning stale data or observing a dead future.
 
       1. "Patient mode" — future already done when ask_question is called.
       2. "Await mode"   — future is pending, so ask_question awaits it.
+      3. "Timeout mode" — nobody replies, so the await times out.
 
-    Regression: the await path previously did not reset the future, causing
-    the second ask_question call to immediately return the stale first reply.
+    Regression 1: the await path did not reset the future, causing the
+    second ask_question call to immediately return the stale first reply.
+
+    Regression 2: the timeout path did not reset the future either, and
+    ``wait_for`` leaves a timed-out future *cancelled*.  The next
+    ask_question then saw ``.done() is True`` and called ``.result()`` on
+    it, which raises CancelledError — aborting the whole surrounding tool
+    loop, whose caller then observed the ask as having produced no answer
+    at all rather than as one unanswered question.
 
     This mirrors the exact ask_question / user_reply_future closure from
-    ConversationManagerHandle.ask() in handle.py.  Both paths must reset.
+    ConversationManagerHandle.ask() in handle.py.  Every path must reset.
     """
     user_reply_future: asyncio.Future = asyncio.Future()
 
@@ -401,11 +440,13 @@ async def test_ask_question_resets_future_after_await():
     # which is a side-effect irrelevant to future management).
     async def ask_question(text: str):
         nonlocal user_reply_future
-        if user_reply_future.done():
-            user_msg = user_reply_future.result()
-            user_reply_future = asyncio.Future()
-            return f"User replied: {user_msg}"
-        user_msg = await asyncio.wait_for(user_reply_future, timeout=5)
+        if not user_reply_future.done():
+            try:
+                await asyncio.wait_for(user_reply_future, timeout=0.1)
+            except asyncio.TimeoutError:
+                user_reply_future = asyncio.Future()
+                return "Timed out waiting for user reply."
+        user_msg = user_reply_future.result()
         user_reply_future = asyncio.Future()
         return f"User replied: {user_msg}"
 
@@ -432,6 +473,87 @@ async def test_ask_question_resets_future_after_await():
     assert (
         not user_reply_future.done()
     ), "user_reply_future was not reset after the patient-mode path returned."
+
+    # --- Path 3 (timeout): nobody replies at all ---
+    result3 = await ask_question("Are you still there?")
+    assert result3 == "Timed out waiting for user reply."
+
+    assert not user_reply_future.done(), (
+        "user_reply_future was not reset after the timeout path returned. "
+        "wait_for cancels the future it gives up on, so the next "
+        "ask_question would read a cancelled future."
+    )
+    assert not user_reply_future.cancelled(), (
+        "user_reply_future was left cancelled after the timeout path. "
+        "Reading it raises CancelledError, which aborts the surrounding "
+        "tool loop instead of returning one unanswered question."
+    )
+
+    # A re-ask after the timeout must behave like any other question: block
+    # for the next reply, and deliver it rather than dying on the stale future.
+    asyncio.get_event_loop().call_later(
+        0.02,
+        user_reply_future.set_result,
+        "still here",
+    )
+    result4 = await ask_question("Are you still there?")
+    assert result4 == "User replied: still here"
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_real_ask_question_survives_unanswered_question(monkeypatch):
+    """An unanswered question must not poison the questions that follow it.
+
+    This drives the *real* closure built by ``ask()`` rather than a copy of
+    it, by intercepting the tool set on its way into the tool loop. The
+    mirrored test above documents the invariant; this one is what actually
+    holds ``handle.py`` to it.
+
+    A question nobody answers used to leave its reply future cancelled. The
+    next question saw a future that was ``done()`` and read it, and reading a
+    cancelled future raises ``CancelledError`` — which unwound the whole ask
+    loop, so the caller was told the ask produced no answer at all instead of
+    that one question went unanswered.
+    """
+    captured_tools: dict = {}
+
+    def _capture_tools(**kwargs):
+        captured_tools.update(kwargs["tools"])
+        return MagicMock()
+
+    monkeypatch.setattr(
+        "unify.conversation_manager.handle.start_async_tool_loop",
+        _capture_tools,
+    )
+    monkeypatch.setattr(
+        "unify.conversation_manager.handle.USER_REPLY_TIMEOUT_S",
+        0.1,
+    )
+
+    mock_cm = MagicMock()
+    mock_cm.call_manager = MagicMock()
+    mock_cm.contact_index = MagicMock()
+
+    handle = ConversationManagerHandle(
+        event_broker=AsyncMock(),
+        conversation_id="conv_123",
+        contact_id=1,
+        transcript_manager=MagicMock(),
+        conversation_manager=mock_cm,
+    )
+
+    ask_handle = await handle.ask("What is the user's name?")
+    ask_question = captured_tools["ask_question"]
+
+    assert await ask_question("What is your name?") == (
+        "Timed out waiting for user reply."
+    )
+
+    # The user speaks up after giving up on the first question. It must land
+    # on the next question rather than on the abandoned future.
+    await ask_handle.interject("My name is Bob")
+    assert await ask_question("Sorry, your name?") == "User replied: My name is Bob"
 
 
 # =============================================================================
@@ -630,18 +752,7 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
         conversation_manager=cm.cm,
     )
 
-    # Track direct speech events
-    direct_speech_events = []
-
-    async def capture_events(channel, message):
-        if channel == "app:comms:direct_speech":
-            try:
-                direct_speech_events.append(Event.from_json(message))
-            except Exception:
-                pass
-        return 1
-
-    cm.cm.event_broker.publish = capture_events
+    questions_asked = _capture_questions(cm)
 
     # Ask something not in transcript - should trigger PATH 2
     ask_handle = await handle.ask(
@@ -649,14 +760,14 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
         response_format=MeetingTime,
     )
 
-    # Wait for active_ask_handle to be set (indicates PATH 2 started)
-    # Use polling instead of fixed sleep for deterministic behavior
-    await _wait_for_condition(
-        lambda: cm.cm.active_ask_handle is not None,
-        timeout=30.0,
-    )
+    # Wait until the question has actually been spoken. ``active_ask_handle``
+    # is set synchronously by ask() before it returns, so polling it says
+    # nothing about whether PATH 2 has begun.
+    assert await _wait_for_condition(
+        lambda: len(questions_asked) >= 1,
+        timeout=_ASK_RESULT_TIMEOUT,
+    ), "PATH 2 never asked the user anything"
 
-    # If PATH 2, there should be a direct speech asking the question
     # The handle should be waiting for user reply
     assert not ask_handle.done()
 
@@ -664,7 +775,10 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
     await ask_handle.interject("Let's do 2 PM")
 
     # Now get result
-    result = await asyncio.wait_for(ask_handle.result(), timeout=30)
+    result = await asyncio.wait_for(
+        ask_handle.result(),
+        timeout=_ASK_RESULT_TIMEOUT,
+    )
 
     assert isinstance(result, MeetingTime)
     assert result.hour == 14  # 2 PM in 24-hour
@@ -708,7 +822,10 @@ async def test_ask_path2_routes_user_input_via_active_ask_handle(initialized_cm)
     await cm.cm.handle_voice_user_turn("My favorite color is blue")
 
     # Result should now be available
-    result = await asyncio.wait_for(ask_handle.result(), timeout=30)
+    result = await asyncio.wait_for(
+        ask_handle.result(),
+        timeout=_ASK_RESULT_TIMEOUT,
+    )
 
     assert "blue" in result.lower()
 
@@ -740,21 +857,7 @@ async def test_ask_path2_multiple_followup_questions(initialized_cm):
         conversation_manager=cm.cm,
     )
 
-    # Track questions asked
-    questions_asked = []
-    original_publish = cm.cm.event_broker.publish
-
-    async def track_questions(channel, message):
-        if channel == "app:comms:direct_speech":
-            try:
-                evt = Event.from_json(message)
-                if isinstance(evt, DirectMessageEvent):
-                    questions_asked.append(evt.content)
-            except Exception:
-                pass
-        return await original_publish(channel, message)
-
-    cm.cm.event_broker.publish = track_questions
+    questions_asked = _capture_questions(cm)
 
     # Ask something specific
     ask_handle = await handle.ask(
@@ -762,10 +865,10 @@ async def test_ask_path2_multiple_followup_questions(initialized_cm):
     )
 
     # Wait for first question to be asked (poll for direct_speech event)
-    await _wait_for_condition(
+    assert await _wait_for_condition(
         lambda: len(questions_asked) >= 1,
-        timeout=30.0,
-    )
+        timeout=_ASK_RESULT_TIMEOUT,
+    ), "PATH 2 never asked the user anything"
 
     # Give vague reply - should trigger follow-up
     await ask_handle.interject("You can reach me anytime")
@@ -773,13 +876,16 @@ async def test_ask_path2_multiple_followup_questions(initialized_cm):
     # Wait for follow-up question (poll for second question)
     await _wait_for_condition(
         lambda: len(questions_asked) >= 2 or ask_handle.done(),
-        timeout=30.0,
+        timeout=_ASK_RESULT_TIMEOUT,
     )
 
     # Provide actual answer
     await ask_handle.interject("+1-555-123-4567")
 
-    result = await asyncio.wait_for(ask_handle.result(), timeout=30)
+    result = await asyncio.wait_for(
+        ask_handle.result(),
+        timeout=_ASK_RESULT_TIMEOUT,
+    )
 
     # Should have extracted the phone number
     assert "555" in result or "123" in result or "4567" in result
@@ -935,7 +1041,10 @@ async def test_intercepting_handle_delegates_lifecycle_methods(initialized_cm):
 
     # Following standard pattern: await result() for clean completion
     # When stopped, result() returns None
-    result = await asyncio.wait_for(ask_handle.result(), timeout=30.0)
+    result = await asyncio.wait_for(
+        ask_handle.result(),
+        timeout=_ASK_RESULT_TIMEOUT,
+    )
     assert result is None
 
     # After the inner loop completes, done() should return True
@@ -1236,13 +1345,17 @@ async def test_ask_handles_empty_transcript(initialized_cm):
         conversation_manager=cm.cm,
     )
 
+    questions_asked = _capture_questions(cm)
+
     ask_handle = await handle.ask("What is the user's name?")
 
-    # Wait for active_ask_handle to be set (PATH 2 started)
-    await _wait_for_condition(
-        lambda: cm.cm.active_ask_handle is not None,
-        timeout=30.0,
-    )
+    # Wait until the question has actually been spoken. ``active_ask_handle``
+    # is set synchronously by ask() before it returns, so polling it says
+    # nothing about whether PATH 2 has begun.
+    assert await _wait_for_condition(
+        lambda: len(questions_asked) >= 1,
+        timeout=_ASK_RESULT_TIMEOUT,
+    ), "PATH 2 never asked the user anything"
 
     # Should be waiting for user input (PATH 2)
     assert not ask_handle.done()
@@ -1250,7 +1363,10 @@ async def test_ask_handles_empty_transcript(initialized_cm):
     # Provide answer via interject
     await ask_handle.interject("My name is Bob")
 
-    result = await asyncio.wait_for(ask_handle.result(), timeout=30)
+    result = await asyncio.wait_for(
+        ask_handle.result(),
+        timeout=_ASK_RESULT_TIMEOUT,
+    )
 
     assert "bob" in result.lower()
 
@@ -1280,12 +1396,33 @@ async def test_ask_with_transcript_manager_tool(initialized_cm):
         conversation_manager=cm.cm,
     )
 
+    questions_asked = _capture_questions(cm)
+
     # This ask might trigger ask_historic_transcript tool
     ask_handle = await handle.ask(
         "What does the user want to be reminded about?",
     )
 
-    result = await ask_handle.result()
+    # There is no earlier conversation to find, so the loop may well come back
+    # and ask the user instead. Answer whatever it asks: an ask left unanswered
+    # only reaches a final answer once every question has timed out, which is
+    # minutes of dead waiting rather than a test of the transcript tool.
+    async def _answer_questions():
+        answered = 0
+        while not ask_handle.done():
+            if len(questions_asked) > answered:
+                answered += 1
+                await ask_handle.interject("The quarterly budget review.")
+            await asyncio.sleep(0.05)
+
+    answering = asyncio.create_task(_answer_questions())
+    try:
+        result = await asyncio.wait_for(
+            ask_handle.result(),
+            timeout=_ASK_RESULT_TIMEOUT,
+        )
+    finally:
+        answering.cancel()
 
     # Should have some response (may use transcript tool or infer)
     assert result is not None

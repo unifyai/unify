@@ -1191,6 +1191,14 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             try:
                 raw = await self._task
             except asyncio.CancelledError:
+                # Only a loop that died on its own is reported as stopped. A
+                # cancellation aimed at the caller — an enclosing ``wait_for``
+                # or ``asyncio.timeout``, a task group tearing down — has to
+                # propagate, otherwise the caller's timeout is answered with a
+                # value and reads as a loop that finished with no answer.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
                 return _stopped_notice
 
             if raw is _COMPRESSION_SIGNAL:
