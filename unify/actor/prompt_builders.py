@@ -265,10 +265,18 @@ _MANAGER_PRIMITIVE_SCOPE = textwrap.dedent("""
 _EXECUTION_RULES = textwrap.dedent("""
     ### Execution Rules
 
-    1. **Sessions**: default is `state_mode="stateless"`; `"stateful"`
-       persists intermediate variables across calls, `"read_only"` sees an
-       existing session without persisting. Discover sessions with
-       `list_sessions()` / `inspect_state()`.
+    1. **Sessions**: Python cells share one persistent sandbox for the
+       whole task — a notebook, not one-shot scripts. Bind results to
+       variables and compose later cells on them instead of re-fetching;
+       print only what the next decision needs, not whole payloads.
+       `list_sessions()` / `inspect_state()` rediscover live sessions
+       and names — variables survive context compression, since state
+       lives in the sandbox, not the transcript. Isolate a cell with
+       `state_mode="stateless"` or a named session; fan out in parallel
+       inside one cell, not across cells. `del` bulky intermediates. An
+       unexpected `NameError` on a known name usually means the sandbox
+       restarted — re-derive or re-fetch, never assume the value came
+       back. Shell and venv cells stay one-shots unless given a session.
 
     2. **Async parallelism**: never wrap work in bare `asyncio.run(...)`
        — the runtime already owns a loop; a sync façade uses the injected
@@ -419,9 +427,9 @@ _INCREMENTAL_EXECUTION = textwrap.dedent("""
     untouched rather than guess wrong.
 
     For uncertain / interactive work: one meaningful action per call,
-    reviewed before the next; use `state_mode="stateful"` so
-    intermediate results persist. **Verify before scaling**: run a loop
-    body once and confirm the result before generalizing to iteration.
+    reviewed before the next — intermediate results persist across
+    cells. **Verify before scaling**: run a loop body once and confirm
+    the result before generalizing to iteration.
     **Read-only for exploration**: branch off known-good state with
     `state_mode="read_only"` to try alternatives without risk. Print or
     display key outputs after each uncertain step — don't assume
