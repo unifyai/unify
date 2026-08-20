@@ -70,8 +70,10 @@ def clarification_guidance(tools: Dict[str, Callable]) -> str:
         return ""
 
     return (
-        f"If anything is unclear or ambiguous, you must always call the `{clar_tool}` *tool* to "
-        "ask the user for clarification before proceeding. Do *not* request clarifications with your final response."
+        f"If anything is unclear or ambiguous, or the request depends on context you were not given "
+        f"(identifiers, scope, preferences), you must always call the `{clar_tool}` *tool* to "
+        "ask the user for clarification before proceeding — never fill the gap with a guess. "
+        "Do *not* request clarifications with your final response."
     )
 
 

@@ -317,7 +317,10 @@ _EXECUTION_RULES = textwrap.dedent("""
        would have to review and undo mistakes), prefer asking over
        guessing — after initial exploration, after a small representative
        batch, or on precedent-setting ambiguous cases; never about trivial
-       choices.
+       choices. Your request arrives self-contained: when it depends on
+       context you were not given (identifiers, scope, preferences it
+       assumes), ask via `request_clarification` rather than guessing
+       what the caller meant.
 """).strip()
 
 

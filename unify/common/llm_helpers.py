@@ -897,6 +897,9 @@ def make_request_clarification_tool(
         Use this when you need additional information from the process that
         invoked you — either because you **cannot proceed** or because
         proceeding without confirmation risks **low-quality results**.
+        Requests arrive self-contained by design: when required context is
+        missing from the request itself (identifiers, scope, preferences the
+        request assumes), ask here rather than guessing what was meant.
 
         Clarification is not only for blockers.  It is equally appropriate
         when you *could* continue but your confidence in the outcome is
