@@ -169,10 +169,25 @@ def build_fast_brain_turn_guidance(
         FAST_BRAIN_TURN_DEFER,
         FAST_BRAIN_TURN_HANG_UP,
         FAST_BRAIN_TURN_SMALLTALK,
+        FAST_BRAIN_TURN_UNDECIDED,
     )
 
     speech = (intended_speech or "").strip()
     quoted = f'"{speech}"' if speech else "(none)"
+    if classification == FAST_BRAIN_TURN_UNDECIDED:
+        # Every other branch tells the slow brain to carry on from a line the
+        # caller already heard. Nothing was said on this turn, so saying that
+        # here would have it continue a sentence that never existed.
+        return (
+            "[Voice Agent turn completed. Classification: UNDECIDED. NOTHING "
+            "was said aloud — the caller has heard no reply and no filler, so "
+            "there is nothing to continue from or avoid repeating. Another "
+            "assistant is on this call and heard the same turn. Decide whether "
+            "this turn was yours: if it was, answer it in full via "
+            "guide_voice_agent (the caller is still waiting on a first word). "
+            "If it was put to a teammate, or you cannot tell, call wait() and "
+            "let them take it.]"
+        )
     if classification == FAST_BRAIN_TURN_HANG_UP:
         return (
             "[Voice Agent turn completed. Classification: HANG_UP. The caller "

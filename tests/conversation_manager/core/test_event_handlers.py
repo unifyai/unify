@@ -1629,6 +1629,37 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
+    async def test_fast_brain_turn_completed_runs_for_undecided(self, mock_cm):
+        """The third gate an undecided turn has to clear.
+
+        The handler drops ``silence`` outright (above). ``undecided`` is silent
+        too but must NOT be dropped: nothing was spoken, so the slow brain is the
+        only thing left that can answer a turn that was in fact this
+        assistant's, and it is also the only thing that can tell.
+        """
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_UNDECIDED,
+            FastBrainTurnCompleted,
+        )
+
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="A-DA, where did we land on pricing?",
+            classification=FAST_BRAIN_TURN_UNDECIDED,
+            intended_speech="",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.handle_voice_user_turn.assert_called_once()
+        # The guidance note is what tells the slow brain nothing was said; a
+        # dropped note would leave it continuing a line that never existed.
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        assert "NOTHING was said aloud" in msgs[0].content
+
+    @pytest.mark.asyncio
     async def test_fast_brain_turn_completed_skips_empty_user_content(self, mock_cm):
         from unify.conversation_manager.events import (
             FAST_BRAIN_TURN_DEFER,

@@ -3392,6 +3392,58 @@ class TestFastBrainSmalltalk:
         assert chunks == []
         a._publish_fast_brain_turn_completed.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_undecided_says_nothing_but_still_schedules_the_slow_brain(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """The distinction between the two silent outcomes.
+
+        A bare ack (above) is a decision to let the turn go, so the slow brain is
+        deliberately not woken. ``undecided`` means no decision was reached at
+        all on a call carrying another assistant: nothing is spoken, but the turn
+        must still reach the slow brain — it is the one that can tell whose turn
+        it was, and dropping it here would leave a question genuinely asked of
+        this assistant unanswered with no second attempt.
+        """
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_UNDECIDED
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_UNDECIDED,
+                intended_speech="",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+
+        # Nothing spoken: no filler, no line, nothing for the caller to hear.
+        assert chunks == []
+        # But the turn is handed on, carrying the classification so the slow
+        # brain's guidance says nothing was said rather than "continue from it".
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_UNDECIDED,
+            intended_speech="",
+        )
+
 
 # =============================================================================
 # Agent-initiated opener: held until the callee's first short utterance or a

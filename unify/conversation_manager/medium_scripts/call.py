@@ -636,6 +636,18 @@ class Assistant(Agent):
                     pending.remainder,
                 )
 
+            if resolved.classification == FAST_BRAIN_TURN_UNDECIDED:
+                # Nothing is spoken, but the turn is not dropped: recording the
+                # classification here (rather than returning bare, as silence
+                # does) is what lets the finally block schedule the slow brain,
+                # which can tell whether this turn was even ours.
+                turn_classification = FAST_BRAIN_TURN_UNDECIDED
+                _log.info(
+                    "Fast brain reached no decision; saying nothing and handing "
+                    "the turn to the slow brain",
+                )
+                return
+
             if resolved.classification == FAST_BRAIN_TURN_SILENCE:
                 _log.info("Fast brain: staying silent on bare acknowledgement")
                 return

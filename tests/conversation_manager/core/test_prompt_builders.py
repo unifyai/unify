@@ -1549,6 +1549,42 @@ class TestFastBrainTurnGuidance:
         assert "wait()" in note
         assert "do not repeat or paraphrase it" in note.lower()
 
+    def test_undecided_says_nothing_was_spoken(self):
+        """The one classification where the shared framing above is a lie.
+
+        Every other branch reports a line the caller already heard. On an
+        undecided turn the fast brain said nothing at all, so telling the slow
+        brain to "continue from it" would have it resume a sentence that never
+        existed — and open mid-thought to a caller still waiting on a first word.
+        """
+        note = build_fast_brain_turn_guidance(
+            classification="undecided",
+            intended_speech="",
+        )
+        lowered = note.lower()
+        assert "nothing was said aloud" in lowered
+        assert "no reply and no filler" in lowered
+        assert "nothing to continue from" in lowered
+
+    def test_undecided_asks_whose_turn_it_was(self):
+        """It is handed over precisely because that question is still open."""
+        note = build_fast_brain_turn_guidance(
+            classification="undecided",
+            intended_speech="",
+        )
+        assert "Another assistant is on this call" in note
+        assert "answer it in full via guide_voice_agent" in note
+        assert "wait()" in note
+
+    def test_undecided_does_not_take_the_generic_already_spoken_branch(self):
+        """A future classification falls through to "you just said this"; this
+        one must not, so it is checked before the fall-through."""
+        note = build_fast_brain_turn_guidance(
+            classification="undecided",
+            intended_speech="",
+        )
+        assert "You have just said this aloud" not in note
+
     def test_voice_guide_treats_the_spoken_line_as_delivered(self):
         guide = _build_voice_calls_guide()
         assert "mine and already delivered" in guide
