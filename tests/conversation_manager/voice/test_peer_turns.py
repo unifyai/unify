@@ -179,3 +179,71 @@ class TestExpiry:
         clock.advance(60)
         assert log.recent(within=30) == []
         assert log.recent(within=120) == ["A-DA: a minute ago"]
+
+
+class TestPartitioning:
+    """Which side of the previous line a teammate spoke on.
+
+    "They already handled this" and "they answered something else a while ago"
+    are different facts, and a flat list of lines cannot tell them apart.
+    """
+
+    def test_a_line_after_the_boundary_is_part_of_this_exchange(self):
+        log, _, clock = _log()
+        boundary = clock.t
+        clock.advance(1)
+        log.handle_message(_spoke("9", "I've sent the quote over."))
+        since, earlier = log.partitioned(boundary)
+        assert since == ["A-DA: I've sent the quote over."]
+        assert earlier == []
+
+    def test_a_line_before_the_boundary_is_earlier_context(self):
+        log, _, clock = _log()
+        log.handle_message(_spoke("9", "morning all"))
+        clock.advance(5)
+        boundary = clock.t
+        since, earlier = log.partitioned(boundary)
+        assert since == []
+        assert earlier == ["A-DA: morning all"]
+
+    def test_both_sides_keep_their_order(self):
+        log, _, clock = _log()
+        log.handle_message(_spoke("9", "old one"))
+        clock.advance(1)
+        log.handle_message(_spoke("9", "old two"))
+        clock.advance(1)
+        boundary = clock.t
+        clock.advance(1)
+        log.handle_message(_spoke("9", "new one"))
+        clock.advance(1)
+        log.handle_message(_spoke("9", "new two"))
+        since, earlier = log.partitioned(boundary)
+        assert since == ["A-DA: new one", "A-DA: new two"]
+        assert earlier == ["A-DA: old one", "A-DA: old two"]
+
+    def test_the_expiry_window_still_applies(self):
+        """Partitioning must not resurrect what recency already dropped."""
+        log, _, clock = _log()
+        log.handle_message(_spoke("9", "ancient"))
+        clock.advance(RECENT_WINDOW_S + 1)
+        since, earlier = log.partitioned(0.0)
+        assert since == []
+        assert earlier == []
+
+    def test_a_boundary_of_zero_puts_everything_in_this_exchange(self):
+        """No previous line to measure from — nothing is 'earlier' yet."""
+        log, _, _ = _log()
+        log.handle_message(_spoke("9", "first thing said"))
+        since, earlier = log.partitioned(0.0)
+        assert since == ["A-DA: first thing said"]
+        assert earlier == []
+
+
+def test_the_clock_is_wall_time_so_it_compares_with_chat_timestamps():
+    """Monotonic readings are not comparable to LiveKit's ``created_at``."""
+    import time as _time
+
+    log = PeerTurnLog(local_id="1", local_name="Lila", publish=None)  # type: ignore[arg-type]
+    log.handle_message(_spoke("9", "hello"))
+    stamped = log._turns[0][2]
+    assert abs(stamped - _time.time()) < 5

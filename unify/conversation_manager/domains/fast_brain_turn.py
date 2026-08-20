@@ -171,10 +171,8 @@ You will not have heard the replies to these, so their going unanswered in your
 transcript is not evidence nobody answered them."""
 
 _PEER_TURNS_CONTEXT = """\
-[system] What your teammates have just said on this call:
-
-{lines}
-
+[system] What your teammates have said on this call.
+{sections}
 You did not hear any of that — it reached you over the assistants' own channel,
 not your microphone. Everyone on the call heard it, so treat it as already said.
 
@@ -185,6 +183,19 @@ not your microphone. Everyone on the call heard it, so treat it as already said.
   a reply to THEM, not a new question for you. Read it that way unless it names
   you or plainly turns to you.
 - These lines are theirs, not yours. Never present one as something you said."""
+
+_PEER_TURNS_SINCE_SECTION = """
+Said since the previous line in the conversation — so what the speaker just said
+is most likely a response to this, not a new question for you:
+
+{lines}
+"""
+
+_PEER_TURNS_EARLIER_SECTION = """
+Said earlier on the call, before the previous line. Context, not a live exchange:
+
+{lines}
+"""
 
 _GROUP_CALL_CONTEXT = """\
 [system] Group call. You are {own_name}. The other people on this call are:
@@ -493,6 +504,7 @@ def build_fast_brain_turn_messages(
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
     peer_turns: Sequence[str] = (),
+    peer_turns_earlier: Sequence[str] = (),
     unanswered_turns: Sequence[str] = (),
     standing_addressee: str = "",
     own_name: str = "Assistant",
@@ -536,14 +548,27 @@ def build_fast_brain_turn_messages(
     # Lands after the etiquette so the rule is in place before the evidence it
     # applies to, and only alongside it: lines with no peer block to interpret
     # them read as unattributed speech the assistant might mistake for its own.
+    # Split around the previous line in the conversation rather than listed
+    # flat: whether a teammate's answer landed before or after it is the
+    # difference between "they already handled this" and "they answered
+    # something else earlier", and the model cannot recover that from an
+    # undifferentiated list.
     spoken = [line.strip() for line in peer_turns if (line or "").strip()]
-    if peers and spoken:
+    earlier = [line.strip() for line in peer_turns_earlier if (line or "").strip()]
+    if peers and (spoken or earlier):
+        sections = ""
+        if spoken:
+            sections += _PEER_TURNS_SINCE_SECTION.format(
+                lines="\n".join(f"- {line}" for line in spoken),
+            )
+        if earlier:
+            sections += _PEER_TURNS_EARLIER_SECTION.format(
+                lines="\n".join(f"- {line}" for line in earlier),
+            )
         messages.append(
             {
                 "role": "system",
-                "content": _PEER_TURNS_CONTEXT.format(
-                    lines="\n".join(f"- {line}" for line in spoken),
-                ),
+                "content": _PEER_TURNS_CONTEXT.format(sections=sections),
             },
         )
     # Turns already declined. Gated on the call being multi-party rather than on
@@ -790,7 +815,9 @@ async def select_fast_brain_turn(
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
     peer_turns: Sequence[str] = (),
+    peer_turns_earlier: Sequence[str] = (),
     unanswered_turns: Sequence[str] = (),
+    standing_addressee: str = "",
     own_name: str = "Assistant",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
@@ -834,7 +861,9 @@ async def select_fast_brain_turn(
         peer_assistants=peers,
         other_participants=other_participants,
         peer_turns=peer_turns,
+        peer_turns_earlier=peer_turns_earlier,
         unanswered_turns=unanswered_turns,
+        standing_addressee=standing_addressee,
         own_name=own_name,
     )
 
