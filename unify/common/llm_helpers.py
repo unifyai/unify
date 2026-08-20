@@ -746,28 +746,32 @@ def method_to_schema(
         # Build conditional docstring based on whether the current loop has parent context
         if has_parent_context:
             ctx_desc = (
-                "Whether to pass conversation context into this tool. When `true`, "
-                "the tool receives: (1) the Parent Chat Context from your system "
-                "message, and (2) your own conversation history up to this point. "
-                "This combined context helps the tool understand the broader "
-                "situation. Set `true` when context would help the tool perform "
-                "better. Set `false` when the tool's task is self-contained and "
-                "additional context would not be useful."
+                "Whether to pass conversation context into this tool. Off by "
+                "default: when omitted or `false`, the tool sees no conversation "
+                "history — write a self-contained request instead. When `true`, "
+                "the tool receives a filtered snapshot of (1) the Parent Chat "
+                "Context from your system message and (2) your own conversation "
+                "so far: genuine user turns and substantive assistant replies "
+                "only (tool calls and tool results are omitted). Set `true` only "
+                "when the sub-task depends on conversation specifics you cannot "
+                "restate compactly in the request itself."
             )
         else:
             ctx_desc = (
-                "Whether to pass conversation context into this tool. When `true`, "
-                "the tool receives your conversation history up to this point, "
-                "helping it understand the broader situation. Set `true` when "
-                "context would help the tool perform better. Set `false` when the "
-                "tool's task is self-contained and additional context would not "
-                "be useful."
+                "Whether to pass conversation context into this tool. Off by "
+                "default: when omitted or `false`, the tool sees no conversation "
+                "history — write a self-contained request instead. When `true`, "
+                "the tool receives a filtered snapshot of your conversation so "
+                "far: genuine user turns and substantive assistant replies only "
+                "(tool calls and tool results are omitted). Set `true` only when "
+                "the sub-task depends on conversation specifics you cannot "
+                "restate compactly in the request itself."
             )
         props["include_parent_chat_context"] = {
             "type": "boolean",
             "description": ctx_desc,
         }
-        # Not in required - defaults to True when omitted
+        # Not in required - defaults to False when omitted
 
     # If this is a steering method that accepts _parent_chat_context_cont and we want
     # LLM control over context continuation propagation, inject the visible control param

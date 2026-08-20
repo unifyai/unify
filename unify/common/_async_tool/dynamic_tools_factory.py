@@ -65,12 +65,13 @@ method : str | None
     Required only for action="call": the name of the custom method to invoke.
 include_parent_context : bool
     Relevant for action="ask" and action="interject". For "ask", whether to
-    pass the parent conversation's context into the nested inspection turn.
-    For "interject", whether to forward the parent conversation's
-    continuation context alongside the guidance text (only takes effect if
-    the target call originally opted into context propagation). Defaults to
-    true; set false when the extra context would just add cost with no
-    benefit. Ignored by every other action.
+    pass the parent conversation's context into the nested inspection turn —
+    off by default; set true only when the question depends on conversation
+    specifics you cannot restate compactly in the payload. For "interject",
+    whether to forward the parent conversation's continuation context
+    alongside the guidance text — on by default, and only takes effect if
+    the target call originally opted into context propagation. Ignored by
+    every other action.
 
 Returns
 -------
@@ -293,7 +294,7 @@ class DynamicToolFactory:
             action: SteerAction,
             payload: Optional[str] = None,
             method: Optional[str] = None,
-            include_parent_context: bool = True,
+            include_parent_context: bool = False,
         ) -> Dict[str, Any]:
             return {"status": "unreachable"}
 

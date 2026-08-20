@@ -322,8 +322,9 @@ def compute_context_injection(
     """
     extra_kwargs: dict = {}
 
-    # Pop the LLM control parameters from args
-    llm_include_ctx = args.pop("include_parent_chat_context", True)
+    # Pop the LLM control parameters from args. Initial context injection is
+    # opt-in: an omitted include_parent_chat_context means no parent context.
+    llm_include_ctx = args.pop("include_parent_chat_context", False)
     llm_include_ctx_cont = args.pop("include_parent_chat_context_cont", True)
 
     # Determine whether to inject context based on propagation mode

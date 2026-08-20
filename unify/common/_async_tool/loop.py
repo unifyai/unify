@@ -3705,7 +3705,7 @@ async def async_tool_loop_inner(
                                     args={
                                         "include_parent_chat_context": args.get(
                                             "include_parent_context",
-                                            True,
+                                            False,
                                         ),
                                     },
                                     propagate_chat_context=propagate_chat_context,
