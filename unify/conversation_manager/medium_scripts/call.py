@@ -83,6 +83,10 @@ from unify.conversation_manager.medium_scripts.meet_floor import (
     FLOOR_TOPIC,
     MeetFloor,
 )
+from unify.conversation_manager.medium_scripts.peer_turns import (
+    PEER_TURN_TOPIC,
+    PeerTurnLog,
+)
 from unify.conversation_manager.domains.recall.client import RECALL_EVENT_TOPIC
 from unify.conversation_manager.domains.recall.events import (
     EVENT_CHAT_MESSAGE,
@@ -313,6 +317,9 @@ class Assistant(Agent):
         # Speaking-floor coordination for multi-assistant org meets; None on
         # every other channel (no gating overhead).
         self.meet_floor: MeetFloor | None = None
+        # What co-assistants have said on this call, which never reaches this
+        # session's STT. None on every channel but an org meet.
+        self.peer_turns: PeerTurnLog | None = None
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
@@ -621,6 +628,9 @@ class Assistant(Agent):
                 ),
                 other_participants=(
                     others_provider() if others_provider is not None else ()
+                ),
+                peer_turns=(
+                    self.peer_turns.recent() if self.peer_turns is not None else ()
                 ),
                 own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
@@ -2392,6 +2402,11 @@ async def entrypoint(ctx: agents.JobContext):
             f"app:comms:{channel}_utterance",
             event.to_json(),
         )
+        # Every line the assistant speaks funnels through here, whichever brain
+        # composed it, so this is the one place co-assistants can be told what
+        # they could not hear.
+        if assistant.peer_turns is not None:
+            await assistant.peer_turns.announce(text)
 
     credit_gate_task: asyncio.Task | None = None
     explicit_stop_requested = False
@@ -3032,12 +3047,32 @@ async def entrypoint(ctx: agents.JobContext):
             log=_log.info,
         )
 
+        async def _publish_peer_turn(payload: dict) -> None:
+            # Unreliable on purpose: this is advisory context for the next turn,
+            # and a lost packet costs one turn's worth of awareness. Blocking a
+            # reply behind a retransmit would cost the call.
+            await ctx.room.local_participant.publish_data(
+                json.dumps(payload).encode(),
+                topic=PEER_TURN_TOPIC,
+                reliable=False,
+            )
+
+        assistant.peer_turns = PeerTurnLog(
+            local_id=str(SESSION_DETAILS.assistant.agent_id or os.getpid()),
+            local_name=SESSION_DETAILS.assistant.name or "",
+            publish=_publish_peer_turn,
+            log=_log.info,
+        )
+
         @ctx.room.on("data_received")
         def _on_floor_data(packet) -> None:
-            if getattr(packet, "topic", "") != FLOOR_TOPIC:
+            topic = getattr(packet, "topic", "")
+            if topic == FLOOR_TOPIC:
+                if assistant.meet_floor is not None:
+                    assistant.meet_floor.handle_message(bytes(packet.data))
                 return
-            if assistant.meet_floor is not None:
-                assistant.meet_floor.handle_message(bytes(packet.data))
+            if topic == PEER_TURN_TOPIC and assistant.peer_turns is not None:
+                assistant.peer_turns.handle_message(bytes(packet.data))
 
     if channel in ("google_meet", "teams_meet"):
         # The relay republishes the meeting platform's participant events into
