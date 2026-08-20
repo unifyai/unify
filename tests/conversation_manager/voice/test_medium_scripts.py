@@ -3633,6 +3633,149 @@ class TestFastBrainSmalltalk:
         assert a._unanswered_turns[-1] == (f"line {call_mod._MAX_UNANSWERED_TURNS + 2}")
 
     @pytest.mark.asyncio
+    async def test_the_addressee_survives_an_unattributable_follow_up(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """The whole point: an unnamed line carries no attribution of its own.
+
+        The fast brain names Ada on the first turn, cannot attribute the
+        follow-up, and the runtime keeps Ada standing so the follow-up is still
+        hers rather than becoming anyone's.
+        """
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+
+        reported = ["A-DA", ""]
+        captured: dict = {}
+
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+                addressed_to=reported.pop(0),
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["A-DA, what's the pricing?"])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+        assert a._standing_addressee == "A-DA"
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["and when does it expire?"])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+        # The unnamed follow-up was told who the exchange was with.
+        assert captured["standing_addressee"] == "A-DA"
+        assert a._standing_addressee == "A-DA"
+
+    @pytest.mark.asyncio
+    async def test_the_addressee_expires_after_a_few_unrefreshed_turns(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """A conversation drifts; an addressee that never expired would have the
+        assistant sitting out a call it was later asked to join."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+        a._standing_addressee = "A-DA"
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+                addressed_to="",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        for _ in range(call_mod._ADDRESSEE_TURNS):
+            ctx = llm.ChatContext()
+            ctx.add_message(role="user", content=["mm"])
+            [chunk async for chunk in a.llm_node(ctx, [], None)]
+        assert a._standing_addressee == "A-DA"
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["mm"])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+        assert a._standing_addressee == ""
+
+    @pytest.mark.asyncio
+    async def test_being_named_ourselves_drops_the_addressee(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
+        from unify.conversation_manager.medium_scripts import call as call_mod
+        from unify.session_details import SESSION_DETAILS
+
+        monkeypatch.setattr(SESSION_DETAILS.assistant, "first_name", "Lila")
+        monkeypatch.setattr(SESSION_DETAILS.assistant, "surname", "Down")
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+        a._standing_addressee = "A-DA"
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One moment.",
+                addressed_to="Lila Down",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["Lila, can you pull that up?"])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert a._standing_addressee == ""
+
+    @pytest.mark.asyncio
     async def test_bare_acknowledgement_stays_silent(
         self,
         boss_contact,

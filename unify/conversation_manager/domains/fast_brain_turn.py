@@ -9,7 +9,7 @@ line resumption.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, Field
@@ -138,6 +138,18 @@ Two rules above this block are replaced while a teammate is on the call:
 That tiebreak covers the unclear case only. If you were plainly the one
 addressed — named, or handed the turn — answering is not optional and staying
 quiet is the worse failure of the two."""
+
+_STANDING_ADDRESSEE_CONTEXT = """\
+[system] The conversation is currently with **{addressee}** — that is who the
+last turn anyone could attribute was put to, and it stands until something
+changes it.
+
+- A line that continues that exchange is still {addressee}'s, however it is
+  phrased and whoever it names. Choose silence.
+- What changes it: your own name, a hand-off to you, or a plainly new subject
+  put to you. Then the turn is yours and you answer it normally.
+- Do not treat "{addressee} has not replied in my transcript" as the exchange
+  being over. You cannot hear their replies."""
 
 _UNANSWERED_TURNS_CONTEXT = """\
 [system] Lines on this call you did not answer, oldest first:
@@ -352,11 +364,62 @@ class FastBrainInterruptedGatedTurnDecision(BaseModel):
     )
 
 
+_ADDRESSED_TO_DESCRIPTION = (
+    "Who THIS turn was aimed at, by name. Your own name when it was put to you; "
+    "a teammate's or a person's name when it was put to them; an empty string "
+    "when you genuinely cannot tell. An unnamed line continuing an exchange "
+    "already addressed to somebody names that somebody, not nobody — this is "
+    "how the next turn knows who the conversation is still with."
+)
+
+
+class _AddressedTo(BaseModel):
+    """Who a turn was aimed at, asked only on a multi-party call.
+
+    Kept off the 1:1 models on purpose. There, every turn is necessarily the
+    assistant's, so the field would be a question with one answer — and it would
+    add a field to the structured output of every phone call to buy nothing.
+    """
+
+    addressed_to: str = Field(default="", description=_ADDRESSED_TO_DESCRIPTION)
+
+
+class FastBrainMultiPartyTurnDecision(FastBrainTurnDecision, _AddressedTo):
+    pass
+
+
+class FastBrainMultiPartyInterruptedTurnDecision(
+    FastBrainInterruptedTurnDecision,
+    _AddressedTo,
+):
+    pass
+
+
+class FastBrainMultiPartyGatedTurnDecision(FastBrainGatedTurnDecision, _AddressedTo):
+    pass
+
+
+class FastBrainMultiPartyInterruptedGatedTurnDecision(
+    FastBrainInterruptedGatedTurnDecision,
+    _AddressedTo,
+):
+    pass
+
+
 def _response_model(
     *,
     interrupted: bool,
     hang_up_gated: bool,
+    multi_party: bool = False,
 ) -> type[BaseModel]:
+    if multi_party:
+        if interrupted and hang_up_gated:
+            return FastBrainMultiPartyInterruptedGatedTurnDecision
+        if interrupted:
+            return FastBrainMultiPartyInterruptedTurnDecision
+        if hang_up_gated:
+            return FastBrainMultiPartyGatedTurnDecision
+        return FastBrainMultiPartyTurnDecision
     if interrupted and hang_up_gated:
         return FastBrainInterruptedGatedTurnDecision
     if interrupted:
@@ -389,6 +452,11 @@ class ResolvedFastBrainTurn:
     classification: str
     intended_speech: str
     declined_continuation: bool = False
+    # Who the model judged this turn was aimed at, on a multi-party call. Empty
+    # when it could not tell, or when the call is 1:1 and the question does not
+    # arise. The runtime carries it into the next turn so an unnamed follow-up
+    # does not have to be re-derived from the exchange every time.
+    addressed_to: str = ""
 
 
 def pick_resume_lead_in() -> str:
@@ -426,6 +494,7 @@ def build_fast_brain_turn_messages(
     other_participants: Sequence[str] = (),
     peer_turns: Sequence[str] = (),
     unanswered_turns: Sequence[str] = (),
+    standing_addressee: str = "",
     own_name: str = "Assistant",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
@@ -489,6 +558,19 @@ def build_fast_brain_turn_messages(
                 "content": _UNANSWERED_TURNS_CONTEXT.format(
                     lines="\n".join(f'- "{line}"' for line in declined),
                 ),
+            },
+        )
+    # The resolved state, last: whom the conversation is with, which the lines
+    # above are only the evidence for. Named rather than inferred, so a
+    # follow-up does not depend on re-reading the exchange every turn. Never
+    # ourselves — an exchange that turned to us is one we answered, and the
+    # runtime drops the addressee at that point.
+    addressee = (standing_addressee or "").strip()
+    if multi_party and addressee and addressee.casefold() != own.casefold():
+        messages.append(
+            {
+                "role": "system",
+                "content": _STANDING_ADDRESSEE_CONTEXT.format(addressee=addressee),
             },
         )
     briefing = (briefing or "").strip()
@@ -736,6 +818,7 @@ async def select_fast_brain_turn(
     response_model = _response_model(
         interrupted=pending_continuation is not None,
         hang_up_gated=hang_up_gated,
+        multi_party=multi_party,
     )
     messages = build_fast_brain_turn_messages(
         system_prompt=system_prompt,
@@ -775,13 +858,20 @@ async def select_fast_brain_turn(
         raw = await client.generate(messages=messages)
         decision = response_model.model_validate_json(raw)
         classification = _wire_classification(decision.classification)
-        return _resolve_content(
+        resolved = _resolve_content(
             classification,
             decision.content,
             pending_continuation=pending_continuation,
             hang_up_gated=hang_up_gated,
             briefed=bool(briefing.strip()),
             peers_present=peers_present,
+        )
+        # Attached after resolution rather than inside it: who a turn was for is
+        # orthogonal to what to say about it, and threading it through every
+        # branch of that function would only repeat it.
+        return replace(
+            resolved,
+            addressed_to=str(getattr(decision, "addressed_to", "") or "").strip(),
         )
     except Exception as exc:
         if peers_present:

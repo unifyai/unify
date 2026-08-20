@@ -1215,3 +1215,124 @@ async def test_a_multi_party_turn_gets_the_higher_reasoning_effort(monkeypatch):
         idle_status_smalltalk=False,
     )
     assert seen["effort"] == SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT
+
+
+# =============================================================================
+# The addressee as reported state, not re-inferred each turn
+# =============================================================================
+
+
+def test_multi_party_models_ask_who_the_turn_was_for():
+    for interrupted in (False, True):
+        for gated in (False, True):
+            model = fast_brain_turn._response_model(
+                interrupted=interrupted,
+                hang_up_gated=gated,
+                multi_party=True,
+            )
+            assert "addressed_to" in model.model_fields, model.__name__
+
+
+def test_one_to_one_models_do_not_ask():
+    """On a 1:1 every turn is necessarily the assistant's, so the field would be
+    a question with one answer — and it would reach every phone call."""
+    for interrupted in (False, True):
+        for gated in (False, True):
+            model = fast_brain_turn._response_model(
+                interrupted=interrupted,
+                hang_up_gated=gated,
+            )
+            assert "addressed_to" not in model.model_fields, model.__name__
+
+
+def test_the_response_model_matrix_still_defaults_to_one_to_one():
+    """`multi_party` defaults false, so nothing that omits it changes shape."""
+    assert (
+        fast_brain_turn._response_model(interrupted=False, hang_up_gated=False)
+        is fast_brain_turn.FastBrainTurnDecision
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_reported_addressee_is_returned(monkeypatch):
+    _patch_client(
+        monkeypatch,
+        {"classification": "silence", "content": "", "addressed_to": "A-DA"},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="A-DA, what's the pricing?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.addressed_to == "A-DA"
+
+
+@pytest.mark.asyncio
+async def test_a_one_to_one_turn_reports_no_addressee(monkeypatch):
+    """Nothing asks for it there, so nothing should arrive."""
+    _patch_client(monkeypatch, {"classification": "defer", "content": "One sec."})
+    resolved = await select_fast_brain_turn(
+        user_text="did you send it?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert resolved.addressed_to == ""
+
+
+def test_standing_addressee_block_names_who_the_conversation_is_with():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        standing_addressee="A-DA",
+    )
+    assert "The conversation is currently with **A-DA**" in text
+    assert "still A-DA's" in text
+
+
+def test_standing_addressee_block_says_what_changes_it():
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            standing_addressee="A-DA",
+        ),
+    )
+    assert "your own name, a hand-off to you, or a plainly new subject" in text
+
+
+def test_standing_addressee_block_warns_off_reading_silence_as_over():
+    """It cannot hear the replies, so an unanswered exchange looks finished."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            standing_addressee="A-DA",
+        ),
+    )
+    assert "You cannot hear their replies" in text
+
+
+def test_no_standing_addressee_block_when_it_is_us():
+    """An exchange that turned to us is one we answer, not one we sit out."""
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        standing_addressee="lila",
+        own_name="Lila",
+    )
+    assert "The conversation is currently with" not in text
+
+
+def test_no_standing_addressee_block_on_a_one_to_one_call():
+    text = _group_system_text(standing_addressee="Ada")
+    assert "The conversation is currently with" not in text

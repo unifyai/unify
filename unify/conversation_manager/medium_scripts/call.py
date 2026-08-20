@@ -138,6 +138,12 @@ MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
 _MAX_UNANSWERED_TURNS = 4
 _UNANSWERED_TURN_CHARS = 200
 
+# How many turns a named addressee keeps governing without being named again.
+# A conversation does drift: somebody addressed three turns ago and not since is
+# no longer who the room is talking to, and an addressee that never expires
+# would have the assistant sitting out a call it was eventually asked to join.
+_ADDRESSEE_TURNS = 3
+
 # How often to re-read the screen a meeting participant is sharing. Recall sends
 # frames at 2fps and the relay stores one a second, so polling faster only costs
 # round trips; polling much slower would leave the frame behind the conversation
@@ -333,6 +339,12 @@ class Assistant(Agent):
         # turn declined without a trace leaves the next turn reading two
         # consecutive unanswered questions.
         self._unanswered_turns: list[str] = []
+        # Who the conversation is currently with, as the fast brain last
+        # reported it, and how many turns ago that was. Held as state rather
+        # than re-derived each turn: an unnamed follow-up carries no attribution
+        # of its own, so the only place the answer exists is the turn before it.
+        self._standing_addressee: str = ""
+        self._standing_addressee_age: int = 0
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
@@ -502,6 +514,36 @@ class Assistant(Agent):
         from the follow-ups to its own answer.
         """
         self._unanswered_turns.clear()
+        self._standing_addressee = ""
+        self._standing_addressee_age = 0
+
+    def _note_addressee(self, addressed_to: str) -> None:
+        """Record who the fast brain judged this turn was for.
+
+        A reported name refreshes the addressee; a turn it could not attribute
+        ages the standing one rather than dropping it, since an unnamed
+        follow-up is exactly the case this exists to cover. Past
+        ``_ADDRESSEE_TURNS`` unrefreshed it expires — a conversation drifts, and
+        an addressee that never expired would have the assistant sitting out a
+        call it was later asked to join.
+        """
+        name = " ".join((addressed_to or "").split()).strip()
+        own = (SESSION_DETAILS.assistant.name or "").strip()
+        if name and own and name.casefold() == own.casefold():
+            # The exchange is with us. Nothing to stand down from.
+            self._standing_addressee = ""
+            self._standing_addressee_age = 0
+            return
+        if name:
+            self._standing_addressee = name
+            self._standing_addressee_age = 0
+            return
+        if not self._standing_addressee:
+            return
+        self._standing_addressee_age += 1
+        if self._standing_addressee_age > _ADDRESSEE_TURNS:
+            self._standing_addressee = ""
+            self._standing_addressee_age = 0
 
     async def _finalize_fast_brain_user_turn(
         self,
@@ -681,8 +723,13 @@ class Assistant(Agent):
                     self.peer_turns.recent() if self.peer_turns is not None else ()
                 ),
                 unanswered_turns=tuple(self._unanswered_turns),
+                standing_addressee=self._standing_addressee,
                 own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
+            # Before any of the branches below return: whoever this turn was for
+            # has to survive a turn the assistant sits out, which is the whole
+            # point of tracking it.
+            self._note_addressee(resolved.addressed_to)
 
             if (
                 resolved.declined_continuation
