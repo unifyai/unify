@@ -1016,3 +1016,79 @@ async def test_blank_peer_names_do_not_count_as_a_teammate(monkeypatch):
     )
     assert resolved.classification == FAST_BRAIN_TURN_DEFER
     assert resolved.intended_speech == _DEFAULT
+
+
+# =============================================================================
+# What teammates have said, carried over the assistants' own channel
+# =============================================================================
+
+
+def test_peer_turns_block_lists_what_teammates_said():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["A-DA: I've sent the quote over."],
+    )
+    assert "What your teammates have just said" in text
+    assert "- A-DA: I've sent the quote over." in text
+
+
+def test_peer_turns_block_says_the_turn_may_already_be_handled():
+    """The whole point: a question a teammate answered is not owed a reply."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            peer_turns=["A-DA: The renewal closes on the 30th."],
+        ),
+    )
+    assert "already answered by one of those lines" in text
+    assert "choose silence" in text
+
+
+def test_peer_turns_block_says_the_lines_were_not_heard():
+    """Otherwise the model treats them as its own transcript and repeats them."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            peer_turns=["A-DA: Done."],
+        ),
+    )
+    assert "You did not hear any of that" in text
+    assert "Never present one as something you said" in text
+
+
+def test_no_peer_turns_block_when_nothing_has_been_said():
+    """An empty block would assert teammates had spoken when none had."""
+    text = _group_system_text(other_participants=[], peer_assistants=["A-DA"])
+    assert "What your teammates have just said" not in text
+
+
+def test_blank_peer_turn_lines_do_not_render_a_block():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["", "   "],
+    )
+    assert "What your teammates have just said" not in text
+
+
+def test_peer_turns_need_the_peer_block_to_interpret_them():
+    """Without a teammate on the roster there is nothing to attribute them to.
+
+    A bare list of lines and no rule saying whose they are reads as unattributed
+    speech the assistant may take for its own — the exact confusion the block
+    exists to prevent.
+    """
+    text = _group_system_text(
+        other_participants=["Ada", "Bo"],
+        peer_assistants=[],
+        peer_turns=["A-DA: I've sent the quote over."],
+    )
+    assert "What your teammates have just said" not in text
+
+
+def test_a_one_to_one_call_never_gets_the_block():
+    text = _group_system_text(peer_turns=["A-DA: something"])
+    assert "What your teammates have just said" not in text

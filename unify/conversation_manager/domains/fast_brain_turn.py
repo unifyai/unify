@@ -139,6 +139,22 @@ That tiebreak covers the unclear case only. If you were plainly the one
 addressed — named, or handed the turn — answering is not optional and staying
 quiet is the worse failure of the two."""
 
+_PEER_TURNS_CONTEXT = """\
+[system] What your teammates have just said on this call:
+
+{lines}
+
+You did not hear any of that — it reached you over the assistants' own channel,
+not your microphone. Everyone on the call heard it, so treat it as already said.
+
+- If what the speaker just said is already answered by one of those lines, the
+  turn is handled: choose silence. Do not repeat it, confirm it, or tack
+  something on unless you genuinely have what a teammate did not cover.
+- A teammate having just taken a turn makes the speaker's next line most likely
+  a reply to THEM, not a new question for you. Read it that way unless it names
+  you or plainly turns to you.
+- These lines are theirs, not yours. Never present one as something you said."""
+
 _GROUP_CALL_CONTEXT = """\
 [system] Group call. You are {own_name}. The other people on this call are:
 {participants}.
@@ -389,6 +405,7 @@ def build_fast_brain_turn_messages(
     briefing: str = "",
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
+    peer_turns: Sequence[str] = (),
     own_name: str = "Assistant",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
@@ -420,6 +437,20 @@ def build_fast_brain_turn_messages(
                 "content": _PEER_ASSISTANTS_CONTEXT.format(
                     own_name=own,
                     peers=", ".join(peers),
+                ),
+            },
+        )
+    # What those teammates actually said, when the channel has carried anything.
+    # Lands after the etiquette so the rule is in place before the evidence it
+    # applies to, and only alongside it: lines with no peer block to interpret
+    # them read as unattributed speech the assistant might mistake for its own.
+    spoken = [line.strip() for line in peer_turns if (line or "").strip()]
+    if peers and spoken:
+        messages.append(
+            {
+                "role": "system",
+                "content": _PEER_TURNS_CONTEXT.format(
+                    lines="\n".join(f"- {line}" for line in spoken),
                 ),
             },
         )
@@ -639,6 +670,7 @@ async def select_fast_brain_turn(
     briefing: str = "",
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
+    peer_turns: Sequence[str] = (),
     own_name: str = "Assistant",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
@@ -678,6 +710,7 @@ async def select_fast_brain_turn(
         briefing=briefing,
         peer_assistants=peers,
         other_participants=other_participants,
+        peer_turns=peer_turns,
         own_name=own_name,
     )
 
