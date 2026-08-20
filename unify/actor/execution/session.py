@@ -14,6 +14,7 @@ import logging
 import json
 import shlex
 import sys
+import time
 import traceback
 import types
 import uuid
@@ -505,6 +506,11 @@ class PythonExecutionSession:
         self.id: str = str(uuid.uuid4())
         self._module_name: str = f"__sandbox_{self.id}__"
 
+        # Cells sharing this session mutate one module dict, one ``display``
+        # hook, and one ``primitives`` binding, so they must run one at a
+        # time; ``execute`` serializes on this lock.
+        self._execution_lock = asyncio.Lock()
+
         # Register the sandbox globals as a proper module in sys.modules.
         _mod = types.ModuleType(self._module_name)
         _initial = create_execution_globals()
@@ -594,12 +600,34 @@ class PythonExecutionSession:
         """
         Executes a string of Python code within the sandbox's stateful environment.
 
+        Concurrent calls are serialized: cells share this session's module
+        dict, ``display`` hook, and ``primitives`` binding, so exactly one
+        cell runs at a time and queued cells run in arrival order.
+
         Returns a dict with:
             stdout: list[OutputPart] - structured output parts (TextPart, ImagePart)
             stderr: list[OutputPart] - structured error output parts
             result: Any - return value of the last expression
             error: str | None - traceback if an exception occurred
         """
+        queued_at = time.perf_counter()
+        async with self._execution_lock:
+            lock_wait_ms = (time.perf_counter() - queued_at) * 1000
+            if lock_wait_ms >= 1:
+                logger.debug(
+                    "sandbox %s: cell waited %.0fms for the session execution lock",
+                    self.id,
+                    lock_wait_ms,
+                )
+            return await self._execute_exclusively(code, timeout=timeout)
+
+    async def _execute_exclusively(
+        self,
+        code: str,
+        *,
+        timeout: float | None,
+    ) -> dict:
+        """Run one cell in the sandbox; the caller holds ``_execution_lock``."""
         result = None
         error = None
 
