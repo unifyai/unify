@@ -1336,3 +1336,94 @@ def test_no_standing_addressee_block_when_it_is_us():
 def test_no_standing_addressee_block_on_a_one_to_one_call():
     text = _group_system_text(standing_addressee="Ada")
     assert "The conversation is currently with" not in text
+
+
+# =============================================================================
+# Peer lines placed relative to the previous line, not listed flat
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_the_selector_accepts_everything_the_runtime_passes(monkeypatch):
+    """A signature guard, because no other test here can catch this.
+
+    Every llm_node test replaces the selector with a `**kwargs` stub, so a
+    parameter the runtime passes and the selector does not accept sails through
+    the suite and raises TypeError on a real call. That is not hypothetical: it
+    shipped once, and it would have broken every multi-party turn.
+    """
+    _patch_client(monkeypatch, {"classification": "silence", "content": ""})
+    resolved = await select_fast_brain_turn(
+        user_text="and when does it expire?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+        hang_up_gate_reason=None,
+        briefing="",
+        peer_assistants=["A-DA"],
+        other_participants=["Ada", "Bo"],
+        peer_turns=["A-DA: I've sent the quote over."],
+        peer_turns_earlier=["A-DA: morning all"],
+        unanswered_turns=["A-DA, what's the pricing?"],
+        standing_addressee="A-DA",
+        own_name="Lila",
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+
+
+def test_selector_and_builder_signatures_do_not_drift():
+    """The builder takes what the selector forwards; nothing may be stranded."""
+    import inspect
+
+    builder = set(inspect.signature(build_fast_brain_turn_messages).parameters)
+    selector = set(inspect.signature(select_fast_brain_turn).parameters)
+    assert builder - selector == set()
+
+
+def test_peer_lines_since_the_previous_line_are_marked_as_this_exchange():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["A-DA: I've sent the quote over."],
+    )
+    assert "Said since the previous line in the conversation" in text
+    assert "- A-DA: I've sent the quote over." in text
+    assert "Said earlier on the call" not in text
+
+
+def test_older_peer_lines_are_marked_as_context():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns_earlier=["A-DA: morning all"],
+    )
+    assert "Said earlier on the call" in text
+    assert "Context, not a live exchange" in text
+    assert "Said since the previous line" not in text
+
+
+def test_both_sections_render_together_in_order():
+    """Recent first: it is what the current line is most likely answering."""
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["A-DA: sent it over"],
+        peer_turns_earlier=["A-DA: morning all"],
+    )
+    assert text.index("Said since the previous line") < text.index(
+        "Said earlier on the call",
+    )
+
+
+def test_no_peer_turns_block_when_both_sections_are_empty():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=[],
+        peer_turns_earlier=[],
+    )
+    assert "What your teammates have said" not in text

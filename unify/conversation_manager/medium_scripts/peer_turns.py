@@ -55,9 +55,14 @@ class PeerTurnLog:
         local_id: str,
         local_name: str,
         publish: Callable[[dict], Awaitable[None]],
-        now: Callable[[], float] = time.monotonic,
+        now: Callable[[], float] = time.time,
         log: Callable[[str], None] | None = None,
     ) -> None:
+        # Wall clock, not monotonic, despite this only ever measuring short
+        # spans: the timestamps are compared against LiveKit chat items'
+        # ``created_at`` to work out whether a teammate spoke before or after the
+        # line being decided, and a monotonic reading is not comparable to
+        # anything outside this process.
         self._local_id = str(local_id)
         self._local_name = (local_name or "").strip()
         self._publish = publish
@@ -111,3 +116,28 @@ class PeerTurnLog:
         return [
             f"{speaker}: {text}" for speaker, text, at in self._turns if at >= cutoff
         ]
+
+    def partitioned(
+        self,
+        boundary: float,
+        *,
+        within: float = RECENT_WINDOW_S,
+    ) -> tuple[list[str], list[str]]:
+        """Split recent teammate lines around ``boundary``, oldest first in each.
+
+        Returns ``(since, earlier)``. ``boundary`` is when the previous line in
+        the conversation was said, so ``since`` holds whatever a teammate
+        contributed between then and now — the exchange the line being decided
+        is most likely responding to. Which side of that boundary a teammate's
+        answer falls on is the difference between "they already handled this" and
+        "they answered something else a while ago", and a flat list cannot say
+        which.
+        """
+        cutoff = self._now() - within
+        since: list[str] = []
+        earlier: list[str] = []
+        for speaker, text, at in self._turns:
+            if at < cutoff:
+                continue
+            (since if at >= boundary else earlier).append(f"{speaker}: {text}")
+        return since, earlier

@@ -480,6 +480,22 @@ class Assistant(Agent):
                 return item.text_content or ""
         return ""
 
+    @staticmethod
+    def _previous_line_at(chat_ctx: llm.ChatContext) -> float:
+        """When the line before the current one was said, as a wall-clock stamp.
+
+        The boundary peer turns are split around: a teammate who spoke after this
+        is contributing to the exchange the current line responds to, one who
+        spoke before it is earlier context. Zero when there is no previous line,
+        which reads as "nothing is earlier yet".
+        """
+        stamps = [
+            float(getattr(item, "created_at", 0.0) or 0.0)
+            for item in chat_ctx.items
+            if getattr(item, "role", None) is not None
+        ]
+        return stamps[-2] if len(stamps) >= 2 else 0.0
+
     def _is_multi_party_call(self) -> bool:
         """Whether a turn on this call could have belonged to somebody else."""
         peers_provider = self._peer_assistants_provider
@@ -702,6 +718,12 @@ class Assistant(Agent):
             )
             peers_provider = self._peer_assistants_provider
             others_provider = self._other_participants_provider
+            if self.peer_turns is not None:
+                peer_turns_since, peer_turns_earlier = self.peer_turns.partitioned(
+                    self._previous_line_at(chat_ctx),
+                )
+            else:
+                peer_turns_since, peer_turns_earlier = [], []
             resolved = await select_fast_brain_turn(
                 user_text=user_text,
                 system_prompt=self._fast_brain_system_prompt,
@@ -719,9 +741,8 @@ class Assistant(Agent):
                 other_participants=(
                     others_provider() if others_provider is not None else ()
                 ),
-                peer_turns=(
-                    self.peer_turns.recent() if self.peer_turns is not None else ()
-                ),
+                peer_turns=peer_turns_since,
+                peer_turns_earlier=peer_turns_earlier,
                 unanswered_turns=tuple(self._unanswered_turns),
                 standing_addressee=self._standing_addressee,
                 own_name=SESSION_DETAILS.assistant.name or "Assistant",
