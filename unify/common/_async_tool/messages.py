@@ -52,6 +52,73 @@ def is_mutable(client, msg: dict) -> bool:
     return idx >= watermark
 
 
+def loop_user_notice(content: Any, **extra: Any) -> dict:
+    """Build a ``role="user"`` message the loop itself authors — status,
+    threshold, quota, or context-continuation notices — never a genuine
+    user turn.
+
+    This is the only place that stamps ``_loop_authored``, the marker
+    ``is_loop_authored_message`` checks. Every loop-authored user-role
+    message must be built here rather than as an inline dict literal, so
+    the marker can never be forgotten at a new call site the way it was
+    at three of them before this existed. ``extra`` still accepts the
+    older, purpose-specific markers (``_progress_msg``, ``_clarify_msg``,
+    ``_lifecycle_msg``, ``_ctx_header``) for callers that also need those
+    for their own coalescing/filtering logic — ``_loop_authored`` is
+    stamped regardless, so the boundary check never depends on which of
+    those a given caller remembered to pass.
+
+    A genuine user interjection (``_interjection``) is built directly at
+    its call site, never through here — that asymmetry is what makes it
+    a real turn boundary.
+    """
+    return {"role": "user", "content": content, "_loop_authored": True, **extra}
+
+
+def is_loop_authored_message(msg: dict) -> bool:
+    """True for a ``role="user"`` message the loop itself appended, never
+    a genuine new user turn.
+
+    Every message built by ``loop_user_notice`` carries ``_loop_authored``,
+    so this checks a single flag rather than an inline list of marker
+    keys. Every consumer that needs to tell "the user said something"
+    apart from "the loop said something" (e.g. a boundary check that must
+    not treat loop-authored status as the start of a new request) should
+    use this predicate.
+    """
+    return bool(msg.get("_loop_authored"))
+
+
+def extract_substantive_text(content: Any) -> Optional[str]:
+    """Normalize assistant content to the text a user would read, for
+    deciding whether a turn carries a substantive answer.
+
+    Handles both a plain string and a multimodal content-block list (only
+    ``"text"`` blocks contribute); returns ``None`` when the result is
+    empty or whitespace-only in either shape, so callers can use a plain
+    ``is None`` check rather than relying on truthiness — which passes a
+    whitespace-only string and misreports a non-empty block list as
+    substantive even when every block's text is blank. When a block list
+    does carry substantive text, the extracted text is returned rather
+    than the raw list, since every consumer downstream treats the answer
+    as plain text. Shared by the final-answer walk-back and the parent
+    context snapshot filter so both apply one definition of "substantive".
+    """
+    if isinstance(content, str):
+        return content if content.strip() else None
+    if isinstance(content, list):
+        texts = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ]
+        joined = "".join(texts)
+        return joined if joined.strip() else None
+    return None
+
+
 def _hash_msgs_slice(msgs: list) -> str:
     try:
         blob = json.dumps(msgs, sort_keys=True, default=str)

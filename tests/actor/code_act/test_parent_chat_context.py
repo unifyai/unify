@@ -61,6 +61,11 @@ async def test_execute_function_forwards_parent_chat_context():
     "Find Lucy's phone number."  We inject a spy ContactManager into a
     real Primitives instance and verify that _parent_chat_context arrives.
 
+    Context injection is opt-in, so the request explicitly instructs the
+    model to set include_parent_chat_context=true on the tool call; the
+    subject here is the forwarding plumbing, not the model's opt-in
+    judgment.
+
     execute_function now synthesises code and routes through the same
     SessionExecutor path as execute_code, so context forwarding is handled
     by PythonExecutionSession's ContextForwardingProxy wrapping.
@@ -89,7 +94,9 @@ async def test_execute_function_forwards_parent_chat_context():
 
     try:
         handle = await actor.act(
-            "Find Lucy's phone number from contacts.",
+            "Find Lucy's phone number from contacts. Set "
+            "include_parent_chat_context=true on the tool call so the "
+            "conversation context is available inside the sandbox.",
             can_compose=False,
             persist=False,
             clarification_enabled=False,
@@ -169,7 +176,9 @@ async def test_execute_code_forwards_parent_chat_context():
     Same Lucy Baker scenario as the execute_function test, but here the LLM
     generates code that calls ``primitives.contacts.ask(...)`` directly in
     the sandbox.  We inject a spy ContactManager and assert that its ask()
-    method received _parent_chat_context.
+    method received _parent_chat_context. As there, the request instructs
+    the explicit include_parent_chat_context=true opt-in because injection
+    is opt-in and the subject is the forwarding plumbing.
     """
     spy = _SpyContactManager()
 
@@ -197,7 +206,9 @@ async def test_execute_code_forwards_parent_chat_context():
 
     try:
         handle = await actor.act(
-            "Find Lucy's phone number from contacts.",
+            "Find Lucy's phone number from contacts. Set "
+            "include_parent_chat_context=true on the tool call so the "
+            "conversation context is available inside the sandbox.",
             persist=False,
             clarification_enabled=False,
             _parent_chat_context=parent_ctx,

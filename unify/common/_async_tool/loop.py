@@ -53,12 +53,13 @@ from .messages import (
     forward_handle_call,
     schedule_missing_for_message,
     is_mutable,
+    is_loop_authored_message,
+    loop_user_notice,
+    extract_substantive_text,
 )
 from .tools_data import (
     ToolsData,
     compute_context_injection,
-    is_loop_authored_message,
-    loop_user_notice,
 )
 from .dynamic_tools_factory import DynamicToolFactory
 from .time_context import create_time_context, TimeContext
@@ -356,35 +357,6 @@ def _check_valid_response_format(response_format: Any) -> dict[str, Any]:
     return normalized.answer_json_schema
 
 
-def _extract_final_answer_text(content: Any) -> Optional[str]:
-    """Normalize assistant content to the text a user would read, for
-    deciding whether a terminal turn has a substantive answer.
-
-    Handles both a plain string and a multimodal content-block list (only
-    ``"text"`` blocks contribute); returns ``None`` when the result is
-    empty or whitespace-only in either shape, so callers can use a plain
-    ``is None`` check rather than relying on truthiness — which passes a
-    whitespace-only string and misreports a non-empty block list as
-    substantive even when every block's text is blank. When a block list
-    does carry substantive text, the extracted text is returned rather
-    than the raw list, since every consumer downstream treats the final
-    answer as plain text.
-    """
-    if isinstance(content, str):
-        return content if content.strip() else None
-    if isinstance(content, list):
-        texts = [
-            block["text"]
-            for block in content
-            if isinstance(block, dict)
-            and block.get("type") == "text"
-            and isinstance(block.get("text"), str)
-        ]
-        joined = "".join(texts)
-        return joined if joined.strip() else None
-    return None
-
-
 async def async_tool_loop_inner(
     client: unillm.AsyncUnify,
     message: str | dict | list[str | dict],
@@ -515,14 +487,15 @@ async def async_tool_loop_inner(
         so the assistant can pivot instantly.  When *False* the loop waits
         for the model to finish (legacy behaviour).
 
-    propagate_chat_context : ``bool``, default ``True``
-        If *True*, the entire conversation state of **this** loop is
-        threaded into any child tool that accepts a
-        ``parent_chat_context`` keyword argument.
-        If *True*, the entire conversation state of **this** loop is threaded
-        into any child tool via the *internal-only* ``parent_chat_context``
-        argument.  This parameter is added automatically and is **not**
-        exposed to the LLM.
+    propagate_chat_context : ``ChatContextPropagation``, default ``LLM_DECIDES``
+        Controls whether a filtered snapshot of this loop's conversation
+        (genuine user turns and substantive assistant text only) is threaded
+        into child tools that accept a ``_parent_chat_context`` keyword
+        argument.  ``ALWAYS`` injects on every such call, ``NEVER`` on none,
+        and ``LLM_DECIDES`` exposes an ``include_parent_chat_context``
+        parameter the model may set to ``true`` — omission means no context.
+        The ``_parent_chat_context`` argument itself is injected
+        automatically and is **not** exposed to the LLM.
 
      tool_policy : ``Callable | None``, default ``None``
          Optional callable that *dynamically* controls tool exposure **and**
@@ -542,10 +515,11 @@ async def async_tool_loop_inner(
          keep the default wait-for-results behaviour.
 
     parent_chat_context : ``list[dict] | None``
-        Nested chat structure passed from an **outer** loop.  When
-        ``propagate_chat_context`` is enabled, this initial context is forwarded
-        to inner tools on their first call, with subsequent calls receiving only
-        incremental updates (new messages since the last call) to avoid token waste.
+        Nested chat structure passed from an **outer** loop.  When a tool
+        call opts into context (or ``propagate_chat_context`` is ``ALWAYS``),
+        the filtered snapshot of this context is forwarded to that inner tool
+        on its first call, with subsequent calls receiving only incremental
+        updates (new messages since the last call) to avoid token waste.
 
     log_steps : ``bool | str``, default ``True``
         Controls verbosity of step logging to ``LOGGER``:
@@ -1889,8 +1863,8 @@ async def async_tool_loop_inner(
                     _ctx_cont = make_messages_safe_for_context_dump(_ctx_cont)
                     context_state.receive_context_continuation(_ctx_cont)
                     # Forward to active inner tool handles that opted into context
-                    # Tools that set include_parent_chat_context=False initially
-                    # should not receive context continuations either.
+                    # Tools that did not opt into context initially should not
+                    # receive context continuations either.
                     for task, info in tools_data.info.items():
                         if info.interject_queue is not None and info.context_opted_in:
                             with suppress(Exception):
@@ -4214,7 +4188,7 @@ async def async_tool_loop_inner(
                     f"max_steps ({max_steps}) exceeded",
                 )
 
-            final_content = _extract_final_answer_text(msg["content"])
+            final_content = extract_substantive_text(msg["content"])
 
             # An empty/null/whitespace-only terminal turn must never override
             # a substantive answer already sitting in the transcript — a
@@ -4235,7 +4209,7 @@ async def async_tool_loop_inner(
                         break
                     if _hist_role != "assistant":
                         continue
-                    _hist_content = _extract_final_answer_text(_hist_msg.get("content"))
+                    _hist_content = extract_substantive_text(_hist_msg.get("content"))
                     if _hist_content is not None:
                         _substantive_content = _hist_content
                         break

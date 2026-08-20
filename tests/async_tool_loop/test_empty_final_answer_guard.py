@@ -25,8 +25,8 @@ import pytest
 
 from unify.common.async_tool_loop import start_async_tool_loop
 from unify.common.llm_client import new_llm_client
-from unify.common._async_tool.loop import _extract_final_answer_text
-from unify.common._async_tool.tools_data import (
+from unify.common._async_tool.messages import (
+    extract_substantive_text,
     is_loop_authored_message,
     loop_user_notice,
 )
@@ -284,23 +284,21 @@ async def test_true_empty_answer_retries_then_fails_loudly(
     assert nudge_count == 1
 
 
-def test_extract_final_answer_text_treats_whitespace_and_empty_blocks_as_empty() -> (
-    None
-):
+def test_extract_substantive_text_treats_whitespace_and_empty_blocks_as_empty() -> None:
     """Direct coverage of the text-extraction helper: whitespace-only
     content in either shape is empty, and a substantive content-block list
     yields its extracted text rather than the raw list."""
-    assert _extract_final_answer_text(None) is None
-    assert _extract_final_answer_text("") is None
-    assert _extract_final_answer_text("   \n  ") is None
-    assert _extract_final_answer_text([]) is None
-    assert _extract_final_answer_text([{"type": "text", "text": ""}]) is None
-    assert _extract_final_answer_text([{"type": "text", "text": "   \n  "}]) is None
-    assert _extract_final_answer_text([{"type": "image", "url": "x"}]) is None
+    assert extract_substantive_text(None) is None
+    assert extract_substantive_text("") is None
+    assert extract_substantive_text("   \n  ") is None
+    assert extract_substantive_text([]) is None
+    assert extract_substantive_text([{"type": "text", "text": ""}]) is None
+    assert extract_substantive_text([{"type": "text", "text": "   \n  "}]) is None
+    assert extract_substantive_text([{"type": "image", "url": "x"}]) is None
 
-    assert _extract_final_answer_text("The answer is 42.") == "The answer is 42."
+    assert extract_substantive_text("The answer is 42.") == "The answer is 42."
     assert (
-        _extract_final_answer_text(
+        extract_substantive_text(
             [
                 {"type": "text", "text": "Part one. "},
                 {"type": "text", "text": "Part two."},
