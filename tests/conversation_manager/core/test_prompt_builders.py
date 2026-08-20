@@ -825,6 +825,122 @@ class TestGroupCallEtiquette:
         prompt = _build()
         assert "[team chat" in prompt and "[group chat" in prompt
 
+    def test_it_tells_me_standing_down_means_calling_wait(self):
+        """Omitting the tool is not resting -- the runtime hands back a turn.
+
+        A slow-brain turn that calls nothing is treated as unfinished and
+        re-opened, and an assistant that keeps being re-offered a turn will
+        eventually take it. So the block has to name the tool, not just the
+        intent.
+        """
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "Standing down is an action I take, not an absence." in prompt
+        assert "not producing no tool call at all" in prompt
+
+    def test_it_reinterprets_the_wait_tools_answer_any_question_clause(self):
+        """`wait`'s own description tells it not to wait when asked a question.
+
+        That is written for a 1:1, where any question is necessarily the
+        assistant's. Left unqualified on a group call it licenses answering a
+        question overheard between two other people. The shared description is
+        not edited -- it ships to every chat and every 1:1 call -- so the block
+        narrows it here instead.
+        """
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "a question **aimed at me**" in prompt
+
+
+class TestPeerAssistantCallEtiquette:
+    """Which assistant takes the turn, when more than one is on the call.
+
+    The fast brain gates the slow brain on a user turn, so this block is not
+    what stops a duplicate answer there. It is for the routes the fast brain
+    never sees: a notification relay, an action completing, a proactive line. On
+    those the slow brain reaches the caller on its own decision.
+    """
+
+    HEADING = "Multi-assistant calls: which assistant takes the turn"
+
+    def test_it_is_absent_off_a_call(self):
+        assert self.HEADING not in _build(call_assistant_names=["A-DA"])
+
+    def test_it_is_absent_with_no_teammate(self):
+        """The 1:1 regression to avoid: nobody else can answer for the assistant."""
+        assert self.HEADING not in _build(on_voice_call=True)
+        assert self.HEADING not in _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+
+    def test_blank_names_do_not_make_a_teammate(self):
+        """A roster crosses a wire; padding must not stand the assistant down."""
+        assert self.HEADING not in _build(
+            on_voice_call=True,
+            call_assistant_names=["", "   "],
+        )
+
+    def test_one_teammate_is_enough(self):
+        """Not folded into the human count: one person plus two assistants is a
+        room where a turn may belong to someone else, which counting humans
+        alone reads as 1:1."""
+        prompt = _build(on_voice_call=True, call_assistant_names=["A-DA"])
+        assert self.HEADING in prompt
+        assert "Also here: A-DA." in prompt
+
+    def test_it_coexists_with_the_group_block(self):
+        """Several humans and a teammate is one call, not a choice of two rules."""
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+            call_assistant_names=["A-DA"],
+        )
+        assert self.HEADING in prompt
+        assert "Group calls: deciding whether a turn is mine" in prompt
+
+    def test_it_says_a_quiet_question_is_not_an_unanswered_one(self):
+        """The gap that makes an assistant pick up a teammate's question.
+
+        Peer audio is not in this assistant's transcript, so a question it heard
+        and no reply to reads as dropped when it was in fact answered.
+        """
+        prompt = _build(on_voice_call=True, call_assistant_names=["A-DA"])
+        assert "I cannot hear my teammates' replies" in prompt
+        assert "not** evidence it went unanswered" in prompt
+
+    def test_unclear_turns_resolve_to_waiting(self):
+        """The inversion the fast brain also makes: with a teammate present,
+        an unclear turn is theirs to risk, not mine to claim."""
+        prompt = _build(on_voice_call=True, call_assistant_names=["A-DA"])
+        assert "Genuinely unclear whose it was" in prompt
+        assert "two assistants answering the same question" in prompt
+
+    def test_being_named_still_obliges_an_answer(self):
+        """Told only to stand down, it stands down from questions put to it."""
+        prompt = _build(on_voice_call=True, call_assistant_names=["A-DA"])
+        assert "I was named, or a teammate handed the turn to me" in prompt
+        assert "guide_voice_agent" in prompt
+
+    def test_it_tells_me_standing_down_means_calling_wait(self):
+        prompt = _build(on_voice_call=True, call_assistant_names=["A-DA"])
+        assert "Standing down is an action I take, not an absence." in prompt
+        assert "omitting the tool is read as an unfinished turn" in prompt
+
+    def test_the_shared_wait_description_is_not_edited(self):
+        """It ships to every chat and every 1:1 call, so it is narrowed in the
+        block rather than rewritten at the tool."""
+        from unify.conversation_manager.domains.brain_action_tools import (
+            ConversationManagerBrainActionTools,
+        )
+
+        doc = ConversationManagerBrainActionTools.wait.__doc__ or ""
+        assert "expresses confusion, or checks whether I" in doc
+
 
 class TestCreateTeamsMeetShareTools:
     """create_teams_meet share guidance names only configured outbound tools."""

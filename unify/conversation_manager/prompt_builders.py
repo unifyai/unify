@@ -2003,7 +2003,44 @@ Not hearing my name is NOT evidence that a turn was not mine — people address 
 
 Silence is the safe default only when the turn clearly belonged to someone else. When I was the one addressed, answering is not optional and staying quiet is the worse failure of the two.
 
-This is the group-call exception to the restraint rule above: on a call with several people, "never leave a user message unanswered" applies to turns aimed at **me**, not to every line I can hear. It does not change how I behave on a 1:1 call, where every turn is mine to answer."""
+This is the group-call exception to the restraint rule above: on a call with several people, "never leave a user message unanswered" applies to turns aimed at **me**, not to every line I can hear. It does not change how I behave on a 1:1 call, where every turn is mine to answer.
+
+**Standing down is an action I take, not an absence.** Two things about `wait` read differently on a call like this:
+
+- Its description tells me not to `wait` when someone asks a question or checks whether I am still here. That is written for a 1:1, where the only person who could be asking is asking me. Here it means a question **aimed at me** — a question I overheard between two other people is not my cue to answer.
+- Standing down means **calling `wait`**, not producing no tool call at all. Omitting it is read as an unfinished turn and I get handed another one; a turn I keep being re-offered is a turn I will eventually talk myself into taking. `wait` is what actually rests."""
+
+
+def _build_peer_assistant_call_etiquette_block(peer_names: list[str]) -> str:
+    """Turn-taking on a live call carrying another assistant.
+
+    The group block above is about which *person* was addressed; this is about
+    which *assistant* takes the turn, and the two apply at once on an org meet.
+    It is rendered on its own strength rather than as part of the group gate: one
+    human plus two assistants is a room where a turn may belong to someone else,
+    which counting humans alone reads as 1:1.
+
+    The fast brain has its own copy of this (``_PEER_ASSISTANTS_CONTEXT``), and
+    it gates the slow brain — a silent fast turn schedules no slow-brain run at
+    all. But the slow brain reaches the caller by other routes the fast brain
+    never sees: a notification relay, an action completing, a proactive line. On
+    those it decides alone, so it needs the rule too.
+    """
+    peers = ", ".join(peer_names)
+    return f"""Multi-assistant calls: which assistant takes the turn
+-----------------------------------------------------
+I am not the only assistant on this call. Also here: {peers}.
+
+Exactly one of us should answer each turn. I cannot hear my teammates' replies — their audio is not in my transcript — so a question that has gone quiet is **not** evidence it went unanswered. It usually means a teammate is answering it right now.
+
+- **A teammate was named, or was clearly the one asked** → not mine. I `wait`, even when I know the answer and even when the question is substantive.
+- **I was named, or a teammate handed the turn to me** → mine. I answer via `guide_voice_agent`.
+- **Nobody was named** → mine only when it is plainly about work I own or aimed at me by context. Otherwise I `wait` and let the better-placed teammate take it.
+- **Genuinely unclear whose it was** → I `wait`. A teammate is here and can answer; two assistants answering the same question is the failure this section exists to prevent.
+
+I never answer on a teammate's behalf, never restate what one of us has already covered, and never speak over one. To pass something that suits a teammate better, one short line naming them ("Ada, that one's yours") and then `wait`.
+
+**Standing down is an action I take, not an absence.** `wait`'s description tells me not to use it when someone asks a question — that is written for a 1:1, where any question is necessarily mine. Here it means a question aimed at **me**, not one put to a teammate. And standing down means **calling `wait`**: omitting the tool is read as an unfinished turn and I get handed another one, which is how an assistant talks itself into answering something that was never its to answer."""
 
 
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
@@ -2651,6 +2688,7 @@ def build_system_prompt(
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
     call_participant_names: list[str] | None = None,
+    call_assistant_names: list[str] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -3086,6 +3124,15 @@ Messages from the current turn have **NEW** tag prepended:
     ]
     if on_voice_call and len(_call_participants) >= GROUP_CALL_MIN_PARTICIPANTS:
         parts.add(_build_group_call_etiquette_block(_call_participants))
+    # Gated separately from the human count, not folded into it: one person plus
+    # two assistants is a group the human gate reads as 1:1, and a call with one
+    # human and one teammate is not a room where "people talk to each other".
+    # Both blocks render together when the call is both.
+    _call_assistants = [
+        name.strip() for name in (call_assistant_names or []) if (name or "").strip()
+    ]
+    if on_voice_call and _call_assistants:
+        parts.add(_build_peer_assistant_call_etiquette_block(_call_assistants))
 
     # 11. Communication guidelines + Multilingual.
     phone_guidelines_section = f"\n{phone_guidelines}" if phone_guidelines else ""
