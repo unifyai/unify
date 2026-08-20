@@ -5,19 +5,26 @@ Verifies that `parent_chat_context` is threaded into tools that accept it and
 that the loop inserts the synthetic system context header.
 
 Also tests incremental context propagation:
-- First tool call receives full parent_chat_context
-- Subsequent calls receive only incremental updates via _parent_chat_context_cont
+- First tool call receives the filtered initial snapshot (genuine user turns
+  and substantive assistant text only)
+- Subsequent calls receive only incremental updates via _parent_chat_context_cont,
+  passed through the same snapshot filter
 - Context continuations from interjections are properly forwarded
+
+Injection is opt-in under LLM_DECIDES: an omitted include_parent_chat_context
+means no parent context is passed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import List
 
 import pytest
 from unify.common.async_tool_loop import ChatContextPropagation, start_async_tool_loop
 from unify.common._async_tool.context_tracker import LoopContextState
+from unify.common._async_tool.messages import loop_user_notice
 from tests.helpers import _handle_project
 from unify.common.llm_client import new_llm_client
 
@@ -114,7 +121,7 @@ async def test_chat_context_propagation_never(llm_config) -> None:
 @pytest.mark.llm_call
 @_handle_project
 async def test_chat_context_propagation_llm_decides_include(llm_config) -> None:
-    """Verify that LLM_DECIDES mode passes context when LLM includes it (default)."""
+    """Verify that LLM_DECIDES mode passes context when the LLM explicitly opts in."""
     client = new_llm_client(**llm_config)
 
     root_ctx = [{"role": "user", "content": "root-level-context-marker"}]
@@ -523,7 +530,8 @@ class TestLoopContextState:
         assert len(state._parent_chat_context_cont_received) == 2
 
     def test_first_call_receives_full_context(self):
-        """First call to a tool should receive full parent context."""
+        """First call to a tool should receive the initial snapshot
+        (all messages here pass the snapshot keep-rule)."""
         parent_ctx = [{"role": "user", "content": "parent msg"}]
         state = LoopContextState(parent_chat_context=parent_ctx)
 
@@ -633,6 +641,89 @@ class TestLoopContextState:
         assert "call_1" in pending
         assert "call_2" not in pending
         assert pending["call_1"][0]["content"] == "pending"
+
+    def test_initial_snapshot_keeps_user_turns_and_substantive_assistant_text(self):
+        """The initial snapshot keeps exactly genuine user turns and
+        substantive assistant text, on both the inherited parent layer and
+        the local messages nested as children — tool results, tool_calls
+        turns, system messages, and loop notices are all dropped."""
+        noisy_parent = [
+            {"role": "user", "content": "genuine parent turn"},
+            {"role": "tool", "content": "discovery tool payload " * 50},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "assistant", "content": "substantive parent reply"},
+            loop_user_notice("parent loop notice"),
+        ]
+        state = LoopContextState(parent_chat_context=noisy_parent)
+
+        noisy_local = [
+            {"role": "system", "content": "local system prompt"},
+            {"role": "user", "content": "genuine local turn"},
+            {"role": "tool", "content": "local tool payload"},
+            {"role": "assistant", "content": "thinking", "tool_calls": [{"id": "c2"}]},
+            {"role": "assistant", "content": "substantive local reply"},
+            loop_user_notice("local loop notice"),
+        ]
+        parent, cont = state.compute_context_for_inner_tool("call_1", noisy_local)
+
+        assert cont is None
+        assert [(m["role"], m["content"]) for m in parent] == [
+            ("user", "genuine parent turn"),
+            ("assistant", "substantive parent reply"),
+        ]
+        assert parent[-1]["children"] == [
+            {"role": "user", "content": "genuine local turn"},
+            {"role": "assistant", "content": "substantive local reply"},
+        ]
+        # The filter reads, never mutates: the tracked messages are intact.
+        assert len(state.parent_chat_context) == 5
+        assert len(noisy_local) == 6
+
+    def test_initial_snapshot_is_none_when_nothing_survives(self):
+        """When every parent and local message is snapshot noise, the
+        opted-in tool gets no parent context at all rather than the noise."""
+        state = LoopContextState(
+            parent_chat_context=[
+                {"role": "tool", "content": "payload"},
+                loop_user_notice("notice"),
+            ],
+        )
+        local = [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "tool", "content": "result"},
+        ]
+        parent, cont = state.compute_context_for_inner_tool("call_1", local)
+        assert parent is None
+        assert cont is None
+
+    def test_incremental_updates_apply_snapshot_filter(self):
+        """Continuations pass the same keep-rule as the initial snapshot,
+        and forwarding indices track the raw transcript so filtered-out
+        messages are consumed, not re-offered on the next call."""
+        state = LoopContextState(
+            parent_chat_context=[{"role": "user", "content": "parent msg"}],
+        )
+        local = [{"role": "user", "content": "genuine turn one"}]
+        state.compute_context_for_inner_tool("call_1", local)
+
+        local += [
+            {"role": "tool", "content": "new tool payload"},
+            loop_user_notice("new loop notice"),
+            {"role": "user", "content": "genuine turn two"},
+            {"role": "assistant", "content": "ok", "tool_calls": [{"id": "c3"}]},
+            {"role": "assistant", "content": "substantive follow-up"},
+        ]
+        parent, cont = state.compute_context_for_inner_tool("call_1", local)
+        assert parent is None
+        assert cont == [
+            {"role": "user", "content": "genuine turn two"},
+            {"role": "assistant", "content": "substantive follow-up"},
+        ]
+
+        # Nothing new: the filtered-out messages must not resurface.
+        parent, cont = state.compute_context_for_inner_tool("call_1", local)
+        assert parent is None
+        assert cont is None
 
     def test_mark_cont_forwarded_to_tool(self):
         """Verify marking cont as forwarded clears pending state."""
@@ -925,7 +1016,7 @@ async def test_ask_dynamic_tool_respects_include_parent_chat_context_false():
         "include_parent_chat_context" not in args_opt_out
     ), "include_parent_chat_context should be popped from args"
 
-    # Test case 2: include_parent_chat_context=True (or omitted) SHOULD inject context
+    # Test case 2: include_parent_chat_context=True SHOULD inject context
     args_opt_in = {
         "question": "what's the status?",
         "include_parent_chat_context": True,
@@ -999,6 +1090,56 @@ async def test_ask_dynamic_tool_respects_include_parent_chat_context_false():
         "_parent_chat_context" not in extra_kwargs4
     ), "In NEVER mode, context should NOT be injected even if LLM opts in"
     assert context_opted_in4 is False
+
+
+def test_context_injection_defaults_off_when_arg_omitted():
+    """Omitting include_parent_chat_context injects no parent context under
+    LLM_DECIDES — context is opt-in.
+
+    compute_context_injection is the shared funnel behind base tool
+    dispatch, steer(action=ask), and ask_about_completed_tool, so this
+    single omitted-arg contract governs all of those consumers. ALWAYS
+    mode is unaffected: it injects regardless of the (absent) LLM choice.
+    """
+    from unify.common._async_tool.tools_data import compute_context_injection
+
+    client_messages = [{"role": "user", "content": "current message"}]
+
+    args_omitted = {"question": "what's the status?"}
+    context_state = LoopContextState(
+        parent_chat_context=[{"role": "user", "content": "parent context"}],
+    )
+    extra_kwargs, context_opted_in = compute_context_injection(
+        args=args_omitted,
+        propagate_chat_context=ChatContextPropagation.LLM_DECIDES,
+        context_state=context_state,
+        client_messages=client_messages,
+        call_id="ask_inner_tool_omitted",
+        accepts_parent_ctx=True,
+        accepts_parent_ctx_cont=False,
+        is_continuation_only=False,
+    )
+    assert (
+        "_parent_chat_context" not in extra_kwargs
+    ), "An omitted include_parent_chat_context must not inject parent context"
+    assert context_opted_in is False
+
+    # ALWAYS mode still injects when the arg is omitted.
+    context_state_always = LoopContextState(
+        parent_chat_context=[{"role": "user", "content": "parent context"}],
+    )
+    extra_kwargs_always, context_opted_in_always = compute_context_injection(
+        args={"question": "what's the status?"},
+        propagate_chat_context=ChatContextPropagation.ALWAYS,
+        context_state=context_state_always,
+        client_messages=client_messages,
+        call_id="ask_inner_tool_always_omitted",
+        accepts_parent_ctx=True,
+        accepts_parent_ctx_cont=False,
+        is_continuation_only=False,
+    )
+    assert "_parent_chat_context" in extra_kwargs_always
+    assert context_opted_in_always is True
 
 
 # =============================================================================
@@ -1152,3 +1293,113 @@ async def test_interjection_context_only_no_user_message(llm_config) -> None:
     assert (
         len(empty_user_msgs) == 0
     ), "Empty user messages should not be appended for context-only interjections"
+
+
+# =============================================================================
+# Loop-level opt-in contract (scripted turns, no LLM)
+# =============================================================================
+
+
+def _scripted_tool_call(call_id: str, name: str, arguments: dict) -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_loop_injects_no_context_unless_opted_in_then_filtered_snapshot(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """Through the real loop dispatch: a tool call that omits
+    include_parent_chat_context receives no parent context, and an explicit
+    opt-in receives the filtered snapshot — genuine user turns and
+    substantive assistant text only, with the tool payloads, tool_calls
+    turns, and loop notices from the parent layer dropped."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    captured_ctx: List[list[dict] | None] = []
+
+    async def record_context(*, _parent_chat_context: list[dict] | None = None) -> str:
+        captured_ctx.append(_parent_chat_context)
+        return "context-recorded"
+
+    record_context.__name__ = "record_context"
+    record_context.__qualname__ = "record_context"
+
+    parent_ctx = [
+        {"role": "user", "content": "genuine parent turn"},
+        {"role": "tool", "content": "discovery tool payload " * 50},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "assistant", "content": "substantive parent reply"},
+        loop_user_notice("parent loop notice"),
+    ]
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"record_context": record_context},
+        parent_chat_context=parent_ctx,
+        max_steps=20,
+        timeout=30,
+    )
+
+    # Turn 1: the tool call omits include_parent_chat_context entirely.
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_scripted_tool_call("call_1", "record_context", {})],
+        },
+    )
+    # Turn 2: explicit opt-in.
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                _scripted_tool_call(
+                    "call_2",
+                    "record_context",
+                    {"include_parent_chat_context": True},
+                ),
+            ],
+        },
+    )
+    await turn_queue.put({"role": "assistant", "content": "done", "tool_calls": []})
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "done"
+
+    assert len(captured_ctx) == 2, f"Expected 2 tool calls, got {len(captured_ctx)}"
+    assert captured_ctx[0] is None, (
+        "A tool call omitting include_parent_chat_context must receive no "
+        "parent context"
+    )
+
+    snapshot = captured_ctx[1]
+    assert snapshot is not None, "Explicit opt-in must receive the snapshot"
+    assert [(m["role"], m["content"]) for m in snapshot] == [
+        ("user", "genuine parent turn"),
+        ("assistant", "substantive parent reply"),
+    ], "Only genuine user turns and substantive assistant text may survive"
+    # Local survivors ride along as children of the last parent message:
+    # the genuine "start" turn, without the tool_calls turns or tool results.
+    children = snapshot[-1]["children"]
+    assert {(m["role"], m["content"]) for m in children} == {("user", "start")}
