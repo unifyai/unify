@@ -139,6 +139,25 @@ That tiebreak covers the unclear case only. If you were plainly the one
 addressed — named, or handed the turn — answering is not optional and staying
 quiet is the worse failure of the two."""
 
+_UNANSWERED_TURNS_CONTEXT = """\
+[system] Lines on this call you did not answer, oldest first:
+
+{lines}
+
+Standing down on a line does not end who it was for. A name is said once and
+then governs the exchange that follows it: "Ada, what's the pricing?" makes the
+next line — "and when does it expire?" — Ada's too, though it names nobody.
+
+- If the current line continues one of the above, it belongs to whoever that one
+  belonged to. Still not you. Choose silence again.
+- A follow-up with no name in it is the normal shape of a conversation, not an
+  opening for you. Two unnamed lines in a row do not become yours by repetition.
+- What ends it is the exchange actually turning to you: your name, a hand-off, or
+  a plainly new subject put to you. Until one of those, leave it where it was.
+
+You will not have heard the replies to these, so their going unanswered in your
+transcript is not evidence nobody answered them."""
+
 _PEER_TURNS_CONTEXT = """\
 [system] What your teammates have just said on this call:
 
@@ -406,6 +425,7 @@ def build_fast_brain_turn_messages(
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
     peer_turns: Sequence[str] = (),
+    unanswered_turns: Sequence[str] = (),
     own_name: str = "Assistant",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
@@ -419,6 +439,9 @@ def build_fast_brain_turn_messages(
     # and another assistant, and they do not contradict: one is about who among
     # the people was addressed, the other about which assistant takes the turn.
     participants = [name.strip() for name in other_participants if (name or "").strip()]
+    multi_party = len(participants) >= GROUP_CALL_MIN_PARTICIPANTS or bool(
+        [name for name in peer_assistants if (name or "").strip()],
+    )
     if len(participants) >= GROUP_CALL_MIN_PARTICIPANTS:
         messages.append(
             {
@@ -451,6 +474,20 @@ def build_fast_brain_turn_messages(
                 "role": "system",
                 "content": _PEER_TURNS_CONTEXT.format(
                     lines="\n".join(f"- {line}" for line in spoken),
+                ),
+            },
+        )
+    # Turns already declined. Gated on the call being multi-party rather than on
+    # peers alone: a name governing the lines after it is how people talk to each
+    # other, teammate present or not. Off a multi-party call there is nothing to
+    # decline, so the buffer feeding this is empty anyway.
+    declined = [line.strip() for line in unanswered_turns if (line or "").strip()]
+    if multi_party and declined:
+        messages.append(
+            {
+                "role": "system",
+                "content": _UNANSWERED_TURNS_CONTEXT.format(
+                    lines="\n".join(f'- "{line}"' for line in declined),
                 ),
             },
         )
@@ -671,11 +708,14 @@ async def select_fast_brain_turn(
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
     peer_turns: Sequence[str] = (),
+    unanswered_turns: Sequence[str] = (),
     own_name: str = "Assistant",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
     peers = [name.strip() for name in peer_assistants if (name or "").strip()]
     peers_present = bool(peers)
+    others = [name.strip() for name in other_participants if (name or "").strip()]
+    multi_party = peers_present or len(others) >= GROUP_CALL_MIN_PARTICIPANTS
     if not (user_text or "").strip():
         if peers_present:
             # Nothing was said that could have been addressed to anyone. On a
@@ -711,14 +751,25 @@ async def select_fast_brain_turn(
         peer_assistants=peers,
         other_participants=other_participants,
         peer_turns=peer_turns,
+        unanswered_turns=unanswered_turns,
         own_name=own_name,
+    )
+
+    # Whose turn this was — and whether an unnamed follow-up still belongs to
+    # whoever was named a turn ago — is a harder call than any 1:1 turn asks
+    # for, and answering over somebody costs more than the added latency. Paid
+    # only on a multi-party call.
+    effort = (
+        SETTINGS.conversation.FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT
+        if multi_party
+        else SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT
     )
 
     try:
         client = new_llm_client(
             SETTINGS.conversation.FAST_BRAIN_MODEL,
             origin="FastBrain.turn",
-            reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
+            reasoning_effort=effort,
         )
         client.set_response_format(response_model)
         raw = await client.generate(messages=messages)

@@ -131,6 +131,13 @@ _log = FastBrainLogger()
 # but both are just as multi-party.
 MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
 
+# Declined lines kept as context for the next turn. A short window on purpose:
+# it exists to carry a named addressee across the unnamed follow-ups that
+# immediately trail it, and a longer tail starts governing an exchange that has
+# since moved on.
+_MAX_UNANSWERED_TURNS = 4
+_UNANSWERED_TURN_CHARS = 200
+
 # How often to re-read the screen a meeting participant is sharing. Recall sends
 # frames at 2fps and the relay stores one a second, so polling faster only costs
 # round trips; polling much slower would leave the frame behind the conversation
@@ -320,6 +327,12 @@ class Assistant(Agent):
         # What co-assistants have said on this call, which never reaches this
         # session's STT. None on every channel but an org meet.
         self.peer_turns: PeerTurnLog | None = None
+        # Lines on a multi-party call this assistant decided were not its own.
+        # Kept because standing down on a line does not end who it was for: a
+        # name is said once and governs the unnamed follow-ups after it, and a
+        # turn declined without a trace leaves the next turn reading two
+        # consecutive unanswered questions.
+        self._unanswered_turns: list[str] = []
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
@@ -454,6 +467,41 @@ class Assistant(Agent):
             if getattr(item, "role", None) == "user":
                 return item.text_content or ""
         return ""
+
+    def _is_multi_party_call(self) -> bool:
+        """Whether a turn on this call could have belonged to somebody else."""
+        peers_provider = self._peer_assistants_provider
+        if peers_provider is not None and any(
+            (name or "").strip() for name in peers_provider()
+        ):
+            return True
+        others_provider = self._other_participants_provider
+        if others_provider is None:
+            return False
+        others = [name for name in others_provider() if (name or "").strip()]
+        return len(others) >= GROUP_CALL_MIN_PARTICIPANTS
+
+    def _record_unanswered_turn(self, user_text: str) -> None:
+        """Remember a line this assistant decided was not its own.
+
+        Only on a multi-party call: on a 1:1 every bare acknowledgement is a
+        silent turn, and a buffer of those describes nothing — there was never
+        anyone else it could have been for.
+        """
+        line = " ".join((user_text or "").split())[:_UNANSWERED_TURN_CHARS].strip()
+        if not line or not self._is_multi_party_call():
+            return
+        self._unanswered_turns.append(line)
+        del self._unanswered_turns[:-_MAX_UNANSWERED_TURNS]
+
+    def _clear_unanswered_turns(self) -> None:
+        """Forget the declined lines once the exchange has turned to us.
+
+        Speaking is the reset: whoever the previous lines were for, this one was
+        ours, so carrying them forward would have the assistant standing down
+        from the follow-ups to its own answer.
+        """
+        self._unanswered_turns.clear()
 
     async def _finalize_fast_brain_user_turn(
         self,
@@ -632,6 +680,7 @@ class Assistant(Agent):
                 peer_turns=(
                     self.peer_turns.recent() if self.peer_turns is not None else ()
                 ),
+                unanswered_turns=tuple(self._unanswered_turns),
                 own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
 
@@ -652,6 +701,7 @@ class Assistant(Agent):
                 # does) is what lets the finally block schedule the slow brain,
                 # which can tell whether this turn was even ours.
                 turn_classification = FAST_BRAIN_TURN_UNDECIDED
+                self._record_unanswered_turn(user_text)
                 _log.info(
                     "Fast brain reached no decision; saying nothing and handing "
                     "the turn to the slow brain",
@@ -659,6 +709,7 @@ class Assistant(Agent):
                 return
 
             if resolved.classification == FAST_BRAIN_TURN_SILENCE:
+                self._record_unanswered_turn(user_text)
                 _log.info("Fast brain: staying silent on bare acknowledgement")
                 return
 
@@ -673,6 +724,9 @@ class Assistant(Agent):
             self._buffers_since_slow_reply += 1
             turn_classification = resolved.classification
             intended_speech = speech
+            # This turn was ours, so the addressee the declined lines were
+            # tracking no longer stands.
+            self._clear_unanswered_turns()
             if turn_classification == FAST_BRAIN_TURN_CONTINUATION:
                 self._attach_reply_continuation(speech)
                 chunk_id = f"fast-brain-continuation-{monotonic_ms()}"
