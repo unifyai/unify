@@ -1092,3 +1092,126 @@ def test_peer_turns_need_the_peer_block_to_interpret_them():
 def test_a_one_to_one_call_never_gets_the_block():
     text = _group_system_text(peer_turns=["A-DA: something"])
     assert "What your teammates have just said" not in text
+
+
+# =============================================================================
+# A named addressee governs the unnamed follow-ups after it
+# =============================================================================
+
+
+def test_unanswered_turns_block_carries_the_declined_lines():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        unanswered_turns=["A-DA, what's the pricing on the renewal?"],
+    )
+    assert "Lines on this call you did not answer" in text
+    assert '- "A-DA, what\'s the pricing on the renewal?"' in text
+
+
+def test_unanswered_turns_block_says_a_name_governs_what_follows():
+    """The reported failure: the name is in turn one, the follow-up has none."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            unanswered_turns=["A-DA, what's the pricing?"],
+        ),
+    )
+    assert "Standing down on a line does not end who it was for" in text
+    assert "Choose silence again" in text
+    assert "do not become yours by repetition" in text
+
+
+def test_unanswered_turns_block_says_what_ends_the_hand_off():
+    """Without this it never takes a turn again once it has stood down."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            unanswered_turns=["A-DA, what's the pricing?"],
+        ),
+    )
+    assert "your name, a hand-off, or" in text
+
+
+def test_unanswered_turns_render_for_a_human_only_group():
+    """A name governing what follows it is how people talk, teammate or not."""
+    text = _group_system_text(
+        other_participants=["Ada", "Bo"],
+        peer_assistants=[],
+        unanswered_turns=["Bo, can you check the date?"],
+    )
+    assert "Lines on this call you did not answer" in text
+
+
+def test_no_unanswered_turns_block_on_a_one_to_one_call():
+    text = _group_system_text(unanswered_turns=["something"])
+    assert "Lines on this call you did not answer" not in text
+
+
+def test_no_unanswered_turns_block_with_one_other_person_and_no_teammate():
+    text = _group_system_text(
+        other_participants=["Ada"],
+        unanswered_turns=["something"],
+    )
+    assert "Lines on this call you did not answer" not in text
+
+
+def test_blank_unanswered_lines_render_nothing():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        unanswered_turns=["", "  "],
+    )
+    assert "Lines on this call you did not answer" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_multi_party_turn_gets_the_higher_reasoning_effort(monkeypatch):
+    """Carrying an addressee across turns is a harder call than any 1:1 turn.
+
+    Answering over somebody costs more than the added latency, and it is paid
+    only where the judgement is actually needed.
+    """
+    from unify.settings import SETTINGS
+
+    seen: dict = {}
+
+    class _Client:
+        def set_response_format(self, _model):
+            pass
+
+        async def generate(self, *, messages=None, **_kw):
+            return json.dumps({"classification": "silence", "content": ""})
+
+    def _factory(_model, *, origin=None, reasoning_effort=None, **_kw):
+        seen["effort"] = reasoning_effort
+        return _Client()
+
+    monkeypatch.setattr(fast_brain_turn, "new_llm_client", _factory)
+
+    await select_fast_brain_turn(
+        user_text="and when does it expire?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert seen["effort"] == (
+        SETTINGS.conversation.FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT
+    )
+
+    await select_fast_brain_turn(
+        user_text="did you send it?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert seen["effort"] == SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT

@@ -3457,6 +3457,182 @@ class TestFastBrainSmalltalk:
         assert captured.get("peer_turns") == ()
 
     @pytest.mark.asyncio
+    async def test_a_declined_turn_is_remembered_for_the_next_one(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """The reported failure: the name is in turn one, the follow-up has none.
+
+        Standing down left no trace, so the next turn read as two consecutive
+        unanswered questions — which is pressure to answer, not to stay out.
+        """
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+
+        captured: dict = {}
+
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        first = llm.ChatContext()
+        first.add_message(role="user", content=["A-DA, what's the pricing?"])
+        [chunk async for chunk in a.llm_node(first, [], None)]
+        # Nothing to carry into the turn that was just declined.
+        assert captured["unanswered_turns"] == ()
+
+        second = llm.ChatContext()
+        second.add_message(role="user", content=["and when does it expire?"])
+        [chunk async for chunk in a.llm_node(second, [], None)]
+        assert captured["unanswered_turns"] == ("A-DA, what's the pricing?",)
+
+    @pytest.mark.asyncio
+    async def test_declined_turns_are_not_remembered_on_a_one_to_one_call(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """Every bare ack on a 1:1 is a silent turn, and there was never anyone
+        else it could have been for — a buffer of those describes nothing."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+
+        captured: dict = {}
+
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        for text in ("okay", "yeah"):
+            ctx = llm.ChatContext()
+            ctx.add_message(role="user", content=[text])
+            [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert a._unanswered_turns == []
+        assert captured["unanswered_turns"] == ()
+
+    @pytest.mark.asyncio
+    async def test_speaking_clears_the_declined_lines(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """Answering resets the addressee.
+
+        Carrying the old lines past our own answer would have the assistant
+        standing down from the follow-ups to what it just said.
+        """
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+        a._unanswered_turns = ["A-DA, what's the pricing?"]
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One moment.",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["Lila, can you pull that up?"])
+        [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert a._unanswered_turns == []
+
+    @pytest.mark.asyncio
+    async def test_only_the_last_few_declined_lines_are_kept(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """A longer tail starts governing an exchange that has since moved on."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        a._peer_assistants_provider = lambda: ["A-DA"]
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        for i in range(call_mod._MAX_UNANSWERED_TURNS + 3):
+            ctx = llm.ChatContext()
+            ctx.add_message(role="user", content=[f"line {i}"])
+            [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert len(a._unanswered_turns) == call_mod._MAX_UNANSWERED_TURNS
+        assert a._unanswered_turns[-1] == (f"line {call_mod._MAX_UNANSWERED_TURNS + 2}")
+
+    @pytest.mark.asyncio
     async def test_bare_acknowledgement_stays_silent(
         self,
         boss_contact,
