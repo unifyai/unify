@@ -2026,6 +2026,25 @@ This is the group-call exception to the restraint rule above: on a call with sev
 - Standing down means **calling `wait`**, not producing no tool call at all. Omitting it is read as an unfinished turn and I get handed another one; a turn I keep being re-offered is a turn I will eventually talk myself into taking. `wait` is what actually rests."""
 
 
+def _build_voice_multi_party_block(participant_names: list[str]) -> str:
+    """The room, for the voice agent's own persona prompt.
+
+    Additive on purpose. Passing these through ``participants`` instead would
+    suppress the "Primary caller context" block, which is exclusive with it, and
+    render nothing in its place — the org roster is keyed ``display_name`` while
+    that block reads ``first_name``/``surname``/``bio``. So a 1:1 meet would lose
+    the caller's identity and gain nothing.
+    """
+    people = ", ".join(participant_names)
+    return f"""Who is on this call
+-------------------
+This is not a 1:1. On the call with me right now: {people}.
+
+Turns arrive attributed — a line reads as "Ada: …" when the platform could tell who spoke. That name is who is TALKING, which is a different question from who is being talked TO, and only the second decides whether a turn is mine.
+
+I hold the whole room in mind rather than one caller: the person named in "Contact details" above is who the call was opened with, not the only person who might speak. When someone I have not heard from yet speaks, that is a participant, not the same person under a new name."""
+
+
 def _build_peer_assistant_call_etiquette_block(peer_names: list[str]) -> str:
     """Turn-taking on a live call carrying another assistant.
 
@@ -3500,6 +3519,7 @@ def build_voice_agent_prompt(
     is_multiplayer: bool = False,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
+    call_participant_names: list[str] | None = None,
 ) -> PromptParts:
     """Build the Voice Agent's system prompt for the whole call.
 
@@ -3666,6 +3686,15 @@ I let the results speak for themselves rather than narrating steps or repeating 
         )
 
     parts.add(_build_visible_presence_block())
+
+    # The room, when there is one. Gated on the same threshold the brains use:
+    # with one other person every turn is theirs and the block would describe a
+    # group that is not there.
+    _voice_call_participants = [
+        name.strip() for name in (call_participant_names or []) if (name or "").strip()
+    ]
+    if len(_voice_call_participants) >= GROUP_CALL_MIN_PARTICIPANTS:
+        parts.add(_build_voice_multi_party_block(_voice_call_participants))
 
     # Brevity
     parts.add(

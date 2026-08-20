@@ -1590,3 +1590,47 @@ class TestFastBrainTurnGuidance:
         assert "mine and already delivered" in guide
         assert "Continue from what I just said." in guide
         assert 'never "Yes. The quickest way is…"' in guide
+
+
+class TestVoiceMultiPartyBlock:
+    """The room, in the voice agent's own prompt.
+
+    Added as its own block rather than through ``participants``, which is
+    exclusive with "Primary caller context" and reads keys the org roster does
+    not carry — routing the roster there would strip a 1:1 meet's caller
+    identity and render nothing in its place.
+    """
+
+    HEADING = "Who is on this call"
+
+    def test_absent_on_a_one_to_one_call(self):
+        assert self.HEADING not in _build_voice()
+
+    def test_absent_with_one_other_person(self):
+        assert self.HEADING not in _build_voice(call_participant_names=["Ada"])
+
+    def test_blank_names_do_not_make_a_room(self):
+        assert self.HEADING not in _build_voice(
+            call_participant_names=["Ada", "", "  "],
+        )
+
+    def test_present_and_named_for_a_group(self):
+        prompt = _build_voice(call_participant_names=["Ada", "Bo"])
+        assert self.HEADING in prompt
+        assert "Ada, Bo" in prompt
+
+    def test_the_caller_identity_block_survives(self):
+        """The regression routing the roster through `participants` would cause."""
+        prompt = _build_voice(call_participant_names=["Ada", "Bo"])
+        assert "Primary caller context" in prompt
+
+    def test_it_separates_who_is_talking_from_who_is_addressed(self):
+        """An attributed turn says who spoke; only the second decides the turn."""
+        prompt = _build_voice(call_participant_names=["Ada", "Bo"])
+        assert "who is TALKING" in prompt
+        assert "who is being talked TO" in prompt
+
+    def test_it_says_the_contact_is_not_the_only_speaker(self):
+        """Otherwise a new voice reads as the same person under a new name."""
+        prompt = _build_voice(call_participant_names=["Ada", "Bo"])
+        assert "not the only person who might speak" in prompt
