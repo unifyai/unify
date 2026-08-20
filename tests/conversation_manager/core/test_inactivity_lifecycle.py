@@ -1505,3 +1505,69 @@ class TestBusyDeclarationHoldsThePodOpen:
             assert not await self._survives(cm, stop_event)
 
         assert cm.shutdown_reason == "drain_restart"
+
+
+class TestManagersDeclareTheirOwnPoolWork:
+    """The declarations that live in the managers rather than the CM.
+
+    Each wraps work that runs on a thread or task nobody awaits, makes no LLM
+    calls, and writes through DataManager -- which publishes nothing. So none of
+    them move either idle clock, and the wrapper is the only thing standing
+    between them and an inactivity shutdown landing mid-flight.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_integration_tools_sync_declares_itself(self):
+        from unify.events.active_work import ACTIVE_WORK
+        from unify.integrations.sync_state import IntegrationSyncCoordinator
+
+        coordinator = IntegrationSyncCoordinator()
+        seen = {}
+
+        async def _fake_sync(_self, app_slug, **kwargs):
+            snapshot = ACTIVE_WORK.snapshot()
+            seen["count"] = snapshot.active_count
+            seen["labels"] = [w["label"] for w in snapshot.works]
+            return None
+
+        with patch.object(
+            IntegrationSyncCoordinator,
+            "_sync_app",
+            new=_fake_sync,
+        ):
+            await coordinator.sync_app("gmail")
+
+        assert seen["count"] == 1
+        assert seen["labels"] == ["integration_tools_sync"]
+        assert ACTIVE_WORK.snapshot().active_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_file_sync_transfer_declares_itself(self):
+        """The transfer, not the 30s poll loop that schedules them.
+
+        Declaring the loop would mean a desktop-attached pod never retires;
+        declaring the transfer means a shutdown cannot stop one half-done, and
+        the desktop's writes are what the next session reads.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+        from unify.file_manager.sync.rclone import RcloneSync
+
+        sync = RcloneSync.__new__(RcloneSync)
+        seen = {}
+
+        async def _fake_inner(cmd, operation, max_retries=None):
+            snapshot = ACTIVE_WORK.snapshot()
+            seen["count"] = snapshot.active_count
+            seen["labels"] = [w["label"] for w in snapshot.works]
+            return None
+
+        with patch.object(
+            RcloneSync,
+            "_run_with_retry_inner",
+            new=staticmethod(_fake_inner),
+        ):
+            await sync._run_with_retry(["rclone", "bisync"], "bisync")
+
+        assert seen["count"] == 1
+        assert seen["labels"] == ["file_sync_transfer"]
+        assert ACTIVE_WORK.snapshot().active_count == 0
