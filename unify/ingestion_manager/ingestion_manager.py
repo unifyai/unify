@@ -1098,12 +1098,77 @@ class IngestionManager(BaseIngestionManager):
         mid-run is not silently half-included.
         """
         if source.kind == "files":
-            return list(source.paths)
+            paths = list(source.paths)
+            self._sync_if_absent(paths)
+            return paths
         if source.kind != "folder":
             return []
         root = Path(source.path)
+        self._sync_if_absent([str(root)])
         walker = root.rglob if source.recursive else root.glob
         return [str(path) for path in sorted(walker(source.pattern)) if path.is_file()]
+
+    def _sync_if_absent(self, paths: List[str]) -> None:
+        """Pull the managed desktop's writes before deciding a path is missing.
+
+        The desktop and this workspace share one tree, but they share it through
+        a sync that runs around desktop *execution*. A file the assistant just
+        downloaded in a browser therefore exists on the desktop and not yet
+        here, and ingesting it moments later measures an empty set -- the same
+        shape of silent shortfall as a listing that omits what it was not asked
+        to include.
+
+        Only an absent path under the shared root triggers this, so the ordinary
+        case costs nothing: paths that are already present, and paths that were
+        never on the desktop, do not touch the network.
+        """
+        missing = [p for p in paths if p and not Path(p).exists()]
+        if not missing:
+            return
+        from unify.file_manager.settings import get_local_root
+
+        try:
+            root = Path(get_local_root()).resolve()
+        except Exception:
+            return
+        if not any(self._under(root, Path(p)) for p in missing):
+            return
+
+        from unify.common.asyncio_compat import run_coro_sync
+
+        manager = self._sync_manager()
+        if manager is None:
+            return
+        logger.info(
+            "Pulling desktop changes before ingesting %d absent path(s).",
+            len(missing),
+        )
+        try:
+            run_coro_sync(manager.sync_remote_changes)
+        except Exception as exc:
+            # A sync that cannot run is not a reason to abandon the ingestion:
+            # the paths may be present for some other reason, and the run's own
+            # reporting is a better place to discover they are not.
+            logger.warning("Pre-ingestion sync failed: %s: %s", type(exc).__name__, exc)
+
+    @staticmethod
+    def _under(root: Path, candidate: Path) -> bool:
+        try:
+            candidate.resolve().relative_to(root)
+        except (ValueError, OSError):
+            return False
+        return True
+
+    def _sync_manager(self) -> Any:
+        """The live file-sync manager, or ``None`` when nothing is syncing."""
+        from unify.manager_registry import ManagerRegistry
+
+        file_manager = ManagerRegistry.get_file_manager()
+        adapter = getattr(file_manager, "_adapter", None)
+        manager = getattr(adapter, "_sync_manager", None)
+        if manager is None or not getattr(manager, "_started", False):
+            return None
+        return manager
 
     # ── observing ─────────────────────────────────────────────────────────
 
