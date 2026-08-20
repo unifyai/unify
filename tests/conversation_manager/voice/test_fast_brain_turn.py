@@ -801,3 +801,187 @@ async def test_gated_hang_up_with_held_opener_reports_declined(monkeypatch):
     )
     assert resolved.classification == FAST_BRAIN_TURN_HANG_UP
     assert resolved.declined_continuation is True
+
+
+# =============================================================================
+# Where an unusable decision lands when a teammate is on the call
+# =============================================================================
+#
+# The fast brain is the only gate on "is this turn mine": the runtime schedules
+# the slow brain for every classification except silence. So every fallback in
+# here is a decision about who answers.
+#
+# Off a multi-assistant call, an unusable decision falls back to `defer` — it
+# speaks a short filler and commits to answering, which is right on a 1:1 where
+# nobody else can take the turn. With a teammate present that same fallback is
+# how a question addressed to somebody else gets answered twice, so a decision
+# that expressed no usable intent falls back to silence instead.
+#
+# Every test below has a peerless counterpart above it in this file. The 1:1
+# behaviour is what these must not disturb.
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace, so an assertion does not depend on where a line wraps."""
+    return " ".join(text.split())
+
+
+def test_base_prompt_still_biases_the_1_to_1_call_toward_speaking():
+    """The shared prompt is untouched, and that is the point.
+
+    Its narrow silence definition and unsure-choose-defer tiebreak are what make
+    a 1:1 call feel responsive. The group and peer blocks override them by saying
+    so, for the turns they apply to — editing the shared prompt instead would
+    change every phone call.
+    """
+    flat = _flat(FAST_BRAIN_TURN_PROMPT)
+    assert "When unsure between silence and defer, choose defer" in flat
+    assert "WHOLE turn is a bare acknowledgement" in flat
+
+
+def test_peer_block_overrides_the_narrow_silence_rule_and_the_tiebreak():
+    text = _flat(
+        _group_system_text(other_participants=[], peer_assistants=["A-DA"]),
+    )
+    assert "silence is not limited to bare acknowledgements here" in text
+    assert "unsure resolves to silence, not defer" in text
+    # The addressed case must survive the inversion, or a named assistant
+    # reasons its way into saying nothing.
+    assert "answering is not optional" in text
+
+
+def test_human_only_group_keeps_the_defer_tiebreak():
+    """With no teammate, silence on an unclear turn leaves it dropped.
+
+    Nobody else in the room can answer for the assistant, so the group block
+    relaxes what silence may be used for without inverting when to reach for it.
+    """
+    text = _flat(_group_system_text(other_participants=["Ada", "Bo"]))
+    assert "silence is not limited to bare acknowledgements here" in text
+    assert "The unsure-choose-defer tiebreak still stands" in text
+    assert "unsure resolves to silence" not in text
+
+
+@pytest.mark.asyncio
+async def test_llm_error_stays_silent_when_a_teammate_is_present(monkeypatch):
+    """Pairs with test_llm_error_falls_back_to_defer, which pins the 1:1 side."""
+    _patch_client(monkeypatch, {}, raises=True)
+    resolved = await select_fast_brain_turn(
+        user_text="A-DA, where did we land on pricing?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.intended_speech == ""
+
+
+@pytest.mark.asyncio
+async def test_empty_input_stays_silent_when_a_teammate_is_present(monkeypatch):
+    """Pairs with test_empty_input_returns_default_without_llm."""
+
+    def _boom(*a, **kw):
+        raise AssertionError("new_llm_client must not be called for empty input")
+
+    monkeypatch.setattr(fast_brain_turn, "new_llm_client", _boom)
+    resolved = await select_fast_brain_turn(
+        user_text="   ",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.intended_speech == ""
+
+
+@pytest.mark.asyncio
+async def test_unusable_smalltalk_stays_silent_when_a_teammate_is_present(
+    monkeypatch,
+):
+    """Pairs with test_unbriefed_smalltalk_keeps_ordinary_cap."""
+    _patch_client(
+        monkeypatch,
+        {"classification": "smalltalk", "content": "x" * 400},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="A-DA, how did the demo go?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.intended_speech == ""
+
+
+def test_silence_with_stray_content_honours_the_silence_when_peers_are_present():
+    """The classification is the decision; the content is the malformed part.
+
+    Speaking it would answer over a teammate on the strength of a formatting
+    slip. Off a multi-assistant call the same slip is read the other way, since
+    a line the model wrote is better than leaving the caller with nothing.
+    """
+    with_peers = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_SILENCE,
+        "It shipped on Tuesday.",
+        pending_continuation=None,
+        peers_present=True,
+    )
+    assert with_peers.classification == FAST_BRAIN_TURN_SILENCE
+    assert with_peers.intended_speech == ""
+
+    alone = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_SILENCE,
+        "It shipped on Tuesday.",
+        pending_continuation=None,
+        peers_present=False,
+    )
+    assert alone.classification == FAST_BRAIN_TURN_DEFER
+    assert alone.intended_speech == "It shipped on Tuesday."
+
+
+def test_a_chosen_defer_is_never_converted_to_silence():
+    """The one conversion that would lose a turn outright.
+
+    `defer` is a decision that this turn IS ours, and the runtime does not
+    schedule the slow brain for a silent turn — so converting it would drop a
+    question that was genuinely asked of this assistant, with no second attempt.
+    Unusable content is still worth the generic filler here.
+    """
+    resolved = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_DEFER,
+        "x" * 400,
+        pending_continuation=None,
+        peers_present=True,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.intended_speech == _DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_blank_peer_names_do_not_count_as_a_teammate(monkeypatch):
+    """A roster crosses a wire; padding must not put the call on group rules."""
+    _patch_client(monkeypatch, {}, raises=True)
+    resolved = await select_fast_brain_turn(
+        user_text="anything",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["", "   "],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.intended_speech == _DEFAULT

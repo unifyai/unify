@@ -123,9 +123,20 @@ turn. Decide whether THIS turn is yours before speaking:
 - To pass a turn that suits a teammate better, use smalltalk with ONE short
   hand-off line naming them (e.g. "Ada, that one's yours.").
 
-Silence is the safe default only when you know a teammate was asked. If you were
-the one addressed, answering is not optional and staying quiet is the worse
-failure of the two."""
+Two rules above this block are replaced while a teammate is on the call:
+
+- **silence is not limited to bare acknowledgements here.** A substantive
+  question that was put to a teammate takes classification silence with empty
+  content. That is the correct output for this turn, not a rule violation.
+- **unsure resolves to silence, not defer.** When you genuinely cannot tell
+  whose turn it was, stay quiet: a teammate is on this call and can answer, and
+  two assistants answering the same question is the failure these rules exist to
+  prevent. A `defer` here is not a neutral holding move — it speaks aloud and
+  commits you to answering.
+
+That tiebreak covers the unclear case only. If you were plainly the one
+addressed — named, or handed the turn — answering is not optional and staying
+quiet is the worse failure of the two."""
 
 _GROUP_CALL_CONTEXT = """\
 [system] Group call. You are {own_name}. The other people on this call are:
@@ -150,9 +161,17 @@ neither do you. Decide whether THIS turn is yours before speaking:
 - Never answer on a participant's behalf and never speak over one. When someone
   else in the room was the one asked, silence is correct.
 
-Silence is the safe default only when the turn clearly belonged to someone else.
-When you were the one addressed, answering is not optional and staying quiet is
-the worse failure of the two."""
+One rule above this block is replaced on a call like this: **silence is not
+limited to bare acknowledgements here.** A substantive exchange between two
+other people takes classification silence with empty content. That is the
+correct output for those turns, not a rule violation. A `defer` is not a neutral
+holding move — it speaks aloud into their conversation.
+
+The unsure-choose-defer tiebreak still stands, because if nobody else here can
+answer for you, silence leaves the turn dropped. Silence is the safe default
+only when the turn clearly belonged to someone else. When you were the one
+addressed, answering is not optional and staying quiet is the worse failure of
+the two."""
 
 _CALL_BRIEFING_CONTEXT = """\
 [system] Active call briefing — context, not script. You are on this call for
@@ -467,7 +486,22 @@ def _resolve_content(
     pending_continuation: PendingContinuation | None,
     hang_up_gated: bool = False,
     briefed: bool = False,
+    peers_present: bool = False,
 ) -> ResolvedFastBrainTurn:
+    """Turn one raw decision into the turn the runtime will act on.
+
+    ``peers_present`` says another assistant is on this call, which changes where
+    an unusable decision lands. Everywhere else a malformed or missing decision
+    falls back to ``defer``: it speaks a short filler and schedules the slow
+    brain, which is right on a 1:1 where staying quiet leaves the caller with
+    nothing. With a teammate in the room that same fallback is how an assistant
+    answers a question addressed to somebody else — so a decision that expressed
+    no usable intent falls back to silence instead, and the teammate answers.
+
+    A ``defer`` the model actually chose is never converted: that is a decision
+    that the turn is ours, and silence would drop it (the runtime does not
+    schedule the slow brain for a silent turn).
+    """
     text = " ".join((content or "").split()).strip()
 
     if classification == FAST_BRAIN_TURN_HANG_UP:
@@ -512,7 +546,7 @@ def _resolve_content(
         )
 
     if classification == FAST_BRAIN_TURN_SILENCE:
-        if text:
+        if text and not peers_present:
             LOGGER.warning(
                 "Fast brain silence with non-empty content; coercing to defer",
             )
@@ -522,6 +556,14 @@ def _resolve_content(
                 classification=FAST_BRAIN_TURN_DEFER,
                 intended_speech=text,
                 declined_continuation=pending_continuation is not None,
+            )
+        if text:
+            # The stated classification is what the model decided; the stray
+            # content is the malformed part. Speaking it would answer over a
+            # teammate on the strength of a formatting slip.
+            LOGGER.warning(
+                "Fast brain silence with non-empty content on a multi-assistant "
+                "call; dropping the content and staying silent",
             )
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_SILENCE,
@@ -534,6 +576,16 @@ def _resolve_content(
             _MAX_BRIEFED_SMALLTALK_CHARS if briefed else _MAX_SMALLTALK_CHARS
         )
         if not text or len(text) > smalltalk_cap:
+            if peers_present:
+                LOGGER.warning(
+                    "Fast brain smalltalk unusable on a multi-assistant call; "
+                    "staying silent rather than deferring",
+                )
+                return ResolvedFastBrainTurn(
+                    classification=FAST_BRAIN_TURN_SILENCE,
+                    intended_speech="",
+                    declined_continuation=pending_continuation is not None,
+                )
             return ResolvedFastBrainTurn(
                 classification=FAST_BRAIN_TURN_DEFER,
                 intended_speech=_DEFAULT_PHRASE,
@@ -585,7 +637,18 @@ async def select_fast_brain_turn(
     own_name: str = "Assistant",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
+    peers = [name.strip() for name in peer_assistants if (name or "").strip()]
+    peers_present = bool(peers)
     if not (user_text or "").strip():
+        if peers_present:
+            # Nothing was said that could have been addressed to anyone. On a
+            # 1:1 the filler covers the gap; with a teammate in the room it is
+            # just this assistant claiming a turn that does not exist.
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+                declined_continuation=False,
+            )
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_DEFER,
             intended_speech=_DEFAULT_PHRASE,
@@ -608,7 +671,7 @@ async def select_fast_brain_turn(
         recent_assistant_text=recent_assistant_text,
         hang_up_gate_reason=hang_up_gate_reason,
         briefing=briefing,
-        peer_assistants=peer_assistants,
+        peer_assistants=peers,
         other_participants=other_participants,
         own_name=own_name,
     )
@@ -629,8 +692,23 @@ async def select_fast_brain_turn(
             pending_continuation=pending_continuation,
             hang_up_gated=hang_up_gated,
             briefed=bool(briefing.strip()),
+            peers_present=peers_present,
         )
     except Exception as exc:
+        if peers_present:
+            # No decision was reached, so there is no basis for taking the turn.
+            # Deferring here speaks first and answers second, which on a call
+            # with a teammate is how a question meant for them gets answered
+            # twice. They heard it too and are not blocked on this assistant.
+            LOGGER.warning(
+                f"Fast brain turn selection failed on a multi-assistant call; "
+                f"staying silent: {exc}",
+            )
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+                declined_continuation=pending_continuation is not None,
+            )
         LOGGER.warning(f"Fast brain turn selection failed; deferring: {exc}")
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_DEFER,
