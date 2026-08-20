@@ -27,6 +27,7 @@ from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
+    FAST_BRAIN_TURN_UNDECIDED,
 )
 
 _DEFAULT = fast_brain_turn._DEFAULT_PHRASE
@@ -863,8 +864,13 @@ def test_human_only_group_keeps_the_defer_tiebreak():
 
 
 @pytest.mark.asyncio
-async def test_llm_error_stays_silent_when_a_teammate_is_present(monkeypatch):
-    """Pairs with test_llm_error_falls_back_to_defer, which pins the 1:1 side."""
+async def test_llm_error_hands_the_turn_over_when_a_teammate_is_present(monkeypatch):
+    """Pairs with test_llm_error_falls_back_to_defer, which pins the 1:1 side.
+
+    Undecided rather than silent: nothing is spoken, but the turn still reaches
+    the slow brain. Silence here would drop it outright, so a question genuinely
+    asked of this assistant would go unanswered with no second attempt.
+    """
     _patch_client(monkeypatch, {}, raises=True)
     resolved = await select_fast_brain_turn(
         user_text="A-DA, where did we land on pricing?",
@@ -876,34 +882,12 @@ async def test_llm_error_stays_silent_when_a_teammate_is_present(monkeypatch):
         idle_status_smalltalk=False,
         peer_assistants=["A-DA"],
     )
-    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.classification == FAST_BRAIN_TURN_UNDECIDED
     assert resolved.intended_speech == ""
 
 
 @pytest.mark.asyncio
-async def test_empty_input_stays_silent_when_a_teammate_is_present(monkeypatch):
-    """Pairs with test_empty_input_returns_default_without_llm."""
-
-    def _boom(*a, **kw):
-        raise AssertionError("new_llm_client must not be called for empty input")
-
-    monkeypatch.setattr(fast_brain_turn, "new_llm_client", _boom)
-    resolved = await select_fast_brain_turn(
-        user_text="   ",
-        system_prompt="PERSONA",
-        history_messages=[],
-        pending_continuation=None,
-        already_deferred=False,
-        guidance="",
-        idle_status_smalltalk=False,
-        peer_assistants=["A-DA"],
-    )
-    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
-    assert resolved.intended_speech == ""
-
-
-@pytest.mark.asyncio
-async def test_unusable_smalltalk_stays_silent_when_a_teammate_is_present(
+async def test_unusable_smalltalk_hands_the_turn_over_when_a_teammate_is_present(
     monkeypatch,
 ):
     """Pairs with test_unbriefed_smalltalk_keeps_ordinary_cap."""
@@ -921,8 +905,55 @@ async def test_unusable_smalltalk_stays_silent_when_a_teammate_is_present(
         idle_status_smalltalk=False,
         peer_assistants=["A-DA"],
     )
-    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.classification == FAST_BRAIN_TURN_UNDECIDED
     assert resolved.intended_speech == ""
+
+
+@pytest.mark.asyncio
+async def test_a_chosen_silence_is_not_handed_over(monkeypatch):
+    """A silence the model chose is a decision, not an absence of one.
+
+    Converting it to undecided would wake the slow brain to relitigate a turn
+    the fast brain deliberately let go — and on a bare "okay" that is how an
+    assistant answers an acknowledgement.
+    """
+    _patch_client(monkeypatch, {"classification": "silence", "content": ""})
+    resolved = await select_fast_brain_turn(
+        user_text="okay",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+
+
+@pytest.mark.asyncio
+async def test_empty_input_stays_silent_rather_than_handing_over(monkeypatch):
+    """Nothing was said, so there is nothing for the slow brain to weigh.
+
+    The turn-completed handler drops an empty ``user_content`` anyway, so
+    scheduling a run here would buy nothing and cost a slow-brain turn.
+    """
+
+    def _boom(*a, **kw):
+        raise AssertionError("new_llm_client must not be called for empty input")
+
+    monkeypatch.setattr(fast_brain_turn, "new_llm_client", _boom)
+    resolved = await select_fast_brain_turn(
+        user_text="  ",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
 
 
 def test_silence_with_stray_content_honours_the_silence_when_peers_are_present():

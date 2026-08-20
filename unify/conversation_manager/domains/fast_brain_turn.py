@@ -21,6 +21,7 @@ from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
+    FAST_BRAIN_TURN_UNDECIDED,
     GROUP_CALL_MIN_PARTICIPANTS,
 )
 from unify.logger import LOGGER
@@ -496,11 +497,15 @@ def _resolve_content(
     brain, which is right on a 1:1 where staying quiet leaves the caller with
     nothing. With a teammate in the room that same fallback is how an assistant
     answers a question addressed to somebody else — so a decision that expressed
-    no usable intent falls back to silence instead, and the teammate answers.
+    no usable intent falls back to ``undecided``: nothing is spoken, and the slow
+    brain gets the turn and decides whose it was.
 
-    A ``defer`` the model actually chose is never converted: that is a decision
-    that the turn is ours, and silence would drop it (the runtime does not
-    schedule the slow brain for a silent turn).
+    Two things are never converted:
+
+    - a ``defer`` the model actually chose — that is a decision that the turn is
+      ours, and the filler is the lead-in to answering it;
+    - a ``silence`` the model actually chose — that is a decision to let the turn
+      go, and waking the slow brain would relitigate it.
     """
     text = " ".join((content or "").split()).strip()
 
@@ -579,10 +584,10 @@ def _resolve_content(
             if peers_present:
                 LOGGER.warning(
                     "Fast brain smalltalk unusable on a multi-assistant call; "
-                    "staying silent rather than deferring",
+                    "saying nothing and handing the turn to the slow brain",
                 )
                 return ResolvedFastBrainTurn(
-                    classification=FAST_BRAIN_TURN_SILENCE,
+                    classification=FAST_BRAIN_TURN_UNDECIDED,
                     intended_speech="",
                     declined_continuation=pending_continuation is not None,
                 )
@@ -696,16 +701,16 @@ async def select_fast_brain_turn(
         )
     except Exception as exc:
         if peers_present:
-            # No decision was reached, so there is no basis for taking the turn.
-            # Deferring here speaks first and answers second, which on a call
-            # with a teammate is how a question meant for them gets answered
-            # twice. They heard it too and are not blocked on this assistant.
+            # No decision was reached, so there is no basis for speaking first
+            # and answering second — on a call with a teammate that is how a
+            # question meant for them gets answered twice. Say nothing and let
+            # the slow brain, which can tell whose turn it was, decide.
             LOGGER.warning(
                 f"Fast brain turn selection failed on a multi-assistant call; "
-                f"staying silent: {exc}",
+                f"handing the turn to the slow brain: {exc}",
             )
             return ResolvedFastBrainTurn(
-                classification=FAST_BRAIN_TURN_SILENCE,
+                classification=FAST_BRAIN_TURN_UNDECIDED,
                 intended_speech="",
                 declined_continuation=pending_continuation is not None,
             )
