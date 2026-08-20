@@ -27,6 +27,7 @@ what happened.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import re
@@ -464,6 +465,30 @@ class IngestionManager(BaseIngestionManager):
                 {"cancel": False, "pause": False},
             )
 
+    @staticmethod
+    @contextlib.contextmanager
+    def _pod_work(label: str, run_key: str):
+        """Declare pool work to the runtime for as long as it runs.
+
+        `submit` promises a handle immediately, so both tiers hand the real work
+        to a pool thread and return. That work therefore outlives the call that
+        started it -- and outlives the actor plan whose own ACTIVE_WORK record
+        was the only thing telling the runtime not to retire the pod. Row writes
+        go through DataManager, which publishes nothing, so without this the
+        work is invisible to every idle clock and an inactivity shutdown can
+        land in the middle of it.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+
+        handle = ACTIVE_WORK.begin(
+            label=label,
+            metadata={"run_key": run_key},
+        )
+        try:
+            yield handle
+        finally:
+            handle.end()
+
     def _execute(
         self,
         run_key: str,
@@ -480,6 +505,19 @@ class IngestionManager(BaseIngestionManager):
         verb that requested it already wrote the state, and overwriting a
         terminal ``cancelled`` with ``succeeded`` would erase what happened.
         """
+        destination = request.destination
+        control = self._control(run_key)
+
+        with self._pod_work("ingestion_inline", run_key):
+            self._execute_guarded(run_key, runs_context, request, declared)
+
+    def _execute_guarded(
+        self,
+        run_key: str,
+        runs_context: str,
+        request: IngestionRequest,
+        declared: Optional[int],
+    ) -> None:
         destination = request.destination
         control = self._control(run_key)
 
@@ -1001,7 +1039,8 @@ class IngestionManager(BaseIngestionManager):
         the run's outcome, so it is written where every other outcome lives.
         """
         try:
-            self._dispatch(run_key, runs_context, request)
+            with self._pod_work("ingestion_dispatch_upload", run_key):
+                self._dispatch(run_key, runs_context, request)
         except Exception as error:
             self._update_run(
                 run_key,
