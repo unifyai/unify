@@ -178,6 +178,38 @@ class IntegrationSyncCoordinator:
         connection_id: str | None = None,
         operation: IntegrationSyncOperation = "materialize",
     ) -> IntegrationSyncState:
+        """Materialise or remove one app's tools, declared as live work.
+
+        Nobody awaits this: it is a background task fetching and materialising
+        provider tool schemas. It makes no LLM calls, and its row writes go
+        through DataManager, which publishes nothing -- so neither idle clock
+        moves while it runs. The only events it emits are terminal, and the
+        failure one is deliberately not presence. Without the declaration an
+        inactivity shutdown can land mid-sync and leave the assistant holding
+        half of an app's tools.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+
+        active_work = ACTIVE_WORK.begin(
+            label="integration_tools_sync",
+            metadata={"app_slug": normalize_app_slug(app_slug), "operation": operation},
+        )
+        try:
+            return await self._sync_app(
+                app_slug,
+                connection_id=connection_id,
+                operation=operation,
+            )
+        finally:
+            active_work.end()
+
+    async def _sync_app(
+        self,
+        app_slug: str,
+        *,
+        connection_id: str | None = None,
+        operation: IntegrationSyncOperation = "materialize",
+    ) -> IntegrationSyncState:
         normalized = normalize_app_slug(app_slug)
         existing = self._states.get(normalized)
         self.set_status(
