@@ -148,6 +148,17 @@ DESKTOP_SCOPED_MEET_SURFACES = (
 # namespace alone is what a call boundary closes. Kept in step with
 # ``console/src/lib/assistants/desktopViewer.ts``.
 CALL_VIEWER_SOURCE = "call"
+# Stands in for the whole room in a call viewer's key, in place of the person who
+# happened to press the button. A call's stage is one switch, not a tally: it puts
+# the desktop in front of *everyone* on the call, so anybody there may turn it on
+# and anybody there may turn it off again. Keyed per person instead, a second
+# participant's "stop" would discard a key they never held and the desktop would
+# stay up with the button doing nothing.
+#
+# The standalone Desktop tab keeps per-person keys, where the tally is the point:
+# two people with the pane open are two viewers, and one closing it must not take
+# it from the other.
+CALL_VIEWER_IDENTITY = "room"
 
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
@@ -402,7 +413,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.project_name = project_name
 
         # inactivity & shutdown
-        self.inactivity_timeout = 3600  # 1 hour in seconds
+        self.inactivity_timeout = 600  # 10 minutes in seconds
         self.inactivity_check_interval = 30  # seconds
         self.last_activity_time = self.loop.time()
         self._last_activity_source = "startup"
@@ -491,12 +502,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # ``*_MEET_SURFACES`` tuples above, which decide what a call boundary
         # closes.
         self.assistant_screen_share_active: bool = False
-        # Who currently has the assistant's desktop open, as
-        # ``"<source>:<user_id>"``. ``assistant_screen_share_active`` above is
-        # this set's emptiness, cached so the ~15 readers of the flag (and the
-        # generic ``_MEET_STATE_FLAGS`` setattr path) keep working unchanged.
-        # Membership, not the last event, decides: several people watch the same
-        # desktop at once, and one of them closing their tab must not tell the
+        # What currently has the assistant's desktop open, as
+        # ``"<source>:<identity>"`` -- one key per Desktop tab, and one per call
+        # for the whole room. ``assistant_screen_share_active`` above is this
+        # set's emptiness, cached so the ~15 readers of the flag (and the generic
+        # ``_MEET_STATE_FLAGS`` setattr path) keep working unchanged.
+        # Membership, not the last event, decides: a call and a Desktop tab watch
+        # the same desktop at once, and either one closing must not tell the
         # assistant that nobody is looking.
         self._assistant_screen_share_viewers: set[str] = set()
         self.user_screen_share_active: bool = False
@@ -826,11 +838,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def assistant_screen_share_viewer_key(user_id: str, source: str) -> str:
         """Identify one viewer of the assistant's desktop.
 
+        A call collapses to one key for the whole room and ``user_id`` is ignored
+        -- see ``CALL_VIEWER_IDENTITY`` for why the person who pressed the button
+        is not the identity that matters there.
+
         A client that predates viewer tracking sends neither field; it collapses
         to a single legacy key so its start/stop pair still opens and closes the
         surface. Without that, an un-upgraded Console would add a viewer it could
         never remove and pin the desktop open for the rest of the session.
         """
+        if source.startswith(f"{CALL_VIEWER_SOURCE}:"):
+            return f"{source}:{CALL_VIEWER_IDENTITY}"
         return f"{source or 'legacy'}:{user_id or 'legacy'}"
 
     def note_assistant_screen_share_viewer(
@@ -840,13 +858,73 @@ class ConversationManager(metaclass=SingletonABCMeta):
         source: str,
         watching: bool,
     ) -> bool:
-        """Add or remove one viewer; return whether anyone is watching now."""
+        """Add or remove one viewer; return whether anything is watching now.
+
+        ``user_id`` names the viewer for a Desktop tab and is ignored for a call,
+        where the key stands for the room rather than the person acting -- so any
+        participant's stop closes the share any other participant opened.
+        """
         key = self.assistant_screen_share_viewer_key(user_id, source)
         if watching:
             self._assistant_screen_share_viewers.add(key)
         else:
             self._assistant_screen_share_viewers.discard(key)
         return bool(self._assistant_screen_share_viewers)
+
+    def assistant_desktop_watched_from_call(self, call_session_id: str = "") -> bool:
+        """True when someone is watching the assistant's desktop *from a call*.
+
+        Narrower than ``assistant_screen_share_active``, deliberately. That flag
+        is desktop-scoped: a standalone Desktop tab holds it true across call
+        boundaries, which is right for everything that reads it -- prompt state,
+        screenshot capture, the computer fast path -- because somebody really is
+        looking at the desktop.
+
+        It is the wrong question for the room. Mounting the desktop on a call's
+        stage shows it to *every* participant, so one person's Desktop tab must
+        not decide it, and neither must a viewer left behind by an earlier call.
+        Only viewers under ``CALL_VIEWER_SOURCE`` count here, and passing
+        ``call_session_id`` narrows that to the call doing the asking.
+        """
+        prefix = (
+            f"{CALL_VIEWER_SOURCE}:{call_session_id}:"
+            if call_session_id
+            else f"{CALL_VIEWER_SOURCE}:"
+        )
+        return any(
+            key.startswith(prefix) for key in self._assistant_screen_share_viewers
+        )
+
+    def drop_stale_call_screen_share_viewers(self, call_session_id: str) -> None:
+        """Drop call viewers belonging to any call other than this one.
+
+        A new call cleaning up after its predecessors, because nothing else
+        reliably does. A viewer can only be closed by a stop event naming the
+        call it came from, and the call it came from is gone. Both resets that
+        would otherwise catch it can be skipped in the same sequence: the
+        call-start one when a dispatch arrives while the previous session is
+        still winding down, and the call-end one when the stale-session guard
+        drops a departed call's ``Ended`` event -- correctly, since a dying call
+        must not clobber a live one, but it takes that call's cleanup with it.
+        Left alone the viewer is immortal for the life of the pod, holding the
+        desktop open on every later call with no way to take it down.
+
+        Keyed on the call id rather than the ``call:`` namespace, so viewers this
+        call has already registered survive: the Console can start a share before
+        the runtime's own call-started event lands.
+        """
+        if not call_session_id:
+            return
+        keep_prefix = f"{CALL_VIEWER_SOURCE}:{call_session_id}:"
+        drop_prefix = f"{CALL_VIEWER_SOURCE}:"
+        self._assistant_screen_share_viewers = {
+            key
+            for key in self._assistant_screen_share_viewers
+            if key.startswith(keep_prefix) or not key.startswith(drop_prefix)
+        }
+        self.assistant_screen_share_active = bool(
+            self._assistant_screen_share_viewers,
+        )
 
     def drop_assistant_screen_share_viewers(self, source: str) -> bool:
         """Drop every viewer watching through ``source``; return who is left.
@@ -3056,38 +3134,112 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 finally:
                     self._current_event_trace = None
 
+    def _busy_snapshot(self) -> tuple[bool, str]:
+        """Whether anything real is in flight, and what it is.
+
+        One predicate, consumed by every branch of the inactivity check. The
+        idle clocks are traffic *proxies*: pubsub says somebody sent us
+        something, the EventBus says we published something. Neither knows
+        whether work is happening right now, so anything that outlives the call
+        that started it -- or lives outside this process entirely -- has to say
+        so here or it can be torn down mid-flight.
+
+        The reason string is returned rather than logged from inside: the
+        inactivity check throttles its own logging, and a predicate that logged
+        on every evaluation would write every 30s forever.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+
+        active_work = ACTIVE_WORK.snapshot()
+        if active_work.active_count > 0:
+            return True, f"active_work({active_work.active_count})"
+
+        # Voice lives in a separate process, so its LLM calls advance that
+        # process's EventBus and never this one. The parent only sees per-turn
+        # IPC events, which means a connected-but-quiet call looks exactly like
+        # an empty pod. Shutting down here runs cleanup_call_proc: it hangs up.
+        call_manager = self.call_manager
+        if call_manager.has_active_call:
+            return True, "active_call"
+        # Channel-agnostic on purpose. The per-channel properties resolve
+        # through `_call_channel`, which is not set yet while a meet is still
+        # joining -- so asking about google_meet and teams_meet individually
+        # answers False for a meeting that is half-way into the room.
+        if call_manager.has_active_meet():
+            return True, "browser_meet"
+        if call_manager._whatsapp_call_joining:
+            return True, "whatsapp_call_joining"
+
+        # Somebody is watching a screen. Watching generates no traffic at all.
+        if self.assistant_screen_share_active:
+            return True, "assistant_screen_share"
+        if self.user_screen_share_active:
+            return True, "user_screen_share"
+        if self._assistant_screen_share_viewers:
+            return True, (
+                f"screen_share_viewers({len(self._assistant_screen_share_viewers)})"
+            )
+
+        # A turn mid-flight. The EventBus only stamps on *completion*, so a
+        # single long call is a silent window on that clock.
+        running_task = getattr(self.debouncer, "running_task", None)
+        if running_task is not None and not running_task.done():
+            return True, "slow_brain_turn"
+
+        if self.in_flight_actions:
+            return True, f"in_flight_actions({len(self.in_flight_actions)})"
+
+        return False, ""
+
     async def check_inactivity(self):
         """Monitor for inactivity and shut down gracefully after timeout.
 
-        Activity is detected from three sources:
-        - External pubsub messages (updated by wait_for_events via last_activity_time)
-        - Internal EventBus publishes (LLM calls, tool-loop turns, manager methods)
-        - Active work records for long-running local execution
+        Two clocks and one predicate:
+        - ``pubsub_idle`` -- somebody sent us something (``counts_as_activity``)
+        - ``eventbus_idle`` -- we published something (LLM calls, tool loops,
+          manager methods)
+        - ``_busy_snapshot`` -- something real is in flight *right now*
 
-        Ghost-publish detection: if pubsub is idle past the timeout but
-        eventbus_idle stays suspiciously low for many consecutive checks,
-        something is periodically resetting last_publish_monotonic without real
-        user-facing activity. After ``_GHOST_PUBLISH_CHECKS`` consecutive such
-        observations we shut down to prevent indefinite hangs.
+        The clocks are traffic proxies and only ever protect, because the
+        decision reads their ``min``. The predicate is what makes "idle"
+        trustworthy: work that outlives its caller, or runs outside this
+        process, generates no traffic and must declare itself.
+
+        Ghost-publish detection: a publisher that keeps ``eventbus_idle`` fresh
+        forever pins ``min`` below the timeout and disarms the ordinary path
+        permanently. When pubsub has been idle past the timeout while the
+        EventBus keeps looking fresh, and nothing is busy, we stop trusting the
+        EventBus clock and shut down anyway. It is gated on the same predicate
+        as the ordinary path: it used to be gated on active work alone, which
+        made it a second way in past every floor the ordinary path respected.
         """
         import time as _time
 
         from unify.events.active_work import ACTIVE_WORK
         from unify.events.event_bus import EventBus
 
-        _GHOST_PUBLISH_CHECKS = 20  # 20 * 30s = 10 minutes
         ghost_counter = 0
 
         while True:
             await asyncio.sleep(self.inactivity_check_interval)
+            # A duration, not a check count. The previous constant (20 checks)
+            # was tuned when the timeout was 420s, so it silently became a
+            # different policy every time the timeout moved. Read per pass
+            # because the timeout is mutable at runtime.
+            ghost_checks_needed = max(
+                2,
+                int(
+                    max(600.0, self.inactivity_timeout)
+                    / self.inactivity_check_interval,
+                ),
+            )
             current_time = self.loop.time()
             pubsub_idle = current_time - self.last_activity_time
             monotonic_now = _time.monotonic()
             eventbus_idle = monotonic_now - EventBus.last_publish_monotonic
             idle_seconds = min(pubsub_idle, eventbus_idle)
-            active_work = ACTIVE_WORK.snapshot()
-            has_active_work = active_work.active_count > 0
-            effective_idle_seconds = 0.0 if has_active_work else idle_seconds
+            is_busy, busy_reason = self._busy_snapshot()
+            effective_idle_seconds = 0.0 if is_busy else idle_seconds
 
             # Control-plane drain: once in-flight work is gone, shut down so
             # the next wake loads a fresh client bundle.
@@ -3098,7 +3250,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             # for three weeks: the pod logged that it was shutting down every
             # 30s and never did, and drains completed only when the control
             # plane force-stopped the session at its deadline.
-            if not has_active_work:
+            if not is_busy:
                 try:
                     from unify.runtime.drain_gate import is_admission_blocked
 
@@ -3112,7 +3264,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 if drain_armed:
                     await self._request_shutdown(
                         "drain_restart",
-                        "Drain in progress and ACTIVE_WORK empty; "
+                        "Drain in progress and nothing in flight; "
                         "shutting down for restart",
                     )
                     break
@@ -3123,7 +3275,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             # fixed whatever broke this one. Retrying in process could not
             # have done that -- the credential check that started this ran
             # against an image that had already been superseded.
-            if not has_active_work and self.unserviceable_reason:
+            if not is_busy and self.unserviceable_reason:
                 await self._request_shutdown(
                     "unserviceable",
                     "Cannot serve this assistant "
@@ -3141,8 +3293,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if SESSION_DETAILS.assistant.agent_id is None:
                 continue
 
+            # Gated on `is_busy`, not on active work alone. With the full
+            # predicate a genuine autonomous stretch resets the counter on its
+            # first check, so the ghost branch can only ever fire for
+            # publishing with nothing running -- which is all it was for.
             if (
-                not has_active_work
+                not is_busy
                 and pubsub_idle > self.inactivity_timeout
                 and eventbus_idle < self.inactivity_timeout
             ):
@@ -3150,23 +3306,34 @@ class ConversationManager(metaclass=SingletonABCMeta):
             else:
                 ghost_counter = 0
 
-            ghost_publish = ghost_counter >= _GHOST_PUBLISH_CHECKS
+            ghost_publish = ghost_counter >= ghost_checks_needed
 
             if int(current_time) % 180 < self.inactivity_check_interval:
                 extra = ""
                 if ghost_counter > 0:
-                    extra = f" ghost_count={ghost_counter}/{_GHOST_PUBLISH_CHECKS}"
-                if has_active_work:
-                    active_heartbeat_age = (
-                        monotonic_now - active_work.newest_heartbeat_at
-                        if active_work.newest_heartbeat_at is not None
-                        else 0.0
-                    )
-                    extra += (
-                        f" active_work_count={active_work.active_count}"
-                        f" active_elapsed={active_work.oldest_elapsed_s:.1f}s"
-                        f" active_heartbeat_age={active_heartbeat_age:.1f}s"
-                    )
+                    extra = f" ghost_count={ghost_counter}/{ghost_checks_needed}"
+                if is_busy:
+                    extra += f" busy={busy_reason}"
+                    active_work = ACTIVE_WORK.snapshot()
+                    if active_work.active_count > 0:
+                        active_heartbeat_age = (
+                            monotonic_now - active_work.newest_heartbeat_at
+                            if active_work.newest_heartbeat_at is not None
+                            else 0.0
+                        )
+                        extra += (
+                            f" active_work_count={active_work.active_count}"
+                            f" active_elapsed={active_work.oldest_elapsed_s:.1f}s"
+                            f" active_heartbeat_age={active_heartbeat_age:.1f}s"
+                        )
+                elif eventbus_idle < self.inactivity_timeout <= pubsub_idle:
+                    # The EventBus clock is the only thing holding this pod
+                    # open: nothing is declared busy and pubsub has gone quiet.
+                    # Every appearance of this line is a work type that owes a
+                    # declaration, which is the whole audit turned into a
+                    # measurement. If it stops appearing, the proxy is
+                    # redundant and can leave the decision entirely.
+                    extra += " proxy_load_bearing=eventbus"
                 self._session_logger.info(
                     "inactivity_check",
                     f"Idle check: last_activity={self._last_activity_source}, "
@@ -3198,6 +3365,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         One sequence for every exit so a new one cannot half-implement it. The
         drain branch used to open-code its own and got it wrong, which is why
         this exists rather than three call sites that look similar.
+
+        Whether the pod *should* stop is the caller's question, decided once in
+        ``check_inactivity`` against ``_busy_snapshot``. Re-deciding it here
+        would put two predicates behind one outcome, and the looser of the two
+        wins by accident.
         """
 
         self.shutdown_reason = reason
@@ -4235,6 +4407,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 conversation_turns,
                 brain_spec.system_prompt.flatten(),
                 action_context=action_context,
+                other_participants=tuple(
+                    self.call_manager.other_call_participant_names,
+                ),
+                peer_assistants=tuple(self.call_manager.other_call_assistant_names),
             )
 
             if _superseded():

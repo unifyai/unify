@@ -27,6 +27,7 @@ from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
+    FAST_BRAIN_TURN_UNDECIDED,
 )
 
 _DEFAULT = fast_brain_turn._DEFAULT_PHRASE
@@ -801,3 +802,628 @@ async def test_gated_hang_up_with_held_opener_reports_declined(monkeypatch):
     )
     assert resolved.classification == FAST_BRAIN_TURN_HANG_UP
     assert resolved.declined_continuation is True
+
+
+# =============================================================================
+# Where an unusable decision lands when a teammate is on the call
+# =============================================================================
+#
+# The fast brain is the only gate on "is this turn mine": the runtime schedules
+# the slow brain for every classification except silence. So every fallback in
+# here is a decision about who answers.
+#
+# Off a multi-assistant call, an unusable decision falls back to `defer` — it
+# speaks a short filler and commits to answering, which is right on a 1:1 where
+# nobody else can take the turn. With a teammate present that same fallback is
+# how a question addressed to somebody else gets answered twice, so a decision
+# that expressed no usable intent falls back to silence instead.
+#
+# Every test below has a peerless counterpart above it in this file. The 1:1
+# behaviour is what these must not disturb.
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace, so an assertion does not depend on where a line wraps."""
+    return " ".join(text.split())
+
+
+def test_base_prompt_still_biases_the_1_to_1_call_toward_speaking():
+    """The shared prompt is untouched, and that is the point.
+
+    Its narrow silence definition and unsure-choose-defer tiebreak are what make
+    a 1:1 call feel responsive. The group and peer blocks override them by saying
+    so, for the turns they apply to — editing the shared prompt instead would
+    change every phone call.
+    """
+    flat = _flat(FAST_BRAIN_TURN_PROMPT)
+    assert "When unsure between silence and defer, choose defer" in flat
+    assert "WHOLE turn is a bare acknowledgement" in flat
+
+
+def test_peer_block_overrides_the_narrow_silence_rule_and_the_tiebreak():
+    text = _flat(
+        _group_system_text(other_participants=[], peer_assistants=["A-DA"]),
+    )
+    assert "silence is not limited to bare acknowledgements here" in text
+    assert "unsure resolves to silence, not defer" in text
+    # The addressed case must survive the inversion, or a named assistant
+    # reasons its way into saying nothing.
+    assert "answering is not optional" in text
+
+
+def test_human_only_group_keeps_the_defer_tiebreak():
+    """With no teammate, silence on an unclear turn leaves it dropped.
+
+    Nobody else in the room can answer for the assistant, so the group block
+    relaxes what silence may be used for without inverting when to reach for it.
+    """
+    text = _flat(_group_system_text(other_participants=["Ada", "Bo"]))
+    assert "silence is not limited to bare acknowledgements here" in text
+    assert "The unsure-choose-defer tiebreak still stands" in text
+    assert "unsure resolves to silence" not in text
+
+
+@pytest.mark.asyncio
+async def test_llm_error_hands_the_turn_over_when_a_teammate_is_present(monkeypatch):
+    """Pairs with test_llm_error_falls_back_to_defer, which pins the 1:1 side.
+
+    Undecided rather than silent: nothing is spoken, but the turn still reaches
+    the slow brain. Silence here would drop it outright, so a question genuinely
+    asked of this assistant would go unanswered with no second attempt.
+    """
+    _patch_client(monkeypatch, {}, raises=True)
+    resolved = await select_fast_brain_turn(
+        user_text="A-DA, where did we land on pricing?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_UNDECIDED
+    assert resolved.intended_speech == ""
+
+
+@pytest.mark.asyncio
+async def test_unusable_smalltalk_hands_the_turn_over_when_a_teammate_is_present(
+    monkeypatch,
+):
+    """Pairs with test_unbriefed_smalltalk_keeps_ordinary_cap."""
+    _patch_client(
+        monkeypatch,
+        {"classification": "smalltalk", "content": "x" * 400},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="A-DA, how did the demo go?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_UNDECIDED
+    assert resolved.intended_speech == ""
+
+
+@pytest.mark.asyncio
+async def test_a_chosen_silence_is_not_handed_over(monkeypatch):
+    """A silence the model chose is a decision, not an absence of one.
+
+    Converting it to undecided would wake the slow brain to relitigate a turn
+    the fast brain deliberately let go — and on a bare "okay" that is how an
+    assistant answers an acknowledgement.
+    """
+    _patch_client(monkeypatch, {"classification": "silence", "content": ""})
+    resolved = await select_fast_brain_turn(
+        user_text="okay",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+
+
+@pytest.mark.asyncio
+async def test_empty_input_stays_silent_rather_than_handing_over(monkeypatch):
+    """Nothing was said, so there is nothing for the slow brain to weigh.
+
+    The turn-completed handler drops an empty ``user_content`` anyway, so
+    scheduling a run here would buy nothing and cost a slow-brain turn.
+    """
+
+    def _boom(*a, **kw):
+        raise AssertionError("new_llm_client must not be called for empty input")
+
+    monkeypatch.setattr(fast_brain_turn, "new_llm_client", _boom)
+    resolved = await select_fast_brain_turn(
+        user_text="  ",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+
+
+def test_silence_with_stray_content_honours_the_silence_when_peers_are_present():
+    """The classification is the decision; the content is the malformed part.
+
+    Speaking it would answer over a teammate on the strength of a formatting
+    slip. Off a multi-assistant call the same slip is read the other way, since
+    a line the model wrote is better than leaving the caller with nothing.
+    """
+    with_peers = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_SILENCE,
+        "It shipped on Tuesday.",
+        pending_continuation=None,
+        peers_present=True,
+    )
+    assert with_peers.classification == FAST_BRAIN_TURN_SILENCE
+    assert with_peers.intended_speech == ""
+
+    alone = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_SILENCE,
+        "It shipped on Tuesday.",
+        pending_continuation=None,
+        peers_present=False,
+    )
+    assert alone.classification == FAST_BRAIN_TURN_DEFER
+    assert alone.intended_speech == "It shipped on Tuesday."
+
+
+def test_a_chosen_defer_is_never_converted_to_silence():
+    """The one conversion that would lose a turn outright.
+
+    `defer` is a decision that this turn IS ours, and the runtime does not
+    schedule the slow brain for a silent turn — so converting it would drop a
+    question that was genuinely asked of this assistant, with no second attempt.
+    Unusable content is still worth the generic filler here.
+    """
+    resolved = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_DEFER,
+        "x" * 400,
+        pending_continuation=None,
+        peers_present=True,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.intended_speech == _DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_blank_peer_names_do_not_count_as_a_teammate(monkeypatch):
+    """A roster crosses a wire; padding must not put the call on group rules."""
+    _patch_client(monkeypatch, {}, raises=True)
+    resolved = await select_fast_brain_turn(
+        user_text="anything",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["", "   "],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.intended_speech == _DEFAULT
+
+
+# =============================================================================
+# What teammates have said, carried over the assistants' own channel
+# =============================================================================
+
+
+def test_peer_turns_block_lists_what_teammates_said():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["A-DA: I've sent the quote over."],
+    )
+    assert "What your teammates have said on this call" in text
+    assert "- A-DA: I've sent the quote over." in text
+
+
+def test_peer_turns_block_says_the_turn_may_already_be_handled():
+    """The whole point: a question a teammate answered is not owed a reply."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            peer_turns=["A-DA: The renewal closes on the 30th."],
+        ),
+    )
+    assert "already answered by one of those lines" in text
+    assert "choose silence" in text
+
+
+def test_peer_turns_block_says_the_lines_were_not_heard():
+    """Otherwise the model treats them as its own transcript and repeats them."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            peer_turns=["A-DA: Done."],
+        ),
+    )
+    assert "You did not hear any of that" in text
+    assert "Never present one as something you said" in text
+
+
+def test_no_peer_turns_block_when_nothing_has_been_said():
+    """An empty block would assert teammates had spoken when none had."""
+    text = _group_system_text(other_participants=[], peer_assistants=["A-DA"])
+    assert "What your teammates have just said" not in text
+
+
+def test_blank_peer_turn_lines_do_not_render_a_block():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["", "   "],
+    )
+    assert "What your teammates have just said" not in text
+
+
+def test_peer_turns_need_the_peer_block_to_interpret_them():
+    """Without a teammate on the roster there is nothing to attribute them to.
+
+    A bare list of lines and no rule saying whose they are reads as unattributed
+    speech the assistant may take for its own — the exact confusion the block
+    exists to prevent.
+    """
+    text = _group_system_text(
+        other_participants=["Ada", "Bo"],
+        peer_assistants=[],
+        peer_turns=["A-DA: I've sent the quote over."],
+    )
+    assert "What your teammates have just said" not in text
+
+
+def test_a_one_to_one_call_never_gets_the_block():
+    text = _group_system_text(peer_turns=["A-DA: something"])
+    assert "What your teammates have just said" not in text
+
+
+# =============================================================================
+# A named addressee governs the unnamed follow-ups after it
+# =============================================================================
+
+
+def test_unanswered_turns_block_carries_the_declined_lines():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        unanswered_turns=["A-DA, what's the pricing on the renewal?"],
+    )
+    assert "Lines on this call you did not answer" in text
+    assert '- "A-DA, what\'s the pricing on the renewal?"' in text
+
+
+def test_unanswered_turns_block_says_a_name_governs_what_follows():
+    """The reported failure: the name is in turn one, the follow-up has none."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            unanswered_turns=["A-DA, what's the pricing?"],
+        ),
+    )
+    assert "Standing down on a line does not end who it was for" in text
+    assert "Choose silence again" in text
+    assert "do not become yours by repetition" in text
+
+
+def test_unanswered_turns_block_says_what_ends_the_hand_off():
+    """Without this it never takes a turn again once it has stood down."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            unanswered_turns=["A-DA, what's the pricing?"],
+        ),
+    )
+    assert "your name, a hand-off, or" in text
+
+
+def test_unanswered_turns_render_for_a_human_only_group():
+    """A name governing what follows it is how people talk, teammate or not."""
+    text = _group_system_text(
+        other_participants=["Ada", "Bo"],
+        peer_assistants=[],
+        unanswered_turns=["Bo, can you check the date?"],
+    )
+    assert "Lines on this call you did not answer" in text
+
+
+def test_no_unanswered_turns_block_on_a_one_to_one_call():
+    text = _group_system_text(unanswered_turns=["something"])
+    assert "Lines on this call you did not answer" not in text
+
+
+def test_no_unanswered_turns_block_with_one_other_person_and_no_teammate():
+    text = _group_system_text(
+        other_participants=["Ada"],
+        unanswered_turns=["something"],
+    )
+    assert "Lines on this call you did not answer" not in text
+
+
+def test_blank_unanswered_lines_render_nothing():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        unanswered_turns=["", "  "],
+    )
+    assert "Lines on this call you did not answer" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_multi_party_turn_gets_the_higher_reasoning_effort(monkeypatch):
+    """Carrying an addressee across turns is a harder call than any 1:1 turn.
+
+    Answering over somebody costs more than the added latency, and it is paid
+    only where the judgement is actually needed.
+    """
+    from unify.settings import SETTINGS
+
+    seen: dict = {}
+
+    class _Client:
+        def set_response_format(self, _model):
+            pass
+
+        async def generate(self, *, messages=None, **_kw):
+            return json.dumps({"classification": "silence", "content": ""})
+
+    def _factory(_model, *, origin=None, reasoning_effort=None, **_kw):
+        seen["effort"] = reasoning_effort
+        return _Client()
+
+    monkeypatch.setattr(fast_brain_turn, "new_llm_client", _factory)
+
+    await select_fast_brain_turn(
+        user_text="and when does it expire?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert seen["effort"] == (
+        SETTINGS.conversation.FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT
+    )
+
+    await select_fast_brain_turn(
+        user_text="did you send it?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert seen["effort"] == SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT
+
+
+# =============================================================================
+# The addressee as reported state, not re-inferred each turn
+# =============================================================================
+
+
+def test_multi_party_models_ask_who_the_turn_was_for():
+    for interrupted in (False, True):
+        for gated in (False, True):
+            model = fast_brain_turn._response_model(
+                interrupted=interrupted,
+                hang_up_gated=gated,
+                multi_party=True,
+            )
+            assert "addressed_to" in model.model_fields, model.__name__
+
+
+def test_one_to_one_models_do_not_ask():
+    """On a 1:1 every turn is necessarily the assistant's, so the field would be
+    a question with one answer — and it would reach every phone call."""
+    for interrupted in (False, True):
+        for gated in (False, True):
+            model = fast_brain_turn._response_model(
+                interrupted=interrupted,
+                hang_up_gated=gated,
+            )
+            assert "addressed_to" not in model.model_fields, model.__name__
+
+
+def test_the_response_model_matrix_still_defaults_to_one_to_one():
+    """`multi_party` defaults false, so nothing that omits it changes shape."""
+    assert (
+        fast_brain_turn._response_model(interrupted=False, hang_up_gated=False)
+        is fast_brain_turn.FastBrainTurnDecision
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_reported_addressee_is_returned(monkeypatch):
+    _patch_client(
+        monkeypatch,
+        {"classification": "silence", "content": "", "addressed_to": "A-DA"},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="A-DA, what's the pricing?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        peer_assistants=["A-DA"],
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+    assert resolved.addressed_to == "A-DA"
+
+
+@pytest.mark.asyncio
+async def test_a_one_to_one_turn_reports_no_addressee(monkeypatch):
+    """Nothing asks for it there, so nothing should arrive."""
+    _patch_client(monkeypatch, {"classification": "defer", "content": "One sec."})
+    resolved = await select_fast_brain_turn(
+        user_text="did you send it?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert resolved.addressed_to == ""
+
+
+def test_standing_addressee_block_names_who_the_conversation_is_with():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        standing_addressee="A-DA",
+    )
+    assert "The conversation is currently with **A-DA**" in text
+    assert "still A-DA's" in text
+
+
+def test_standing_addressee_block_says_what_changes_it():
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            standing_addressee="A-DA",
+        ),
+    )
+    assert "your own name, a hand-off to you, or a plainly new subject" in text
+
+
+def test_standing_addressee_block_warns_off_reading_silence_as_over():
+    """It cannot hear the replies, so an unanswered exchange looks finished."""
+    text = _flat(
+        _group_system_text(
+            other_participants=[],
+            peer_assistants=["A-DA"],
+            standing_addressee="A-DA",
+        ),
+    )
+    assert "You cannot hear their replies" in text
+
+
+def test_no_standing_addressee_block_when_it_is_us():
+    """An exchange that turned to us is one we answer, not one we sit out."""
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        standing_addressee="lila",
+        own_name="Lila",
+    )
+    assert "The conversation is currently with" not in text
+
+
+def test_no_standing_addressee_block_on_a_one_to_one_call():
+    text = _group_system_text(standing_addressee="Ada")
+    assert "The conversation is currently with" not in text
+
+
+# =============================================================================
+# Peer lines placed relative to the previous line, not listed flat
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_the_selector_accepts_everything_the_runtime_passes(monkeypatch):
+    """A signature guard, because no other test here can catch this.
+
+    Every llm_node test replaces the selector with a `**kwargs` stub, so a
+    parameter the runtime passes and the selector does not accept sails through
+    the suite and raises TypeError on a real call. That is not hypothetical: it
+    shipped once, and it would have broken every multi-party turn.
+    """
+    _patch_client(monkeypatch, {"classification": "silence", "content": ""})
+    resolved = await select_fast_brain_turn(
+        user_text="and when does it expire?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+        hang_up_gate_reason=None,
+        briefing="",
+        peer_assistants=["A-DA"],
+        other_participants=["Ada", "Bo"],
+        peer_turns=["A-DA: I've sent the quote over."],
+        peer_turns_earlier=["A-DA: morning all"],
+        unanswered_turns=["A-DA, what's the pricing?"],
+        standing_addressee="A-DA",
+        own_name="Lila",
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SILENCE
+
+
+def test_selector_and_builder_signatures_do_not_drift():
+    """The builder takes what the selector forwards; nothing may be stranded."""
+    import inspect
+
+    builder = set(inspect.signature(build_fast_brain_turn_messages).parameters)
+    selector = set(inspect.signature(select_fast_brain_turn).parameters)
+    assert builder - selector == set()
+
+
+def test_peer_lines_since_the_previous_line_are_marked_as_this_exchange():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["A-DA: I've sent the quote over."],
+    )
+    assert "Said since the previous line in the conversation" in text
+    assert "- A-DA: I've sent the quote over." in text
+    assert "Said earlier on the call" not in text
+
+
+def test_older_peer_lines_are_marked_as_context():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns_earlier=["A-DA: morning all"],
+    )
+    assert "Said earlier on the call" in text
+    assert "Context, not a live exchange" in text
+    assert "Said since the previous line" not in text
+
+
+def test_both_sections_render_together_in_order():
+    """Recent first: it is what the current line is most likely answering."""
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=["A-DA: sent it over"],
+        peer_turns_earlier=["A-DA: morning all"],
+    )
+    assert text.index("Said since the previous line") < text.index(
+        "Said earlier on the call",
+    )
+
+
+def test_no_peer_turns_block_when_both_sections_are_empty():
+    text = _group_system_text(
+        other_participants=[],
+        peer_assistants=["A-DA"],
+        peer_turns=[],
+        peer_turns_earlier=[],
+    )
+    assert "What your teammates have said" not in text

@@ -9,7 +9,7 @@ line resumption.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
+    FAST_BRAIN_TURN_UNDECIDED,
     GROUP_CALL_MIN_PARTICIPANTS,
 )
 from unify.logger import LOGGER
@@ -123,9 +124,78 @@ turn. Decide whether THIS turn is yours before speaking:
 - To pass a turn that suits a teammate better, use smalltalk with ONE short
   hand-off line naming them (e.g. "Ada, that one's yours.").
 
-Silence is the safe default only when you know a teammate was asked. If you were
-the one addressed, answering is not optional and staying quiet is the worse
-failure of the two."""
+Two rules above this block are replaced while a teammate is on the call:
+
+- **silence is not limited to bare acknowledgements here.** A substantive
+  question that was put to a teammate takes classification silence with empty
+  content. That is the correct output for this turn, not a rule violation.
+- **unsure resolves to silence, not defer.** When you genuinely cannot tell
+  whose turn it was, stay quiet: a teammate is on this call and can answer, and
+  two assistants answering the same question is the failure these rules exist to
+  prevent. A `defer` here is not a neutral holding move — it speaks aloud and
+  commits you to answering.
+
+That tiebreak covers the unclear case only. If you were plainly the one
+addressed — named, or handed the turn — answering is not optional and staying
+quiet is the worse failure of the two."""
+
+_STANDING_ADDRESSEE_CONTEXT = """\
+[system] The conversation is currently with **{addressee}** — that is who the
+last turn anyone could attribute was put to, and it stands until something
+changes it.
+
+- A line that continues that exchange is still {addressee}'s, however it is
+  phrased and whoever it names. Choose silence.
+- What changes it: your own name, a hand-off to you, or a plainly new subject
+  put to you. Then the turn is yours and you answer it normally.
+- Do not treat "{addressee} has not replied in my transcript" as the exchange
+  being over. You cannot hear their replies."""
+
+_UNANSWERED_TURNS_CONTEXT = """\
+[system] Lines on this call you did not answer, oldest first:
+
+{lines}
+
+Standing down on a line does not end who it was for. A name is said once and
+then governs the exchange that follows it: "Ada, what's the pricing?" makes the
+next line — "and when does it expire?" — Ada's too, though it names nobody.
+
+- If the current line continues one of the above, it belongs to whoever that one
+  belonged to. Still not you. Choose silence again.
+- A follow-up with no name in it is the normal shape of a conversation, not an
+  opening for you. Two unnamed lines in a row do not become yours by repetition.
+- What ends it is the exchange actually turning to you: your name, a hand-off, or
+  a plainly new subject put to you. Until one of those, leave it where it was.
+
+You will not have heard the replies to these, so their going unanswered in your
+transcript is not evidence nobody answered them."""
+
+_PEER_TURNS_CONTEXT = """\
+[system] What your teammates have said on this call.
+{sections}
+You did not hear any of that — it reached you over the assistants' own channel,
+not your microphone. Everyone on the call heard it, so treat it as already said.
+
+- If what the speaker just said is already answered by one of those lines, the
+  turn is handled: choose silence. Do not repeat it, confirm it, or tack
+  something on unless you genuinely have what a teammate did not cover.
+- A teammate having just taken a turn makes the speaker's next line most likely
+  a reply to THEM, not a new question for you. Read it that way unless it names
+  you or plainly turns to you.
+- These lines are theirs, not yours. Never present one as something you said."""
+
+_PEER_TURNS_SINCE_SECTION = """
+Said since the previous line in the conversation — so what the speaker just said
+is most likely a response to this, not a new question for you:
+
+{lines}
+"""
+
+_PEER_TURNS_EARLIER_SECTION = """
+Said earlier on the call, before the previous line. Context, not a live exchange:
+
+{lines}
+"""
 
 _GROUP_CALL_CONTEXT = """\
 [system] Group call. You are {own_name}. The other people on this call are:
@@ -150,9 +220,17 @@ neither do you. Decide whether THIS turn is yours before speaking:
 - Never answer on a participant's behalf and never speak over one. When someone
   else in the room was the one asked, silence is correct.
 
-Silence is the safe default only when the turn clearly belonged to someone else.
-When you were the one addressed, answering is not optional and staying quiet is
-the worse failure of the two."""
+One rule above this block is replaced on a call like this: **silence is not
+limited to bare acknowledgements here.** A substantive exchange between two
+other people takes classification silence with empty content. That is the
+correct output for those turns, not a rule violation. A `defer` is not a neutral
+holding move — it speaks aloud into their conversation.
+
+The unsure-choose-defer tiebreak still stands, because if nobody else here can
+answer for you, silence leaves the turn dropped. Silence is the safe default
+only when the turn clearly belonged to someone else. When you were the one
+addressed, answering is not optional and staying quiet is the worse failure of
+the two."""
 
 _CALL_BRIEFING_CONTEXT = """\
 [system] Active call briefing — context, not script. You are on this call for
@@ -297,11 +375,62 @@ class FastBrainInterruptedGatedTurnDecision(BaseModel):
     )
 
 
+_ADDRESSED_TO_DESCRIPTION = (
+    "Who THIS turn was aimed at, by name. Your own name when it was put to you; "
+    "a teammate's or a person's name when it was put to them; an empty string "
+    "when you genuinely cannot tell. An unnamed line continuing an exchange "
+    "already addressed to somebody names that somebody, not nobody — this is "
+    "how the next turn knows who the conversation is still with."
+)
+
+
+class _AddressedTo(BaseModel):
+    """Who a turn was aimed at, asked only on a multi-party call.
+
+    Kept off the 1:1 models on purpose. There, every turn is necessarily the
+    assistant's, so the field would be a question with one answer — and it would
+    add a field to the structured output of every phone call to buy nothing.
+    """
+
+    addressed_to: str = Field(default="", description=_ADDRESSED_TO_DESCRIPTION)
+
+
+class FastBrainMultiPartyTurnDecision(FastBrainTurnDecision, _AddressedTo):
+    pass
+
+
+class FastBrainMultiPartyInterruptedTurnDecision(
+    FastBrainInterruptedTurnDecision,
+    _AddressedTo,
+):
+    pass
+
+
+class FastBrainMultiPartyGatedTurnDecision(FastBrainGatedTurnDecision, _AddressedTo):
+    pass
+
+
+class FastBrainMultiPartyInterruptedGatedTurnDecision(
+    FastBrainInterruptedGatedTurnDecision,
+    _AddressedTo,
+):
+    pass
+
+
 def _response_model(
     *,
     interrupted: bool,
     hang_up_gated: bool,
+    multi_party: bool = False,
 ) -> type[BaseModel]:
+    if multi_party:
+        if interrupted and hang_up_gated:
+            return FastBrainMultiPartyInterruptedGatedTurnDecision
+        if interrupted:
+            return FastBrainMultiPartyInterruptedTurnDecision
+        if hang_up_gated:
+            return FastBrainMultiPartyGatedTurnDecision
+        return FastBrainMultiPartyTurnDecision
     if interrupted and hang_up_gated:
         return FastBrainInterruptedGatedTurnDecision
     if interrupted:
@@ -334,6 +463,11 @@ class ResolvedFastBrainTurn:
     classification: str
     intended_speech: str
     declined_continuation: bool = False
+    # Who the model judged this turn was aimed at, on a multi-party call. Empty
+    # when it could not tell, or when the call is 1:1 and the question does not
+    # arise. The runtime carries it into the next turn so an unnamed follow-up
+    # does not have to be re-derived from the exchange every time.
+    addressed_to: str = ""
 
 
 def pick_resume_lead_in() -> str:
@@ -369,6 +503,10 @@ def build_fast_brain_turn_messages(
     briefing: str = "",
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
+    peer_turns: Sequence[str] = (),
+    peer_turns_earlier: Sequence[str] = (),
+    unanswered_turns: Sequence[str] = (),
+    standing_addressee: str = "",
     own_name: str = "Assistant",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
@@ -382,6 +520,9 @@ def build_fast_brain_turn_messages(
     # and another assistant, and they do not contradict: one is about who among
     # the people was addressed, the other about which assistant takes the turn.
     participants = [name.strip() for name in other_participants if (name or "").strip()]
+    multi_party = len(participants) >= GROUP_CALL_MIN_PARTICIPANTS or bool(
+        [name for name in peer_assistants if (name or "").strip()],
+    )
     if len(participants) >= GROUP_CALL_MIN_PARTICIPANTS:
         messages.append(
             {
@@ -401,6 +542,60 @@ def build_fast_brain_turn_messages(
                     own_name=own,
                     peers=", ".join(peers),
                 ),
+            },
+        )
+    # What those teammates actually said, when the channel has carried anything.
+    # Lands after the etiquette so the rule is in place before the evidence it
+    # applies to, and only alongside it: lines with no peer block to interpret
+    # them read as unattributed speech the assistant might mistake for its own.
+    # Split around the previous line in the conversation rather than listed
+    # flat: whether a teammate's answer landed before or after it is the
+    # difference between "they already handled this" and "they answered
+    # something else earlier", and the model cannot recover that from an
+    # undifferentiated list.
+    spoken = [line.strip() for line in peer_turns if (line or "").strip()]
+    earlier = [line.strip() for line in peer_turns_earlier if (line or "").strip()]
+    if peers and (spoken or earlier):
+        sections = ""
+        if spoken:
+            sections += _PEER_TURNS_SINCE_SECTION.format(
+                lines="\n".join(f"- {line}" for line in spoken),
+            )
+        if earlier:
+            sections += _PEER_TURNS_EARLIER_SECTION.format(
+                lines="\n".join(f"- {line}" for line in earlier),
+            )
+        messages.append(
+            {
+                "role": "system",
+                "content": _PEER_TURNS_CONTEXT.format(sections=sections),
+            },
+        )
+    # Turns already declined. Gated on the call being multi-party rather than on
+    # peers alone: a name governing the lines after it is how people talk to each
+    # other, teammate present or not. Off a multi-party call there is nothing to
+    # decline, so the buffer feeding this is empty anyway.
+    declined = [line.strip() for line in unanswered_turns if (line or "").strip()]
+    if multi_party and declined:
+        messages.append(
+            {
+                "role": "system",
+                "content": _UNANSWERED_TURNS_CONTEXT.format(
+                    lines="\n".join(f'- "{line}"' for line in declined),
+                ),
+            },
+        )
+    # The resolved state, last: whom the conversation is with, which the lines
+    # above are only the evidence for. Named rather than inferred, so a
+    # follow-up does not depend on re-reading the exchange every turn. Never
+    # ourselves — an exchange that turned to us is one we answered, and the
+    # runtime drops the addressee at that point.
+    addressee = (standing_addressee or "").strip()
+    if multi_party and addressee and addressee.casefold() != own.casefold():
+        messages.append(
+            {
+                "role": "system",
+                "content": _STANDING_ADDRESSEE_CONTEXT.format(addressee=addressee),
             },
         )
     briefing = (briefing or "").strip()
@@ -467,7 +662,26 @@ def _resolve_content(
     pending_continuation: PendingContinuation | None,
     hang_up_gated: bool = False,
     briefed: bool = False,
+    peers_present: bool = False,
 ) -> ResolvedFastBrainTurn:
+    """Turn one raw decision into the turn the runtime will act on.
+
+    ``peers_present`` says another assistant is on this call, which changes where
+    an unusable decision lands. Everywhere else a malformed or missing decision
+    falls back to ``defer``: it speaks a short filler and schedules the slow
+    brain, which is right on a 1:1 where staying quiet leaves the caller with
+    nothing. With a teammate in the room that same fallback is how an assistant
+    answers a question addressed to somebody else — so a decision that expressed
+    no usable intent falls back to ``undecided``: nothing is spoken, and the slow
+    brain gets the turn and decides whose it was.
+
+    Two things are never converted:
+
+    - a ``defer`` the model actually chose — that is a decision that the turn is
+      ours, and the filler is the lead-in to answering it;
+    - a ``silence`` the model actually chose — that is a decision to let the turn
+      go, and waking the slow brain would relitigate it.
+    """
     text = " ".join((content or "").split()).strip()
 
     if classification == FAST_BRAIN_TURN_HANG_UP:
@@ -512,7 +726,7 @@ def _resolve_content(
         )
 
     if classification == FAST_BRAIN_TURN_SILENCE:
-        if text:
+        if text and not peers_present:
             LOGGER.warning(
                 "Fast brain silence with non-empty content; coercing to defer",
             )
@@ -522,6 +736,14 @@ def _resolve_content(
                 classification=FAST_BRAIN_TURN_DEFER,
                 intended_speech=text,
                 declined_continuation=pending_continuation is not None,
+            )
+        if text:
+            # The stated classification is what the model decided; the stray
+            # content is the malformed part. Speaking it would answer over a
+            # teammate on the strength of a formatting slip.
+            LOGGER.warning(
+                "Fast brain silence with non-empty content on a multi-assistant "
+                "call; dropping the content and staying silent",
             )
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_SILENCE,
@@ -534,6 +756,16 @@ def _resolve_content(
             _MAX_BRIEFED_SMALLTALK_CHARS if briefed else _MAX_SMALLTALK_CHARS
         )
         if not text or len(text) > smalltalk_cap:
+            if peers_present:
+                LOGGER.warning(
+                    "Fast brain smalltalk unusable on a multi-assistant call; "
+                    "saying nothing and handing the turn to the slow brain",
+                )
+                return ResolvedFastBrainTurn(
+                    classification=FAST_BRAIN_TURN_UNDECIDED,
+                    intended_speech="",
+                    declined_continuation=pending_continuation is not None,
+                )
             return ResolvedFastBrainTurn(
                 classification=FAST_BRAIN_TURN_DEFER,
                 intended_speech=_DEFAULT_PHRASE,
@@ -582,10 +814,27 @@ async def select_fast_brain_turn(
     briefing: str = "",
     peer_assistants: Sequence[str] = (),
     other_participants: Sequence[str] = (),
+    peer_turns: Sequence[str] = (),
+    peer_turns_earlier: Sequence[str] = (),
+    unanswered_turns: Sequence[str] = (),
+    standing_addressee: str = "",
     own_name: str = "Assistant",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
+    peers = [name.strip() for name in peer_assistants if (name or "").strip()]
+    peers_present = bool(peers)
+    others = [name.strip() for name in other_participants if (name or "").strip()]
+    multi_party = peers_present or len(others) >= GROUP_CALL_MIN_PARTICIPANTS
     if not (user_text or "").strip():
+        if peers_present:
+            # Nothing was said that could have been addressed to anyone. On a
+            # 1:1 the filler covers the gap; with a teammate in the room it is
+            # just this assistant claiming a turn that does not exist.
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+                declined_continuation=False,
+            )
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_DEFER,
             intended_speech=_DEFAULT_PHRASE,
@@ -596,6 +845,7 @@ async def select_fast_brain_turn(
     response_model = _response_model(
         interrupted=pending_continuation is not None,
         hang_up_gated=hang_up_gated,
+        multi_party=multi_party,
     )
     messages = build_fast_brain_turn_messages(
         system_prompt=system_prompt,
@@ -608,29 +858,65 @@ async def select_fast_brain_turn(
         recent_assistant_text=recent_assistant_text,
         hang_up_gate_reason=hang_up_gate_reason,
         briefing=briefing,
-        peer_assistants=peer_assistants,
+        peer_assistants=peers,
         other_participants=other_participants,
+        peer_turns=peer_turns,
+        peer_turns_earlier=peer_turns_earlier,
+        unanswered_turns=unanswered_turns,
+        standing_addressee=standing_addressee,
         own_name=own_name,
+    )
+
+    # Whose turn this was — and whether an unnamed follow-up still belongs to
+    # whoever was named a turn ago — is a harder call than any 1:1 turn asks
+    # for, and answering over somebody costs more than the added latency. Paid
+    # only on a multi-party call.
+    effort = (
+        SETTINGS.conversation.FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT
+        if multi_party
+        else SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT
     )
 
     try:
         client = new_llm_client(
             SETTINGS.conversation.FAST_BRAIN_MODEL,
             origin="FastBrain.turn",
-            reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
+            reasoning_effort=effort,
         )
         client.set_response_format(response_model)
         raw = await client.generate(messages=messages)
         decision = response_model.model_validate_json(raw)
         classification = _wire_classification(decision.classification)
-        return _resolve_content(
+        resolved = _resolve_content(
             classification,
             decision.content,
             pending_continuation=pending_continuation,
             hang_up_gated=hang_up_gated,
             briefed=bool(briefing.strip()),
+            peers_present=peers_present,
+        )
+        # Attached after resolution rather than inside it: who a turn was for is
+        # orthogonal to what to say about it, and threading it through every
+        # branch of that function would only repeat it.
+        return replace(
+            resolved,
+            addressed_to=str(getattr(decision, "addressed_to", "") or "").strip(),
         )
     except Exception as exc:
+        if peers_present:
+            # No decision was reached, so there is no basis for speaking first
+            # and answering second — on a call with a teammate that is how a
+            # question meant for them gets answered twice. Say nothing and let
+            # the slow brain, which can tell whose turn it was, decide.
+            LOGGER.warning(
+                f"Fast brain turn selection failed on a multi-assistant call; "
+                f"handing the turn to the slow brain: {exc}",
+            )
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_UNDECIDED,
+                intended_speech="",
+                declined_continuation=pending_continuation is not None,
+            )
         LOGGER.warning(f"Fast brain turn selection failed; deferring: {exc}")
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_DEFER,

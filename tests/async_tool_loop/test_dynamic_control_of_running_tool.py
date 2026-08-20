@@ -24,15 +24,17 @@ from typing import List
 
 import pytest
 from unify.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
+from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
 
 # Shared helpers
 from tests.helpers import _handle_project
 from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
-    _wait_for_assistant_call_prefix,
+    _wait_for_assistant_steer_action,
     _wait_for_tool_message_prefix,
     _wait_for_condition,
+    _steer_call_action,
 )
 
 pytestmark = pytest.mark.llm_call
@@ -75,6 +77,21 @@ def _assistant_calls_prefix(msgs: List[dict], prefix: str) -> int:
     )
 
 
+def _steer_action_calls(msgs: List[dict], action: str) -> int:
+    """Count assistant turns containing a `steer(action=<action>, ...)` call.
+
+    Replaces `_assistant_calls_prefix(msgs, "pause_")`-style counting now
+    that every steering call shares the tool name "steer" — the action lives
+    in the parsed arguments instead of the name.
+    """
+    return sum(
+        1
+        for m in msgs
+        if m["role"] == "assistant"
+        and any(_steer_call_action(tc) == action for tc in (m.get("tool_calls") or []))
+    )
+
+
 def _tool_results(msgs: List[dict], tool_name: str) -> int:
     """Count tool-result messages for `tool_name`."""
     return sum(1 for m in msgs if m["role"] == "tool" and m["name"] == tool_name)
@@ -88,15 +105,10 @@ def _is_helper_tool_name(name: str) -> bool:
         n = str(name or "")
     except Exception:
         n = ""
-    return bool(
-        (n == "wait")
-        or n.startswith("pause_")
-        or n.startswith("resume_")
-        or n.startswith("stop_")
-        or n.startswith("clarify_")
-        or n.startswith("interject_")
-        or n.startswith("ask_"),
-    )
+    # Every steering action now shares the single static tool name "steer";
+    # ask_about_completed_tool is likewise static. No more per-call-id
+    # pause_<fn>_<id>/resume_<fn>_<id>/... names to prefix-match.
+    return n in ("wait", "steer", "ask_about_completed_tool")
 
 
 def _assistant_is_helper_only(msg: dict) -> bool:
@@ -230,8 +242,8 @@ async def test_functional_tool_pause_extends_wall_clock(client):
     """
     * The assistant must…
         1️⃣  call `pausable_fn`;
-        2️⃣  when the *user* says **hold**, invoke the `pause_…` helper;
-        3️⃣  when the *user* says **go**,   invoke the `resume_…` helper;
+        2️⃣  when the *user* says **hold**, call steer(action="pause") on it;
+        3️⃣  when the *user* says **go**,   call steer(action="resume") on it;
         4️⃣  when the tool finishes, reply with **done**.
     * We measure wall-clock time: because the loop is paused for ~2 s in the
       middle, total duration must be ≥ 2 s + the tool's own 1-second workload.
@@ -259,10 +271,10 @@ async def test_functional_tool_pause_extends_wall_clock(client):
 
     client.set_system_message(
         "1️⃣ Call `pausable_fn`.\n"
-        "2️⃣ When the user says **hold**, call the helper whose name starts "
-        "with `pause_`.\n"
-        "3️⃣ When the user says **go**,   call the helper whose name starts "
-        "with `resume_`.\n"
+        "2️⃣ When the user says **hold**, call steer(call_id=<the id of your "
+        'pausable_fn call>, action="pause").\n'
+        "3️⃣ When the user says **go**,   call steer(call_id=<the same id>, "
+        'action="resume").\n'
         "4️⃣ Once the tool finishes, reply with **done**.",
     )
 
@@ -279,11 +291,11 @@ async def test_functional_tool_pause_extends_wall_clock(client):
     await _wait_for_tool_request(client, "pausable_fn")
     # Trigger pause while the tool is running
     await outer.interject("hold")
-    # Wait until the assistant REQUESTS the pause helper…
-    await _wait_for_assistant_call_prefix(client, "pause")
+    # Wait until the assistant REQUESTS the pause action…
+    await _wait_for_assistant_steer_action(client, "pause")
     # …and also until the loop ACKNOWLEDGES it (tool message inserted), which is
     # the moment the tool's pause_event has been cleared.
-    await _wait_for_tool_message_prefix(client, "pause ")
+    await _wait_for_tool_message_prefix(client, "steer:pause ")
 
     # Release the tool's first gate now that pause helper has been invoked
     pause_called_gate.set()
@@ -298,10 +310,10 @@ async def test_functional_tool_pause_extends_wall_clock(client):
         for m in msgs_during_pause
     ), "assistant produced final reply while tool was paused"
 
-    # Resume and finish – ensure the assistant calls the resume helper first
+    # Resume and finish – ensure the assistant calls steer(action="resume") first
     await outer.interject("go")
-    await _wait_for_assistant_call_prefix(client, "resume")
-    await _wait_for_tool_message_prefix(client, "resume ")
+    await _wait_for_assistant_steer_action(client, "resume")
+    await _wait_for_tool_message_prefix(client, "steer:resume ")
 
     # Release the tool's second gate now that resume helper has been invoked
     resume_called_gate.set()
@@ -318,7 +330,8 @@ async def test_pause_resume_helpers_called_once(client):
     """
     Same scenario as above but we *count* helper invocations in the chat log.
 
-    • Exactly one `pause_…` and one `resume_…` tool-call must appear.
+    • Exactly one `steer(action="pause")` and one `steer(action="resume")`
+      tool-call must appear.
     """
 
     # Gates to ensure deterministic ordering: the tool must see pause then resume
@@ -343,8 +356,10 @@ async def test_pause_resume_helpers_called_once(client):
 
     client.set_system_message(
         "1️⃣ Call `pausable_fn`.\n"
-        "2️⃣ If the user says **freeze**, call `pause_…` *once*.\n"
-        "3️⃣ If the user then says **unfreeze**, call `resume_…` *once*.\n"
+        "2️⃣ If the user says **freeze**, call steer(call_id=<the id of your "
+        'pausable_fn call>, action="pause") *once*.\n'
+        "3️⃣ If the user then says **unfreeze**, call steer(call_id=<the same "
+        'id>, action="resume") *once*.\n'
         "4️⃣ When the tool finishes, reply with **all done**.",
     )
 
@@ -361,30 +376,34 @@ async def test_pause_resume_helpers_called_once(client):
     await _wait_for_tool_request(client, "pausable_fn")
     await h.interject("freeze")
 
-    # Wait until the assistant has called the corresponding ``pause_…`` helper
-    # before sending the *unfreeze* command so we are sure the helper sequence
-    # is pause → resume (in that order).
-    await _wait_for_assistant_call_prefix(client, "pause")
-    await _wait_for_tool_message_prefix(client, "pause ")
+    # Wait until the assistant has called steer(action="pause") before
+    # sending the *unfreeze* command so we are sure the sequence is
+    # pause -> resume (in that order).
+    await _wait_for_assistant_steer_action(client, "pause")
+    await _wait_for_tool_message_prefix(client, "steer:pause ")
     # Unblock the tool after pause helper observed
     pause_called_gate.set()
 
     await h.interject("unfreeze")
-    # Ensure resume helper is actually invoked before allowing tool to finish
-    await _wait_for_assistant_call_prefix(client, "resume")
-    await _wait_for_tool_message_prefix(client, "resume ")
+    # Ensure the resume action is actually invoked before allowing tool to finish
+    await _wait_for_assistant_steer_action(client, "resume")
+    await _wait_for_tool_message_prefix(client, "steer:resume ")
     resume_called_gate.set()
 
     final = await h.result()
     msgs = client.messages
 
     # helper counters -----------------------------------------------------
-    pause_calls = _assistant_calls_prefix(msgs, "pause")
-    resume_calls = _assistant_calls_prefix(msgs, "resume")
+    pause_calls = _steer_action_calls(msgs, "pause")
+    resume_calls = _steer_action_calls(msgs, "resume")
 
     assert final is not None, "Loop should complete with a response"
-    assert pause_calls == 1, f"expected exactly 1 pause_ helper, got {pause_calls}"
-    assert resume_calls == 1, f"expected exactly 1 resume_ helper, got {resume_calls}"
+    assert (
+        pause_calls == 1
+    ), f"expected exactly 1 steer(action='pause') call, got {pause_calls}"
+    assert (
+        resume_calls == 1
+    ), f"expected exactly 1 steer(action='resume') call, got {resume_calls}"
 
 
 @pytest.mark.asyncio
@@ -545,18 +564,20 @@ async def test_resume_allows_llm_turn(client):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_only_one_of_pause_or_resume_is_exposed(client):
+async def test_steer_schema_stable_and_state_enforced_across_pause_resume_cycles(
+    client,
+):
     """
-    Verify helper EXPOSURE flips correctly across multiple pause/resume cycles,
-    irrespective of what the LLM actually calls. We assert which helper names
-    are exposed to the model on each generation turn by spying the `tools`
-    argument passed into the LLM call.
+    Pre-steer() this test asserted the *schema* flipped between exposing
+    `pause_…`/`resume_…` depending on live state — the exact per-turn schema
+    churn issue 01/05/06 existed to describe. Post-steer(), the schema is
+    static (byte-identical `steer` tool every turn); state is enforced at
+    *execution* time instead: a mistargeted pause/resume gets an instructive
+    refusal rather than being unavailable to call in the first place.
 
-    Expectations per turn:
-    - While running: `pause_…` exposed, `resume_…` NOT exposed.
-    - On the turn when pausing is requested: `pause_…` exposed, `resume_…` NOT exposed.
-    - Next turn after pausing: `resume_…` exposed, `pause_…` NOT exposed.
-    - Repeat pause→resume cycle twice.
+    This verifies both halves: the tool-name set the LLM sees never changes
+    across a pause->resume->pause->resume cycle, and the pause/resume
+    sequence still produces the correct steering-state outcome end to end.
     """
 
     done_event = asyncio.Event()
@@ -573,16 +594,19 @@ async def test_only_one_of_pause_or_resume_is_exposed(client):
 
     client.set_system_message(
         "️1. Call `pausable_fn`.\n"
-        "2. When the user says 'hold', call the helper whose name starts with `pause_`.\n"
-        "3. When the user says 'go',   call the helper whose name starts with `resume_` immediately.\n"
+        "2. When the user says 'hold', call steer(call_id=<the id of your "
+        'pausable_fn call>, action="pause").\n'
+        "3. When the user says 'go', call steer(call_id=<the same id>, "
+        'action="resume") immediately.\n'
         "4. Repeat the pause→resume cycle twice.\n"
-        "5. IMPORTANT: Do NOT call the `wait` helper in response to 'go'. If both `resume_…` and `wait` are offered, ALWAYS choose `resume_…`.\n"
-        "6. You may use `wait` only when you intend to remain paused without resuming; do NOT use it right after 'go'.\n"
-        "7. Do NOT call any legacy `continue_` helper.\n"
-        "8. After the second resume, wait for completion and reply with 'done'.",
+        "5. IMPORTANT: Do NOT call `wait` in response to 'go' — always steer "
+        'with action="resume" instead.\n'
+        "6. You may use `wait` only when you intend to remain paused without "
+        "resuming; do NOT use it right after 'go'.\n"
+        "7. After the second resume, wait for completion and reply with 'done'.",
     )
 
-    # Spy tool exposure at the exact callsite by wrapping the symbol actually used in the loop
+    # Spy tool-name exposure at the exact callsite the loop uses.
     from unify.common._async_tool import loop as _loop
 
     seen_tools: list[list[str]] = []
@@ -613,83 +637,65 @@ async def test_only_one_of_pause_or_resume_is_exposed(client):
         max_parallel_tool_calls=1,
     )
 
-    async def _wait_exposure(has_pause: bool, has_resume: bool, timeout: float = 20.0):
-        import time as _time
-
-        start = _time.perf_counter()
-        start_idx = len(seen_tools)
-        while _time.perf_counter() - start < timeout:
-            # scan any newly appended exposure sets for the desired pattern
-            for names in seen_tools[start_idx:]:
-                has_p = any(n.startswith("pause_pausable_fn_") for n in names)
-                has_r = any(n.startswith("resume_pausable_fn_") for n in names)
-                if has_p == has_pause and has_r == has_resume:
-                    return names
-            await asyncio.sleep(0.05)
-        raise TimeoutError(
-            f"timeout waiting for exposure has_pause={has_pause} has_resume={has_resume}",
-        )
-
-    def _assert_exposure(names: list[str], *, has_pause: bool, has_resume: bool):
-        has_p = any(n.startswith("pause_pausable_fn_") for n in names)
-        has_r = any(n.startswith("resume_pausable_fn_") for n in names)
-        assert (
-            has_p == has_pause
-        ), f"pause exposure mismatch; expected {has_pause}, tools={names}"
-        assert (
-            has_r == has_resume
-        ), f"resume exposure mismatch; expected {has_resume}, tools={names}"
-
     # Ensure the tool is running before issuing commands
     await _wait_for_tool_request(client, "pausable_fn")
+    baseline_names = set(seen_tools[-1]) if seen_tools else set()
+    assert "steer" in baseline_names
 
-    # Pause turn: still expose pause only
+    def _assert_schema_unchanged(label: str):
+        for names in seen_tools:
+            assert set(names) == baseline_names, (
+                f"tool-name set changed after {label}: expected {baseline_names}, "
+                f"got {set(names)}"
+            )
+
+    # First pause/resume cycle
     await h.interject("hold")
-    names = await _wait_exposure(has_pause=True, has_resume=False)
-    _assert_exposure(names, has_pause=True, has_resume=False)
+    await _wait_for_assistant_steer_action(client, "pause")
+    await _wait_for_tool_message_prefix(client, "steer:pause ")
+    _assert_schema_unchanged("first pause")
 
-    # Ensure the pause helper was actually invoked and acknowledged (state now paused)
-    await _wait_for_assistant_call_prefix(client, "pause")
-    await _wait_for_tool_message_prefix(client, "pause ")
-
-    # Next turn after paused: expose resume only
     await h.interject("go")
-    names = await _wait_exposure(has_pause=False, has_resume=True)
-    _assert_exposure(names, has_pause=False, has_resume=True)
+    await _wait_for_assistant_steer_action(client, "resume")
+    await _wait_for_tool_message_prefix(client, "steer:resume ")
+    _assert_schema_unchanged("first resume")
 
-    # Ensure the resume helper was actually invoked and acknowledged (state now running)
-    await _wait_for_assistant_call_prefix(client, "resume")
-    await _wait_for_tool_message_prefix(client, "resume ")
-
-    # Second cycle: pause turn → pause only
+    # Second pause/resume cycle
     await h.interject("hold")
-    names = await _wait_exposure(has_pause=True, has_resume=False)
-    _assert_exposure(names, has_pause=True, has_resume=False)
+    await _wait_for_assistant_steer_action(client, "pause")
+    await _wait_for_tool_message_prefix(client, "steer:pause ")
+    _assert_schema_unchanged("second pause")
 
-    # Ensure pause helper applied again
-    await _wait_for_assistant_call_prefix(client, "pause")
-    await _wait_for_tool_message_prefix(client, "pause ")
-
-    # After that pause: resume only
     await h.interject("go")
-    names = await _wait_exposure(has_pause=False, has_resume=True)
-    _assert_exposure(names, has_pause=False, has_resume=True)
-
-    # Ensure resume helper applied again before completion
-    await _wait_for_assistant_call_prefix(client, "resume")
-    await _wait_for_tool_message_prefix(client, "resume ")
+    await _wait_for_assistant_steer_action(client, "resume")
+    await _wait_for_tool_message_prefix(client, "steer:resume ")
+    _assert_schema_unchanged("second resume")
 
     done_event.set()
     final = await h.result()
     assert final is not None, "Loop should complete with a response"
 
+    # The tool-name set the model saw was identical on every single turn of
+    # the run, not just at the four checkpoints above.
+    for names in seen_tools:
+        assert set(names) == baseline_names
 
-@pytest.mark.asyncio
-@_handle_project
-async def test_helpers_hide_notification_clarification(client):
+
+def test_custom_call_discovery_hides_notification_clarification():
     """
-    Verify dynamic tools do NOT expose `next_notification_…` or `next_clarification_…`
-    for an in‑flight inner handle (would fail before the management-set change).
+    Verify `steer(action="call", method=...)` can never reach
+    `next_notification`/`next_clarification`/`answer_clarification` on an
+    in-flight inner handle.
+
+    Pre-steer(), this was verified indirectly by spying on
+    `DynamicToolFactory._register_tool` and checking no
+    `next_notification_…`/`next_clarification_…` tool got minted. That
+    registration point no longer exists for per-handle methods at all
+    (steer's action="call" resolves methods at execution time via
+    `_discover_custom_public_methods` instead of pre-minting a tool per
+    method), so this now tests that discovery function directly — the exact
+    mechanism loop.py's steer(action="call") branch consults to decide
+    which methods are reachable.
     """
 
     class MockNestedHandle(SteerableToolHandle):
@@ -729,134 +735,26 @@ async def test_helpers_hide_notification_clarification(client):
             return None
 
     inner_handle = MockNestedHandle()
+    custom_methods = DynamicToolFactory._discover_custom_public_methods(inner_handle)
 
-    async def spawn_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
-        return inner_handle
-
-    client.set_system_message(
-        "1️⃣ Call `spawn_handle` to start a nested task.\n2️⃣ Wait until it finishes.\n3️⃣ Then reply with OK.",
-    )
-
-    # Minimal spy: capture dynamic helper registrations only (source of truth)
-    from unify.common._async_tool import dynamic_tools_factory as _dtf
-
-    # Also spy the dynamic tool registration point to capture exact helper names
-    registered_helpers: list[str] = []
-    orig_register_tool = _dtf.DynamicToolFactory._register_tool
-
-    def _spy_register_tool(self, func_name: str, fallback_doc: str, fn):  # type: ignore[no-redef]
-        registered_helpers.append(func_name)
-        return orig_register_tool(self, func_name, fallback_doc, fn)
-
-    setattr(_dtf.DynamicToolFactory, "_register_tool", _spy_register_tool)
-
-    outer = start_async_tool_loop(
-        client,
-        message="start",
-        tools={"spawn_handle": spawn_handle},
-        timeout=120,
-    )
-
-    # Ensure the assistant has requested the spawn tool
-    await _wait_for_tool_request(client, "spawn_handle")
-
-    # Reset spies, then force an immediate LLM turn so dynamic helpers are exposed
-    registered_helpers.clear()
-    await outer.interject("probe for dynamic helpers")
-
-    # Wait until at least one standard helper is registered
-    async def _helpers_registered() -> bool:
-        return any(
-            any(h.startswith(p) for h in registered_helpers)
-            for p in ("pause_", "resume_", "stop_", "interject_", "ask_")
+    for core_method in (
+        "ask",
+        "interject",
+        "stop",
+        "pause",
+        "resume",
+        "done",
+        "result",
+        "next_clarification",
+        "next_notification",
+        "answer_clarification",
+        "get_history",
+    ):
+        assert core_method not in custom_methods, (
+            f"{core_method!r} is a core SteerableToolHandle method — it must "
+            "stay reachable only via steer's dedicated actions, never via "
+            f'action="call". Discovered custom methods: {sorted(custom_methods)}'
         )
-
-    await _wait_for_condition(_helpers_registered, poll=0.05, timeout=30.0)
-
-    # Ensure that next_notification_* and next_clarification_* are NOT exposed
-    combined = set(registered_helpers)
-    assert not any(
-        n.startswith("next_notification_") for n in combined
-    ), f"unexpected next_notification_* exposed: {sorted(combined)}"
-    assert not any(
-        n.startswith("next_clarification_") for n in combined
-    ), f"unexpected next_clarification_* exposed: {sorted(combined)}"
-
-    # Finish inner handle and let the loop complete
-    inner_handle._done.set()
-    final = await outer.result()
-    assert final is not None, "Loop should complete with a response"
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_helpers_hide_get_history(client, llm_config):
-    """
-    Verify dynamic tools do NOT expose `get_history_…` for an in‑flight nested
-    AsyncToolLoopHandle (this would have been exposed before dynamic base-method
-    exclusion).
-    """
-
-    async def spawn_inner_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
-        # Start an inner async tool loop and return its handle immediately
-        inner_client = new_llm_client(**llm_config)
-        return start_async_tool_loop(
-            inner_client,
-            message="Inner loop: reply OK.",
-            tools={},
-            timeout=60,
-        )
-
-    client.set_system_message(
-        "1️⃣ Call `spawn_inner_handle` to start a nested async tool loop.\n"
-        "2️⃣ Wait until it finishes.\n"
-        "3️⃣ Then reply with OK.",
-    )
-
-    # Spy dynamic helper registrations
-    from unify.common._async_tool import dynamic_tools_factory as _dtf
-
-    registered_helpers: list[str] = []
-    orig_register_tool = _dtf.DynamicToolFactory._register_tool
-
-    def _spy_register_tool(self, func_name: str, fallback_doc: str, fn):  # type: ignore[no-redef]
-        registered_helpers.append(func_name)
-        return orig_register_tool(self, func_name, fallback_doc, fn)
-
-    setattr(_dtf.DynamicToolFactory, "_register_tool", _spy_register_tool)
-
-    outer = start_async_tool_loop(
-        client,
-        message="start",
-        tools={"spawn_inner_handle": spawn_inner_handle},
-        timeout=120,
-    )
-
-    # Ensure the assistant requests the spawning tool
-    await _wait_for_tool_request(client, "spawn_inner_handle")
-
-    # Force an immediate assistant turn to expose dynamic helpers
-    registered_helpers.clear()
-    await outer.interject("probe dynamic helpers")
-
-    # Wait until we see at least one standard helper for the nested handle
-    async def _helpers_registered() -> bool:
-        return any(
-            any(h.startswith(p) for h in registered_helpers)
-            for p in ("pause_", "resume_", "stop_", "interject_", "ask_")
-        )
-
-    await _wait_for_condition(_helpers_registered, poll=0.05, timeout=30.0)
-
-    # Assert that no get_history_* helper is exposed
-    combined = set(registered_helpers)
-    assert not any(
-        n.startswith("get_history_") for n in combined
-    ), f"unexpected get_history_* exposed: {sorted(combined)}"
-
-    # Let the nested loop finish so the test can complete cleanly
-    final = await outer.result()
-    assert final is not None, "Loop should complete with a response"
 
 
 @pytest.mark.asyncio
@@ -1050,11 +948,11 @@ async def test_resume_unblocks_base_tool(client, monkeypatch):
 
     await _wait_for_condition(_has_final_ok, poll=0.05, timeout=60.0)
 
-    # Ensure no resume helper call was made by the assistant (programmatic resume path)
+    # Ensure no resume action was requested by the assistant (programmatic resume path)
     msgs = client.messages or []
     assert (
-        _assistant_calls_prefix(msgs, "resume") == 0
-    ), "LLM should not need to call resume_… helper for base tools"
+        _steer_action_calls(msgs, "resume") == 0
+    ), 'LLM should not need to call steer(action="resume") for base tools'
 
     # Cleanup – stop the loop and restore generator
     await h.stop("cleanup")

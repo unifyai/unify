@@ -132,7 +132,8 @@ def build_ask_prompt(*, tools: Dict[str, Callable]) -> PromptParts:
         textwrap.dedent(
             f"""
             ─ Clarification ─
-            • If the query is ambiguous, ask the user to specify
+            • If the query is ambiguous, or depends on context missing from the
+              request itself, ask the user to specify rather than guessing
               `{request_clar_fname}(question="Could you clarify what you mean?")`
             """,
         ).strip()

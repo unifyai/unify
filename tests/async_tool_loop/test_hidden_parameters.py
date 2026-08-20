@@ -113,14 +113,23 @@ def test_hidden_parameters_are_removed_from_schema_and_docs(fn) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 4. Test DynamicToolFactory adopts handle signatures without hardcoding      #
+# 4. steer()'s schema is fixed regardless of a handle's interject signature   #
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_dynamic_factory_adopts_custom_interject_args() -> None:
+async def test_dynamic_factory_does_not_adopt_custom_interject_args() -> None:
     """
-    Verify that DynamicToolFactory._create_interject_tool dynamically adopts
-    the handle's interject signature, including any custom parameters the
-    handle defines, rather than hardcoding a fixed set of params.
+    Pre-steer(), DynamicToolFactory._create_interject_tool adopted a
+    per-call-id minted tool's signature from the live handle's own
+    `interject` override, including any custom parameters beyond `message`
+    (e.g. `priority`, `category`) — that method (and the "hardcode nothing,
+    adopt everything" design it was written to prove) no longer exists.
+    steer()'s `interject` action always takes a single string `payload`
+    (see STEER_DOC / dynamic_tools_factory.py), regardless of what a live
+    handle's own `interject()` signature looks like — a handle can no
+    longer widen what the model can pass for a core steering action (only
+    `action="call"` on a genuinely custom method still adopts a real
+    signature). This asserts that boundary directly: steer's own generated
+    schema carries none of CustomInterjectHandle's extra parameters.
     """
     from contextlib import suppress
 
@@ -217,32 +226,31 @@ async def test_dynamic_factory_adopts_custom_interject_args() -> None:
     )
     tools_data.save_task(pending_task, meta)
 
-    # Generate tools
+    # Generate tools — no per-call interject tool is minted anymore.
     factory = DynamicToolFactory(tools_data)
     factory.generate()
 
-    # Find the interject tool
-    interject_keys = [
-        k for k in factory.dynamic_tools.keys() if k.startswith("interject_")
-    ]
-    assert interject_keys, "Expected interject helper to be generated"
+    assert set(factory.dynamic_tools.keys()) == {
+        "wait",
+        "steer",
+        "ask_about_completed_tool",
+    }
 
-    helper = factory.dynamic_tools[interject_keys[0]]
-    schema = llmh.method_to_schema(helper, include_class_name=False)
+    steer_fn = factory.dynamic_tools["steer"]
+    schema = llmh.method_to_schema(steer_fn, include_class_name=False)
     props = schema["function"]["parameters"]["properties"]
 
-    # Custom params (priority, category) SHOULD be visible
-    assert (
-        "priority" in props
-    ), f"Expected 'priority' in schema, got: {list(props.keys())}"
-    assert (
-        "category" in props
-    ), f"Expected 'category' in schema, got: {list(props.keys())}"
-
-    # message SHOULD be visible (either from handle or content alias)
-    assert "message" in props or "content" in props
-
-    # _parent_chat_context_cont MUST be hidden (via explicit list)
+    # steer()'s fixed shape: call_id/action/payload/method/include_parent_context.
+    # None of CustomInterjectHandle's extra interject kwargs leak in.
+    assert set(props.keys()) == {
+        "call_id",
+        "action",
+        "payload",
+        "method",
+        "include_parent_context",
+    }
+    assert "priority" not in props
+    assert "category" not in props
     assert "_parent_chat_context_cont" not in props
 
     with suppress(BaseException):

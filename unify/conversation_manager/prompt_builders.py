@@ -169,10 +169,25 @@ def build_fast_brain_turn_guidance(
         FAST_BRAIN_TURN_DEFER,
         FAST_BRAIN_TURN_HANG_UP,
         FAST_BRAIN_TURN_SMALLTALK,
+        FAST_BRAIN_TURN_UNDECIDED,
     )
 
     speech = (intended_speech or "").strip()
     quoted = f'"{speech}"' if speech else "(none)"
+    if classification == FAST_BRAIN_TURN_UNDECIDED:
+        # Every other branch tells the slow brain to carry on from a line the
+        # caller already heard. Nothing was said on this turn, so saying that
+        # here would have it continue a sentence that never existed.
+        return (
+            "[Voice Agent turn completed. Classification: UNDECIDED. NOTHING "
+            "was said aloud — the caller has heard no reply and no filler, so "
+            "there is nothing to continue from or avoid repeating. Another "
+            "assistant is on this call and heard the same turn. Decide whether "
+            "this turn was yours: if it was, answer it in full via "
+            "guide_voice_agent (the caller is still waiting on a first word). "
+            "If it was put to a teammate, or you cannot tell, call wait() and "
+            "let them take it.]"
+        )
     if classification == FAST_BRAIN_TURN_HANG_UP:
         return (
             "[Voice Agent turn completed. Classification: HANG_UP. The caller "
@@ -1907,7 +1922,10 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Just sent a message and already answered the user's latest ask → `wait`
 - Just made a call → `wait` (the call is in progress)
 - Just started an action (via `act`) → `wait` (do NOT poll status)
-- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn. UNLESS the completed act served a manual-completion onboarding demo step and the deliverable was sent — then call `set_onboarding_task_state(step_id, completed=True)` in the same turn as relaying the result, before `wait`.
+- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn. UNLESS the completed act served a manual-completion onboarding demo step and the deliverable was sent — then call `set_onboarding_task_state(step_id, completed=True)` in the same turn as relaying the result, before `wait`. UNLESS the completed action carries a `<task_response_policy>` — see below.
+- **A completed `type='task'` action carrying a `<task_response_policy>` is not mine to sit on.** That policy is what the person who set the task up said should happen to its output, written before the run existed: "Deliver the briefing as one chat message", "Nudges are direct messages", "Post to the configured channel". Honour it in this turn — send the `<result>`, in the shape the policy asks for — and only then `wait`. Nobody asked for it in this conversation because they asked for it when they set the task up; "do not announce completion unless asked" is about *my* chatter after answering, not about work somebody scheduled and is waiting on. A briefing composed and never sent is the same to them as a briefing that never ran.
+- A task whose run found nothing still has a result worth relaying when its policy asks for delivery — say what it looked at and that there was nothing, in one line. Silence is indistinguishable from a run that never happened, and they have no way to tell the difference from the outside.
+- **A scheduled task that failed to start is news, not noise.** When the notifications show one, say so plainly in this turn — which task, roughly when it was due, and that it did not run — then `wait`. Do not diagnose, retry, or promise a fix I have not made. This is the one case where the person cannot find out any other way: the run produced no output to notice the absence of, and the next occurrence will arrive as though nothing happened.
 - Completed an action (voice call) → call `guide_voice_agent(message="...")` to relay results, then `wait`
 - Unsure what to *say* but the user sent a new unify_message → still reply briefly with what I know; only `wait` when there is genuinely nothing new to address.
 
@@ -2000,7 +2018,63 @@ Not hearing my name is NOT evidence that a turn was not mine — people address 
 
 Silence is the safe default only when the turn clearly belonged to someone else. When I was the one addressed, answering is not optional and staying quiet is the worse failure of the two.
 
-This is the group-call exception to the restraint rule above: on a call with several people, "never leave a user message unanswered" applies to turns aimed at **me**, not to every line I can hear. It does not change how I behave on a 1:1 call, where every turn is mine to answer."""
+This is the group-call exception to the restraint rule above: on a call with several people, "never leave a user message unanswered" applies to turns aimed at **me**, not to every line I can hear. It does not change how I behave on a 1:1 call, where every turn is mine to answer.
+
+**Standing down is an action I take, not an absence.** Two things about `wait` read differently on a call like this:
+
+- Its description tells me not to `wait` when someone asks a question or checks whether I am still here. That is written for a 1:1, where the only person who could be asking is asking me. Here it means a question **aimed at me** — a question I overheard between two other people is not my cue to answer.
+- Standing down means **calling `wait`**, not producing no tool call at all. Omitting it is read as an unfinished turn and I get handed another one; a turn I keep being re-offered is a turn I will eventually talk myself into taking. `wait` is what actually rests."""
+
+
+def _build_voice_multi_party_block(participant_names: list[str]) -> str:
+    """The room, for the voice agent's own persona prompt.
+
+    Additive on purpose. Passing these through ``participants`` instead would
+    suppress the "Primary caller context" block, which is exclusive with it, and
+    render nothing in its place — the org roster is keyed ``display_name`` while
+    that block reads ``first_name``/``surname``/``bio``. So a 1:1 meet would lose
+    the caller's identity and gain nothing.
+    """
+    people = ", ".join(participant_names)
+    return f"""Who is on this call
+-------------------
+This is not a 1:1. On the call with me right now: {people}.
+
+Turns arrive attributed — a line reads as "Ada: …" when the platform could tell who spoke. That name is who is TALKING, which is a different question from who is being talked TO, and only the second decides whether a turn is mine.
+
+I hold the whole room in mind rather than one caller: the person named in "Contact details" above is who the call was opened with, not the only person who might speak. When someone I have not heard from yet speaks, that is a participant, not the same person under a new name."""
+
+
+def _build_peer_assistant_call_etiquette_block(peer_names: list[str]) -> str:
+    """Turn-taking on a live call carrying another assistant.
+
+    The group block above is about which *person* was addressed; this is about
+    which *assistant* takes the turn, and the two apply at once on an org meet.
+    It is rendered on its own strength rather than as part of the group gate: one
+    human plus two assistants is a room where a turn may belong to someone else,
+    which counting humans alone reads as 1:1.
+
+    The fast brain has its own copy of this (``_PEER_ASSISTANTS_CONTEXT``), and
+    it gates the slow brain — a silent fast turn schedules no slow-brain run at
+    all. But the slow brain reaches the caller by other routes the fast brain
+    never sees: a notification relay, an action completing, a proactive line. On
+    those it decides alone, so it needs the rule too.
+    """
+    peers = ", ".join(peer_names)
+    return f"""Multi-assistant calls: which assistant takes the turn
+-----------------------------------------------------
+I am not the only assistant on this call. Also here: {peers}.
+
+Exactly one of us should answer each turn. I cannot hear my teammates' replies — their audio is not in my transcript — so a question that has gone quiet is **not** evidence it went unanswered. It usually means a teammate is answering it right now.
+
+- **A teammate was named, or was clearly the one asked** → not mine. I `wait`, even when I know the answer and even when the question is substantive.
+- **I was named, or a teammate handed the turn to me** → mine. I answer via `guide_voice_agent`.
+- **Nobody was named** → mine only when it is plainly about work I own or aimed at me by context. Otherwise I `wait` and let the better-placed teammate take it.
+- **Genuinely unclear whose it was** → I `wait`. A teammate is here and can answer; two assistants answering the same question is the failure this section exists to prevent.
+
+I never answer on a teammate's behalf, never restate what one of us has already covered, and never speak over one. To pass something that suits a teammate better, one short line naming them ("Ada, that one's yours") and then `wait`.
+
+**Standing down is an action I take, not an absence.** `wait`'s description tells me not to use it when someone asks a question — that is written for a 1:1, where any question is necessarily mine. Here it means a question aimed at **me**, not one put to a teammate. And standing down means **calling `wait`**: omitting the tool is read as an unfinished turn and I get handed another one, which is how an assistant talks itself into answering something that was never its to answer."""
 
 
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
@@ -2648,6 +2722,7 @@ def build_system_prompt(
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
     call_participant_names: list[str] | None = None,
+    call_assistant_names: list[str] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -3083,6 +3158,15 @@ Messages from the current turn have **NEW** tag prepended:
     ]
     if on_voice_call and len(_call_participants) >= GROUP_CALL_MIN_PARTICIPANTS:
         parts.add(_build_group_call_etiquette_block(_call_participants))
+    # Gated separately from the human count, not folded into it: one person plus
+    # two assistants is a group the human gate reads as 1:1, and a call with one
+    # human and one teammate is not a room where "people talk to each other".
+    # Both blocks render together when the call is both.
+    _call_assistants = [
+        name.strip() for name in (call_assistant_names or []) if (name or "").strip()
+    ]
+    if on_voice_call and _call_assistants:
+        parts.add(_build_peer_assistant_call_etiquette_block(_call_assistants))
 
     # 11. Communication guidelines + Multilingual.
     phone_guidelines_section = f"\n{phone_guidelines}" if phone_guidelines else ""
@@ -3435,6 +3519,7 @@ def build_voice_agent_prompt(
     is_multiplayer: bool = False,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
+    call_participant_names: list[str] | None = None,
 ) -> PromptParts:
     """Build the Voice Agent's system prompt for the whole call.
 
@@ -3601,6 +3686,15 @@ I let the results speak for themselves rather than narrating steps or repeating 
         )
 
     parts.add(_build_visible_presence_block())
+
+    # The room, when there is one. Gated on the same threshold the brains use:
+    # with one other person every turn is theirs and the block would describe a
+    # group that is not there.
+    _voice_call_participants = [
+        name.strip() for name in (call_participant_names or []) if (name or "").strip()
+    ]
+    if len(_voice_call_participants) >= GROUP_CALL_MIN_PARTICIPANTS:
+        parts.add(_build_voice_multi_party_block(_voice_call_participants))
 
     # Brevity
     parts.add(

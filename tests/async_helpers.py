@@ -94,25 +94,47 @@ async def _wait_for_tool_result(
     timeout: float = 300.0,
     poll: float = 0.05,
 ) -> None:
-    """Wait until *min_results* tool result messages are present.
+    """Wait until *min_results* signals that a tool's state moved past a bare
+    pending placeholder are present.
 
-    If *tool_name* is given, only results **whose ``name`` matches exactly**
-    are counted.  This mirrors the behaviour required by several tests that
-    must synchronise with a tool finishing before proceeding.
+    If *tool_name* is given, a tool-role message counts when its ``name``
+    matches exactly. Bare ``{"_placeholder": "pending"}`` stubs written at
+    schedule time never count, so callers do not race ahead of a real
+    update — but once the sent watermark can freeze that stub before a
+    later update lands, "a real update" itself has two more shapes this
+    also recognizes:
 
-    Bare ``pending`` placeholders written at schedule time are ignored so
-    callers do not race ahead of nested-handle adoption / progress rewrites.
+    - a ``check_status_<call_id>`` tool message: the sole below-watermark
+      delivery path for a final result once the original placeholder has
+      already been dispatched;
+    - a coalesced ``[progress ...]`` / ``[clarification ...]`` user-role
+      tail message: what nested-handle adoption (or any notification) now
+      writes instead of rewriting a frozen placeholder in place.
+
+    Note for flake triage: neither of those two release conditions is
+    scoped to *tool_name* — a check_status message counts regardless of
+    which call_id it answers, and a progress/clarification message counts
+    regardless of which tool emitted it. In a test with more than one tool
+    in flight at once, a signal from a *different* tool can satisfy this
+    wait early. Callers with that shape should pair this with a more
+    specific assertion afterward rather than relying on the wait alone.
     """
 
     async def _predicate():
         msgs = client.messages or []
-        n_seen = sum(
-            1
-            for m in msgs
-            if m.get("role") == "tool"
-            and (tool_name is None or m.get("name") == tool_name)
-            and not _is_bare_pending_tool_placeholder(m)
-        )
+        n_seen = 0
+        for m in msgs:
+            role = m.get("role")
+            if role == "tool":
+                name = m.get("name")
+                if tool_name is not None and name != tool_name:
+                    if not (isinstance(name, str) and name.startswith("check_status_")):
+                        continue
+                if _is_bare_pending_tool_placeholder(m):
+                    continue
+                n_seen += 1
+            elif role == "user" and (m.get("_progress_msg") or m.get("_clarify_msg")):
+                n_seen += 1
         return n_seen >= min_results
 
     await _wait_for_condition(_predicate, poll=poll, timeout=timeout)
@@ -170,6 +192,77 @@ async def _wait_for_assistant_call_prefix(
     )
 
 
+def _steer_call_action(tc: dict) -> str | None:
+    """Return the `action` a `steer(...)` tool_call requests, or None if
+    *tc* isn't a steer call (or its arguments don't parse)."""
+    import json as _json
+
+    fn = tc.get("function", {}) or {}
+    if fn.get("name") != "steer":
+        return None
+    try:
+        parsed = _json.loads(fn.get("arguments") or "{}")
+        action = parsed.get("action")
+        return str(action) if isinstance(action, str) else None
+    except Exception:
+        return None
+
+
+async def _wait_for_assistant_steer_action(
+    client: "unillm.AsyncUnify",
+    action: str,
+    *,
+    timeout: float = 300.0,
+    poll: float = 0.05,
+) -> None:
+    """Poll for a NEW assistant `steer(action=<action>, ...)` tool_call.
+
+    steer()'s structured-args dispatch replaced the per-call-id minted
+    tools (`stop_<fn>_<id>`, `pause_<fn>_<id>`, ...) that
+    `_wait_for_assistant_call_prefix` was built to detect by tool-call
+    NAME prefix — every steer() call shares the name "steer" regardless
+    of action, so this keys on the parsed `action` argument instead.
+    Shares the baseline/polling shape with `_wait_for_assistant_call_prefix`
+    (extended, not forked) under its own prefix key so the two never collide.
+    """
+    import time as _time
+
+    def _count(msgs, act):
+        return sum(
+            1
+            for m in (msgs or [])
+            if m.get("role") == "assistant"
+            and any(_steer_call_action(tc) == act for tc in (m.get("tool_calls") or []))
+        )
+
+    start_ts = _time.perf_counter()
+    key = (id(client), f"steer:{action}")
+    try:
+        current = _count(client.messages or [], action)
+    except Exception:
+        current = 0
+    baseline = _ASSISTANT_PREFIX_COUNTS.get(key)
+    if baseline is None:
+        _ASSISTANT_PREFIX_COUNTS[key] = current
+        if current > 0:
+            return
+    while _time.perf_counter() - start_ts < timeout:
+        msgs = client.messages or []
+        cnt = _count(msgs, action)
+        if baseline is None:
+            if cnt > 0:
+                _ASSISTANT_PREFIX_COUNTS[key] = cnt
+                return
+        else:
+            if cnt > baseline:
+                _ASSISTANT_PREFIX_COUNTS[key] = cnt
+                return
+        await asyncio.sleep(poll)
+    raise TimeoutError(
+        f"Timed out after {timeout}s waiting for assistant to call steer(action={action!r}).",
+    )
+
+
 async def _wait_for_tool_message_prefix(
     client: "unillm.AsyncUnify",
     prefix: str,
@@ -214,6 +307,64 @@ async def _wait_for_tool_message_prefix(
         await asyncio.sleep(poll)
     raise TimeoutError(
         f"Timed out after {timeout}s waiting for a tool message with name starting with {prefix!r}.",
+    )
+
+
+import weakref
+
+# Keyed by the client object itself (WeakKeyDictionary), not id(client): a
+# plain id-keyed dict lets a GC'd client's baseline silently apply to a
+# different, later client that happens to be allocated at the same id.
+_USER_PREFIX_COUNTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+async def _wait_for_user_message_prefix(
+    client: "unillm.AsyncUnify",
+    prefix: str,
+    *,
+    timeout: float = 300.0,
+    poll: float = 0.05,
+) -> None:
+    """Poll until a NEW user-role message whose ``content`` starts with ``prefix`` appears.
+
+    Used for the coalesce-then-freeze ``[progress <call_id>]`` /
+    ``[clarification <call_id>]`` tail messages the async tool loop appends
+    instead of rewriting an already-dispatched placeholder in place.
+    """
+    import time as _time
+
+    def _count_user_msgs(_msgs, _pref):
+        return sum(
+            1
+            for m in (_msgs or [])
+            if m.get("role") == "user" and str(m.get("content") or "").startswith(_pref)
+        )
+
+    start_ts = _time.perf_counter()
+    client_counts = _USER_PREFIX_COUNTS.setdefault(client, {})
+    try:
+        current = _count_user_msgs(client.messages or [], prefix)
+    except Exception:
+        current = 0
+    baseline = client_counts.get(prefix)
+    if baseline is None:
+        client_counts[prefix] = current
+        if current > 0:
+            return
+    while _time.perf_counter() - start_ts < timeout:
+        msgs = client.messages or []
+        cnt = _count_user_msgs(msgs, prefix)
+        if baseline is None:
+            if cnt > 0:
+                client_counts[prefix] = cnt
+                return
+        else:
+            if cnt > baseline:
+                client_counts[prefix] = cnt
+                return
+        await asyncio.sleep(poll)
+    raise TimeoutError(
+        f"Timed out after {timeout}s waiting for a user message with content starting with {prefix!r}.",
     )
 
 
@@ -303,6 +454,20 @@ def last_plain_assistant_message(msgs: List[dict]) -> dict:
         if m.get("role") == "assistant" and not m.get("tool_calls"):
             return m
     raise AssertionError("No plain assistant message (without tool_calls) found")
+
+
+def first_assistant_steer_call(msgs: List[dict], action: str) -> tuple[dict, dict]:
+    """Return (assistant_message, tool_call) for the first assistant turn that
+    calls steer(action=<action>, ...). Extends first_assistant_tool_call_by_prefix
+    for the post-steer() shape, where the action lives in parsed arguments
+    rather than the tool name."""
+    for m in msgs:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if _steer_call_action(tc) == action:
+                return m, tc
+    raise AssertionError(f"Assistant steer(action={action!r}) call not found")
 
 
 def first_tool_message_by_name_prefix(msgs: List[dict], prefix: str) -> dict:
@@ -431,6 +596,34 @@ def real_tool_messages(msgs: List[dict], tool_name: str | None = None) -> List[d
             continue
         results.append(m)
     return results
+
+
+def any_tool_message_content_contains(msgs: List[dict], snippet: str) -> bool:
+    """True if *snippet* appears in any tool-role message's content, including
+    synthetic check_status_* replies.
+
+    Post-watermark, a below-mark result (single-tool or a multi-handle
+    child's terminal result) is delivered via an appended check_status pair
+    rather than by rewriting the original (possibly already-dispatched)
+    placeholder — real_tool_messages() deliberately excludes those, so tests
+    asserting on "the final result landed somewhere" should use this instead
+    of filtering to only the named placeholder.
+    """
+    for m in msgs or []:
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content")
+        if isinstance(content, str) and snippet in content:
+            return True
+        if isinstance(content, list):
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and isinstance(block.get("text"), str)
+                    and snippet in block["text"]
+                ):
+                    return True
+    return False
 
 
 def nth_real_assistant_tool_turn(msgs: List[dict], n: int) -> dict:

@@ -2,6 +2,7 @@ import asyncio
 import unillm
 import functools
 import json
+import re
 from contextlib import suppress
 from typing import (
     Optional,
@@ -29,6 +30,7 @@ from ._async_tool.context_compression import (
     compress_and_rebuild,
 )
 from .context_dump import make_messages_safe_for_context_dump
+from ._async_tool.formatting import TOOL_RESULT_TEXT_CHAR_LIMIT, _truncate_tool_text
 from typing import Iterable
 
 
@@ -73,6 +75,64 @@ _PARENT_CTX_POINTER = (
     "from this transcript to avoid duplication. Refer to the Parent Chat Context "
     "section in your system context for the full, up-to-date version.]"
 )
+
+# ── Digest-first inspection of COMPLETED handles ────────────────────────────
+# A completed handle's ask() no longer re-pays its entire transcript on every
+# question (that path stays for still-running handles — see the branch in
+# `ask()` below). Instead it embeds a mechanically-built digest, cached after
+# the first build so every subsequent ask against the same handle reuses the
+# identical bytes and hits the provider's prefix cache.
+_DIGEST_URL_RE = re.compile(r"https?://[^\s\"'<>\]\)]+")
+_DIGEST_SOURCES_CAP = 20
+_DIGEST_RESULT_HEAD_CHARS = 240
+
+# Long trajectories would otherwise grow the digest unboundedly (measured:
+# ~45 tokens/turn, so an uncapped digest blows past the ~2k-token design
+# budget for digests well before 100 turns and the 20k inspection-request
+# ceiling around 340). Cap turns at head+tail with an explicit elision
+# marker in between — elided turns keep their original transcript `idx`, so
+# they stay reachable via read_child_message even though they're not listed
+# individually.
+_DIGEST_TURNS_HEAD = 17
+_DIGEST_TURNS_TAIL = 17
+_DIGEST_MAX_TURNS = _DIGEST_TURNS_HEAD + _DIGEST_TURNS_TAIL
+
+_DIGEST_SYSTEM_HEADER = (
+    "You are inspecting a COMPLETED tool-use conversation to answer a question "
+    "about it.\n\n"
+    "## Digest\n"
+    "The JSON below is a mechanically-built, compact summary of the completed "
+    "run (not the full transcript): the original request, each tool call in "
+    "execution order (its name, its `thought` argument when the tool supplied "
+    "one, a preview of its result, the result's size in bytes, and the message "
+    "`idx` it corresponds to), source URLs seen across the run, and the final "
+    "result. On a long run, the middle turns may be replaced by a single "
+    '`{"elided": true, ...}` marker giving their count and idx range — those '
+    "turns still exist and are still reachable, just not listed individually.\n\n"
+    "If the digest does not contain enough detail to answer precisely, call "
+    "`read_child_message(idx)` with the `idx` of any turn (or any idx inside "
+    "an elided range) to fetch that exact message from the completed "
+    "transcript verbatim (compact-serialized, capped at 32KB)."
+)
+
+
+def _digest_result_head(text: str) -> str:
+    """Pick a representative preview line from a tool result's text.
+
+    A bare ``splitlines()[0]`` previews as noise whenever the first line is
+    purely structural (a pretty-printed JSON opening brace, a rule of
+    dashes) — the actual content sits on line 2+. Prefer the first line that
+    has real content; fall back to a flat character slice when no line
+    qualifies (e.g. single-line results, which are the common case).
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    for line in stripped.splitlines():
+        candidate = line.strip()
+        if len(candidate) >= 3 and any(ch.isalnum() for ch in candidate):
+            return candidate[:_DIGEST_RESULT_HEAD_CHARS]
+    return stripped[:_DIGEST_RESULT_HEAD_CHARS]
 
 
 def _replace_runtime_parent_context(messages: list[dict]) -> list[dict]:
@@ -309,6 +369,12 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         self._loop_config: Optional[dict] = None
         self._runtime_state = runtime_state or ToolLoopRuntimeState()
 
+        # digest()'s cached output (built once, at first completed ask) and
+        # the sanitized transcript snapshot it was built from — the latter
+        # backs read_child_message(idx) drill-down. See digest().
+        self._digest_cache: Optional[str] = None
+        self._digest_messages: Optional[list[dict]] = None
+
     # small local helpers to keep user-visible history consistent
     def _append_user_visible_user(
         self,
@@ -386,27 +452,19 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         # Record the user-visible question immediately (even if delegated)
         self._append_user_visible_user(question, _parent_chat_context)
 
-        # 1.  Gather a *read-only* snapshot of the loop being asked about.
-        loop_chat_context = []
-        with suppress(Exception):
-            msgs = getattr(self._client, "messages", []) if self._client else []
-            if msgs is None:
-                msgs = []
-            loop_chat_context = list(msgs)
-        loop_chat_context_safe = make_messages_safe_for_context_dump(loop_chat_context)
+        # Whether this handle has already completed decides the inspection
+        # representation: a completed handle gets the byte-stable digest
+        # (built once, cached — repeat asks reuse identical bytes and hit the
+        # provider's prefix cache); a still-running handle keeps today's live
+        # snapshot (the transcript so far, compact-serialized) since a digest
+        # only exists from completion onward. No ``await`` precedes this
+        # check (the statements above are synchronous), so nothing can yield
+        # control and let the task finish out from under the branch chosen.
+        _is_completed = self.done()
+
         parent_chat_context_safe = make_messages_safe_for_context_dump(
             _parent_chat_context,
         )
-
-        # When fresh parent context is provided, replace the stale runtime
-        # parent-context header in the transcript with a pointer.  This avoids
-        # duplicating the (potentially large) parent context while preserving
-        # the structural marker so the inspection LLM knows the loop received
-        # parent context and where it appeared in the conversation.
-        if _parent_chat_context:
-            loop_chat_context_safe = _replace_runtime_parent_context(
-                loop_chat_context_safe,
-            )
 
         # 1b. Snapshot ask_* tools available at invocation time so the
         #     inspection loop can propagate questions to inner handles.
@@ -426,71 +484,110 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
         inspection_client = new_llm_client(parent_model)
 
-        # Build system message with the inspected loop's transcript.
-        # Transform roles to inner_user/inner_assistant so the inspection LLM
-        # can distinguish the inspected conversation from its own messages and
-        # from the outer parent context (which uses outer_user/outer_assistant).
-        loop_chat_context_transformed = _transform_inner_roles(
-            loop_chat_context_safe,
-        )
+        inspection_tools: dict = dict(ask_tools)
 
-        # A transcript snapshot dead-ends silently while the loop is waiting on
-        # an LLM response — there is no message for "the model has not answered
-        # yet", so inspectors misread the pause as a stall and reach for
-        # progress tools that cannot help. Surface the in-flight window
-        # (stamped by ``generate_with_preprocess``) as an explicit final entry.
-        with suppress(Exception):
-            _inflight_since = (
-                getattr(self._client, "_llm_inflight_since", None)
-                if self._client is not None
-                else None
-            )
-            if _inflight_since:
-                import time as _time
-
-                _elapsed = max(0.0, _time.time() - float(_inflight_since))
-                loop_chat_context_transformed = [
-                    *loop_chat_context_transformed,
-                    {
-                        "role": "system",
-                        "_loop_status": True,
-                        "content": (
-                            "STATUS: the inspected loop is currently waiting on "
-                            f"an in-flight LLM request that started {_elapsed:.0f} "
-                            "seconds ago and has not returned yet. The transcript "
-                            "ends here because the model is still thinking, not "
-                            "because a tool is stuck or anything failed. Answer "
-                            "progress questions from this fact first; only reach "
-                            "for inspection tools if the question is about "
-                            "something this does not explain."
-                        ),
-                    },
-                ]
-
-        transcript_description = (
-            "This is the transcript of the tool/loop you are being asked about. "
-            "Messages use 'inner_user' and 'inner_assistant' roles to clearly "
-            "distinguish them from your current conversation. "
-            "Use this to answer the user's question about the current state or progress."
-        )
-        if _parent_chat_context:
-            transcript_description += (
-                " Note: this is separate from the Parent Chat Context that may "
-                "appear below — that context shows the broader conversation that "
-                "led to this request, while this transcript is what you are "
-                "answering questions about."
+        if _is_completed:
+            # Digest-first: mechanical, cached summary instead of the full
+            # transcript. read_child_message(idx) is the drill-down tool for
+            # anything the digest's previews leave out. digest() must run
+            # first — it populates self._digest_messages, which the
+            # drill-down closure captures.
+            digest_text = self.digest()
+            inspection_tools["read_child_message"] = (
+                self._make_read_child_message_tool()
             )
 
-        sys_msg_parts = [
-            "You are inspecting a running tool-use conversation to answer a question about it.",
-            "",
-            "## Inspected Loop Transcript",
-            transcript_description,
-            "",
-            json.dumps(loop_chat_context_transformed, indent=2),
-        ]
+            sys_msg_parts = [_DIGEST_SYSTEM_HEADER, "", digest_text]
+        else:
+            # 1.  Gather a *read-only* snapshot of the loop being asked about.
+            loop_chat_context = []
+            with suppress(Exception):
+                msgs = getattr(self._client, "messages", []) if self._client else []
+                if msgs is None:
+                    msgs = []
+                loop_chat_context = list(msgs)
+            loop_chat_context_safe = make_messages_safe_for_context_dump(
+                loop_chat_context,
+            )
+
+            # When fresh parent context is provided, replace the stale runtime
+            # parent-context header in the transcript with a pointer.  This avoids
+            # duplicating the (potentially large) parent context while preserving
+            # the structural marker so the inspection LLM knows the loop received
+            # parent context and where it appeared in the conversation.
+            if _parent_chat_context:
+                loop_chat_context_safe = _replace_runtime_parent_context(
+                    loop_chat_context_safe,
+                )
+
+            # Build system message with the inspected loop's transcript.
+            # Transform roles to inner_user/inner_assistant so the inspection LLM
+            # can distinguish the inspected conversation from its own messages and
+            # from the outer parent context (which uses outer_user/outer_assistant).
+            loop_chat_context_transformed = _transform_inner_roles(
+                loop_chat_context_safe,
+            )
+
+            # A transcript snapshot dead-ends silently while the loop is waiting on
+            # an LLM response — there is no message for "the model has not answered
+            # yet", so inspectors misread the pause as a stall and reach for
+            # progress tools that cannot help. Surface the in-flight window
+            # (stamped by ``generate_with_preprocess``) as an explicit final entry.
+            with suppress(Exception):
+                _inflight_since = (
+                    getattr(self._client, "_llm_inflight_since", None)
+                    if self._client is not None
+                    else None
+                )
+                if _inflight_since:
+                    import time as _time
+
+                    _elapsed = max(0.0, _time.time() - float(_inflight_since))
+                    loop_chat_context_transformed = [
+                        *loop_chat_context_transformed,
+                        {
+                            "role": "system",
+                            "_loop_status": True,
+                            "content": (
+                                "STATUS: the inspected loop is currently waiting on "
+                                f"an in-flight LLM request that started {_elapsed:.0f} "
+                                "seconds ago and has not returned yet. The transcript "
+                                "ends here because the model is still thinking, not "
+                                "because a tool is stuck or anything failed. Answer "
+                                "progress questions from this fact first; only reach "
+                                "for inspection tools if the question is about "
+                                "something this does not explain."
+                            ),
+                        },
+                    ]
+
+            transcript_description = (
+                "This is the transcript of the tool/loop you are being asked about. "
+                "Messages use 'inner_user' and 'inner_assistant' roles to clearly "
+                "distinguish them from your current conversation. "
+                "Use this to answer the user's question about the current state or progress."
+            )
+            if _parent_chat_context:
+                transcript_description += (
+                    " Note: this is separate from the Parent Chat Context that may "
+                    "appear below — that context shows the broader conversation that "
+                    "led to this request, while this transcript is what you are "
+                    "answering questions about."
+                )
+
+            sys_msg_parts = [
+                "You are inspecting a running tool-use conversation to answer a question about it.",
+                "",
+                "## Inspected Loop Transcript",
+                transcript_description,
+                "",
+                json.dumps(loop_chat_context_transformed, separators=(",", ":")),
+            ]
 
         # If inner-handle ask_* tools are available, hint the LLM about them
+        # (stable once the handle has completed — nothing mutates its closed
+        # loop's tools_data afterward — so this never re-breaks the digest
+        # branch's byte-stability).
         if ask_tools:
             sys_msg_parts.extend(
                 [
@@ -499,10 +596,10 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                     (
                         "You have access to `ask_*` tools that query inner tool loops for detailed information. "
                         "Each inner tool loop has its own transcript that may contain details NOT visible in the "
-                        "Inspected Loop Transcript above. If the transcript does not contain enough information "
+                        "context above. If that context does not contain enough information "
                         "to answer the question — for example if a tool's result only shows a placeholder or "
                         "summary — you MUST call the corresponding `ask_*` tool to get details from that "
-                        "tool's own internal context. Only answer directly from the transcript when it clearly "
+                        "tool's own internal context. Only answer directly from the context above when it clearly "
                         "contains the specific information being asked about."
                     ),
                 ],
@@ -577,7 +674,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             helper_handle = start_async_tool_loop(
                 inspection_client,
                 _ask_message,
-                ask_tools,  # ask_* tools for inner handle propagation
+                inspection_tools,  # ask_* tools (+ read_child_message when completed)
                 loop_id=loop_id_label,
                 parent_lineage=_sibling_lineage,
                 parent_chat_context=(
@@ -682,6 +779,231 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         except Exception:
             pass
         return helper_handle
+
+    def digest(self) -> str:
+        """Return a compact, byte-stable digest of this handle's completed run.
+
+        Built once, mechanically (no LLM call), from data the loop already
+        retains: the original request, each tool call in execution order
+        (name, its ``thought`` argument when the tool supplied one, a preview
+        of its result and the result's size in bytes, and the message index
+        it corresponds to — capped at ``_DIGEST_MAX_TURNS`` with an elision
+        marker for anything in between), source URLs seen across the run, and
+        the final result. Cached after the first build so every subsequent
+        call — and every completed-``ask()`` that embeds it — returns
+        byte-identical text, which is what lets a second question about the
+        same handle hit the provider's prefix cache.
+
+        Meaningful only once the handle has completed. If this handle's own
+        loop compressed its context internally, ``self._client.messages``
+        already reflects the post-compression state by the time this can
+        run — the wrapper task that adopted this handle (see
+        ``ToolsData.adopt_nested``) awaits ``self.result()`` to completion,
+        which resolves any compression restarts, before this handle is ever
+        reachable as "completed" — so the digest is built from that final
+        state, not a stale pre-compression snapshot.
+
+        Raises
+        ------
+        asyncio.InvalidStateError
+            If called before the handle has completed. ``ask()`` only ever
+            reaches this on its completed branch (guarded by ``done()``),
+            so this only fires on a direct, premature call — and it must
+            fire rather than mislabel the run: without this guard, reading
+            ``self._task.result()`` on a still-running task raises its own
+            ``InvalidStateError`` ("Result is not set"), which would
+            otherwise be caught below and rendered as a false "this run
+            ended with an error" outcome for a run that neither errored
+            nor finished.
+        """
+        if self._digest_cache is not None:
+            return self._digest_cache
+
+        if not self.done():
+            raise asyncio.InvalidStateError(
+                "digest() is only available after completion; use the "
+                "live-snapshot ask() path for a still-running handle.",
+            )
+
+        raw_messages = list(getattr(self._client, "messages", None) or [])
+        safe_messages = make_messages_safe_for_context_dump(raw_messages)
+        self._digest_messages = safe_messages
+
+        original_request = None
+        if self._user_visible_history:
+            first_content = self._user_visible_history[0].get("content")
+            if isinstance(first_content, dict):
+                first_content = first_content.get("message")
+            original_request = first_content
+
+        # The authoritative final answer: the task backing this (completed)
+        # handle already holds it. Reading it directly avoids guessing at the
+        # answer's shape in the transcript — the guess is wrong whenever the
+        # loop submitted its answer through a tool (e.g. a structured-output
+        # loop's final_response/send_response) rather than as a bare
+        # assistant message, since then the last such message is only
+        # narration ("Working on it, one moment.") that preceded the real
+        # answer. A task that errored still gets a truthful final_result
+        # instead of silently falling through to whatever narration happens
+        # to be last.
+        final_result = None
+        _task_result_available = False
+        try:
+            _raw_result = self._task.result()
+        except asyncio.CancelledError:
+            final_result = "(this run was stopped before producing a result)"
+            _task_result_available = True
+        except asyncio.InvalidStateError:
+            # Must never happen — the done() guard above rules this out —
+            # but re-raise rather than let the generic handler below
+            # mislabel a not-actually-finished task as one that errored.
+            raise
+        except Exception as exc:
+            final_result = (
+                f"(this run ended with an error: {type(exc).__name__}: {exc})"
+            )
+            _task_result_available = True
+        else:
+            # `_COMPRESSION_SIGNAL` means no one has driven this task's
+            # `result()` through a compression restart yet — the digest
+            # shouldn't have been reachable in that state (see the
+            # docstring), but fall through to the heuristic rather than
+            # surface the sentinel if it somehow is.
+            if _raw_result is not _COMPRESSION_SIGNAL:
+                final_result = (
+                    _raw_result
+                    if isinstance(_raw_result, str)
+                    else json.dumps(_raw_result, separators=(",", ":"), default=str)
+                )
+                _task_result_available = True
+
+        # Index tool_calls by id so the matching tool-result message can look
+        # up its name/thought below.
+        call_meta: dict[str, dict] = {}
+        for m in safe_messages:
+            if m.get("role") != "assistant":
+                continue
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                thought = None
+                with suppress(Exception):
+                    parsed_args = json.loads(fn.get("arguments") or "{}")
+                    if isinstance(parsed_args, dict) and isinstance(
+                        parsed_args.get("thought"),
+                        str,
+                    ):
+                        thought = parsed_args["thought"]
+                call_meta[tc.get("id")] = {"name": fn.get("name"), "thought": thought}
+
+        turns: list[dict] = []
+        seen_urls: list[str] = []
+        seen_urls_set: set[str] = set()
+        heuristic_final_result = None
+
+        for idx, m in enumerate(safe_messages):
+            role = m.get("role")
+            content = m.get("content")
+            if isinstance(content, str):
+                text = content
+            elif content:
+                try:
+                    text = json.dumps(content, separators=(",", ":"))
+                except Exception:
+                    text = str(content)
+            else:
+                text = ""
+
+            if text:
+                for url in _DIGEST_URL_RE.findall(text):
+                    if url not in seen_urls_set:
+                        seen_urls_set.add(url)
+                        seen_urls.append(url)
+
+            if role == "tool":
+                meta = call_meta.get(m.get("tool_call_id"), {})
+                turns.append(
+                    {
+                        "idx": idx,
+                        "tool": meta.get("name") or m.get("name"),
+                        "thought": meta.get("thought"),
+                        "result_head": _digest_result_head(text),
+                        "result_bytes": len(text.encode("utf-8")),
+                    },
+                )
+            elif (
+                role == "assistant"
+                and not m.get("tool_calls")
+                and isinstance(content, str)
+                and content.strip()
+            ):
+                # Fallback only — used when the task result itself wasn't
+                # available above (see the comment there).
+                heuristic_final_result = content
+
+        if not _task_result_available:
+            final_result = heuristic_final_result
+
+        if len(turns) > _DIGEST_MAX_TURNS:
+            head = turns[:_DIGEST_TURNS_HEAD]
+            tail = turns[-_DIGEST_TURNS_TAIL:] if _DIGEST_TURNS_TAIL else []
+            elided = turns[_DIGEST_TURNS_HEAD : len(turns) - _DIGEST_TURNS_TAIL]
+            marker = {
+                "elided": True,
+                "count": len(elided),
+                "idx_range": [elided[0]["idx"], elided[-1]["idx"]],
+                "note": (
+                    f"{len(elided)} turns elided to keep the digest compact "
+                    "(count is turns; idx_range is transcript positions, "
+                    "which interleave with non-tool messages so it is not "
+                    "contiguous per turn) — each elided turn still has a "
+                    "stable idx; retrieve any one verbatim via "
+                    "read_child_message(idx)."
+                ),
+            }
+            turns = [*head, marker, *tail]
+
+        digest_obj = {
+            "request": original_request,
+            "turns": turns,
+            "sources": seen_urls[:_DIGEST_SOURCES_CAP],
+            "final_result": final_result,
+        }
+        self._digest_cache = json.dumps(digest_obj, separators=(",", ":"), default=str)
+        return self._digest_cache
+
+    def _make_read_child_message_tool(self) -> Callable:
+        """Build the drill-down tool for the digest-first inspection sub-loop.
+
+        Must be called after ``digest()`` has populated ``self._digest_messages``
+        (``ask()`` guarantees this ordering). Returns one message from this
+        handle's own completed transcript, verbatim, compact-serialized and
+        capped at 32KB — the counterpart to the digest's ``idx`` fields.
+        """
+        messages = self._digest_messages if self._digest_messages is not None else []
+
+        async def read_child_message(idx: int) -> str:
+            if not (0 <= idx < len(messages)):
+                return (
+                    f"⚠️ No message at idx={idx}. Valid range: "
+                    f"0-{max(len(messages) - 1, 0)}."
+                )
+            serialized = json.dumps(messages[idx], separators=(",", ":"), default=str)
+            return _truncate_tool_text(serialized, limit=TOOL_RESULT_TEXT_CHAR_LIMIT)
+
+        read_child_message.__doc__ = (
+            "Fetch one message from the completed tool's transcript, verbatim.\n\n"
+            "Parameters\n"
+            "----------\n"
+            "idx : int\n"
+            "    The message index, as listed in the digest's `turns` entries "
+            "(`idx` field).\n\n"
+            "Returns\n"
+            "-------\n"
+            "str\n"
+            "    The message, compact-serialized JSON, capped at 32KB (beyond "
+            "that the middle is omitted with a marker)."
+        )
+        return read_child_message
 
     # -- public API -----------------------------------------------------------
     @functools.wraps(SteerableToolHandle.interject, updated=())
@@ -919,6 +1241,12 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
         self._client._messages = result.system_msgs
         self._client._system_message = None
+        # A compression rebuild is a deliberate full-cache sacrifice: the
+        # transcript it replaces no longer exists, so nothing in the new one
+        # was ever dispatched. Reset explicitly rather than relying on the
+        # rebuilt list happening to be shorter than the old watermark.
+        self._client._sent_watermark = 0
+        self._client._sent_watermark_hash = None
         self._runtime_state.message_count_offset += n_archived - len(
             result.system_msgs,
         )

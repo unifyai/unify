@@ -81,6 +81,7 @@ dependencies = [
     "polars>=1.39.3",
     "sherpa-onnx>=1.13.3",
     "sherpa-onnx-core>=1.13.3",
+    "jsonschema>=4.20",
 ]
 
 [dependency-groups]

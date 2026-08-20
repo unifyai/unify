@@ -3,7 +3,16 @@ from __future__ import annotations
 import inspect
 import textwrap
 import json
-from typing import Callable, Dict, Optional, Mapping, TYPE_CHECKING
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Optional,
+    Mapping,
+    Sequence,
+    TYPE_CHECKING,
+)
 
 if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
@@ -196,14 +205,16 @@ _TOOL_SELECTION_AND_SURFACES = textwrap.dedent("""
     A running block suspends when a correction reaches it, and you get a
     turn carrying the interjection and a progress report. Work already
     done has already happened — a replacement block must not repeat it.
-    `stop_<tool>_<call_id>` abandons the block (choose when the correction
-    changes the *remaining* work — an irreversible step the correction was
-    meant to prevent is worse than a discarded plan);
-    `interject_<tool>_<call_id>` resumes it as written, the text available
-    via `steering.messages` (choose when the remaining work is unchanged).
-    Do not stop on every interjection either. When a correction concerns
-    work already running in `primitives.*` handles, route it via
-    `handle.interject(...)` rather than restarting the plan.
+    `steer(call_id=<id>, action="stop")` abandons the block (choose when the
+    correction changes the *remaining* work — an irreversible step the
+    correction was meant to prevent is worse than a discarded plan);
+    `steer(call_id=<id>, action="interject", payload=<text>)` resumes it as
+    written, the text available via `steering.messages` (choose when the
+    remaining work is unchanged). Do not stop on every interjection either.
+    When a correction concerns work already running in `primitives.*`
+    handles, route it via `handle.interject(...)` rather than restarting the
+    plan — `steer` is for handles the outer async tool loop is tracking for
+    you, not for handles you are holding directly in code.
 
     ### Execution Surface: where code runs
 
@@ -254,10 +265,18 @@ _MANAGER_PRIMITIVE_SCOPE = textwrap.dedent("""
 _EXECUTION_RULES = textwrap.dedent("""
     ### Execution Rules
 
-    1. **Sessions**: default is `state_mode="stateless"`; `"stateful"`
-       persists intermediate variables across calls, `"read_only"` sees an
-       existing session without persisting. Discover sessions with
-       `list_sessions()` / `inspect_state()`.
+    1. **Sessions**: Python cells share one persistent sandbox for the
+       whole task — a notebook, not one-shot scripts. Bind results to
+       variables and compose later cells on them instead of re-fetching;
+       print only what the next decision needs, not whole payloads.
+       `list_sessions()` / `inspect_state()` rediscover live sessions
+       and names — variables survive context compression, since state
+       lives in the sandbox, not the transcript. Isolate a cell with
+       `state_mode="stateless"` or a named session; fan out in parallel
+       inside one cell, not across cells. `del` bulky intermediates. An
+       unexpected `NameError` on a known name usually means the sandbox
+       restarted — re-derive or re-fetch, never assume the value came
+       back. Shell and venv cells stay one-shots unless given a session.
 
     2. **Async parallelism**: never wrap work in bare `asyncio.run(...)`
        — the runtime already owns a loop; a sync façade uses the injected
@@ -306,7 +325,10 @@ _EXECUTION_RULES = textwrap.dedent("""
        would have to review and undo mistakes), prefer asking over
        guessing — after initial exploration, after a small representative
        batch, or on precedent-setting ambiguous cases; never about trivial
-       choices.
+       choices. Your request arrives self-contained: when it depends on
+       context you were not given (identifiers, scope, preferences it
+       assumes), ask via `request_clarification` rather than guessing
+       what the caller meant.
 """).strip()
 
 
@@ -405,9 +427,9 @@ _INCREMENTAL_EXECUTION = textwrap.dedent("""
     untouched rather than guess wrong.
 
     For uncertain / interactive work: one meaningful action per call,
-    reviewed before the next; use `state_mode="stateful"` so
-    intermediate results persist. **Verify before scaling**: run a loop
-    body once and confirm the result before generalizing to iteration.
+    reviewed before the next — intermediate results persist across
+    cells. **Verify before scaling**: run a loop body once and confirm
+    the result before generalizing to iteration.
     **Read-only for exploration**: branch off known-good state with
     `state_mode="read_only"` to try alternatives without risk. Print or
     display key outputs after each uncertain step — don't assume
@@ -541,7 +563,10 @@ def _build_filesystem_context() -> str:
 
         GUI files on the managed desktop live under `/Unity/...` (home
         `HOME=/Unity`, Downloads `/Unity/Downloads`, synced tree
-        `/Unity/Local`) — Computer Control paths only;
+        `/Unity/Local`) — Computer Control paths only.  Downloads is a
+        symlink into the synced tree, so anything the browser saves there
+        arrives in this workspace under `Downloads/` once synced, and is
+        ingestible from that path;
         do not treat them as this pod workspace's cwd or open them with
         ordinary local file IO (see Computer Control →
         Managed desktop filesystem).  Do not treat the desktop panel name
@@ -882,3 +907,472 @@ def build_code_act_prompt(
             parts.append(rules_and_examples)
 
     return "\n\n".join(p for p in parts if p and p.strip())
+
+
+# ---------------------------------------------------------------------------
+# Verifier pass prompts
+# ---------------------------------------------------------------------------
+#
+# Every per-call verifier prompt is three blocks in a fixed order so provider
+# prefix caching holds across firings of the same task: a constant static
+# prefix (decision framework, output schema, examples), a stable block that
+# is byte-identical for every call of one call site (goal, guidance, intent
+# chain, sources, contract), and a volatile block (this call's arguments,
+# tier-0 outcome, sibling results, probes, interactions, result). The static
+# review omits the chain and the volatile block entirely: it is a function of
+# the source alone, so its verdict is cached per trust hash.
+#
+# No verifier prompt ever contains the conversation transcript or the CodeAct
+# trajectory. The verifier's context is per frame and bounded.
+
+_VERIFIER_OUTPUT_SCHEMA = textwrap.dedent("""
+    ### Output
+
+    Respond with one JSON object and nothing else:
+
+    {"verdict": "PASS" | "FAIL" | "UNSURE", "reason": "<one or two sentences>", "fault": "leaf" | "caller" | null}
+
+    * `PASS` — you have positive evidence the check holds.
+    * `FAIL` — you have positive evidence it does not. A FAIL MUST set `fault`:
+      `leaf` when the function under review is wrong (its logic, its output,
+      its effect), `caller` when the function is fine but was called with
+      arguments that cannot be right for the stated goal.
+    * `UNSURE` — the evidence does not settle it either way. Prefer UNSURE to a
+      guessed PASS or FAIL; UNSURE never fails a run and never counts as
+      evidence, so it is the honest answer when you cannot tell.
+
+    `reason` is read by the owner of the task when a run is held or corrected.
+    Say what was checked and what was found, in plain words, never internals.
+    """).strip()
+
+_VERIFIER_COMMON_FRAME = textwrap.dedent("""
+    You are an independent verifier for a stored function that runs as part
+    of a recurring task with no human in the loop. You did not write the
+    function and you must not repair it; you judge one call of it. Trust is
+    earned from many such judgements, so be exact: a PASS says the evidence
+    supports the check, a FAIL says the evidence contradicts it, UNSURE says
+    the evidence is not there. Judge only what is in front of you.
+    """).strip()
+
+STATIC_REVIEW_STATIC_PREFIX = "\n\n".join(
+    [
+        _VERIFIER_COMMON_FRAME,
+        textwrap.dedent("""
+    ### This pass: static review
+
+    You are shown one stored function — its source, docstring, contract and the
+    names and docstrings of the functions it depends on — and nothing about any
+    particular call. Decide whether the implementation can do what its
+    docstring and contract promise. Look for:
+
+    * a body that cannot produce the documented output (wrong shape, wrong
+      units, missing fields the docstring names, a return the output schema
+      rejects);
+    * a postcondition the code cannot satisfy, or a docstring promise the code
+      silently drops (a filter it does not apply, a sort it does not perform);
+    * effects the docstring does not disclose (a send, a write, a delete), or
+      a documented effect the code never performs;
+    * hard-coded values that were plainly observations of one run (a date, an
+      id, a count) rather than task constants;
+    * error handling that turns a real failure into a plausible-looking
+      success (an empty result returned as if it were the answer, an exception
+      swallowed into a default).
+
+    Style, naming and efficiency are out of scope. A function that is
+    inelegant but correct is a PASS. A function you cannot judge without
+    seeing a real call is UNSURE, not FAIL. `fault` is always `leaf` here.
+
+    Example — PASS: docstring says "Return the sum of `amount` over the rows in
+    minor units"; the body sums `row['amount']` and returns an int. Example —
+    FAIL (leaf): docstring says "Return only orders with status == 'paid'"; the
+    body returns every row unfiltered.
+        """).strip(),
+        _VERIFIER_OUTPUT_SCHEMA,
+    ],
+)
+
+ARGS_REVIEW_STATIC_PREFIX = "\n\n".join(
+    [
+        _VERIFIER_COMMON_FRAME,
+        textwrap.dedent("""
+    ### This pass: argument review
+
+    You are shown the goal, the chain of stored functions from the root of the
+    run down to this call, this function's source and contract, and the
+    concrete arguments it is about to be called with. Decide whether these
+    arguments are the right ones for this call given the goal and the caller's
+    intent. Look for:
+
+    * a recipient, channel, table, path or id that does not match the goal or
+      the linked guidance (the wrong person, the wrong list, last week's file);
+    * a value with the wrong meaning for the parameter (major units where the
+      function expects minor units, a start date after the end date, an
+      identifier from a different system);
+    * an argument the caller plainly computed wrongly from its own inputs (an
+      off-by-one window, a stale default the guidance says to override);
+    * an argument that would make an irreversible effect reach the wrong
+      target or the wrong number of targets.
+
+    If the arguments are wrong the fault is `caller` — the function is being
+    asked to do the wrong thing. Only mark `leaf` if the function's own
+    contract makes these arguments impossible to act on correctly. Arguments
+    that are plausible and consistent with the goal are a PASS.
+
+    Example — FAIL (caller): goal is "send the weekly summary to the finance
+    channel"; the call passes `channel='#general'`. Example — PASS: goal is
+    "fetch last week's orders"; the call passes the Monday-to-Sunday window
+    of the previous ISO week computed from the run's scheduled date.
+        """).strip(),
+        _VERIFIER_OUTPUT_SCHEMA,
+    ],
+)
+
+PRECONDITION_PROBE_STATIC_PREFIX = "\n\n".join(
+    [
+        _VERIFIER_COMMON_FRAME,
+        textwrap.dedent("""
+    ### This pass: precondition probe
+
+    This function is about to perform an effect. You are shown the goal, the
+    chain of calls that led here, the function's source, its declared
+    precondition (a description of the state the world must be in for the call
+    to be right), and the arguments. You have one tool, `run_probe`, which runs
+    a short read-only Python snippet in a fresh interpreter and returns what it
+    prints. Use it to observe the world as it is right now — does the record
+    exist, is the target reachable, has this effect already been applied —
+    before the effect runs. Never perform the effect through the probe and
+    never mutate anything.
+
+    Decide whether the precondition holds. Missing evidence is UNSURE, not
+    PASS. A precondition that plainly does not hold is a FAIL: `caller` when
+    the arguments point at a state that is simply not there (the row was
+    deleted, the message was already sent), `leaf` when the function's own
+    precondition is unsatisfiable as written.
+        """).strip(),
+        _VERIFIER_OUTPUT_SCHEMA,
+    ],
+)
+
+POST_PROBE_STATIC_PREFIX = "\n\n".join(
+    [
+        _VERIFIER_COMMON_FRAME,
+        textwrap.dedent("""
+    ### This pass: post-execution review
+
+    The call has run. You are shown the goal, the chain of calls, the
+    function's source and contract, the arguments, the deterministic contract
+    outcome, results already produced by sibling calls in this run, the log of
+    primitive calls this function made (name, arguments, result), any
+    before/after probe output, and the returned value. Decide whether the call
+    did what its docstring promises for these arguments. Look for:
+
+    * a result whose meaning drifted from the docstring (a total in the wrong
+      units, a count that ignores a documented filter, a field renamed);
+    * a result that is internally inconsistent, or inconsistent with the
+      sibling results and the interactions (three rows fetched, five reported);
+    * an effect that did not happen, happened twice, or reached a different
+      target than the arguments named;
+    * an empty, default or error-shaped value returned as if it were the
+      answer.
+
+    A result that follows from the arguments and the interactions is a PASS.
+    A wrong result or a wrong effect is a FAIL with `fault=leaf`; a correct
+    function fed arguments that could never produce the goal is `caller`.
+    When you cannot tell from what is shown, answer UNSURE.
+        """).strip(),
+        _VERIFIER_OUTPUT_SCHEMA,
+    ],
+)
+
+
+def _cap(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n… ({len(text) - limit} more characters)"
+
+
+def _fence(text: str, lang: str = "") -> str:
+    return f"```{lang}\n{text}\n```"
+
+
+def _first_line(text: str) -> str:
+    for line in (text or "").strip().splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _contract_section(contract: Optional[Mapping]) -> str:
+    if not contract:
+        return "## Contract\n\nNone recorded."
+    parts = ["## Contract"]
+    if contract.get("input_schema"):
+        parts.append(
+            "Input schema:\n"
+            + _fence(json.dumps(contract["input_schema"], sort_keys=True), "json"),
+        )
+    if contract.get("output_schema"):
+        parts.append(
+            "Output schema:\n"
+            + _fence(json.dumps(contract["output_schema"], sort_keys=True), "json"),
+        )
+    if contract.get("postconditions"):
+        parts.append(
+            "Postconditions (each must be true of `result` given `kwargs`):\n"
+            + "\n".join(f"- `{p}`" for p in contract["postconditions"]),
+        )
+    if len(parts) == 1:
+        parts.append("None recorded.")
+    return "\n\n".join(parts)
+
+
+def _function_block(fn: Mapping, *, title: str) -> str:
+    """Source, docstring, class and dependencies of one stored function."""
+    header = (
+        f"## {title}: `{fn.get('name')}`\n\n"
+        f"Effect class: `{fn.get('side_effect_class')}`"
+        + (
+            f" (detected: `{fn.get('side_effect_class_detected')}`)"
+            if fn.get("side_effect_class_detected")
+            else ""
+        )
+        + "\n\nDocstring:\n"
+        + _fence(str(fn.get("docstring") or "(none)"))
+    )
+    source = str(fn.get("implementation") or "(no source)")
+    return header + "\n\nSource:\n" + _fence(source, "python")
+
+
+def _dependencies_block(dependencies: Iterable[Mapping]) -> str:
+    rows = list(dependencies)
+    if not rows:
+        return "## Dependencies\n\nNone."
+    lines = ["## Dependencies (name — docstring)"]
+    for dep in rows:
+        lines.append(
+            f"- `{dep.get('name')}` — {_first_line(str(dep.get('docstring') or '')) or '(no docstring)'}",
+        )
+    return "\n".join(lines)
+
+
+def build_static_review_prompt(
+    fn: Mapping,
+    *,
+    dependencies: Iterable[Mapping] = (),
+) -> tuple[str, str, str]:
+    """Static review: (static prefix, function block, empty) — no call context."""
+    stable = "\n\n".join(
+        [
+            _function_block(fn, title="Function under review"),
+            _contract_section(fn.get("contract")),
+            _dependencies_block(dependencies),
+            "## Question\n\nCan this implementation do what its docstring and contract promise?",
+        ],
+    )
+    return STATIC_REVIEW_STATIC_PREFIX, stable, ""
+
+
+def _chain_block(frames: Sequence[Mapping]) -> str:
+    """The intent chain from root to leaf: name, docstring line, class, call-site source."""
+    if not frames:
+        return "## Call chain\n\nThis is the root of the run."
+    lines = ["## Call chain (root → this call)"]
+    for index, frame in enumerate(frames, start=1):
+        marker = "  ← this call" if index == len(frames) else ""
+        lines.append(
+            f"{index}. `{frame.get('name')}` [{frame.get('effect_class')}] — "
+            f"{_first_line(str(frame.get('docstring') or '')) or '(no docstring)'}{marker}",
+        )
+        site = frame.get("call_site_line")
+        if site:
+            lines.append(f"   called as: `{str(site).strip()}`")
+    return "\n".join(lines)
+
+
+def _guidance_block(guidance: Sequence[Mapping], *, max_chars: int) -> str:
+    if not guidance:
+        return "## Linked guidance\n\nNone."
+    parts = ["## Linked guidance"]
+    budget = max_chars
+    for entry in guidance:
+        title = str(entry.get("title") or entry.get("name") or "guidance")
+        body = str(entry.get("content") or entry.get("body") or "")
+        chunk = f"### {title}\n{_cap(body, max(budget, 0))}"
+        parts.append(chunk)
+        budget -= len(body)
+        if budget <= 0:
+            break
+    return "\n\n".join(parts)
+
+
+def _parent_window_block(
+    parent_source: Optional[str],
+    call_line: Optional[int],
+    *,
+    radius: int = 20,
+) -> str:
+    if not parent_source:
+        return ""
+    lines = parent_source.splitlines()
+    if call_line is None or call_line < 1 or call_line > len(lines):
+        window = lines[: 2 * radius + 1]
+        start = 1
+    else:
+        start = max(1, call_line - radius)
+        window = lines[start - 1 : call_line + radius]
+    numbered = "\n".join(
+        f"{start + i:4d}{'>' if (call_line is not None and start + i == call_line) else ' '} {line}"
+        for i, line in enumerate(window)
+    )
+    return "## Caller source (window around the call site)\n\n" + _fence(
+        numbered,
+        "python",
+    )
+
+
+def build_call_stable_block(
+    *,
+    goal: str,
+    guidance: Sequence[Mapping],
+    frames: Sequence[Mapping],
+    leaf: Mapping,
+    parent_source: Optional[str],
+    call_line: Optional[int],
+    children: Iterable[Mapping] = (),
+    max_guidance_chars: int = 6000,
+) -> str:
+    """The stable block shared by every per-call pass for one call site."""
+    child_rows = list(children)
+    children_block = (
+        "## Functions this one calls (name — docstring)\n"
+        + "\n".join(
+            f"- `{c.get('name')}` — {_first_line(str(c.get('docstring') or '')) or '(no docstring)'}"
+            for c in child_rows
+        )
+        if child_rows
+        else "## Functions this one calls\n\nNone."
+    )
+    parts = [
+        "## Goal of the run\n\n" + (goal.strip() or "(not stated)"),
+        _guidance_block(guidance, max_chars=max_guidance_chars),
+        _chain_block(frames),
+        _parent_window_block(parent_source, call_line),
+        _function_block(leaf, title="Function under review"),
+        children_block,
+        _contract_section(leaf.get("contract")),
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
+def _repr_capped(value: Any, limit: int) -> str:
+    try:
+        text = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+    except Exception:
+        text = repr(value)
+    return _cap(text, limit)
+
+
+def build_call_volatile_block(
+    *,
+    kwargs: Mapping[str, Any],
+    tier0: Optional[str] = None,
+    sibling_results: Sequence[Mapping] = (),
+    probe_output: Optional[str] = None,
+    interactions: Sequence[Mapping] = (),
+    result: Any = None,
+    include_result: bool = False,
+) -> str:
+    """This call's concrete values: arguments, checks, siblings, probes, interactions, result."""
+    parts = ["## Arguments\n\n" + _fence(_repr_capped(dict(kwargs), 4000), "json")]
+    if tier0 is not None:
+        parts.append("## Deterministic contract check\n\n" + tier0)
+    if sibling_results:
+        lines = ["## Results already produced in this run"]
+        for item in sibling_results:
+            lines.append(
+                f"- `{item.get('name')}` → {_repr_capped(item.get('result'), 2000)}",
+            )
+        parts.append("\n".join(lines))
+    if probe_output:
+        parts.append("## Probe output\n\n" + _fence(_cap(probe_output, 6000)))
+    if interactions:
+        lines = ["## Primitive calls made by this function (name, arguments → result)"]
+        for item in interactions:
+            lines.append(
+                f"- `{item.get('name')}`({_repr_capped(item.get('args'), 800)}) → {_repr_capped(item.get('result'), 800)}",
+            )
+        parts.append("\n".join(lines))
+    if include_result:
+        parts.append(
+            "## Returned value\n\n" + _fence(_repr_capped(result, 4000), "json"),
+        )
+    return "\n\n".join(parts)
+
+
+def build_args_review_prompt(
+    *,
+    stable_block: str,
+    kwargs: Mapping[str, Any],
+    tier0: Optional[str],
+    sibling_results: Sequence[Mapping] = (),
+) -> tuple[str, str, str]:
+    volatile = build_call_volatile_block(
+        kwargs=kwargs,
+        tier0=tier0,
+        sibling_results=sibling_results,
+    )
+    return (
+        ARGS_REVIEW_STATIC_PREFIX,
+        stable_block,
+        volatile
+        + "\n\n## Question\n\nAre these the right arguments for this call, given the goal and the caller's intent?",
+    )
+
+
+def build_precondition_probe_prompt(
+    *,
+    stable_block: str,
+    precondition: Optional[Mapping],
+    kwargs: Mapping[str, Any],
+    sibling_results: Sequence[Mapping] = (),
+) -> tuple[str, str, str]:
+    volatile = build_call_volatile_block(kwargs=kwargs, sibling_results=sibling_results)
+    precondition_text = (
+        json.dumps(dict(precondition), indent=2, sort_keys=True, default=str)
+        if precondition
+        else "(none declared — judge from the goal, the source and the arguments)"
+    )
+    volatile += "\n\n## Declared precondition\n\n" + _fence(precondition_text, "json")
+    return (
+        PRECONDITION_PROBE_STATIC_PREFIX,
+        stable_block,
+        volatile
+        + "\n\n## Question\n\nDoes the world satisfy this precondition right now, so that the effect should run?",
+    )
+
+
+def build_post_probe_prompt(
+    *,
+    stable_block: str,
+    kwargs: Mapping[str, Any],
+    result: Any,
+    tier0: Optional[str],
+    sibling_results: Sequence[Mapping] = (),
+    probe_output: Optional[str] = None,
+    interactions: Sequence[Mapping] = (),
+) -> tuple[str, str, str]:
+    volatile = build_call_volatile_block(
+        kwargs=kwargs,
+        tier0=tier0,
+        sibling_results=sibling_results,
+        probe_output=probe_output,
+        interactions=interactions,
+        result=result,
+        include_result=True,
+    )
+    return (
+        POST_PROBE_STATIC_PREFIX,
+        stable_block,
+        volatile
+        + "\n\n## Question\n\nDid this call do what the docstring promises for these arguments?",
+    )

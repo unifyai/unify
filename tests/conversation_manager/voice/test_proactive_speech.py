@@ -24,6 +24,7 @@ import pytest
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.common.prompt_helpers import PromptParts
 from unify.conversation_manager.domains.proactive_speech import (
+    GROUP_CALL_MIN_DELAY_S,
     ProactiveDecision,
     ProactiveSpeech,
 )
@@ -126,6 +127,11 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     cm.call_manager._whatsapp_call_joining = False
     cm.call_manager.hang_up_gate_reason = None
     cm.call_manager.set_hang_up_gate = AsyncMock()
+    # A 1:1 call, which is what these loop tests describe. Stated rather than
+    # left to MagicMock's empty-iterable default: the roster is what decides
+    # whether the silence decision is put on group-call restraint.
+    cm.call_manager.other_call_participant_names = []
+    cm.call_manager.other_call_assistant_names = []
     cm.assistant_has_teams = False
 
     # Create SimulatedContactManager and populate with sample contacts
@@ -473,6 +479,39 @@ class TestProactiveSpeechLoop:
 
         mock_cm.event_broker.publish.assert_called()
 
+    async def test_loop_forwards_the_live_roster_to_the_decision(self, mock_cm):
+        """The decision cannot judge a silence without knowing who is in the room.
+
+        Read from the call manager on each cycle rather than captured once: a
+        call that starts 1:1 and gains a second person, or a second assistant,
+        has to pick the group-call restraint up mid-call.
+        """
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.mode = Mode.CALL
+        mock_cm.call_manager.other_call_participant_names = ["Julia", "Dan"]
+        mock_cm.call_manager.other_call_assistant_names = ["Ada"]
+
+        seen: dict = {}
+
+        async def mock_decide(*args, **kwargs):
+            seen.update(kwargs)
+            return ProactiveDecision(delay=0, content="Are you there?"), ""
+
+        mock_cm.proactive_speech.decide = mock_decide
+
+        with (
+            patch("asyncio.sleep", new=AsyncMock()),
+            patch(
+                "unify.conversation_manager.conversation_manager.build_brain_spec",
+                return_value=MockBrainSpec(),
+            ),
+        ):
+            await ConversationManager._proactive_speech_loop(mock_cm)
+
+        assert seen["other_participants"] == ("Julia", "Dan")
+        assert seen["peer_assistants"] == ("Ada",)
+
     async def test_loop_drops_line_when_gate_arms_mid_decision(self, mock_cm):
         """Scheduling-time suppression cannot see a gate that arms while the
         decision is in flight; the delivery-time check drops the pending line
@@ -664,6 +703,134 @@ class TestProactiveSpeechDecideIntegration:
                     chat_history=[{"role": "user", "content": "Hello"}],
                     system_prompt="Test",
                 )
+
+
+# =============================================================================
+# 5. Group-call restraint on the silence decision
+# =============================================================================
+
+
+async def _decide_with_stub_llm(
+    *,
+    delay: int,
+    content: str = "Any luck with that?",
+    **roster,
+) -> tuple[ProactiveDecision, list[dict]]:
+    """Run ``decide`` against a canned LLM answer; return it and the messages."""
+    captured: list[dict] = []
+
+    class _StubClient:
+        def set_response_format(self, _model) -> None:
+            pass
+
+        async def generate(self, messages):
+            captured.extend(messages)
+            return json.dumps({"delay": delay, "content": content})
+
+    with patch(
+        "unify.conversation_manager.domains.proactive_speech."
+        "new_slow_brain_llm_client",
+        return_value=_StubClient(),
+    ):
+        decision, _ = await ProactiveSpeech().decide(
+            chat_history=[{"role": "user", "content": "…"}],
+            system_prompt="Test",
+            **roster,
+        )
+    return decision, captured
+
+
+def _group_block(messages: list[dict]) -> str:
+    """The group-call restraint message, or "" when it was not rendered."""
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith(
+            "[system] This is a group call",
+        ):
+            return content
+    return ""
+
+
+@pytest.mark.asyncio
+class TestProactiveSpeechGroupCallRestraint:
+    """A silence on a group call is usually the room's, not the assistant's.
+
+    Left ungated, this path produced the worst line an assistant can say on a
+    live call: it greets, nobody answers because the people are mid-discussion,
+    and the "somebody is waiting on a reply" branch fires seconds later with
+    "can you still hear me?".
+
+    Every test here pins the 1:1 side too. Telephony and a meet the boss is
+    alone in must keep their existing timing exactly — the conversational
+    smoothness there is load-bearing and this restraint must not reach it.
+    """
+
+    async def test_one_to_one_keeps_its_short_delay(self):
+        """Telephony: no roster at all, so nothing is gated."""
+        decision, messages = await _decide_with_stub_llm(delay=3)
+        assert decision.delay == 3
+        assert _group_block(messages) == ""
+
+    async def test_a_meet_with_one_other_person_is_not_a_group(self):
+        """The 1:1 Unify Meet, and the case a naive truthiness check breaks.
+
+        The call manager reports the one human on an ``assistant_dm`` call, so
+        "is this list non-empty" would read every 1:1 console call as a group
+        and delay its check-ins by the floor below.
+        """
+        decision, messages = await _decide_with_stub_llm(
+            delay=4,
+            other_participants=("Julia",),
+        )
+        assert decision.delay == 4
+        assert _group_block(messages) == ""
+
+    async def test_two_other_people_make_it_a_group(self):
+        decision, messages = await _decide_with_stub_llm(
+            delay=3,
+            other_participants=("Julia", "Dan"),
+        )
+        assert decision.delay == GROUP_CALL_MIN_DELAY_S
+        block = _group_block(messages)
+        assert "Julia, Dan" in block
+        assert "can you still hear me?" in block
+
+    async def test_one_person_plus_a_peer_assistant_makes_it_a_group(self):
+        """A group without a second human — the shape human-counting misses."""
+        decision, messages = await _decide_with_stub_llm(
+            delay=5,
+            other_participants=("Julia",),
+            peer_assistants=("Ada",),
+        )
+        assert decision.delay == GROUP_CALL_MIN_DELAY_S
+        block = _group_block(messages)
+        assert "Julia, Ada" in block
+        assert "Other assistants are on this call too (Ada)" in block
+
+    async def test_no_peer_paragraph_without_peers(self):
+        """The peer paragraph claims things that are false of a human-only call."""
+        _, messages = await _decide_with_stub_llm(
+            delay=3,
+            other_participants=("Julia", "Dan"),
+        )
+        assert "Other assistants are on this call" not in _group_block(messages)
+
+    async def test_the_floor_does_not_shorten_a_long_delay(self):
+        """It is a floor, not a fixed delay: a chosen long wait survives."""
+        decision, _ = await _decide_with_stub_llm(
+            delay=1800,
+            other_participants=("Julia", "Dan"),
+        )
+        assert decision.delay == 1800
+
+    async def test_the_line_itself_is_never_rewritten(self):
+        """Only the timing is clamped; what to say stays the model's call."""
+        decision, _ = await _decide_with_stub_llm(
+            delay=2,
+            content="Dan, want me to pull those numbers up?",
+            other_participants=("Julia", "Dan"),
+        )
+        assert decision.content == "Dan, want me to pull those numbers up?"
 
 
 # =============================================================================

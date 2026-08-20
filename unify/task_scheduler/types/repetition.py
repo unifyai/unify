@@ -2,14 +2,13 @@
 Schema describing how a task repeats over time. The model serializes to and
 from JSON for storage and transport.
 
-The recurrence subset (pattern schema, normalization, next-occurrence
-projection, deterministic dispatch jitter) is deliberately mirrored into
-``orchestra/services/task_repetition.py`` so Orchestra can re-project a future
-head for a repeating series whose worker died before dispatch. Any change to
-those semantics MUST be applied to both files in the same changeset; the two
-copies are pinned against each other by the shared
-``repeat_projection_vectors.json`` checked into each repo's test tree with
-byte-identical content.
+Orchestra owns recurrence: next-occurrence projection and deterministic
+dispatch jitter live only in ``orchestra/services/task_repetition.py``,
+guarded there by its ``repeat_projection_vectors.json`` corpus. This file
+keeps what authoring and validation need — the pattern schema and its
+normalization — whose semantics that Orchestra module mirrors. Any change
+to schema or normalization semantics MUST be applied to both files in the
+same changeset.
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional
 from datetime import datetime, time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -81,6 +81,19 @@ class RepeatPattern(BaseModel):
             "by the scheduler."
         ),
     )
+    timezone: Optional[str] = Field(
+        default=None,
+        description=(
+            "IANA zone the `time_of_day` clock reading belongs to, e.g. "
+            "'Asia/Karachi'. Omitted means UTC, which is what every schedule "
+            "written before this field existed meant by omission. Set it "
+            "whenever the time expresses a human hour -- 'before stand-up', "
+            "'end of day' -- because those are claims about somebody's local "
+            "clock and mean nothing in UTC: a 17:30 end-of-day log fires at "
+            "22:30 for a reader five hours east, and the previous morning for "
+            "one eight hours west."
+        ),
+    )
     jitter_seconds: Optional[int] = Field(
         default=None,
         ge=0,
@@ -109,6 +122,21 @@ class RepeatPattern(BaseModel):
             raise ValueError(
                 "`time_of_day` must be a `datetime.time`, not a full datetime",
             )
+        return v
+
+    @field_validator("timezone")
+    def _resolvable_zone(cls, v):
+        """Reject a zone this machine cannot resolve.
+
+        A typo would otherwise surface as a schedule firing at the wrong hour,
+        which is indistinguishable from the bug this field exists to fix.
+        """
+        if v is None:
+            return v
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA timezone: {v!r}") from exc
         return v
 
 

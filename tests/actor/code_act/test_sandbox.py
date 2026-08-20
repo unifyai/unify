@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from pydantic import TypeAdapter
 
@@ -6,6 +8,7 @@ from unify.actor.environments.computer import ComputerEnvironment
 from unify.actor.execution import (
     PythonExecutionSession,
     ExecutionResult,
+    _CURRENT_SANDBOX,
     parts_to_text,
     parts_to_llm_content,
     TextPart,
@@ -17,6 +20,7 @@ from unify.common._async_tool.formatting import (
     serialize_tool_content,
     FormattedToolResult,
 )
+from unify.common.tool_errors import ToolInputError
 
 
 @pytest.mark.asyncio
@@ -580,3 +584,215 @@ async def test_sandbox_builtin_open_available(tmp_path):
         result["error"] is None
     ), f"open() should be available in the sandbox but got: {result['error']}"
     assert "hello world" in parts_to_text(result["stdout"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_sandbox_concurrent_cells_serialize_in_arrival_order():
+    """Cells submitted concurrently to one session run one at a time, in order.
+
+    Cells share the session's module dict, display hook, and primitives
+    binding, so a cell that awaits mid-body must not interleave with a
+    later-submitted cell, and each cell's captured output stays its own.
+    """
+    sandbox = PythonExecutionSession()
+    seed = await sandbox.execute("order = []")
+    assert seed["error"] is None
+
+    task_a = asyncio.create_task(
+        sandbox.execute(
+            "import asyncio\n"
+            "await asyncio.sleep(0.2)\n"
+            "print('from-A')\n"
+            "order.append('A')",
+        ),
+    )
+    # Let cell A start (and hit its await) before submitting cell B.
+    await asyncio.sleep(0.05)
+    task_b = asyncio.create_task(
+        sandbox.execute("print('from-B')\norder.append('B')"),
+    )
+    result_a, result_b = await asyncio.gather(task_a, task_b)
+
+    assert result_a["error"] is None
+    assert result_b["error"] is None
+    # A finishes before B despite sleeping mid-cell: execution is exclusive
+    # and arrival-ordered, not interleaved at await points.
+    final = await sandbox.execute("order")
+    assert final["result"] == ["A", "B"]
+    # Output capture is per-cell, not crosstalked through the shared session.
+    assert parts_to_text(result_a["stdout"]) == "from-A\n"
+    assert parts_to_text(result_b["stdout"]) == "from-B\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_sandbox_distinct_sessions_do_not_contend():
+    """A cell in one session runs while another session's cell is in flight."""
+    session_a = PythonExecutionSession()
+    session_b = PythonExecutionSession()
+
+    # Cell A blocks on an event only the test can set, so it is guaranteed
+    # to still be executing while session B's cell runs to completion.
+    gate = asyncio.Event()
+    session_a.global_state["gate"] = gate
+    task_a = asyncio.create_task(session_a.execute("await gate.wait()"))
+    # Let session A's cell start before running session B's cell.
+    await asyncio.sleep(0.05)
+    result_b = await session_b.execute("value = 41 + 1\nvalue")
+
+    assert result_b["error"] is None
+    assert result_b["result"] == 42
+    # B completed while A was still executing: no cross-session contention.
+    assert not task_a.done()
+    gate.set()
+    result_a = await task_a
+    assert result_a["error"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_execute_code_python_cell_defaults_to_persistent_session_zero():
+    """A python cell with no state_mode runs stateful in the bound sandbox.
+
+    Variables defined in one default cell are readable in the next, and an
+    explicitly stateless cell neither sees nor pollutes session-0 names.
+    """
+    actor = CodeActActor(environments=[])
+    sandbox = PythonExecutionSession()
+    token = _CURRENT_SANDBOX.set(sandbox)
+    try:
+        execute_code = actor._build_tools()["execute_code"]
+
+        first = await execute_code(
+            thought="define a variable in a default cell",
+            language="python",
+            code="answer = 41",
+        )
+        assert first.error is None
+        assert first.state_mode == "stateful"
+        assert first.session_id == 0
+        assert sandbox.global_state.get("answer") == 41
+
+        second = await execute_code(
+            thought="read the variable back in a later default cell",
+            language="python",
+            code="answer + 1",
+        )
+        assert second.error is None
+        assert second.result == 42
+
+        isolated = await execute_code(
+            thought="run an isolated cell",
+            language="python",
+            state_mode="stateless",
+            code=(
+                "try:\n"
+                "    print(answer)\n"
+                "except NameError:\n"
+                "    print('NOT_FOUND')\n"
+                "leak = True"
+            ),
+        )
+        assert isolated.error is None
+        assert "NOT_FOUND" in parts_to_text(isolated.stdout)
+        assert "leak" not in sandbox.global_state
+    finally:
+        _CURRENT_SANDBOX.reset(token)
+        try:
+            await actor.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_execute_code_shell_and_venv_cells_default_to_one_shot():
+    """Omitting state_mode keeps shell and venv cells stateless one-shots.
+
+    Only local venv-less python cells run in the persistent bound sandbox;
+    a shell export does not survive to the next shell cell, and a venv cell
+    resolves stateless rather than targeting the bound sandbox.
+    """
+    actor = CodeActActor(environments=[])
+    sandbox = PythonExecutionSession()
+    token = _CURRENT_SANDBOX.set(sandbox)
+    try:
+        execute_code = actor._build_tools()["execute_code"]
+
+        exported = await execute_code(
+            thought="export a shell variable",
+            language="bash",
+            code="export FOO=bar",
+        )
+        assert exported["error"] is None
+        assert exported["state_mode"] == "stateless"
+        assert exported["session_id"] is None
+
+        echoed = await execute_code(
+            thought="read the shell variable in a second cell",
+            language="bash",
+            code='echo "${FOO:-UNSET}"',
+        )
+        assert echoed["error"] is None
+        assert "UNSET" in echoed["stdout"]
+
+        # The venv need not exist: the structured refusal reports which
+        # state_mode the omitted argument resolved to for a venv cell.
+        with pytest.raises(ToolInputError) as refusal:
+            await execute_code(
+                thought="run a cell in a venv",
+                language="python",
+                venv_id=123,
+                code="print('hi')",
+            )
+        assert refusal.value.received["state_mode"] == "stateless"
+    finally:
+        _CURRENT_SANDBOX.reset(token)
+        try:
+            await actor.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_execute_code_default_session_is_scoped_to_the_bound_sandbox():
+    """Each act binds its own sandbox, so default cells never share state.
+
+    Each binding — the shape of nested or successive act() calls — resolves
+    its default cells to its own session 0, never another act's namespace.
+    """
+    actor = CodeActActor(environments=[])
+    try:
+        execute_code = actor._build_tools()["execute_code"]
+
+        async def run_default_cell(code: str):
+            sandbox = PythonExecutionSession()
+            token = _CURRENT_SANDBOX.set(sandbox)
+            try:
+                return await execute_code(
+                    thought="run a default cell in this act's sandbox",
+                    language="python",
+                    code=code,
+                )
+            finally:
+                _CURRENT_SANDBOX.reset(token)
+
+        first = await run_default_cell("own_name = 'mine'")
+        assert first.error is None
+        assert first.session_id == 0
+
+        probe = await run_default_cell(
+            "try:\n"
+            "    print(own_name)\n"
+            "except NameError:\n"
+            "    print('NOT_FOUND')",
+        )
+        assert probe.error is None
+        assert "NOT_FOUND" in parts_to_text(probe.stdout)
+    finally:
+        try:
+            await actor.close()
+        except Exception:
+            pass

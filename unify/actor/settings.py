@@ -12,7 +12,7 @@ class ActorSettings(BaseSettings):
     """Actor settings.
 
     Attributes:
-        IMPL: Implementation type - "single_function", "code_act", or "simulated".
+        IMPL: Implementation type - "code_act" or "simulated".
         SIMULATED_STEPS: Number of steps before auto-completion for simulated actor.
         ANTICAPTCHA_KEY: API key for AntiCaptcha service.
     """

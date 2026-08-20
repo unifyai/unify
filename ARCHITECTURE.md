@@ -159,15 +159,28 @@ When the Actor calls `primitives.contacts.ask(...)`, the ContactManager starts i
 
 This gives full-depth steering with transcript visibility at every level.
 
-### `ask()` — inspecting a running loop
+### `ask()` — inspecting a loop, running or completed
 
-`ask()` is not a simple state peek. It:
+`ask()` is not a simple state peek, and it represents the inspected loop
+differently depending on whether it has finished:
 
-1. Snapshots the running loop's full transcript
-2. Transforms roles to `inner_user`/`inner_assistant` (so the inspection LLM distinguishes the inspected conversation from its own)
-3. Creates a fresh LLM client with the snapshot as system context
-4. Starts a **new, read-only tool loop** to answer the question
-5. If the inspected loop has its own inner handles, their `ask_*` tools are forwarded to the inspection loop, enabling recursive drill-down
+- **Still running** — a live snapshot: the transcript so far, compact-
+  serialized, with roles transformed to `inner_user`/`inner_assistant` (so
+  the inspection LLM distinguishes the inspected conversation from its own).
+- **Completed** — a compact **digest** instead: built once, mechanically (no
+  LLM call), from data the loop already retains — the original request, each
+  tool call's name/`thought`/result preview+size, source URLs seen, and the
+  final result. Cached on the handle, so a second question about the same
+  completed handle reuses byte-identical text and hits the provider's prefix
+  cache. A `read_child_message(idx)` tool is offered alongside it so the
+  inspection loop can fetch any one message from the completed transcript
+  verbatim (capped at 32KB) when the digest's previews aren't enough.
+
+Both paths otherwise follow the same shape:
+
+1. Creates a fresh LLM client with the snapshot/digest as system context
+2. Starts a **new, read-only tool loop** to answer the question
+3. If the inspected loop has its own inner handles, their `ask_*` tools are forwarded to the inspection loop, enabling recursive drill-down
 
 This means you can ask "what's the flight search doing?" and the inspection loop can, if needed, call `ask_flight_search()` to query the inner handle's own transcript.
 
@@ -215,6 +228,16 @@ The Actor implements a **gating policy**: until the LLM has queried both `Functi
 
 The registry auto-discovers methods from manager base classes, generates tool schemas, builds prompt context, and constructs the sandbox's global state — all from the spec definitions.
 
+### Verification
+
+**Files:** `unify/actor/verification_runtime.py`, `unify/function_manager/verification/`
+
+A recurring task's steady state is a stored function firing with no model in the loop. That state is *earned*. Every compositional `Function` row carries a verification ledger: an **effect class** detected deterministically from its AST (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`; every primitive is classified in `classify.py`, unknown ones are `unsafe_effectful` and logged), a **trust hash** over its source, dependency closure, venv and language, a **contract** derived from type hints plus librarian-authored postconditions, **fixtures** for pure functions, and a summary folded from the append-only `Functions/Verifications` table. `Function.verify` is derived from that evidence by `policy.derive_verify` — no tool, prompt or model writes it.
+
+While a function is untrusted, a symbolic run (a task entrypoint executing without the CodeAct loop) wraps every untrusted callable in its closure. Per call: tier-0 input check → for effectful leaves, wait for every earlier verdict in the run to land `PASS`, then static review (cached per hash), argument review and precondition probe to completion; for pure/read leaves those passes race the call → memo lookup → execute with an interactions log → tier-0 output check → an async post pass. Verdict tasks run on a dedicated verifier loop; the barrier is total-order over the run's verdicts, not dependency-tracked. A `FAIL` cancels later verdicts and the entrypoint task, repairs the blamed leaf (`fault=caller` blames the parent; a repeat on the same target escalates one frame) and re-invokes the root with a memo so no effect runs twice, bounded by `max_rewinds_per_run`. `UNSURE` or a timeout at the barrier holds the run (`ExecutionState.held`) with an owner notification and no effect executed. Delivery waits for the root verdict by default. Trusted functions in a mixed closure get a memo wrapper only; trusted effectful functions without an output contract are sampled for spot checks that inform but never gate. A fully trusted closure runs with no supervisor, no wrappers and no verdict tasks.
+
+Trust is invalidated by any change to source, dependencies, venv or linked guidance, and by any `FAIL`. Offline promotion follows from the ledger: a task is eligible when every function in its entrypoint's closure is trusted, and is promoted automatically at the end of the run in which the last member flips. Every actor LLM client is tagged with a `purpose` (`planning`, `verification`, `repair`) and each execution row records the token split so the distillation curve — planning tokens falling to zero as verification tokens fall to zero — can be plotted.
+
 ---
 
 ## State managers
@@ -243,7 +266,7 @@ The `_as_caller_description` class attribute on each manager tells nested loops 
 
 **TranscriptManager** — Conversation history. Search, filter, and analyze past conversations. Can resolve participants via ContactManager.
 
-**GuidanceManager** — Procedures and SOPs. Step-by-step instructions, software walkthroughs, and strategies for composing functions. Linked to FunctionManager entries.
+**GuidanceManager** — Procedures and SOPs. Step-by-step instructions, software walkthroughs, and strategies for composing functions. Linked to FunctionManager entries; editing or deleting an entry invalidates the trust of the functions linked to it.
 
 **MemoryManager** — Offline consolidation. Runs periodically (every ~50 messages) to extract contacts, relationships, knowledge, tasks, and response policies from recent conversations into the structured managers.
 

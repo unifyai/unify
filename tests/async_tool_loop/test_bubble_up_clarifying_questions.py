@@ -10,11 +10,11 @@ from tests.helpers import _handle_project
 from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
-    _wait_for_tool_message_prefix,
-    _wait_for_assistant_call_prefix,
+    _wait_for_user_message_prefix,
+    _wait_for_assistant_steer_action,
     first_user_message,
     first_assistant_tool_call,
-    first_assistant_tool_call_by_prefix,
+    first_assistant_steer_call,
     first_tool_message_by_name_prefix,
     first_tool_message_by_name,
     last_plain_assistant_message,
@@ -94,7 +94,7 @@ async def test_clarification_bubbles_up_two_tiers(llm_config) -> None:
         "that is NOT inferable from the current tool context or prior messages in this loop. Do not guess or invent.\n"
         "Therefore: (1) Do not start unrelated base tools until that pending call is unblocked; "
         "(2) Call `request_clarification` to ask the user the exact question and wait for their answer (you may call other tools only to fetch that answer); "
-        "(3) As soon as you have the answer, immediately call the generated clarify_{toolName}_{id} helper for that exact pending call to provide the answer so it can resume.\n"
+        '(3) As soon as you have the answer, immediately call steer(call_id=<the id from the "[clarification ...]" tail message>, action="clarify", payload=<the answer>) to provide the answer so the pending call can resume.\n'
         "After the original call resumes or completes, you may continue with further tools as needed.\n"
         "When the email has been sent successfully, end your final assistant message with an explicit confirmation using the word 'sent' (e.g., 'Email sent.').\n"
         "Do not hallucinate any details; if unknown, ask. Keep responses concise.",
@@ -120,22 +120,23 @@ async def test_clarification_bubbles_up_two_tiers(llm_config) -> None:
     # Deterministic ordering using triggers:
     # 1) Wait until assistant schedules send_email
     await _wait_for_tool_request(outer_client, "send_email", timeout=120.0)
-    # 2) Wait until the clarification request tool message appears
-    await _wait_for_tool_message_prefix(
+    # 2) Wait until the coalesced clarification tail message appears (the
+    # pending stub tool message is never rewritten with the question).
+    await _wait_for_user_message_prefix(
         outer_client,
-        "clarification_request_",
+        "[clarification ",
         timeout=120.0,
     )
 
     # 3) The request_clarification tool will bubble the question up – capture it
     await clar_up_q.get()
-    # 4) Provide the answer; assistant should then call a clarify_* helper
+    # 4) Provide the answer; assistant should then call steer(action="clarify")
     await clar_down_q.put("I'll be bringing sausages and a pack of beer")
 
-    # 5) Ensure the assistant has invoked a clarify_* helper
-    await _wait_for_assistant_call_prefix(
+    # 5) Ensure the assistant has invoked steer(action="clarify")
+    await _wait_for_assistant_steer_action(
         outer_client,
-        "clarify_send_email",
+        "clarify",
         timeout=120.0,
     )
 
@@ -159,10 +160,14 @@ async def test_clarification_bubbles_up_two_tiers(llm_config) -> None:
     args1 = json.loads(call1["function"]["arguments"])
     assert args1["address"] == "jonathan.smith@example.com"
 
-    # 3️⃣ tool asks a clarification question ----------------------------------
-    clar_req = first_tool_message_by_name_prefix(
-        outer_client.messages,
-        "clarification_request_",
+    # 3️⃣ tool asks a clarification question — delivered as a coalesced
+    # [clarification <call_id>] user-role tail message, not a rewrite of the
+    # pending tool-reply stub.
+    clar_req = next(
+        m
+        for m in outer_client.messages
+        if m.get("role") == "user"
+        and str(m.get("content") or "").startswith("[clarification ")
     )
     assert "Will you be bringing anything" in clar_req["content"]
 
@@ -180,16 +185,16 @@ async def test_clarification_bubbles_up_two_tiers(llm_config) -> None:
     assert "sausages" in clar_ans["content"]
     assert "beer" in clar_ans["content"]
 
-    # 6️⃣ assistant forwards the answer via `_clarify_send_email…` ------------
-    _m5, _clar = first_assistant_tool_call_by_prefix(
+    # 6️⃣ assistant forwards the answer via steer(action="clarify") ----------
+    _m5, _clar = first_assistant_steer_call(
         outer_client.messages,
-        "clarify_send_email",
+        "clarify",
     )
 
     # 7️⃣ final tool message contains the real result -------------------------
     final_tool = first_tool_message_by_name_prefix(
         outer_client.messages,
-        "clarify_send_email",
+        "steer:clarify",
     )
     assert "Email sent" in final_tool["content"]
 
@@ -227,8 +232,9 @@ async def delegating_tool(
         "CRITICAL: When any internal tool requests clarification, the missing information is a user-specific preference or fact "
         "that is NOT available to you from tool context or prior messages in this loop. Do not infer, assume, or guess.\n"
         "Therefore, you MUST first call `request_clarification` to ask the user the exact question, wait for the user's answer, "
-        "and ONLY THEN call the corresponding clarify_{toolName}_{id} helper to provide that answer so the tool can resume.\n"
-        "Never call a clarify_* helper unless you have just obtained the answer via `request_clarification` in this conversation. "
+        'and ONLY THEN call steer(call_id=<the id from the "[clarification ...]" tail message>, action="clarify", payload=<answer>) '
+        "to provide that answer so the tool can resume.\n"
+        'Never call steer(action="clarify") unless you have just obtained the answer via `request_clarification` in this conversation. '
         "For example, for a question like 'what colour should the widget be?', treat it as a personal preference unknown to you; ask the user. "
         "Keep responses concise.",
     )
@@ -256,10 +262,11 @@ async def test_clarification_bubbles_through_returned_handle(llm_config) -> None
 
     outer_llm = make_llm(
         "You are the TOP-LEVEL coordinator. When any pending tool (including nested delegated tools) asks a clarification "
-        "question via a clarification_request_* tool message, you MUST:\n"
+        "question via a [clarification ...] message, you MUST:\n"
         "(1) Call `request_clarification` to ask the user that exact question;\n"
         "(2) Wait for the user's answer;\n"
-        "(3) Forward that answer to the pending tool via the clarify_* helper.\n"
+        '(3) Forward that answer via steer(call_id=<the id from the "[clarification ...]" '
+        'tail message>, action="clarify", payload=<answer>).\n'
         "Treat these as user preferences or facts unknown to you; do NOT answer them yourself, guess, or infer from unrelated context.\n"
         "Do NOT start unrelated tools until pending clarifications are resolved.",
         **llm_config,
@@ -362,7 +369,7 @@ async def test_outer_loop_exits_when_inner_blocked_on_unanswered_clarification(
             "cannot answer it (because you don't have a request_clarification tool), "
             "call the `final_answer` tool with answer='I cannot help with that.' to "
             "end the conversation.\n"
-            "IMPORTANT: When you see a clarification_request message, use `final_answer` "
+            "IMPORTANT: When you see a [clarification ...] message, use `final_answer` "
             "to respond with 'I cannot help with that.' - do NOT try to answer it "
             "yourself or guess, and do NOT call stop or wait helpers."
         ),

@@ -24,6 +24,14 @@ class ConversationSettings(BaseSettings):
         FAST_BRAIN_REASONING_EFFORT: Reasoning effort for voice fast-brain
             call sites (LiveKit voice, turn selection, opening greeting).
             Override via UNIFY_CONVERSATION_FAST_BRAIN_REASONING_EFFORT.
+        FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT: Reasoning effort for turn
+            selection while another assistant or a second person is on the
+            call. Deciding whether a turn was aimed at you — and whether an
+            unnamed follow-up still belongs to whoever was named a turn ago —
+            is a harder judgement than any 1:1 turn requires, and the cost of
+            getting it wrong is answering over somebody. Paid only on a
+            multi-party call, so 1:1 latency is untouched. Override via
+            UNIFY_CONVERSATION_FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT.
         SLOW_BRAIN_MODEL: Shared ConversationManager slow-brain model. Empty
             falls back to the global shared model (UNIFY_MODEL / assistant
             default resolution). Override via
@@ -61,6 +69,7 @@ class ConversationSettings(BaseSettings):
 
     FAST_BRAIN_MODEL: str = "openai/gpt-5.4-mini@openrouter"
     FAST_BRAIN_REASONING_EFFORT: str = "low"
+    FAST_BRAIN_MULTI_PARTY_REASONING_EFFORT: str = "medium"
     SLOW_BRAIN_MODEL: str = "openai/gpt-5.6-terra@openrouter"
     SLOW_BRAIN_REASONING_EFFORT: str = "high"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50

@@ -85,15 +85,17 @@ async def test_extra_ask_tools_coexist_with_dynamic_and_completed():
     # Simulate a completed ask handle
     td._completed_ask_handles["ask_completed"] = ask_completed
 
-    # Simulate a live dynamic ask tool
-    td._dynamic_tools_ref = {"ask_dynamic": ask_dynamic, "other_tool": lambda: None}
+    # Simulate a live ask closure (DynamicToolFactory.live_ask_fns) — every
+    # entry here is by construction an ask closure, so unlike the pre-steer()
+    # `_dynamic_tools_ref` (which mixed ask_* in with everything else and had
+    # to be filtered by name prefix), no filtering is needed here anymore.
+    td._live_ask_fns_ref = {"ask_dynamic": ask_dynamic}
 
     snapshot = td.get_ask_tools()
 
     assert "ask_extra" in snapshot, "Extra ask tool missing"
     assert "ask_completed" in snapshot, "Completed ask tool missing"
     assert "ask_dynamic" in snapshot, "Dynamic ask tool missing"
-    assert "other_tool" not in snapshot, "Non-ask dynamic tools should be filtered"
 
     assert snapshot["ask_extra"] is ask_extra
     assert snapshot["ask_completed"] is ask_completed
@@ -123,7 +125,7 @@ async def test_extra_ask_tools_precedence():
     )
     td._completed_ask_handles["ask_shared"] = sentinel_completed
     td._completed_ask_handles["ask_completed_only"] = sentinel_completed
-    td._dynamic_tools_ref = {
+    td._live_ask_fns_ref = {
         "ask_shared": sentinel_dynamic,
         "ask_dynamic_only": sentinel_dynamic,
     }
@@ -139,37 +141,19 @@ async def test_extra_ask_tools_precedence():
 
 
 # ---------------------------------------------------------------------------
-# 4. ask_about_completed_tool meta-dispatcher excluded from get_ask_tools()
+# 4. ask_about_completed_tool never reaches get_ask_tools() — structurally,
+#    not by filtering.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(5)
-async def test_get_ask_tools_excludes_ask_about_completed_tool():
-    """The ``ask_about_completed_tool`` meta-dispatcher created by
-    DynamicToolFactory must not leak into get_ask_tools().
-
-    It routes by call_id into _completed_askable_tools, so including it
-    alongside genuine per-tool ask functions (keyed by function name) causes
-    signature mismatches when downstream code calls fn(question=...).
-    """
-
-    async def ask_real_tool() -> str:
-        return "real"
-
-    async def ask_about_completed_tool(tool_id: str, question: str) -> str:
-        return "meta-dispatcher"
-
-    td = _make_tools_data()
-    td._dynamic_tools_ref = {
-        "ask_real_tool": ask_real_tool,
-        "ask_about_completed_tool": ask_about_completed_tool,
-    }
-
-    snapshot = td.get_ask_tools()
-
-    assert "ask_real_tool" in snapshot, "Genuine ask tool should be included"
-    assert "ask_about_completed_tool" not in snapshot, (
-        "Meta-dispatcher ask_about_completed_tool must be excluded from "
-        "get_ask_tools() to prevent signature mismatches in downstream consumers"
-    )
+#
+# Pre-steer(), `ask_about_completed_tool` and genuine per-tool ask closures
+# lived in the same `_dynamic_tools_ref` dict (keyed by function name),
+# separated only by an explicit exclusion check in get_ask_tools() — a
+# check that could be forgotten and cause a real signature mismatch
+# downstream (fn(question=...) vs fn(tool_id=..., question=...)).
+#
+# Post-steer(), `ask_about_completed_tool` lives in DynamicToolFactory's
+# outer-visible `dynamic_tools` dict; live ask closures for recursion live
+# in the *separate* `live_ask_fns` dict that seeds `_live_ask_fns_ref`.
+# There is no shared namespace left to filter — see
+# DynamicToolFactory.generate() and test_tools_bytes_stability.py's
+# coverage of the static surface for the mechanism this now relies on.

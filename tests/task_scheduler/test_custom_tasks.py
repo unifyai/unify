@@ -344,7 +344,16 @@ def test_task_adapter_derived_stale_detects_repointed_entrypoint():
         {"entrypoint": 1},
         {"entrypoint_function": "run_unknown"},
     )
+
+    # A source that declares no entrypoint_function used to end the check on
+    # its first line, which made an entrypoint the *runtime* attached — the
+    # only kind the source never names — unrepairable by construction. It is
+    # now judged on whether it still resolves.
+    adapter._entrypoint_resolves = lambda fid: fid == 1
     assert not adapter.derived_stale("k", {"entrypoint": 1}, {})
+    adapter._entrypoint_resolves = lambda fid: fid == 29
+    assert adapter.derived_stale("k", {"entrypoint": 1}, {})
+    assert not adapter.derived_stale("k", {"entrypoint": None}, {})
 
 
 @_handle_project

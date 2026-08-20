@@ -83,7 +83,9 @@ class BaseWebSearcher(BaseStateManager, metaclass=SingletonABCMeta):
         Clarifications
         --------------
         Do not ask the user questions in the final answer. When a clarification
-        channel is provided via request_clarification, route any follow-ups there.
+        channel is provided via request_clarification, route any follow-ups
+        there — including when the question depends on context missing from the
+        request itself: ask rather than guess.
         If no clarification channel exists, proceed with sensible defaults or
         best-guess values and state assumptions in the final answer when relevant.
 
@@ -108,6 +110,41 @@ class BaseWebSearcher(BaseStateManager, metaclass=SingletonABCMeta):
         SteerableToolHandle
             A live handle that ultimately yields the assistant's answer and
             exposes steering operations (pause, resume, interject, stop).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def fetch(self, url: str) -> str:
+        """Download a public URL and return the local path it was saved to.
+
+        Purpose
+        -------
+        For retrieving the *bytes* at an address rather than reading about it:
+        a CSV export link, a PDF, a dataset, or a folder shared with "anyone
+        with the link", which is an ordinary public URL however it was created.
+        Use ``ask`` instead when the question is about content and the answer is
+        prose.
+
+        The returned path is an ordinary file in the workspace, so it can be
+        passed straight to file parsing or to ingestion without any further
+        step.
+
+        Scope
+        -----
+        The public internet only. Addresses that resolve inside a private
+        network are refused, as are schemes other than http and https, and
+        credentials embedded in the URL. A page that requires signing in
+        returns whatever an anonymous visitor would get -- usually a login
+        page, not the file -- so this is not a route to gated content; reach
+        that through the connected workspace or integration instead.
+
+        Very large downloads and slow servers are cut off rather than allowed
+        to run indefinitely.
+
+        Returns
+        -------
+        str
+            Absolute path to the downloaded file.
         """
         raise NotImplementedError
 

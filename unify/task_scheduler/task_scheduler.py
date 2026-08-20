@@ -135,37 +135,6 @@ ToolsDict = Dict[str, Callable[..., Any]]
 TASKS_META_TABLE = "Tasks/Meta"
 logger = logging.getLogger(__name__)
 
-OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS = {
-    "idempotency_contract",
-    "side_effect_contract",
-    "cost_contract",
-    "input_contract",
-    "failure_contract",
-    "observability_contract",
-    "equivalence_contract",
-    "managed_primitive_contract",
-}
-OFFLINE_CERTIFICATION_ALLOWED_RISK_CLASSIFICATIONS = {
-    "safe_noop",
-    "read_only",
-    "idempotent_effectful",
-    "unsafe_effectful",
-}
-OFFLINE_CERTIFICATION_REQUIRED_ATTESTATIONS = {
-    "no_hardcoded_live_observations",
-    "no_removed_validation_gates",
-    "no_reordered_side_effects",
-    "no_discarded_recovery_branches",
-    "no_static_runtime_assumptions",
-    "no_ad_hoc_logic_replaced_managed_primitives",
-}
-
-
-def _missing_certification_value(value: Any) -> bool:
-    """Return whether a certification evidence field is materially empty."""
-
-    return value in (None, "", [], {})
-
 
 def _now_iso() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
@@ -186,9 +155,19 @@ class StaleActivationSuperseded(Exception):
     """
 
 
-# Columns definitions carried before run state moved to Tasks/Executions.
-# Dropped on read so rows written before the migration still load.
-_LEGACY_DEFINITION_FIELDS = frozenset({"status", "activated_by", "instance_id"})
+# Columns definitions carried before run state moved to Tasks/Executions, and
+# the self-attested offline certification keys that verification replaced.
+# Dropped on read so rows written before those changes still load.
+_LEGACY_DEFINITION_FIELDS = frozenset(
+    {
+        "status",
+        "activated_by",
+        "instance_id",
+        "certification_status",
+        "certification_metadata",
+        "certification_result",
+    },
+)
 
 
 class TaskSelfInvocationError(RuntimeError):
@@ -430,32 +409,20 @@ class TaskScheduler(BaseTaskScheduler):
             *,
             function_id: int,
             rationale: str,
-            certification_metadata: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return self._attach_entrypoint_to_definition(
                 task_id=task.task_id,
                 function_id=function_id,
                 rationale=rationale,
-                certification_metadata=certification_metadata,
             )
 
-        def _promote_entrypoint_offline(
-            *,
-            function_id: int,
-            certification_metadata: dict[str, Any],
-            certification_result: dict[str, Any],
-        ) -> dict[str, Any]:
-            return self._promote_definition_to_offline(
-                task_id=task.task_id,
-                function_id=function_id,
-                certification_metadata=certification_metadata,
-                certification_result=certification_result,
-            )
+        def _promote_offline() -> dict[str, Any]:
+            return self.promote_task_offline(task_id=task.task_id)
 
         return {
             "metadata": metadata,
             "attach_entrypoint": _attach_entrypoint,
-            "promote_entrypoint_offline": _promote_entrypoint_offline,
+            "promote_task_offline": _promote_offline,
         }
 
     def _build_task_run_context(
@@ -520,9 +487,8 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         function_id: int,
         rationale: str,
-        certification_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record a symbolic executor candidate on the task definition row."""
+        """Record a symbolic executor on the task definition row."""
 
         if function_id < 0:
             raise ValueError("function_id must be a non-negative integer.")
@@ -553,104 +519,79 @@ class TaskScheduler(BaseTaskScheduler):
                 entries={"entrypoint": int(function_id)},
             )
             return {
-                "outcome": "candidate_recorded",
+                "outcome": "entrypoint_recorded",
                 "task_id": task_id,
                 "function_id": int(function_id),
                 "rationale": rationale,
-                "certification_status": "required_before_offline_promotion",
-                "certification_metadata": certification_metadata or {},
+                "next": (
+                    "Future runs execute this function under verification; it "
+                    "earns trust from independent verdicts, and the task is "
+                    "promoted to offline delivery once every function it calls "
+                    "is trusted."
+                ),
             }
 
-    def _offline_promotion_rejection_reasons(
-        self,
-        *,
-        certification_metadata: dict[str, Any],
-        certification_result: dict[str, Any],
-    ) -> list[str]:
-        """Return reasons a symbolic candidate is not certified for offline use."""
+    def _function_manager_for_trust(self) -> Any:
+        from unify.function_manager.function_manager import FunctionManager
 
+        fm = ManagerRegistry.get_function_manager()
+        return fm if isinstance(fm, FunctionManager) else None
+
+    def offline_eligible(self, task: Task) -> tuple[bool, list[str]]:
+        """Whether ``task`` may run offline: a bound entrypoint whose whole closure is trusted.
+
+        Returns ``(eligible, reasons)``; each reason names an offending
+        function_id — untrusted, or ``unsafe_effectful`` with a class that
+        was only inferred from third-party imports and never confirmed.
+        """
+        if task.entrypoint is None:
+            return False, ["no_entrypoint"]
+        fm = self._function_manager_for_trust()
+        if fm is None:
+            return False, ["no_function_manager"]
+        from unify.actor.verification_runtime import closure_rows, rederive_trust
+
+        rows = fm.filter_functions(
+            filter=f"function_id == {int(task.entrypoint)}",
+            destination=task.destination,
+            include_implementations=True,
+        )
+        if not rows:
+            return False, [f"entrypoint_missing:{int(task.entrypoint)}"]
+        closure = closure_rows(fm, rows[0])
+        rederive_trust(fm, closure, settings=fm.verification_settings)
         reasons: list[str] = []
-        evidence = certification_metadata.get("certification_evidence")
-        if not isinstance(evidence, dict) or not evidence:
-            reasons.append("missing_certification_evidence")
-            evidence = {}
+        for row in closure.values():
+            fid = int(row["function_id"])
+            if row.get("verify", True):
+                reasons.append(f"untrusted:{fid}")
+            if (
+                row.get("side_effect_class") == "unsafe_effectful"
+                and row.get("class_source") == "inferred_third_party"
+            ):
+                reasons.append(f"unconfirmed_unsafe_class:{fid}")
+        return (not reasons), reasons
 
-        missing_evidence_fields = sorted(
-            field
-            for field in OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS
-            if _missing_certification_value(evidence.get(field))
-        )
-        reasons.extend(f"missing_evidence:{field}" for field in missing_evidence_fields)
+    def promote_task_offline(self, *, task_id: int) -> dict[str, Any]:
+        """Promote a task to offline delivery when its entrypoint closure is trusted.
 
-        risk_classification = evidence.get("risk_classification")
-        if _missing_certification_value(risk_classification):
-            reasons.append("missing_evidence:risk_classification")
-        elif (
-            risk_classification
-            not in OFFLINE_CERTIFICATION_ALLOWED_RISK_CLASSIFICATIONS
-        ):
-            reasons.append(f"invalid_risk_classification:{risk_classification}")
-        elif risk_classification == "unsafe_effectful":
-            reasons.append("unsafe_side_effect_contract")
-
-        managed_primitive_contract = evidence.get("managed_primitive_contract")
-        if isinstance(managed_primitive_contract, dict):
-            preserved = managed_primitive_contract.get("preserved")
-            if preserved is not True:
-                reasons.append("primitive_surface_changed")
-            ad_hoc_replacements = managed_primitive_contract.get(
-                "ad_hoc_replacements",
-            )
-            if ad_hoc_replacements not in (None, [], {}):
-                reasons.append("ad_hoc_logic_replaced_managed_primitive")
-        elif not _missing_certification_value(managed_primitive_contract):
-            reasons.append("invalid_evidence:managed_primitive_contract")
-
-        cost_contract = evidence.get("cost_contract")
-        if isinstance(cost_contract, dict) and cost_contract.get("bounded") is not True:
-            reasons.append("cost_contract_too_expensive")
-
-        attestations = evidence.get("attestations")
-        if not isinstance(attestations, dict):
-            reasons.append("missing_evidence:attestations")
-            attestations = {}
-        failed_attestations = sorted(
-            field
-            for field in OFFLINE_CERTIFICATION_REQUIRED_ATTESTATIONS
-            if attestations.get(field) is not True
-        )
-        reasons.extend(f"failed_attestation:{field}" for field in failed_attestations)
-
-        if certification_result.get("evidence_based") is not True:
-            reasons.append("certification_evidence_not_attested")
-        if certification_result.get("executed_entrypoint") is True:
-            reasons.append("certification_must_not_execute_entrypoint")
-        return reasons
-
-    def _promote_definition_to_offline(
-        self,
-        *,
-        task_id: int,
-        function_id: int,
-        certification_metadata: dict[str, Any],
-        certification_result: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Promote the task definition to offline delivery after certification."""
-
-        if function_id < 0:
-            raise ValueError("function_id must be a non-negative integer.")
-
-        rejection_reasons = self._offline_promotion_rejection_reasons(
-            certification_metadata=certification_metadata,
-            certification_result=certification_result,
-        )
-        if rejection_reasons:
+        Eligibility is derived from the verification ledger, never attested.
+        Loss of trust later never demotes: offline is a delivery choice and
+        the headless lane runs the same verification.
+        """
+        task = self._get_task_or_raise(task_id)
+        eligible, reasons = self.offline_eligible(task)
+        if not eligible:
             return {
-                "outcome": "certification_rejected",
+                "outcome": "not_eligible",
                 "task_id": task_id,
-                "function_id": int(function_id),
-                "rejection_reasons": rejection_reasons,
+                "function_id": task.entrypoint,
+                "reasons": reasons,
             }
+        return self._promote_definition_to_offline(task_id=task_id)
+
+    def _promote_definition_to_offline(self, *, task_id: int) -> dict[str, Any]:
+        """Write ``offline=True`` on the definition; callers check eligibility first."""
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
@@ -660,29 +601,13 @@ class TaskScheduler(BaseTaskScheduler):
                 return_ids_only=False,
             )
             if not log_objs:
-                return {
-                    "outcome": "definition_missing",
-                    "task_id": task_id,
-                    "function_id": int(function_id),
-                    "certification_status": "passed",
-                    "certification_result": certification_result,
-                }
+                return {"outcome": "definition_missing", "task_id": task_id}
             row = log_objs[0]
-            if int(row.entries.get("entrypoint") or -1) != int(function_id):
-                return {
-                    "outcome": "entrypoint_mismatch",
-                    "task_id": task_id,
-                    "function_id": int(function_id),
-                    "certification_status": "passed",
-                    "certification_result": certification_result,
-                }
             if bool(row.entries.get("offline")):
                 return {
                     "outcome": "already_offline",
                     "task_id": task_id,
-                    "function_id": int(function_id),
-                    "certification_status": "passed",
-                    "certification_result": certification_result,
+                    "function_id": row.entries.get("entrypoint"),
                 }
             self._write_log_entries(
                 logs=row.id,
@@ -691,10 +616,7 @@ class TaskScheduler(BaseTaskScheduler):
             return {
                 "outcome": "offline_promoted",
                 "task_id": task_id,
-                "function_id": int(function_id),
-                "certification_status": "passed",
-                "certification_metadata": certification_metadata,
-                "certification_result": certification_result,
+                "function_id": row.entries.get("entrypoint"),
             }
 
     def warm_embeddings(self) -> None:
@@ -1309,15 +1231,9 @@ class TaskScheduler(BaseTaskScheduler):
                 scheduler=self,
                 entrypoint=task.entrypoint,
                 entrypoint_kwargs=entrypoint_kwargs,
-                # Deployment-owned tasks (custom_hash set) are healed by
-                # bundle resync, never by LLM repair — including when the
-                # entrypoint row itself is missing, where the per-function
-                # ownership guard has nothing left to inspect.
-                entrypoint_repair_attempts=(
-                    1 if task.entrypoint is not None and not task.custom_hash else 0
-                ),
                 entrypoint_repair_context=(
                     {
+                        "task_name": task.name,
                         "task_run_context": entrypoint_kwargs.get(
                             "task_execution_context",
                             {},
@@ -1457,15 +1373,9 @@ class TaskScheduler(BaseTaskScheduler):
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            # Same ownership rule as the scheduled path: bundle-owned tasks
-            # never LLM-repair, even when the entrypoint row is gone.
-            entrypoint_repair_attempts=(
-                1
-                if definition.entrypoint is not None and not definition.custom_hash
-                else 0
-            ),
             entrypoint_repair_context=(
                 {
+                    "task_name": definition.name,
                     "task_run_context": entrypoint_kwargs.get(
                         "task_execution_context",
                         {},
@@ -1753,6 +1663,15 @@ class TaskScheduler(BaseTaskScheduler):
         ``entrypoint``), background offline execution, an optional per-attempt
         runtime bound (``max_runtime_seconds``), and an enabled flag.
         Returns a ``ToolOutcome`` containing the newly assigned ``task_id``.
+
+        A successful create is the arming: an enabled task with a schedule
+        or recurrence fires without any further step. Run rows are
+        materialized separately by the deployment's scheduler and may not
+        appear until the first run starts, so an empty run ledger right
+        after creation is normal and is not evidence the task is disarmed.
+        Never recreate or disable a task because no run row is visible yet;
+        to confirm arming, read the definition back — ``enabled`` plus its
+        schedule and recurrence.
 
         ``_sync_identity`` carries the custom-sync row identity
         (``custom_key``/``custom_hash`` and sync-owned extras) so
@@ -2112,6 +2031,7 @@ class TaskScheduler(BaseTaskScheduler):
             task_id = entries.get("task_id")
             if task_id is None:
                 continue
+            entrypoint = entries.get("entrypoint")
             planted.append(
                 {
                     "task_id": int(task_id),
@@ -2120,6 +2040,12 @@ class TaskScheduler(BaseTaskScheduler):
                     # connection: the definition exists and nothing will
                     # start it, an explicit run included.
                     "enabled": entries.get("enabled") is not False,
+                    # The function this definition runs, when it has one.
+                    # Reported because it is the only record of which
+                    # functions a source's tasks reference -- an uninstall
+                    # reads it to find what its own runs distilled, which
+                    # no bundle source lists.
+                    "entrypoint": None if entrypoint is None else int(entrypoint),
                 },
             )
         return sorted(planted, key=lambda task: task["task_id"])
@@ -2259,6 +2185,12 @@ class TaskScheduler(BaseTaskScheduler):
         unless a new ``repeat`` is set in the same call — a cadence has
         nothing to anchor to without a schedule). Converting a scheduled task
         to a triggered one is a single call: ``trigger=..., start_at=None``.
+
+        Schedule, recurrence and ``enabled`` edits re-arm the series by
+        rewriting the definition; the deployment's scheduler picks them up
+        when it next materializes a run. As with creation, no ``scheduled``
+        run row may be visible in the meantime — that is not evidence the
+        edit failed to take.
         """
 
         if not _root_applied:
@@ -3205,8 +3137,13 @@ class TaskScheduler(BaseTaskScheduler):
         ``cancelled``), ``scheduled_for`` (the moment it belongs to),
         ``started_at`` / ``completed_at``, ``result_summary`` for what the run
         produced, and ``error`` when it failed. A single ``scheduled`` entry
-        dated ahead is the next run; its absence means nothing is currently
-        armed for this task.
+        dated ahead is the next run. Its absence does not mean the task is
+        disarmed: run rows are materialized by the deployment's scheduler,
+        not by task creation, and for a task that has never run the first
+        one may appear only when that run starts. Whether a task is armed
+        is answered by its definition (``enabled`` plus its schedule or
+        trigger); this listing answers what actually happened, and — once a
+        ``scheduled`` row exists — exactly when the next run is due.
 
         ``run_key`` identifies one run, and is what
         ``get_run_event_children`` needs to walk that run's internals when a
@@ -3602,6 +3539,7 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         data: Dict[str, Any],
         function_name_to_id: Dict[str, int],
+        detach_entrypoint: bool = False,
     ) -> None:
         payload = dict(data)
         custom_key = payload.pop("custom_key")
@@ -3628,7 +3566,12 @@ class TaskScheduler(BaseTaskScheduler):
         description = payload.pop("description", None)
         require_consumed(payload, kind="tasks", custom_key=custom_key)
 
-        entrypoint: Any = _UNSET
+        # ``_UNSET`` leaves whatever the row holds, which is what keeps a
+        # runtime-attached entrypoint alive across an ordinary bundle update.
+        # ``None`` is the deliberate opposite: the caller has decided this
+        # row's entrypoint is no longer valid and the task must fall back to
+        # the full loop.
+        entrypoint: Any = None if detach_entrypoint else _UNSET
         if entrypoint_function is not None:
             if entrypoint_function == "":
                 entrypoint = None
@@ -3865,6 +3808,65 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         self._function_name_to_id = function_name_to_id
         self.managed_by = managed_by
         self.max_workers = scheduler._custom_task_sync_workers()
+        self._resolved: Dict[int, bool] = {}
+
+    def _entrypoint_resolves(self, function_id: int) -> bool:
+        """Whether a stored entrypoint id still points at a function.
+
+        Memoized for the pass: several tasks can share one distilled
+        entrypoint, and the answer cannot change while a reconcile holds the
+        sync lease.
+        """
+
+        from ..function_manager.function_manager import function_id_resolves
+
+        if function_id not in self._resolved:
+            self._resolved[function_id] = function_id_resolves(function_id)
+        return self._resolved[function_id]
+
+    def _detach_runtime_entrypoint(
+        self,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        """Whether this row's entrypoint was attached at runtime and must go.
+
+        A task can acquire an ``entrypoint`` its source never declared: the
+        post-run review distils a successful trajectory into a function and
+        attaches it, which is how a recurring task gets cheaper and more
+        deterministic every time it runs. That is worth having, and it is
+        deliberately not promoted into the bundle -- a bundle is universal to
+        everyone who installs it, while a distillation is the product of one
+        installation's own trajectory and data.
+
+        So the bundle stays the base and the distillation is a local overlay,
+        and reconcile has to keep both. It does that by detaching in exactly
+        two cases, each of which makes the overlay wrong rather than merely
+        old:
+
+        * **It dangles.** The function was deleted or renumbered, so the task
+          now points at nothing and every future run fails on it.
+        * **The base moved underneath it.** A distillation encodes the task
+          description it was derived from. When an update rewrites that
+          description, keeping the overlay runs yesterday's logic under
+          today's instructions -- a confident wrong answer, which is worse
+          than the slow path.
+
+        Detaching is always safe, and that asymmetry is what makes this
+        self-healing rather than merely defensive: the task ran correctly
+        through the full actor loop before any entrypoint existed, so dropping
+        one degrades to correct-and-slower, never to broken. A later run
+        re-derives against the new description if it is still worth doing.
+        """
+
+        if fields.get("entrypoint_function"):
+            return False
+        stored = live_row.get("entrypoint")
+        if stored is None:
+            return False
+        if not self._entrypoint_resolves(int(stored)):
+            return True
+        return live_row.get("custom_hash") != fields.get("custom_hash")
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
@@ -3900,10 +3902,16 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         ``entrypoint_function`` at write time. When the functions store is
         re-registered under new ids, the row dangles while its content
         hash — which covers the name, never the id — still matches.
+
+        An entrypoint attached at runtime dangles the same way and used to be
+        unrepairable by construction: this returned ``False`` on its first
+        line whenever the *source* named no ``entrypoint_function``, which is
+        precisely the case the runtime creates. The check the method exists to
+        make was skipped for the one drift no other detector can see.
         """
         entrypoint_function = fields.get("entrypoint_function")
         if not entrypoint_function:
-            return False
+            return self._detach_runtime_entrypoint(live_row, fields)
         resolved = self._function_name_to_id.get(entrypoint_function)
         if resolved is None:
             return False
@@ -3926,6 +3934,7 @@ class _TaskSyncAdapter(CustomSyncAdapter):
             task_id=int(live_row["task_id"]),
             data=fields,
             function_name_to_id=self._function_name_to_id,
+            detach_entrypoint=self._detach_runtime_entrypoint(live_row, fields),
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:

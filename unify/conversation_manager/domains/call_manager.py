@@ -1125,6 +1125,41 @@ class LivekitCallManager:
         return []
 
     @property
+    def other_call_assistant_names(self) -> list[str]:
+        """Peer assistants on the live call, by display name.
+
+        Only an org call marks which roster entries are assistants, so this is
+        empty everywhere else — telephony carries no peers at all, and a browser
+        meet cannot tell a co-assistant from a notetaker (those entries are
+        counted as people by ``other_call_participant_names`` instead).
+
+        A call can be a group without a second human on it: one person plus two
+        assistants is a room where a turn may belong to somebody else, and
+        counting humans alone reads it as 1:1.
+
+        Self-exclusion is by id, falling back to display name the way the browser
+        meets above do. Counting itself as a peer is the one failure that matters
+        here: it would read a 1:1 meet as a group and put the assistant on group
+        timing for a call where every turn is its own.
+        """
+        if (self._call_channel or "") != "unify_meet":
+            return []
+        own_id = SESSION_DETAILS.assistant.agent_id
+        own_name = (SESSION_DETAILS.assistant.name or "").strip()
+        names: list[str] = []
+        for member in self.unify_meet_participants:
+            if member.get("kind") != "assistant":
+                continue
+            member_id = member.get("assistant_id")
+            if member_id is not None and own_id is not None:
+                if str(member_id) == str(own_id):
+                    continue
+            name = (member.get("display_name") or "").strip()
+            if name and name != own_name:
+                names.append(name)
+        return names
+
+    @property
     def meet_lobby_waiting(self) -> bool:
         """Whether the browser meet is admitted-pending in the waiting room.
 

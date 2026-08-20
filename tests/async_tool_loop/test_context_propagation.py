@@ -5,19 +5,26 @@ Verifies that `parent_chat_context` is threaded into tools that accept it and
 that the loop inserts the synthetic system context header.
 
 Also tests incremental context propagation:
-- First tool call receives full parent_chat_context
-- Subsequent calls receive only incremental updates via _parent_chat_context_cont
+- First tool call receives the filtered initial snapshot (genuine user turns
+  and substantive assistant text only)
+- Subsequent calls receive only incremental updates via _parent_chat_context_cont,
+  passed through the same snapshot filter
 - Context continuations from interjections are properly forwarded
+
+Injection is opt-in under LLM_DECIDES: an omitted include_parent_chat_context
+means no parent context is passed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import List
 
 import pytest
 from unify.common.async_tool_loop import ChatContextPropagation, start_async_tool_loop
 from unify.common._async_tool.context_tracker import LoopContextState
+from unify.common._async_tool.messages import loop_user_notice
 from tests.helpers import _handle_project
 from unify.common.llm_client import new_llm_client
 
@@ -114,7 +121,7 @@ async def test_chat_context_propagation_never(llm_config) -> None:
 @pytest.mark.llm_call
 @_handle_project
 async def test_chat_context_propagation_llm_decides_include(llm_config) -> None:
-    """Verify that LLM_DECIDES mode passes context when LLM includes it (default)."""
+    """Verify that LLM_DECIDES mode passes context when the LLM explicitly opts in."""
     client = new_llm_client(**llm_config)
 
     root_ctx = [{"role": "user", "content": "root-level-context-marker"}]
@@ -268,8 +275,9 @@ async def test_ask_inspection_loop_context_without_parent(monkeypatch) -> None:
         def __init__(self):
             self.messages = [{"role": "user", "content": "loop transcript message"}]
 
+    # Deliberately left unresolved — see the sibling tests below for why:
+    # this test's docstring is about the live transcript path.
     task = asyncio.Future()
-    task.set_result("done")
 
     handle = atl.AsyncToolLoopHandle(
         task=task,
@@ -332,8 +340,11 @@ async def test_ask_inspection_loop_with_parent_context(monkeypatch) -> None:
                 {"role": "assistant", "content": "doing it"},
             ]
 
+    # Deliberately left unresolved: ask() picks the live-snapshot transcript
+    # path only for a still-running handle (checked via done() at invocation
+    # time), which is what this test's assertions are about. A completed
+    # handle gets the digest-first path instead (see test_inspection_digest.py).
     task = asyncio.Future()
-    task.set_result("done")
 
     handle = atl.AsyncToolLoopHandle(
         task=task,
@@ -399,8 +410,13 @@ async def test_ask_inspection_prompt_redacts_image_payloads(monkeypatch) -> None
                 },
             ]
 
+    # Deliberately left unresolved: ask() picks the live-snapshot transcript
+    # path only for a still-running handle (checked via done() at invocation
+    # time), which is what this test's assertions are about. The digest path
+    # is redaction-safe too, via the same make_messages_safe_for_context_dump
+    # helper — see test_inspection_digest.py::
+    # test_digest_and_read_child_message_redact_image_payloads.
     task = asyncio.Future()
-    task.set_result("done")
 
     handle = atl.AsyncToolLoopHandle(
         task=task,
@@ -514,7 +530,8 @@ class TestLoopContextState:
         assert len(state._parent_chat_context_cont_received) == 2
 
     def test_first_call_receives_full_context(self):
-        """First call to a tool should receive full parent context."""
+        """First call to a tool should receive the initial snapshot
+        (all messages here pass the snapshot keep-rule)."""
         parent_ctx = [{"role": "user", "content": "parent msg"}]
         state = LoopContextState(parent_chat_context=parent_ctx)
 
@@ -624,6 +641,89 @@ class TestLoopContextState:
         assert "call_1" in pending
         assert "call_2" not in pending
         assert pending["call_1"][0]["content"] == "pending"
+
+    def test_initial_snapshot_keeps_user_turns_and_substantive_assistant_text(self):
+        """The initial snapshot keeps exactly genuine user turns and
+        substantive assistant text, on both the inherited parent layer and
+        the local messages nested as children — tool results, tool_calls
+        turns, system messages, and loop notices are all dropped."""
+        noisy_parent = [
+            {"role": "user", "content": "genuine parent turn"},
+            {"role": "tool", "content": "discovery tool payload " * 50},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "assistant", "content": "substantive parent reply"},
+            loop_user_notice("parent loop notice"),
+        ]
+        state = LoopContextState(parent_chat_context=noisy_parent)
+
+        noisy_local = [
+            {"role": "system", "content": "local system prompt"},
+            {"role": "user", "content": "genuine local turn"},
+            {"role": "tool", "content": "local tool payload"},
+            {"role": "assistant", "content": "thinking", "tool_calls": [{"id": "c2"}]},
+            {"role": "assistant", "content": "substantive local reply"},
+            loop_user_notice("local loop notice"),
+        ]
+        parent, cont = state.compute_context_for_inner_tool("call_1", noisy_local)
+
+        assert cont is None
+        assert [(m["role"], m["content"]) for m in parent] == [
+            ("user", "genuine parent turn"),
+            ("assistant", "substantive parent reply"),
+        ]
+        assert parent[-1]["children"] == [
+            {"role": "user", "content": "genuine local turn"},
+            {"role": "assistant", "content": "substantive local reply"},
+        ]
+        # The filter reads, never mutates: the tracked messages are intact.
+        assert len(state.parent_chat_context) == 5
+        assert len(noisy_local) == 6
+
+    def test_initial_snapshot_is_none_when_nothing_survives(self):
+        """When every parent and local message is snapshot noise, the
+        opted-in tool gets no parent context at all rather than the noise."""
+        state = LoopContextState(
+            parent_chat_context=[
+                {"role": "tool", "content": "payload"},
+                loop_user_notice("notice"),
+            ],
+        )
+        local = [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "tool", "content": "result"},
+        ]
+        parent, cont = state.compute_context_for_inner_tool("call_1", local)
+        assert parent is None
+        assert cont is None
+
+    def test_incremental_updates_apply_snapshot_filter(self):
+        """Continuations pass the same keep-rule as the initial snapshot,
+        and forwarding indices track the raw transcript so filtered-out
+        messages are consumed, not re-offered on the next call."""
+        state = LoopContextState(
+            parent_chat_context=[{"role": "user", "content": "parent msg"}],
+        )
+        local = [{"role": "user", "content": "genuine turn one"}]
+        state.compute_context_for_inner_tool("call_1", local)
+
+        local += [
+            {"role": "tool", "content": "new tool payload"},
+            loop_user_notice("new loop notice"),
+            {"role": "user", "content": "genuine turn two"},
+            {"role": "assistant", "content": "ok", "tool_calls": [{"id": "c3"}]},
+            {"role": "assistant", "content": "substantive follow-up"},
+        ]
+        parent, cont = state.compute_context_for_inner_tool("call_1", local)
+        assert parent is None
+        assert cont == [
+            {"role": "user", "content": "genuine turn two"},
+            {"role": "assistant", "content": "substantive follow-up"},
+        ]
+
+        # Nothing new: the filtered-out messages must not resurface.
+        parent, cont = state.compute_context_for_inner_tool("call_1", local)
+        assert parent is None
+        assert cont is None
 
     def test_mark_cont_forwarded_to_tool(self):
         """Verify marking cont as forwarded clears pending state."""
@@ -787,189 +887,44 @@ def test_method_to_schema_exposes_context_cont_control():
     assert props_exposed["include_parent_chat_context_cont"]["type"] == "boolean"
 
 
-@pytest.mark.asyncio
-async def test_dynamic_tool_factory_marks_steering_methods():
-    """Verify that DynamicToolFactory marks steering methods with context opt-in status."""
-    import asyncio
-    from unittest.mock import MagicMock
-
-    from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unify.common._async_tool.tools_data import ToolsData
-    from unify.common._async_tool.tools_utils import ToolCallMetadata
-
-    # Create mock tools_data
-    mock_client = MagicMock()
-    mock_client.messages = []
-    mock_logger = MagicMock()
-    mock_logger.log_steps = False
-    mock_logger.info = MagicMock()
-
-    tools_data = ToolsData({}, client=mock_client, logger=mock_logger)
-
-    # Create mock task with metadata indicating context opted in
-    mock_task_opted_in = asyncio.Future()
-    mock_handle = MagicMock()
-    mock_handle.ask = MagicMock(return_value="answer")
-    mock_handle.interject = MagicMock()
-    mock_handle.stop = MagicMock()
-
-    metadata_opted_in = ToolCallMetadata(
-        name="test_tool",
-        call_id="call_abc123",
-        call_dict={"function": {"arguments": "{}"}},
-        call_idx=0,
-        chat_context=None,
-        assistant_msg={},
-        is_interjectable=True,
-        tool_schema={},
-        llm_arguments={},
-        raw_arguments_json="{}",
-        handle=mock_handle,
-        interject_queue=asyncio.Queue(),
-        context_opted_in=True,  # Tool opted in
-    )
-    tools_data.pending.add(mock_task_opted_in)
-    tools_data.info[mock_task_opted_in] = metadata_opted_in
-
-    # Generate dynamic tools
-    factory = DynamicToolFactory(tools_data)
-    factory.generate()
-
-    # Check that interject steering method is marked with context flags
-    # (stop and ask no longer use these flags - they use different mechanisms)
-    interject_key = "interject_test_tool_abc123"
-
-    assert interject_key in factory.dynamic_tools
-    assert getattr(
-        factory.dynamic_tools[interject_key],
-        "__supports_context_propagation__",
-        False,
-    )
-    assert getattr(factory.dynamic_tools[interject_key], "__context_opted_in__", False)
-
-    # stop and ask should exist but NOT have context propagation flags
-    stop_key = "stop_test_tool_abc123"
-    ask_key = "ask_test_tool_abc123"
-    assert stop_key in factory.dynamic_tools
-    assert ask_key in factory.dynamic_tools
-    # These should NOT have the flags (we removed them)
-    assert not hasattr(
-        factory.dynamic_tools[stop_key],
-        "__supports_context_propagation__",
-    )
-    assert not hasattr(
-        factory.dynamic_tools[ask_key],
-        "__supports_context_propagation__",
-    )
-
-
-@pytest.mark.asyncio
-async def test_dynamic_tool_factory_marks_opted_out():
-    """Verify that interject for opted-out tools has context_opted_in=False."""
-    import asyncio
-    from unittest.mock import MagicMock
-
-    from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unify.common._async_tool.tools_data import ToolsData
-    from unify.common._async_tool.tools_utils import ToolCallMetadata
-
-    # Create mock tools_data
-    mock_client = MagicMock()
-    mock_client.messages = []
-    mock_logger = MagicMock()
-    mock_logger.log_steps = False
-    mock_logger.info = MagicMock()
-
-    tools_data = ToolsData({}, client=mock_client, logger=mock_logger)
-
-    # Create mock task with metadata indicating context opted OUT
-    mock_task_opted_out = asyncio.Future()
-    mock_handle = MagicMock()
-    mock_handle.stop = MagicMock()
-    mock_handle.interject = MagicMock()
-
-    metadata_opted_out = ToolCallMetadata(
-        name="private_tool",
-        call_id="call_xyz789",
-        call_dict={"function": {"arguments": "{}"}},
-        call_idx=0,
-        chat_context=None,
-        assistant_msg={},
-        is_interjectable=True,  # Now interjectable so we can test the flag
-        tool_schema={},
-        llm_arguments={},
-        raw_arguments_json="{}",
-        handle=mock_handle,
-        interject_queue=asyncio.Queue(),
-        context_opted_in=False,  # Tool opted OUT
-    )
-    tools_data.pending.add(mock_task_opted_out)
-    tools_data.info[mock_task_opted_out] = metadata_opted_out
-
-    # Generate dynamic tools
-    factory = DynamicToolFactory(tools_data)
-    factory.generate()
-
-    # Check that interject method is marked as opted out
-    interject_key = "interject_private_tool_xyz789"
-    assert interject_key in factory.dynamic_tools
-    assert getattr(
-        factory.dynamic_tools[interject_key],
-        "__supports_context_propagation__",
-        False,
-    )
-    assert not getattr(
-        factory.dynamic_tools[interject_key],
-        "__context_opted_in__",
-        True,
-    )
-
-
-# =============================================================================
-# Tests for ask_* dynamic tool context control
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_ask_dynamic_tool_exposes_include_parent_chat_context():
-    """Verify that ask_* dynamic tools expose include_parent_chat_context in LLM_DECIDES mode.
-
-    This test ensures the LLM can opt out of context propagation when calling ask_*
-    on an in-flight tool, just like it can for regular tools.
+def test_steer_action_call_never_carries_context_propagation_flags():
     """
-    import asyncio
-    from unittest.mock import MagicMock
-
+    Pre-steer(), context-propagation flags (__supports_context_propagation__,
+    __context_opted_in__) were stamped onto *individual minted tools*
+    (interject_<fn>_<id> got them, stop_<fn>_<id>/ask_<fn>_<id> didn't) so
+    loop.py's per-tool schema generation could expose
+    include_parent_chat_context_cont only where it applied. steer() replaces
+    all of those with one static tool, so there is nothing left to stamp —
+    context handling for each action is decided directly in loop.py's
+    steer() dispatch (interject: continuation-only, forwarded verbatim;
+    ask: full initial context, gated by the new include_parent_context
+    param — see test_ask_dynamic_tool_respects_include_parent_chat_context_false
+    below for that mechanism, which is unchanged). This asserts the negative:
+    the generated `steer` tool itself carries neither flag, regardless of
+    what the live handle's interject/ask/stop look like.
+    """
     from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
     from unify.common._async_tool.tools_data import ToolsData
     from unify.common._async_tool.tools_utils import ToolCallMetadata
     from unify.common.async_tool_loop import SteerableToolHandle
-    from unify.common.llm_helpers import method_to_schema
 
-    # Create a handle with an ask method that accepts _parent_chat_context
     class TestHandle(SteerableToolHandle):
         def __init__(self):
             pass
 
-        async def ask(
-            self,
-            question: str,
-            *,
-            _parent_chat_context: list[dict] | None = None,
-        ) -> "SteerableToolHandle":
-            """Ask a question about this tool's status."""
+        async def ask(self, question: str) -> "SteerableToolHandle":
             return self
 
-        async def interject(self, message: str, **kwargs):
+        async def interject(self, message: str):
             pass
 
         def stop(self, reason: str | None = None):
             pass
 
-        def pause(self):
+        async def pause(self):
             pass
 
-        def resume(self):
+        async def resume(self):
             pass
 
         def done(self) -> bool:
@@ -987,175 +942,30 @@ async def test_ask_dynamic_tool_exposes_include_parent_chat_context():
         async def answer_clarification(self, call_id: str, answer: str) -> None:
             pass
 
-    # Create mock tools_data
-    mock_client = MagicMock()
-    mock_client.messages = []
-    mock_logger = MagicMock()
-    mock_logger.log_steps = False
-    mock_logger.info = MagicMock()
-
-    tools_data = ToolsData({}, client=mock_client, logger=mock_logger)
-
-    # Create mock task with handle
-    mock_task = asyncio.Future()
-    test_handle = TestHandle()
-
-    metadata = ToolCallMetadata(
+    tools_data = ToolsData({}, client=None, logger=None)
+    task = object()
+    tools_data.info[task] = ToolCallMetadata(
         name="test_tool",
         call_id="call_abc123",
         call_dict={"function": {"arguments": "{}"}},
         call_idx=0,
-        chat_context=[{"role": "user", "content": "context"}],
-        assistant_msg={},
-        is_interjectable=False,
-        tool_schema={},
-        llm_arguments={},
-        raw_arguments_json="{}",
-        handle=test_handle,
-        context_opted_in=True,
-    )
-    tools_data.pending.add(mock_task)
-    tools_data.info[mock_task] = metadata
-
-    # Generate dynamic tools
-    factory = DynamicToolFactory(tools_data)
-    factory.generate()
-
-    # The ask_* tool should exist
-    ask_key = "ask_test_tool_abc123"
-    assert ask_key in factory.dynamic_tools
-
-    ask_fn = factory.dynamic_tools[ask_key]
-
-    # Generate schema with expose_context_control=True (simulating LLM_DECIDES mode)
-    schema = method_to_schema(
-        ask_fn,
-        expose_context_control=True,
-        has_parent_context=True,
-    )
-
-    props = schema["function"]["parameters"]["properties"]
-
-    # The ask_* tool should expose include_parent_chat_context
-    assert (
-        "include_parent_chat_context" in props
-    ), "ask_* dynamic tool should expose include_parent_chat_context in LLM_DECIDES mode"
-    assert props["include_parent_chat_context"]["type"] == "boolean"
-
-    # But _parent_chat_context should be hidden
-    assert (
-        "_parent_chat_context" not in props
-    ), "_parent_chat_context should be hidden from LLM schema"
-
-
-@pytest.mark.asyncio
-async def test_ask_dynamic_tool_context_control_not_exposed_for_other_steering_methods():
-    """Verify that stop_* and interject_* do NOT expose include_parent_chat_context.
-
-    Only ask_* should expose this control because:
-    - stop_* no longer uses context at all
-    - interject_* uses _parent_chat_context_cont (continuation), not initial context
-    """
-    import asyncio
-    from unittest.mock import MagicMock
-
-    from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unify.common._async_tool.tools_data import ToolsData
-    from unify.common._async_tool.tools_utils import ToolCallMetadata
-    from unify.common.async_tool_loop import SteerableToolHandle
-    from unify.common.llm_helpers import method_to_schema
-
-    class TestHandle(SteerableToolHandle):
-        def __init__(self):
-            pass
-
-        async def ask(
-            self,
-            question: str,
-            *,
-            _parent_chat_context: list[dict] | None = None,
-        ) -> "SteerableToolHandle":
-            return self
-
-        async def interject(
-            self,
-            message: str,
-            *,
-            _parent_chat_context_cont: list[dict] | None = None,
-        ):
-            pass
-
-        def stop(self, reason: str | None = None):
-            pass
-
-        def pause(self):
-            pass
-
-        def resume(self):
-            pass
-
-        def done(self) -> bool:
-            return False
-
-        async def result(self):
-            return "result"
-
-        async def next_clarification(self) -> dict:
-            return {}
-
-        async def next_notification(self) -> dict:
-            return {}
-
-        async def answer_clarification(self, call_id: str, answer: str) -> None:
-            pass
-
-    mock_client = MagicMock()
-    mock_client.messages = []
-    mock_logger = MagicMock()
-    mock_logger.log_steps = False
-    mock_logger.info = MagicMock()
-
-    tools_data = ToolsData({}, client=mock_client, logger=mock_logger)
-
-    mock_task = asyncio.Future()
-    test_handle = TestHandle()
-
-    metadata = ToolCallMetadata(
-        name="test_tool",
-        call_id="call_abc123",
-        call_dict={"function": {"arguments": "{}"}},
-        call_idx=0,
-        chat_context=[{"role": "user", "content": "context"}],
+        chat_context=None,
         assistant_msg={},
         is_interjectable=True,
         tool_schema={},
         llm_arguments={},
         raw_arguments_json="{}",
-        handle=test_handle,
-        interject_queue=asyncio.Queue(),
+        handle=TestHandle(),
         context_opted_in=True,
     )
-    tools_data.pending.add(mock_task)
-    tools_data.info[mock_task] = metadata
+    tools_data.pending.add(task)
 
     factory = DynamicToolFactory(tools_data)
     factory.generate()
 
-    # stop_* should NOT have include_parent_chat_context
-    stop_fn = factory.dynamic_tools["stop_test_tool_abc123"]
-    stop_schema = method_to_schema(stop_fn, expose_context_control=True)
-    stop_props = stop_schema["function"]["parameters"]["properties"]
-    assert (
-        "include_parent_chat_context" not in stop_props
-    ), "stop_* should NOT expose include_parent_chat_context"
-
-    # interject_* should NOT have include_parent_chat_context (uses _cont version)
-    interject_fn = factory.dynamic_tools["interject_test_tool_abc123"]
-    interject_schema = method_to_schema(interject_fn, expose_context_control=True)
-    interject_props = interject_schema["function"]["parameters"]["properties"]
-    assert (
-        "include_parent_chat_context" not in interject_props
-    ), "interject_* should NOT expose include_parent_chat_context"
+    steer_fn = factory.dynamic_tools["steer"]
+    assert not hasattr(steer_fn, "__supports_context_propagation__")
+    assert not hasattr(steer_fn, "__context_opted_in__")
 
 
 @pytest.mark.asyncio
@@ -1206,7 +1016,7 @@ async def test_ask_dynamic_tool_respects_include_parent_chat_context_false():
         "include_parent_chat_context" not in args_opt_out
     ), "include_parent_chat_context should be popped from args"
 
-    # Test case 2: include_parent_chat_context=True (or omitted) SHOULD inject context
+    # Test case 2: include_parent_chat_context=True SHOULD inject context
     args_opt_in = {
         "question": "what's the status?",
         "include_parent_chat_context": True,
@@ -1280,6 +1090,56 @@ async def test_ask_dynamic_tool_respects_include_parent_chat_context_false():
         "_parent_chat_context" not in extra_kwargs4
     ), "In NEVER mode, context should NOT be injected even if LLM opts in"
     assert context_opted_in4 is False
+
+
+def test_context_injection_defaults_off_when_arg_omitted():
+    """Omitting include_parent_chat_context injects no parent context under
+    LLM_DECIDES — context is opt-in.
+
+    compute_context_injection is the shared funnel behind base tool
+    dispatch, steer(action=ask), and ask_about_completed_tool, so this
+    single omitted-arg contract governs all of those consumers. ALWAYS
+    mode is unaffected: it injects regardless of the (absent) LLM choice.
+    """
+    from unify.common._async_tool.tools_data import compute_context_injection
+
+    client_messages = [{"role": "user", "content": "current message"}]
+
+    args_omitted = {"question": "what's the status?"}
+    context_state = LoopContextState(
+        parent_chat_context=[{"role": "user", "content": "parent context"}],
+    )
+    extra_kwargs, context_opted_in = compute_context_injection(
+        args=args_omitted,
+        propagate_chat_context=ChatContextPropagation.LLM_DECIDES,
+        context_state=context_state,
+        client_messages=client_messages,
+        call_id="ask_inner_tool_omitted",
+        accepts_parent_ctx=True,
+        accepts_parent_ctx_cont=False,
+        is_continuation_only=False,
+    )
+    assert (
+        "_parent_chat_context" not in extra_kwargs
+    ), "An omitted include_parent_chat_context must not inject parent context"
+    assert context_opted_in is False
+
+    # ALWAYS mode still injects when the arg is omitted.
+    context_state_always = LoopContextState(
+        parent_chat_context=[{"role": "user", "content": "parent context"}],
+    )
+    extra_kwargs_always, context_opted_in_always = compute_context_injection(
+        args={"question": "what's the status?"},
+        propagate_chat_context=ChatContextPropagation.ALWAYS,
+        context_state=context_state_always,
+        client_messages=client_messages,
+        call_id="ask_inner_tool_always_omitted",
+        accepts_parent_ctx=True,
+        accepts_parent_ctx_cont=False,
+        is_continuation_only=False,
+    )
+    assert "_parent_chat_context" in extra_kwargs_always
+    assert context_opted_in_always is True
 
 
 # =============================================================================
@@ -1433,3 +1293,113 @@ async def test_interjection_context_only_no_user_message(llm_config) -> None:
     assert (
         len(empty_user_msgs) == 0
     ), "Empty user messages should not be appended for context-only interjections"
+
+
+# =============================================================================
+# Loop-level opt-in contract (scripted turns, no LLM)
+# =============================================================================
+
+
+def _scripted_tool_call(call_id: str, name: str, arguments: dict) -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(60)
+@_handle_project
+async def test_loop_injects_no_context_unless_opted_in_then_filtered_snapshot(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """Through the real loop dispatch: a tool call that omits
+    include_parent_chat_context receives no parent context, and an explicit
+    opt-in receives the filtered snapshot — genuine user turns and
+    substantive assistant text only, with the tool payloads, tool_calls
+    turns, and loop notices from the parent layer dropped."""
+    client = new_llm_client(**llm_config)
+    client.set_system_message("This turn is fully scripted by the test.")
+
+    from unify.common._async_tool import loop as _loop
+
+    turn_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _fake_gwp(_client, _preprocess_msgs, **gen_kwargs):
+        next_msg = await turn_queue.get()
+        _client.messages.append(next_msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(_loop, "generate_with_preprocess", _fake_gwp, raising=True)
+
+    captured_ctx: List[list[dict] | None] = []
+
+    async def record_context(*, _parent_chat_context: list[dict] | None = None) -> str:
+        captured_ctx.append(_parent_chat_context)
+        return "context-recorded"
+
+    record_context.__name__ = "record_context"
+    record_context.__qualname__ = "record_context"
+
+    parent_ctx = [
+        {"role": "user", "content": "genuine parent turn"},
+        {"role": "tool", "content": "discovery tool payload " * 50},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "assistant", "content": "substantive parent reply"},
+        loop_user_notice("parent loop notice"),
+    ]
+
+    handle = start_async_tool_loop(
+        client=client,
+        message="start",
+        tools={"record_context": record_context},
+        parent_chat_context=parent_ctx,
+        max_steps=20,
+        timeout=30,
+    )
+
+    # Turn 1: the tool call omits include_parent_chat_context entirely.
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_scripted_tool_call("call_1", "record_context", {})],
+        },
+    )
+    # Turn 2: explicit opt-in.
+    await turn_queue.put(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                _scripted_tool_call(
+                    "call_2",
+                    "record_context",
+                    {"include_parent_chat_context": True},
+                ),
+            ],
+        },
+    )
+    await turn_queue.put({"role": "assistant", "content": "done", "tool_calls": []})
+
+    final = await asyncio.wait_for(handle.result(), timeout=30)
+    assert final == "done"
+
+    assert len(captured_ctx) == 2, f"Expected 2 tool calls, got {len(captured_ctx)}"
+    assert captured_ctx[0] is None, (
+        "A tool call omitting include_parent_chat_context must receive no "
+        "parent context"
+    )
+
+    snapshot = captured_ctx[1]
+    assert snapshot is not None, "Explicit opt-in must receive the snapshot"
+    assert [(m["role"], m["content"]) for m in snapshot] == [
+        ("user", "genuine parent turn"),
+        ("assistant", "substantive parent reply"),
+    ], "Only genuine user turns and substantive assistant text may survive"
+    # Local survivors ride along as children of the last parent message:
+    # the genuine "start" turn, without the tool_calls turns or tool results.
+    children = snapshot[-1]["children"]
+    assert {(m["role"], m["content"]) for m in children} == {("user", "start")}

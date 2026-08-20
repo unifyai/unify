@@ -5,7 +5,7 @@ tests/conversation_manager/core/test_inactivity_lifecycle.py
 Tests for container inactivity detection and lifecycle management.
 
 These tests verify the critical production behavior documented in INFRA.md:
-- Containers shut down after 1 hour (3600s) of inactivity
+- Containers shut down after 10 minutes (600s) of *genuine* idleness
 - Idle containers ping every 30 seconds to stay alive
 - Cleanup is called properly on shutdown
 - Jobs are marked as done in AssistantJobs
@@ -18,12 +18,13 @@ What This File Tests:
 2. **Activity reset**: Does receiving events reset the inactivity timer?
 3. **Unassigned pod lifetime**: Is a pod with no assistant exempt from the timer?
 4. **Cleanup sequence**: Is cleanup called in the correct order on shutdown?
+4b. **Busy declaration**: does every kind of in-flight work hold the pod open?
 5. **Job marking**: Is assistant_jobs.mark_job_done() called for live containers?
 6. **Event broker close**: Is the event broker properly closed on shutdown?
 
 Production Context (from INFRA.md):
 -----------------------------------
-- Inactivity timeout: 1 hour (3600 seconds)
+- Inactivity timeout: 10 minutes (600 seconds)
 - Ping interval: 30 seconds, and a ping is not presence — an unassigned pod
   is kept alive by being exempt from the timer, not by its own keepalive
 - Idle containers use assistant_id=None
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1134,7 +1136,7 @@ class TestDrainShutdown:
         )
         cm.inactivity_check_interval = 0.05
         # Nowhere near the idle timeout: a drain must not have to wait for it.
-        cm.inactivity_timeout = 3600
+        cm.inactivity_timeout = 600
         cm.last_activity_time = cm.loop.time()
         return cm
 
@@ -1237,7 +1239,7 @@ class TestUnserviceableRetirement:
             stop=stop_event,
         )
         cm.inactivity_check_interval = 0.05
-        cm.inactivity_timeout = 3600
+        cm.inactivity_timeout = 600
         # Freshly "active": the idle path would never fire here.
         cm.last_activity_time = cm.loop.time()
         cm.unserviceable_reason = "manager initialization failed: no LLM credential"
@@ -1279,7 +1281,7 @@ class TestUnserviceableRetirement:
             stop=stop_event,
         )
         cm.inactivity_check_interval = 0.05
-        cm.inactivity_timeout = 3600
+        cm.inactivity_timeout = 600
         cm.last_activity_time = cm.loop.time()
 
         check_task = asyncio.create_task(cm.check_inactivity())
@@ -1290,3 +1292,282 @@ class TestUnserviceableRetirement:
 
         assert not stop_event.is_set()
         assert cm.shutdown_reason is None
+
+
+class TestBusyDeclarationHoldsThePodOpen:
+    """Idle must mean idle.
+
+    Both clocks the check reads are traffic proxies: pubsub says somebody sent
+    us something, the EventBus says we published something. Neither knows
+    whether work is happening *now*, so work that outlives the call that
+    started it -- or that runs outside this process -- has to declare itself or
+    it gets torn down mid-flight. One test per kind of work that does.
+    """
+
+    def _cm(self, event_broker, stop_event):
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        cm = ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=stop_event,
+        )
+        cm.inactivity_check_interval = 0.05
+        cm.inactivity_timeout = 0.1
+        # Both clocks stale: without a declaration this pod retires at once.
+        cm.last_activity_time = cm.loop.time() - 100.0
+        return cm
+
+    async def _survives(self, cm, stop_event) -> bool:
+        """Run the checker briefly; True if the pod was still alive after."""
+        check_task = asyncio.create_task(cm.check_inactivity())
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=0.6)
+            return False
+        except asyncio.TimeoutError:
+            return True
+        finally:
+            check_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await check_task
+
+    @pytest.mark.asyncio
+    async def test_a_stale_pod_with_nothing_in_flight_does_retire(
+        self,
+        event_broker,
+    ):
+        """The control: every case below must differ from this one."""
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        from unify.events.event_bus import EventBus
+
+        EventBus.last_publish_monotonic = time.monotonic() - 100.0
+
+        assert not await self._survives(cm, stop_event)
+        assert cm.shutdown_reason == "idle_timeout"
+
+    # Each voice surface, driven through the state its read-only predicate
+    # actually reads. `meet_joining` is the case the per-channel properties
+    # miss: `_call_channel` is unset until the room is joined.
+    VOICE_SURFACES = {
+        "phone_or_whatsapp_call": lambda mgr: setattr(mgr, "_active_job", True),
+        "google_meet": lambda mgr: (
+            setattr(mgr, "_meet_session_id", "sess-1"),
+            setattr(mgr, "_call_channel", "google_meet"),
+        ),
+        "teams_meet": lambda mgr: (
+            setattr(mgr, "_meet_session_id", "sess-1"),
+            setattr(mgr, "_call_channel", "teams_meet"),
+        ),
+        "meet_joining": lambda mgr: setattr(mgr, "_meet_joining", True),
+        "whatsapp_joining": lambda mgr: setattr(mgr, "_whatsapp_call_joining", True),
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", sorted(VOICE_SURFACES))
+    async def test_a_quiet_call_is_not_an_idle_pod(self, event_broker, surface):
+        """Voice runs in a separate process.
+
+        Its LLM calls advance *that* process's EventBus, and the parent only
+        ever sees per-turn IPC events -- so a connected-but-silent call looks
+        exactly like an empty pod. Retiring here runs ``cleanup_call_proc``,
+        which hangs up on whoever is on the line.
+        """
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        self.VOICE_SURFACES[surface](cm.call_manager)
+
+        assert await self._survives(cm, stop_event)
+        assert cm.shutdown_reason is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "attr",
+        ["assistant_screen_share_active", "user_screen_share_active"],
+    )
+    async def test_somebody_watching_a_screen_is_not_an_idle_pod(
+        self,
+        event_broker,
+        attr,
+    ):
+        """Watching generates no traffic on either clock."""
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        setattr(cm, attr, True)
+
+        assert await self._survives(cm, stop_event)
+
+    @pytest.mark.asyncio
+    async def test_an_in_flight_turn_is_not_an_idle_pod(self, event_broker):
+        """The EventBus stamps on *completion*, so one long call is a blind spot."""
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+
+        async def _thinking():
+            await asyncio.sleep(30)
+
+        turn = asyncio.create_task(_thinking())
+        cm.debouncer.running_task = turn
+        try:
+            assert await self._survives(cm, stop_event)
+        finally:
+            turn.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await turn
+
+    @pytest.mark.asyncio
+    async def test_pool_work_outliving_its_caller_is_not_an_idle_pod(
+        self,
+        event_broker,
+    ):
+        """Ingestion hands work to a pool thread and returns a handle at once.
+
+        The plan's own ACTIVE_WORK record ends with the plan, so without the
+        manager's own declaration the write is invisible to both clocks.
+        """
+        from unify.ingestion_manager.ingestion_manager import IngestionManager
+
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+
+        with IngestionManager._pod_work("ingestion_inline", "run-1"):
+            assert await self._survives(cm, stop_event)
+
+        assert not await self._survives(cm, stop_event)
+
+    @pytest.mark.asyncio
+    async def test_the_ghost_branch_respects_the_same_predicate(self, event_broker):
+        """The ghost path used to be a second way in past every floor.
+
+        It is the only branch that can retire a pod whose EventBus clock is
+        fresh, so gating it on active work alone meant a declaration the
+        ordinary path honoured did not bind it.
+        """
+        from unify.events.event_bus import EventBus
+
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        # Exactly the ghost shape: pubsub long stale, EventBus kept fresh.
+        cm.call_manager._active_job = True
+
+        async def _keep_eventbus_fresh():
+            while True:
+                EventBus.last_publish_monotonic = time.monotonic()
+                await asyncio.sleep(0.01)
+
+        pump = asyncio.create_task(_keep_eventbus_fresh())
+        try:
+            assert await self._survives(cm, stop_event)
+        finally:
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pump
+
+    @pytest.mark.asyncio
+    async def test_a_drain_waits_for_a_live_call_then_ends_the_pod(
+        self,
+        event_broker,
+    ):
+        """A drain is graceful in the pod and forced from outside.
+
+        The in-pod branch exists so a draining pod retires itself once nothing
+        is in flight; hanging up a live call to pick up a new image is not a
+        trade the pod gets to make. If the call never ends, the control plane
+        stops the session at its own deadline -- that path does not come
+        through here.
+        """
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        cm.call_manager._active_job = True
+
+        with patch(
+            "unify.runtime.drain_gate.is_admission_blocked",
+            return_value=True,
+        ):
+            assert await self._survives(cm, stop_event)
+            assert cm.shutdown_reason is None
+
+            # Call over: the same armed drain now retires the pod.
+            cm.call_manager._active_job = False
+            assert not await self._survives(cm, stop_event)
+
+        assert cm.shutdown_reason == "drain_restart"
+
+
+class TestManagersDeclareTheirOwnPoolWork:
+    """The declarations that live in the managers rather than the CM.
+
+    Each wraps work that runs on a thread or task nobody awaits, makes no LLM
+    calls, and writes through DataManager -- which publishes nothing. So none of
+    them move either idle clock, and the wrapper is the only thing standing
+    between them and an inactivity shutdown landing mid-flight.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_integration_tools_sync_declares_itself(self):
+        from unify.events.active_work import ACTIVE_WORK
+        from unify.integrations.sync_state import IntegrationSyncCoordinator
+
+        coordinator = IntegrationSyncCoordinator()
+        seen = {}
+
+        async def _fake_sync(_self, app_slug, **kwargs):
+            snapshot = ACTIVE_WORK.snapshot()
+            seen["count"] = snapshot.active_count
+            seen["labels"] = [w["label"] for w in snapshot.works]
+            return None
+
+        with patch.object(
+            IntegrationSyncCoordinator,
+            "_sync_app",
+            new=_fake_sync,
+        ):
+            await coordinator.sync_app("gmail")
+
+        assert seen["count"] == 1
+        assert seen["labels"] == ["integration_tools_sync"]
+        assert ACTIVE_WORK.snapshot().active_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_file_sync_transfer_declares_itself(self):
+        """The transfer, not the 30s poll loop that schedules them.
+
+        Declaring the loop would mean a desktop-attached pod never retires;
+        declaring the transfer means a shutdown cannot stop one half-done, and
+        the desktop's writes are what the next session reads.
+        """
+        from unify.events.active_work import ACTIVE_WORK
+        from unify.file_manager.sync.rclone import RcloneSync
+
+        sync = RcloneSync.__new__(RcloneSync)
+        seen = {}
+
+        async def _fake_inner(cmd, operation, max_retries=None):
+            snapshot = ACTIVE_WORK.snapshot()
+            seen["count"] = snapshot.active_count
+            seen["labels"] = [w["label"] for w in snapshot.works]
+            return None
+
+        with patch.object(
+            RcloneSync,
+            "_run_with_retry_inner",
+            new=staticmethod(_fake_inner),
+        ):
+            await sync._run_with_retry(["rclone", "bisync"], "bisync")
+
+        assert seen["count"] == 1
+        assert seen["labels"] == ["file_sync_transfer"]
+        assert ACTIVE_WORK.snapshot().active_count == 0

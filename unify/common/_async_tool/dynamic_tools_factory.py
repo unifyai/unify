@@ -2,14 +2,96 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, Dict, Optional
 from contextlib import suppress
 from .tools_data import ToolsData
-from .messages import forward_handle_call
-from .tools_utils import ToolCallMetadata
-from .utils import get_handle_paused_state, maybe_await
+
+
+class SteerAction(str, Enum):
+    """The complete steering surface, unified behind one static dispatcher."""
+
+    STOP = "stop"
+    INTERJECT = "interject"
+    PAUSE = "pause"
+    RESUME = "resume"
+    CLARIFY = "clarify"
+    CALL = "call"
+    ASK = "ask"
+
+
+STEER_DOC = """Steer a currently-tracked call: stop it, interject guidance, pause/resume it, \
+answer a pending clarification, invoke a custom method on its handle, or ask a read-only \
+question about its live progress.
+
+`call_id` is the id shown on the original tool call that launched the work (the same id \
+that later appears on its `check_status`/progress/clarification tail messages). This tool \
+is always available — if `call_id` no longer refers to a live, in-flight call (it already \
+finished, or never existed), you get back an instructive error instead of a schema change.
+
+Parameters
+----------
+call_id : str
+    The id of the call to steer (see above).
+action : "stop" | "interject" | "pause" | "resume" | "clarify" | "call" | "ask"
+    stop      - Cancel the call. `payload` may carry an optional reason.
+    interject - Inject additional guidance while the call keeps running.
+                `payload` is the guidance text.
+    pause     - Pause the call. Fails with an instructive error if it is already paused.
+    resume    - Resume a paused call. Fails with an instructive error if it is not paused.
+    clarify   - Answer a clarification the call is blocked on. `payload` is the answer text.
+                Only valid while that call is actually waiting on a clarification.
+    call      - Invoke a custom method the call's handle exposes beyond the core steering
+                surface above. `method` names the method; `payload` is a JSON **object**
+                string of keyword arguments matched against that method's real signature.
+                Blocking: you get the method's return value once it completes, same as
+                waiting on any other tool.
+    ask       - Ask a read-only question about a call that is still running, to understand
+                its live progress or intermediate reasoning without stopping it. `payload`
+                is the question. Blocking: spins up a nested inspection turn and returns a
+                short answer. Intended for a call that is still running; once it has
+                completed, prefer `ask_about_completed_tool` instead (a different id
+                namespace is not needed; the same call_id applies there too) — its
+                docstring never changes, so it is the more idiomatic choice for
+                retrospective questions. A call that finishes in the narrow window
+                between you deciding to steer it and this executing still gets a
+                coherent answer either way: this resolves to the same completed-run
+                answer `ask_about_completed_tool` would have given.
+payload : str | None
+    Action-specific content — see above. Omit when the action does not need one
+    (stop's reason, pause, resume).
+method : str | None
+    Required only for action="call": the name of the custom method to invoke.
+include_parent_context : bool
+    Relevant for action="ask" and action="interject". For "ask", whether to
+    pass the parent conversation's context into the nested inspection turn —
+    off by default; set true only when the question depends on conversation
+    specifics you cannot restate compactly in the payload. For "interject",
+    whether to forward the parent conversation's continuation context
+    alongside the guidance text — on by default, and only takes effect if
+    the target call originally opted into context propagation. Ignored by
+    every other action.
+
+Returns
+-------
+A status acknowledgement, or (for "call"/"ask") the underlying result once it completes.
+"""
+
+ASK_ABOUT_COMPLETED_TOOL_DOC = """Ask a follow-up question about a completed tool to \
+understand its internal reasoning, intermediate steps, or any details not visible in the \
+outer transcript.
+
+Which tools are completed and askable is announced as they finish (look for \
+"[askable <call_id>]" tail messages above) — this tool's own description never changes.
+
+Parameters
+----------
+tool_id : str
+    The call_id of the completed tool to query (see the "[askable ...]" announcements).
+question : str
+    The follow-up question to ask about the completed tool's execution.
+"""
 
 
 class DynamicToolFactory:
@@ -22,7 +104,18 @@ class DynamicToolFactory:
         safe_call_id: str
 
     def __init__(self, tools_data: ToolsData):
-        self.dynamic_tools = {}
+        # Only ever holds the STATIC, byte-stable surface: wait, steer,
+        # ask_about_completed_tool. Nothing here varies with what is
+        # pending/completed/paused this turn.
+        self.dynamic_tools: Dict[str, Callable] = {}
+        # ask_* closures for handles that are still running, keyed by a
+        # synthetic per-call name. These exist ONLY to seed recursive
+        # inspection-loop tool schemas (ToolsData.get_ask_tools() ->
+        # SteerableToolHandle.ask()'s nested loop) — they are never merged
+        # into self.dynamic_tools, so they never reach the outer loop's own
+        # visible schema (that would reintroduce the per-call-id churn this
+        # dispatcher exists to remove).
+        self.live_ask_fns: Dict[str, Callable] = {}
         self.tools_data = tools_data
 
     # Shared steering helpers – reduce duplication across dynamic helper tools
@@ -106,7 +199,9 @@ class DynamicToolFactory:
         Return a mapping ``name → bound_method`` of *public* callables on *handle*:
             • name does **not** start with ``_``  _and_
             • name is not a core steering method defined on base async-tool loop handles
-              (SteerableToolHandle, AsyncToolLoopHandle).
+              (SteerableToolHandle, AsyncToolLoopHandle) — those are reached via
+              ``steer``'s dedicated actions (stop/interject/pause/resume/clarify/ask),
+              never via action="call".
         """
 
         def _management_method_names_for_handle(_h) -> set[str]:
@@ -155,7 +250,7 @@ class DynamicToolFactory:
 
     def _create_wait_tool(self) -> None:
         """
-        Expose a single global helper tool `wait` that performs a no-op.
+        Expose a single, always-present global helper tool `wait` that performs a no-op.
 
         Purpose
         -------
@@ -164,6 +259,9 @@ class DynamicToolFactory:
         any currently running tool calls to finish (or for an interjection
         to arrive) before deciding whether to act next. It does not start,
         stop, pause, resume, or modify any in-flight work.
+
+        If a clarification is currently pending on any call, `wait` is refused —
+        answer it first via `steer(call_id=<id>, action="clarify", payload=<answer>)`.
         """
 
         async def _wait() -> Dict[str, str]:
@@ -174,399 +272,71 @@ class DynamicToolFactory:
             fallback_doc=(
                 "No-op: keep waiting on the currently running tool calls. "
                 "Use this when you don't need to start/stop/pause/resume anything right now; "
-                "decide what to do after the next tool completes or a new interjection arrives."
+                "decide what to do after the next tool completes or a new interjection arrives. "
+                "Refused while a clarification is pending — answer it via "
+                'steer(call_id=<id>, action="clarify", payload=<answer>) first.'
             ),
             fn=_wait,
         )
 
-    def _create_stop_tool(
-        self,
-        tool_context: _ToolContext,
-        task: asyncio.Task,
-        handle: Any,
-    ) -> None:
-        doc = (
-            f"Stop {tool_context.fn_name}({tool_context.arg_repr}), cancelling any pending work.\n\n"
-            "While any tools are still running you cannot end the conversation;\n"
-            "stop or wait for all in-flight tools to complete, then respond.\n\n"
-            "Parameters\n"
-            "----------\n"
-            "reason : str | None\n"
-            "    Optional human-readable reason for stopping."
-        )
+    def _create_steer_tool(self) -> None:
+        """Expose the single static steering dispatcher (see STEER_DOC).
 
-        async def _stop(**_kw) -> Dict[str, str]:
-            # Forward stop intent to the running handle with any extra kwargs
-            if handle is not None and hasattr(handle, "stop"):
-                await forward_handle_call(
-                    handle,
-                    "stop",
-                    _kw,
-                    fallback_positional_keys=["reason"],
-                )
-            if not task.done():
-                task.cancel()  # kill the waiter coroutine
-            self.tools_data.pop_task(task)
-            return {
-                "status": "stopped",
-                "call_id": tool_context.call_id,
-                **_kw,
-            }
-
-        # Set fallback docstring first; _adopt_signature_and_annotations may override
-        _stop.__doc__ = doc
-        # Expose full argspec and docstring of handle.stop in the helper schema
-        with suppress(Exception):
-            if handle is not None and hasattr(handle, "stop"):
-                self._adopt_signature_and_annotations(getattr(handle, "stop"), _stop)
-        # Register after adopting signature/doc so factory falls back only when needed
-        self._register_tool(
-            func_name=f"stop_{tool_context.fn_name}_{tool_context.safe_call_id}",
-            fallback_doc=doc,
-            fn=_stop,
-        )
-
-    def _create_interject_tool(
-        self,
-        tool_context: _ToolContext,
-        task_info: ToolCallMetadata,
-        handle: Any,
-    ) -> None:
-        doc = (
-            f"Inject additional instructions for {tool_context.fn_name}({tool_context.arg_repr}).\n\n"
-            "Parameters\n"
-            "----------\n"
-            "content : str | None\n"
-            "    Interjection text. When omitted, `message` may be used as a synonym.\n"
-            "message : str | None\n"
-            "    Synonym for `content`. If both are provided, `content` takes precedence.\n\n"
-            "Returns\n"
-            "-------\n"
-            "Dict[str, str]\n"
-            "    Status acknowledgement including the underlying call id.\n"
-        )
-
-        if handle is not None:
-
-            async def _interject(**_kw) -> Dict[str, str]:
-                # nested async-tool loop: delegate to its public API with full argspec
-                with suppress(Exception):
-                    await forward_handle_call(
-                        handle,
-                        "interject",
-                        _kw,
-                        fallback_positional_keys=["content", "message"],
-                    )
-                return {
-                    "status": "interjected",
-                    "call_id": tool_context.call_id,
-                    **_kw,
-                }
-
-            # Set fallback docstring first; _adopt_signature_and_annotations may override
-            _interject.__doc__ = doc
-            # Expose the downstream handle's signature to the LLM dynamically.
-            # Plumbing parameters like _parent_chat_context_cont are automatically hidden
-            # by method_to_schema (via the explicit hidden params list).
-            with suppress(Exception):
-                if hasattr(handle, "interject"):
-                    self._adopt_signature_and_annotations(
-                        getattr(handle, "interject"),
-                        _interject,
-                    )
-
-        else:
-
-            async def _interject(
-                *,
-                content: Optional[str] = None,
-                message: Optional[str] = None,
-            ) -> Dict[str, str]:
-                # regular tool: push onto its private queue
-                actual = content if content is not None else (message or "")
-                await task_info.interject_queue.put(actual)
-                return {
-                    "status": "interjected",
-                    "call_id": tool_context.call_id,
-                    **({"content": actual} if actual else {}),
-                }
-
-            # Set fallback docstring (no handle to adopt from in this branch)
-            _interject.__doc__ = doc
-
-        self._register_tool(
-            func_name=f"interject_{tool_context.fn_name}_{tool_context.safe_call_id}",
-            fallback_doc=doc,
-            fn=_interject,
-        )
-        # Mark as supporting context propagation so schema generation can expose include_parent_chat_context_cont
-        _interject.__supports_context_propagation__ = True  # type: ignore[attr-defined]
-
-    def _create_ask_tool(
-        self,
-        tool_context: _ToolContext,
-        handle: Any,
-    ) -> str | None:
-        """
-        Expose a synthetic helper to invoke the handle's `ask` method for inspection.
-
-        Behaviour
-        ---------
-        - For nested async handles, returns the downstream handle so the loop can adopt
-          and await its result (consistent with base-tool behaviour).
-        - Otherwise returns the direct answer value from the handle.
+        This function is never actually invoked — loop.py special-cases the
+        `steer` tool name for execution (same pattern as `wait` and
+        `compress_context`). It exists purely so ``method_to_schema`` can
+        derive a byte-stable JSON schema (including the action enum) from a
+        real, typed Python signature.
         """
 
-        if handle is None or not hasattr(handle, "ask"):
-            return
-
-        async def _ask(**_kw):
-            # Robust forwarding with support for positional fallback (question)
-            return await forward_handle_call(
-                handle,
-                "ask",
-                _kw,
-                fallback_positional_keys=["question"],
-            )
-
-        # Set fallback docstring first; _adopt_signature_and_annotations may override
-        _ask.__doc__ = (
-            f"Ask a read-only question about the running call {tool_context.fn_name}({tool_context.arg_repr}).\n\n"
-            "Returns either a nested handle (adopted by the loop) or a direct answer."
-        )
-        # Reflect downstream signature/annotations for clean tool schema
-        with suppress(Exception):
-            self._adopt_signature_and_annotations(getattr(handle, "ask"), _ask)
-
-        func_name = f"ask_{tool_context.fn_name}_{tool_context.safe_call_id}"
+        async def steer(
+            call_id: str,
+            action: SteerAction,
+            payload: Optional[str] = None,
+            method: Optional[str] = None,
+            include_parent_context: bool = False,
+        ) -> Dict[str, Any]:
+            return {"status": "unreachable"}
 
         self._register_tool(
-            func_name=func_name,
-            fallback_doc=_ask.__doc__,
-            fn=_ask,
+            func_name="steer",
+            fallback_doc=STEER_DOC,
+            fn=steer,
         )
 
-        return func_name
+    def _create_ask_about_completed_tool(self) -> None:
+        """Expose the single, frozen-docstring dispatcher for asking follow-up
+        questions about tools that have already completed.
 
-    def _create_clarify_tool(
-        self,
-        tool_context: _ToolContext,
-        handle: Any,
-    ) -> None:
-        doc = (
-            f"Provide an answer to the clarification which was requested by the (currently pending) tool "
-            f"{tool_context.fn_name}({tool_context.arg_repr}).\n\n"
-            "Parameters\n"
-            "----------\n"
-            "answer : str\n"
-            "    The answer text.\n\n"
-            "Returns\n"
-            "-------\n"
-            "Dict[str, str]\n"
-            "    Status acknowledgement including the underlying call id.\n"
-        )
+        The docstring no longer embeds a live listing of completed tools —
+        that listing now arrives as appended "[askable <call_id>]" tail
+        messages (see ToolsData.record_tool_completed_askable), which keeps
+        this tool's schema bytes constant regardless of how many tools have
+        completed. Execution is special-cased in loop.py, mirroring `steer`.
+        """
 
-        async def _clarify(answer: str) -> Dict[str, str]:
-            return {
-                "status": "clar_answer",
-                "call_id": tool_context.call_id,
-                "answer": answer,
-            }
-
-        # Set fallback docstring first; handle docstring may override below
-        _clarify.__doc__ = doc
-        # Prefer to propagate a class method docstring when available (e.g., handle.answer_clarification)
-        with suppress(Exception):
-            if handle is not None and hasattr(handle, "answer_clarification"):
-                src = getattr(handle, "answer_clarification")
-                src_doc = inspect.getdoc(getattr(src, "__func__", src))
-                if isinstance(src_doc, str) and src_doc.strip():
-                    _clarify.__doc__ = src_doc.strip()
+        async def ask_about_completed_tool(tool_id: str, question: str) -> Any:
+            return {"status": "unreachable"}
 
         self._register_tool(
-            func_name=f"clarify_{tool_context.fn_name}_{tool_context.safe_call_id}",
-            fallback_doc=doc,
-            fn=_clarify,
+            func_name="ask_about_completed_tool",
+            fallback_doc=ASK_ABOUT_COMPLETED_TOOL_DOC,
+            fn=ask_about_completed_tool,
         )
 
-    def _create_pause_tool(
-        self,
-        tool_context: _ToolContext,
-        handle: Any,
-        pause_event: Optional[asyncio.Event],
-    ) -> None:
-        handle_available = handle is not None
-        doc = f"Pause the pending call {tool_context.fn_name}({tool_context.arg_repr})."
+    def _refresh_task_capabilities(self, task: asyncio.Task) -> None:
+        """Refresh per-task bookkeeping that steer()'s execution-time
+        validation and the clarification/interjection plumbing depend on.
 
-        if handle_available and hasattr(handle, "pause"):
-
-            async def _pause(**_kw) -> Dict[str, str]:
-                with suppress(Exception):
-                    await forward_handle_call(handle, "pause", _kw)
-                return {"status": "paused", "call_id": tool_context.call_id, **_kw}
-
-            # Set fallback docstring first; _adopt_signature_and_annotations may override
-            _pause.__doc__ = doc
-            # Reflect downstream signature/annotations
-            with suppress(Exception):
-                self._adopt_signature_and_annotations(
-                    getattr(handle, "pause"),
-                    _pause,
-                )
-
-        else:
-
-            async def _pause() -> Dict[str, str]:
-                if handle_available and hasattr(handle, "pause"):
-                    await maybe_await(handle.pause())
-                elif pause_event is not None:
-                    pause_event.clear()
-                return {"status": "paused", "call_id": tool_context.call_id}
-
-            # Set fallback docstring (no handle to adopt from in this branch)
-            _pause.__doc__ = doc
-
-        self._register_tool(
-            func_name=f"pause_{tool_context.fn_name}_{tool_context.safe_call_id}",
-            fallback_doc=doc,
-            fn=_pause,
-        )
-
-    def _create_resume_tool(
-        self,
-        tool_context: _ToolContext,
-        handle: Any,
-        pause_event: Optional[asyncio.Event],
-    ) -> None:
-        doc = f"Resume the previously paused call {tool_context.fn_name}({tool_context.arg_repr})."
-
-        handle_available = handle is not None
-
-        if handle_available and hasattr(handle, "resume"):
-
-            async def _resume(**_kw) -> Dict[str, str]:
-                with suppress(Exception):
-                    await forward_handle_call(handle, "resume", _kw)
-                return {"status": "resumed", "call_id": tool_context.call_id, **_kw}
-
-            # Set fallback docstring first; _adopt_signature_and_annotations may override
-            _resume.__doc__ = doc
-            with suppress(Exception):
-                self._adopt_signature_and_annotations(
-                    getattr(handle, "resume"),
-                    _resume,
-                )
-
-        else:
-
-            async def _resume() -> Dict[str, str]:
-                if handle_available and hasattr(handle, "resume"):
-                    await maybe_await(handle.resume())
-                elif pause_event is not None:
-                    pause_event.set()
-                return {"status": "resumed", "call_id": tool_context.call_id}
-
-            # Set fallback docstring (no handle to adopt from in this branch)
-            _resume.__doc__ = doc
-
-        self._register_tool(
-            func_name=f"resume_{tool_context.fn_name}_{tool_context.safe_call_id}",
-            fallback_doc=doc,
-            fn=_resume,
-        )
-
-    def _expose_public_methods(self, tool_context: _ToolContext, handle: Any):
-        public_methods = self._discover_custom_public_methods(handle)
-
-        # Identify write-only helpers declared by the handle
-        write_only_set: set[str] = set()
-        with suppress(Exception):
-            wo = getattr(handle, "write_only_methods", None)
-            if wo is not None:
-                write_only_set |= set(wo)
-
-        with suppress(Exception):
-            wo2 = getattr(handle, "write_only_tools", None)
-            if wo2 is not None:
-                write_only_set |= set(wo2)
-
-        for meth_name, bound in public_methods.items():
-            # use the same name we're about to give fn.__name__
-            func_name = (
-                f"{meth_name}_{tool_context.fn_name}_{tool_context.safe_call_id}"
-            )
-            helper_key = func_name
-
-            # Skip if we already generated one this turn (possible when
-            # the loop revisits the same pending task).
-            if helper_key in self.dynamic_tools:
-                continue
-
-            # Write-only helpers: fire-and-forget operations
-            if meth_name in write_only_set:
-
-                async def _invoke_handle_method(
-                    _method_name=meth_name,
-                    **_kw,
-                ):
-                    # Robust forwarding incl. kwargs normalisation and fallbacks
-                    with suppress(Exception):
-                        await forward_handle_call(
-                            handle,
-                            _method_name,
-                            _kw,
-                        )
-                    # Write-only: no result propagation
-                    return {"call_id": tool_context.call_id, "status": "ack"}
-
-            else:
-
-                async def _invoke_handle_method(
-                    _method_name=meth_name,
-                    **_kw,
-                ):  # default args → capture current method name
-                    """
-                    Auto-generated wrapper that calls the corresponding
-                    method on the live handle and **waits** for the return
-                    value (sync or async).
-                    """
-                    # Use shared forwarding to support flexible args and fallbacks
-                    res = await forward_handle_call(
-                        handle,
-                        _method_name,
-                        _kw,
-                    )
-                    return {"call_id": tool_context.call_id, "result": res}
-
-            # Override the wrapper's signature and annotations to match the real method
-            _invoke_handle_method.__signature__ = inspect.signature(bound)
-            # Also copy annotations so downstream schema generation preserves types (e.g., int)
-            self._adopt_signature_and_annotations(bound, _invoke_handle_method)
-
-            self._register_tool(
-                func_name=func_name,
-                fallback_doc=(
-                    (
-                        f"Perform `{meth_name}` on the running handle (id={tool_context.call_id}). "
-                        "Fire-and-forget write-only operation; returns immediately."
-                    )
-                    if meth_name in write_only_set
-                    else (
-                        f"Invoke `{meth_name}` on the running handle (id={tool_context.call_id}). "
-                        "Returns when that method finishes."
-                    )
-                ),
-                fn=_invoke_handle_method,
-            )
-            # Mark write-only helpers so scheduling can acknowledge and avoid tracking
-            if meth_name in write_only_set:
-                with suppress(Exception):
-                    self.dynamic_tools[helper_key].__write_only__ = True  # type: ignore[attr-defined]
-
-    def _process_task(self, task: asyncio.Task):
+        This is the bookkeeping half of what used to be `_process_task` —
+        the tool-minting half is gone (steer/wait/ask_about_completed_tool
+        are static now), but the live state this tracks (is_interjectable,
+        clarification queue wiring, an ask() closure for recursive
+        inspection) still needs to be refreshed whenever a handle is
+        adopted or changes mid-flight.
+        """
         info = self.tools_data.info[task]
         handle = info.handle
-        task_pause_event = info.pause_event
         handle_available = handle is not None
 
         # ── DYNAMIC capability refresh (handle may change) ─────
@@ -606,183 +376,64 @@ class DynamicToolFactory:
             info.clar_down_queue = h_dn_q
 
         _call_id: str = info.call_id
-        # Compact, sanitized suffix of the call_id for use in function names.
-        # Capped at 8 chars to conserve the 64-char tool-name budget (OpenAI limit)
-        # while retaining enough uniqueness (~2.8 trillion combos for alphanumeric).
+        # Compact, sanitized suffix of the call_id for use in the synthetic
+        # ask-closure key below (this key is internal — never surfaced to
+        # the outer loop's own schema — so the 64-char tool-name budget
+        # that used to constrain it no longer applies, but the shape is
+        # kept for continuity with the closures' historical naming).
         _safe_call_id: str = _call_id.replace("-", "_").split("_")[-1][-8:]
         _fn_name: str = info.name
-        _arg_json: str = info.call_dict["function"]["arguments"]
-        try:
-            _arg_dict = json.loads(_arg_json)
-            _arg_repr = ", ".join(f"{k}={v!r}" for k, v in _arg_dict.items())
-        except Exception:
-            _arg_repr = _arg_json  # fallback: raw JSON string
 
-        create_tool_ctx = self._ToolContext(
-            fn_name=_fn_name,
-            arg_repr=_arg_repr,
-            call_id=_call_id,
-            safe_call_id=_safe_call_id,
-        )
-
-        # Track context opt-in for steering methods
-        # This determines whether include_parent_chat_context_cont is exposed in schema
-        _context_opted_in = getattr(info, "context_opted_in", True)
-
-        self._create_stop_tool(
-            create_tool_ctx,
-            task,
-            handle,
-        )
-
-        if info.is_interjectable:
-            self._create_interject_tool(
-                create_tool_ctx,
-                info,
-                handle,
-            )
-            # Mark with context opt-in status
-            interject_key = f"interject_{_fn_name}_{_safe_call_id}"
-            if interject_key in self.dynamic_tools:
-                self.dynamic_tools[interject_key].__context_opted_in__ = _context_opted_in  # type: ignore[attr-defined]
-
-        if info.clar_up_queue is not None:
-            self._create_clarify_tool(create_tool_ctx, handle)
-
-        # Synthetic `ask` helper for LLM-accessible inspection
-        if handle_available:
-            result = self._create_ask_tool(create_tool_ctx, handle)
-            if result is not None:
-                self.tools_data._task_ask_keys[task] = result
-
-        # Determine capability and current pause state; expose only one helper at a time
-        cap_pause = (handle_available and hasattr(handle, "pause")) or (
-            task_pause_event is not None
-        )
-        cap_resume = (handle_available and hasattr(handle, "resume")) or (
-            task_pause_event is not None
-        )
-
-        # Use shared helper to check handle's pause state first
-        paused_state = get_handle_paused_state(handle) if handle_available else None
-
-        # Fallback to task_pause_event if handle doesn't have _pause_event
-        if (
-            paused_state is None
-            and task_pause_event is not None
-            and hasattr(task_pause_event, "is_set")
-        ):
+        # Synthetic `ask` closure retained ONLY for recursive inspection-loop
+        # seeding (ToolsData.get_ask_tools()); never exposed as an outer tool.
+        if handle_available and hasattr(handle, "ask"):
             try:
-                paused_state = not task_pause_event.is_set()
+                _arg_dict = None
+                import json as _json
+
+                _arg_json = info.call_dict["function"]["arguments"]
+                try:
+                    _arg_dict = _json.loads(_arg_json)
+                    _arg_repr = ", ".join(f"{k}={v!r}" for k, v in _arg_dict.items())
+                except Exception:
+                    _arg_repr = _arg_json
             except Exception:
-                paused_state = None
+                _arg_repr = ""
 
-        # Default to "running" when unknown → expose pause first
-        if paused_state is True:
-            if cap_resume:
-                self._create_resume_tool(
-                    create_tool_ctx,
-                    handle,
-                    task_pause_event,
-                )
-        else:
-            if cap_pause:
-                self._create_pause_tool(
-                    create_tool_ctx,
-                    handle,
-                    task_pause_event,
+            async def _ask(_handle=handle, **_kw):
+                from .messages import forward_handle_call as _forward_handle_call
+
+                return await _forward_handle_call(
+                    _handle,
+                    "ask",
+                    _kw,
+                    fallback_positional_keys=["question"],
                 )
 
-        # 7.  expose *all* other public methods of the handle
-        if handle_available:
-            self._expose_public_methods(create_tool_ctx, handle)
-
-    def _create_ask_about_completed_tool(self) -> None:
-        """Expose a single dispatcher that lets the LLM ask follow-up questions
-        about any steerable inner tool that has already completed.
-
-        The dispatcher routes by ``tool_id`` (the original ``call_id``) to the
-        retained ``ask`` closure for that tool, which spins up a retrospective
-        inspection loop against the completed inner handle's transcript.
-        """
-        completed = self.tools_data._completed_askable_tools
-
-        # Build a dynamic docstring listing all askable completed tools.
-        # Annotate tools whose handle has an active background lifecycle
-        # (e.g. post-result storage review) so the LLM can distinguish
-        # them from truly dormant tools.
-        tool_lines = []
-        for cid, meta in completed.items():
-            args_str = meta["arg_repr"]
-            handle = meta.get("handle")
-            if handle is not None and hasattr(handle, "done") and not handle.done():
-                suffix = " [result returned — background skill storage in progress]"
-            else:
-                suffix = ""
-            tool_lines.append(
-                f'  - tool_id="{cid}": {meta["name"]}({args_str}){suffix}',
-            )
-        listing = "\n".join(tool_lines)
-
-        doc = (
-            "Ask a follow-up question about a completed tool to understand its "
-            "internal reasoning, intermediate steps, or any details not visible in "
-            "the outer transcript.\n\n"
-            "Available completed tools:\n"
-            f"{listing}\n\n"
-            "Parameters\n"
-            "----------\n"
-            "tool_id : str\n"
-            "    The tool_id of the completed tool to query (see listing above).\n"
-            "question : str\n"
-            "    The follow-up question to ask about the completed tool's execution."
-        )
-
-        # Capture references for closure
-        _completed = completed
-        _all_completed_names = self.tools_data._completed_tool_names
-
-        async def _ask_about_completed_tool(
-            tool_id: str,
-            question: str,
-            **_kw,
-        ):
-            entry = _completed.get(tool_id)
-            if entry is not None:
-                return await entry["ask_fn"](question=question, **_kw)
-
-            # Not askable — distinguish "exists but not steerable" from "doesn't exist"
-            tool_name = _all_completed_names.get(tool_id)
-            if tool_name is not None:
-                return (
-                    f"Cannot ask about tool_id={tool_id!r} ({tool_name}). "
-                    f"This tool completed successfully but was not steerable — "
-                    f"it executed as a direct function call with no inner "
-                    f"reasoning trajectory to inspect. Its result is already "
-                    f"visible in the outer transcript above."
-                )
-
-            available = list(_completed.keys())
-            return (
-                f"No tool found with tool_id={tool_id!r}. "
-                f"This ID does not match any completed tool call. "
-                f"Available tool_ids for retrospective inspection: {available}"
-            )
-
-        _ask_about_completed_tool.__doc__ = doc
-
-        self._register_tool(
-            func_name="ask_about_completed_tool",
-            fallback_doc=doc,
-            fn=_ask_about_completed_tool,
-        )
+            _ask.__doc__ = f"Ask a read-only question about the running call {_fn_name}({_arg_repr})."
+            with suppress(Exception):
+                self._adopt_signature_and_annotations(getattr(handle, "ask"), _ask)
+            ask_key = f"ask_{_fn_name}_{_safe_call_id}"
+            _ask.__name__ = ask_key[:64]
+            _ask.__qualname__ = ask_key[:64]
+            self.live_ask_fns[ask_key] = _ask
+            self.tools_data._task_ask_keys[task] = ask_key
 
     def generate(self):
-        for task in list(self.tools_data.pending):
-            self._process_task(task)
-        # Expose a single global `wait` helper when anything is in flight
-        if self.tools_data.pending:
-            self._create_wait_tool()
-        # Expose a single dispatcher for retrospective asking about completed tools
-        if self.tools_data._completed_askable_tools:
-            self._create_ask_about_completed_tool()
+        # Refresh capability bookkeeping (interjectable flag, clarification
+        # channel wiring, live-ask closures) for every pending task. This no
+        # longer mints any outer-visible tools — sorting by call_idx is kept
+        # only so `live_ask_fns` population order stays deterministic.
+        for task in sorted(
+            list(self.tools_data.pending),
+            key=lambda t: getattr(self.tools_data.info.get(t), "call_idx", 0),
+        ):
+            self._refresh_task_capabilities(task)
+
+        # The static, byte-stable surface: always present, every turn,
+        # regardless of what is pending/completed/paused right now.
+        self._create_wait_tool()
+        self._create_steer_tool()
+        self._create_ask_about_completed_tool()
+
+        self.tools_data._live_ask_fns_ref = self.live_ask_fns

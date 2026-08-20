@@ -265,6 +265,9 @@ def build_brain_spec(
         # Empty off-call and on telephony; two or more names means the assistant
         # is in a room where a turn may belong to someone else.
         call_participant_names=cm.call_manager.other_call_participant_names,
+        # Org calls only. One teammate is enough to make a turn possibly not
+        # mine, so this is not folded into the human count above.
+        call_assistant_names=cm.call_manager.other_call_assistant_names,
     )
     _system_prompt_ms = _mark_step()
 

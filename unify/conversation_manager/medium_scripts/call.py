@@ -59,6 +59,7 @@ from unify.session_details import SESSION_DETAILS
 # Shared helpers
 from unify.conversation_manager.medium_scripts.common import (
     event_broker,
+    CALL_DESKTOP_SHARE_SURFACE,
     create_end_call,  # kept for test monkeypatch compatibility
     match_say_meta,
     setup_participant_disconnect_handler,  # kept for test monkeypatch compatibility
@@ -81,6 +82,10 @@ from unify.conversation_manager.medium_scripts.common import (
 from unify.conversation_manager.medium_scripts.meet_floor import (
     FLOOR_TOPIC,
     MeetFloor,
+)
+from unify.conversation_manager.medium_scripts.peer_turns import (
+    PEER_TURN_TOPIC,
+    PeerTurnLog,
 )
 from unify.conversation_manager.domains.recall.client import RECALL_EVENT_TOPIC
 from unify.conversation_manager.domains.recall.events import (
@@ -125,6 +130,24 @@ _log = FastBrainLogger()
 # platform, reached through a hosted bot, whereas Unify Meet is our own room —
 # but both are just as multi-party.
 MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
+
+# Declined lines kept as context for the next turn. A short window on purpose:
+# it exists to carry a named addressee across the unnamed follow-ups that
+# immediately trail it, and a longer tail starts governing an exchange that has
+# since moved on.
+_MAX_UNANSWERED_TURNS = 4
+_UNANSWERED_TURN_CHARS = 200
+
+# How many turns a named addressee keeps governing without being named again.
+# A conversation does drift: somebody addressed three turns ago and not since is
+# no longer who the room is talking to, and an addressee that never expires
+# would have the assistant sitting out a call it was eventually asked to join.
+_ADDRESSEE_TURNS = 3
+
+# Where the resolved speaker is stashed on a chat item. The framework owns these
+# items; ``extra`` is the field it leaves for callers, so the label rides along
+# with the turn instead of being held in a side map that has to be kept aligned.
+_SPEAKER_EXTRA_KEY = "unify_speaker"
 
 # How often to re-read the screen a meeting participant is sharing. Recall sends
 # frames at 2fps and the relay stores one a second, so polling faster only costs
@@ -312,6 +335,21 @@ class Assistant(Agent):
         # Speaking-floor coordination for multi-assistant org meets; None on
         # every other channel (no gating overhead).
         self.meet_floor: MeetFloor | None = None
+        # What co-assistants have said on this call, which never reaches this
+        # session's STT. None on every channel but an org meet.
+        self.peer_turns: PeerTurnLog | None = None
+        # Lines on a multi-party call this assistant decided were not its own.
+        # Kept because standing down on a line does not end who it was for: a
+        # name is said once and governs the unnamed follow-ups after it, and a
+        # turn declined without a trace leaves the next turn reading two
+        # consecutive unanswered questions.
+        self._unanswered_turns: list[str] = []
+        # Who the conversation is currently with, as the fast brain last
+        # reported it, and how many turns ago that was. Held as state rather
+        # than re-derived each turn: an unnamed follow-up carries no attribution
+        # of its own, so the only place the answer exists is the turn before it.
+        self._standing_addressee: str = ""
+        self._standing_addressee_age: int = 0
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
@@ -320,6 +358,10 @@ class Assistant(Agent):
         # group when someone joins has to pick the etiquette up mid-call, and one
         # that empties back out has to drop it again.
         self._other_participants_provider: Callable[[], list[str]] | None = None
+        # Who is speaking right now, by display name. Wired on multi-party
+        # channels only: telephony carries one other person, so labelling every
+        # turn with their name tells the brains nothing they do not already have.
+        self._speaker_name_provider: Callable[[], str] | None = None
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -447,6 +489,97 @@ class Assistant(Agent):
                 return item.text_content or ""
         return ""
 
+    @staticmethod
+    def _latest_user_speaker(chat_ctx: llm.ChatContext) -> str:
+        """The stamped speaker of the most recent user turn, or ""."""
+        for item in reversed(chat_ctx.items):
+            if getattr(item, "role", None) != "user":
+                continue
+            extra = getattr(item, "extra", None) or {}
+            return str(extra.get(_SPEAKER_EXTRA_KEY) or "").strip()
+        return ""
+
+    @staticmethod
+    def _previous_line_at(chat_ctx: llm.ChatContext) -> float:
+        """When the line before the current one was said, as a wall-clock stamp.
+
+        The boundary peer turns are split around: a teammate who spoke after this
+        is contributing to the exchange the current line responds to, one who
+        spoke before it is earlier context. Zero when there is no previous line,
+        which reads as "nothing is earlier yet".
+        """
+        stamps = [
+            float(getattr(item, "created_at", 0.0) or 0.0)
+            for item in chat_ctx.items
+            if getattr(item, "role", None) is not None
+        ]
+        return stamps[-2] if len(stamps) >= 2 else 0.0
+
+    def _is_multi_party_call(self) -> bool:
+        """Whether a turn on this call could have belonged to somebody else."""
+        peers_provider = self._peer_assistants_provider
+        if peers_provider is not None and any(
+            (name or "").strip() for name in peers_provider()
+        ):
+            return True
+        others_provider = self._other_participants_provider
+        if others_provider is None:
+            return False
+        others = [name for name in others_provider() if (name or "").strip()]
+        return len(others) >= GROUP_CALL_MIN_PARTICIPANTS
+
+    def _record_unanswered_turn(self, user_text: str) -> None:
+        """Remember a line this assistant decided was not its own.
+
+        Only on a multi-party call: on a 1:1 every bare acknowledgement is a
+        silent turn, and a buffer of those describes nothing — there was never
+        anyone else it could have been for.
+        """
+        line = " ".join((user_text or "").split())[:_UNANSWERED_TURN_CHARS].strip()
+        if not line or not self._is_multi_party_call():
+            return
+        self._unanswered_turns.append(line)
+        del self._unanswered_turns[:-_MAX_UNANSWERED_TURNS]
+
+    def _clear_unanswered_turns(self) -> None:
+        """Forget the declined lines once the exchange has turned to us.
+
+        Speaking is the reset: whoever the previous lines were for, this one was
+        ours, so carrying them forward would have the assistant standing down
+        from the follow-ups to its own answer.
+        """
+        self._unanswered_turns.clear()
+        self._standing_addressee = ""
+        self._standing_addressee_age = 0
+
+    def _note_addressee(self, addressed_to: str) -> None:
+        """Record who the fast brain judged this turn was for.
+
+        A reported name refreshes the addressee; a turn it could not attribute
+        ages the standing one rather than dropping it, since an unnamed
+        follow-up is exactly the case this exists to cover. Past
+        ``_ADDRESSEE_TURNS`` unrefreshed it expires — a conversation drifts, and
+        an addressee that never expired would have the assistant sitting out a
+        call it was later asked to join.
+        """
+        name = " ".join((addressed_to or "").split()).strip()
+        own = (SESSION_DETAILS.assistant.name or "").strip()
+        if name and own and name.casefold() == own.casefold():
+            # The exchange is with us. Nothing to stand down from.
+            self._standing_addressee = ""
+            self._standing_addressee_age = 0
+            return
+        if name:
+            self._standing_addressee = name
+            self._standing_addressee_age = 0
+            return
+        if not self._standing_addressee:
+            return
+        self._standing_addressee_age += 1
+        if self._standing_addressee_age > _ADDRESSEE_TURNS:
+            self._standing_addressee = ""
+            self._standing_addressee_age = 0
+
     async def _finalize_fast_brain_user_turn(
         self,
         *,
@@ -496,6 +629,16 @@ class Assistant(Agent):
             schedule_bridge = self._pending_opening_bridge
             self._pending_opening_bridge = None
             schedule_bridge()
+        # Stamp who spoke onto the turn itself. Deciding whether a line was aimed
+        # at you is unanswerable without knowing who said it, and the resolved
+        # name is otherwise only attached to the published utterance event — a
+        # different path, which the brains never read. Stamped here because this
+        # runs before generation, while the active speaker is still current.
+        provider = self._speaker_name_provider
+        if provider is not None:
+            speaker = (provider() or "").strip()
+            if speaker:
+                new_message.extra[_SPEAKER_EXTRA_KEY] = speaker
         text = new_message.text_content or ""
         if text:
             _log.user_speech(text)
@@ -604,8 +747,24 @@ class Assistant(Agent):
             )
             peers_provider = self._peer_assistants_provider
             others_provider = self._other_participants_provider
+            if self.peer_turns is not None:
+                peer_turns_since, peer_turns_earlier = self.peer_turns.partitioned(
+                    self._previous_line_at(chat_ctx),
+                )
+            else:
+                # Empty as a tuple, matching how every other absent roster
+                # provider below reports "nobody".
+                peer_turns_since, peer_turns_earlier = (), ()
+            # Attributed for the fast brain only. "Was this aimed at me?" has no
+            # answer without knowing who said it, but `user_text` also carries
+            # the turn to the slow brain, which gets the speaker on its own path
+            # — prefixing there would label it twice.
+            speaker = self._latest_user_speaker(chat_ctx)
+            attributed_text = user_text
+            if speaker and user_text.strip() and self._is_multi_party_call():
+                attributed_text = f"{speaker}: {user_text}"
             resolved = await select_fast_brain_turn(
-                user_text=user_text,
+                user_text=attributed_text,
                 system_prompt=self._fast_brain_system_prompt,
                 history_messages=history_messages,
                 pending_continuation=pending,
@@ -621,8 +780,16 @@ class Assistant(Agent):
                 other_participants=(
                     others_provider() if others_provider is not None else ()
                 ),
+                peer_turns=peer_turns_since,
+                peer_turns_earlier=peer_turns_earlier,
+                unanswered_turns=tuple(self._unanswered_turns),
+                standing_addressee=self._standing_addressee,
                 own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
+            # Before any of the branches below return: whoever this turn was for
+            # has to survive a turn the assistant sits out, which is the whole
+            # point of tracking it.
+            self._note_addressee(resolved.addressed_to)
 
             if (
                 resolved.declined_continuation
@@ -635,7 +802,21 @@ class Assistant(Agent):
                     pending.remainder,
                 )
 
+            if resolved.classification == FAST_BRAIN_TURN_UNDECIDED:
+                # Nothing is spoken, but the turn is not dropped: recording the
+                # classification here (rather than returning bare, as silence
+                # does) is what lets the finally block schedule the slow brain,
+                # which can tell whether this turn was even ours.
+                turn_classification = FAST_BRAIN_TURN_UNDECIDED
+                self._record_unanswered_turn(user_text)
+                _log.info(
+                    "Fast brain reached no decision; saying nothing and handing "
+                    "the turn to the slow brain",
+                )
+                return
+
             if resolved.classification == FAST_BRAIN_TURN_SILENCE:
+                self._record_unanswered_turn(user_text)
                 _log.info("Fast brain: staying silent on bare acknowledgement")
                 return
 
@@ -650,6 +831,9 @@ class Assistant(Agent):
             self._buffers_since_slow_reply += 1
             turn_classification = resolved.classification
             intended_speech = speech
+            # This turn was ours, so the addressee the declined lines were
+            # tracking no longer stands.
+            self._clear_unanswered_turns()
             if turn_classification == FAST_BRAIN_TURN_CONTINUATION:
                 self._attach_reply_continuation(speech)
                 chunk_id = f"fast-brain-continuation-{monotonic_ms()}"
@@ -2070,6 +2254,19 @@ async def entrypoint(ctx: agents.JobContext):
         is_multiplayer=SESSION_DETAILS.is_multiplayer,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNIFY_CONSOLE_UI,
+        # The roster the call was dispatched with. This prompt is built once, so
+        # a call that becomes a group later is covered by the per-turn blocks
+        # rather than here; a browser meet learns its roster from polling and so
+        # has none of this yet either.
+        call_participant_names=[
+            name
+            for name in (
+                (member.get("display_name") or "").strip()
+                for member in unify_meet_roster
+                if member.get("kind") == "human"
+            )
+            if name
+        ],
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
@@ -2379,6 +2576,11 @@ async def entrypoint(ctx: agents.JobContext):
             f"app:comms:{channel}_utterance",
             event.to_json(),
         )
+        # Every line the assistant speaks funnels through here, whichever brain
+        # composed it, so this is the one place co-assistants can be told what
+        # they could not hear.
+        if assistant.peer_turns is not None:
+            await assistant.peer_turns.announce(text)
 
     credit_gate_task: asyncio.Task | None = None
     explicit_stop_requested = False
@@ -2510,6 +2712,12 @@ async def entrypoint(ctx: agents.JobContext):
     # -- Screenshot state --
     screenshot_history = ScreenshotHistory()
     assistant_screen_share_active = False
+    # Whether the desktop belongs on *this call's* stage, which is a different
+    # question from whether anyone is watching it: a Desktop tab open beside the
+    # call watches without the room having anything to show. Kept apart so that
+    # capturing frames for the brain and mounting an iframe on every
+    # participant's screen cannot be decided by one another's answer.
+    assistant_desktop_on_stage = False
     user_remote_control_active = False
     _agent_service_url: str | None = (
         (meta.get("agent_service_url") if meta else None)
@@ -2544,7 +2752,7 @@ async def entrypoint(ctx: agents.JobContext):
         state = {
             "type": "assistant_screenshare",
             "assistantId": str(SESSION_DETAILS.assistant.agent_id or ""),
-            "active": assistant_screen_share_active,
+            "active": assistant_desktop_on_stage,
         }
 
         async def _send() -> None:
@@ -2958,6 +3166,17 @@ async def entrypoint(ctx: agents.JobContext):
 
         assistant._other_participants_provider = _other_participant_names
 
+        def _current_speaker_name() -> str:
+            """Who the current utterance is from, by display name.
+
+            Resolved through the same ordering the published utterance uses, so
+            the brains and the transcript agree on who spoke.
+            """
+            _resolved, label, _sid, _source = _resolve_speaker()
+            return (label or "").strip()
+
+        assistant._speaker_name_provider = _current_speaker_name
+
     # --- Multi-assistant speaking floor (org meets only) ---
     # Assistants in a shared org room coordinate playout over the data channel
     # so they never talk over each other. Solo calls skip the claim window via
@@ -2965,7 +3184,17 @@ async def entrypoint(ctx: agents.JobContext):
     if call_session_id and channel == "unify_meet":
 
         def _peer_assistant_names() -> list[str]:
+            """Assistants other than this one, by display name.
+
+            Self-exclusion is by id, falling back to display name when the
+            roster crossed the wire without one. Listing itself here is the
+            failure that matters: a peer being present is what puts the fast
+            brain's unusable-decision fallbacks on silence, so an assistant that
+            counts itself would start dropping turns on a call where every turn
+            is its own.
+            """
             own_id = SESSION_DETAILS.assistant.agent_id
+            own_name = (SESSION_DETAILS.assistant.name or "").strip()
             names: list[str] = []
             for member in unify_meet_roster:
                 if member.get("kind") != "assistant":
@@ -2975,7 +3204,7 @@ async def entrypoint(ctx: agents.JobContext):
                     if str(member_id) == str(own_id):
                         continue
                 name = (member.get("display_name") or "").strip()
-                if name:
+                if name and name != own_name:
                     names.append(name)
             return names
 
@@ -3003,12 +3232,32 @@ async def entrypoint(ctx: agents.JobContext):
             log=_log.info,
         )
 
+        async def _publish_peer_turn(payload: dict) -> None:
+            # Unreliable on purpose: this is advisory context for the next turn,
+            # and a lost packet costs one turn's worth of awareness. Blocking a
+            # reply behind a retransmit would cost the call.
+            await ctx.room.local_participant.publish_data(
+                json.dumps(payload).encode(),
+                topic=PEER_TURN_TOPIC,
+                reliable=False,
+            )
+
+        assistant.peer_turns = PeerTurnLog(
+            local_id=str(SESSION_DETAILS.assistant.agent_id or os.getpid()),
+            local_name=SESSION_DETAILS.assistant.name or "",
+            publish=_publish_peer_turn,
+            log=_log.info,
+        )
+
         @ctx.room.on("data_received")
         def _on_floor_data(packet) -> None:
-            if getattr(packet, "topic", "") != FLOOR_TOPIC:
+            topic = getattr(packet, "topic", "")
+            if topic == FLOOR_TOPIC:
+                if assistant.meet_floor is not None:
+                    assistant.meet_floor.handle_message(bytes(packet.data))
                 return
-            if assistant.meet_floor is not None:
-                assistant.meet_floor.handle_message(bytes(packet.data))
+            if topic == PEER_TURN_TOPIC and assistant.peer_turns is not None:
+                assistant.peer_turns.handle_message(bytes(packet.data))
 
     if channel in ("google_meet", "teams_meet"):
         # The relay republishes the meeting platform's participant events into
@@ -3276,7 +3525,7 @@ async def entrypoint(ctx: agents.JobContext):
             # A client that joins mid-share starts with nothing mounted, so the
             # state has to be restated for it. Only when active: "not sharing"
             # is what a fresh client already assumes.
-            if assistant_screen_share_active:
+            if assistant_desktop_on_stage:
                 _publish_assistant_screenshare_state()
         if joined_gate_required and not outbound:
             _mark_user_joined("participant_connected")
@@ -3615,6 +3864,7 @@ async def entrypoint(ctx: agents.JobContext):
         *,
         strip_images: bool = False,
         tail: int | None = None,
+        attribute_speakers: bool = False,
     ) -> list[dict]:
         """Convert a LiveKit ChatContext into a list of message dicts for direct LLM calls.
 
@@ -3627,6 +3877,11 @@ async def entrypoint(ctx: agents.JobContext):
         tail : int | None
             When set, only the last *tail* messages are returned (after any
             image stripping).  Useful for keeping the context compact.
+        attribute_speakers : bool
+            When True, prefix each user message with the speaker stamped on its
+            item, so a reader can tell who said what.  Opt-in: on a 1:1 every
+            user line is the same person and the prefix is noise, and the
+            greeting sidecar shares this function.
         """
         from livekit.agents.llm import ImageContent
 
@@ -3662,6 +3917,11 @@ async def entrypoint(ctx: agents.JobContext):
                 text = getattr(item, "text_content", None)
                 if not text:
                     continue
+                if attribute_speakers and role == "user":
+                    extra = getattr(item, "extra", None) or {}
+                    who = str(extra.get(_SPEAKER_EXTRA_KEY) or "").strip()
+                    if who:
+                        text = f"{who}: {text}"
                 messages.append({"role": role, "content": text})
         if tail is not None and len(messages) > tail:
             messages = messages[-tail:]
@@ -3771,6 +4031,7 @@ async def entrypoint(ctx: agents.JobContext):
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
         nonlocal _pending_console_steps, user_remote_control_active
+        nonlocal assistant_desktop_on_stage
         if data.get("event_name") == "AssistantTurnInjected":
             payload = data.get("payload") or {}
             apply_assistant_turn_injection(str(payload.get("content") or ""))
@@ -3795,6 +4056,15 @@ async def entrypoint(ctx: agents.JobContext):
                 )
                 if not assistant_screen_share_active:
                     _clear_visual_context(source="assistant")
+            # Republished on every viewer change rather than on a transition of
+            # this flag, so a room that has drifted out of step is put back.
+            # Every client's copy of what is mounted lives in its own memory, and
+            # an edge-triggered broadcast can only correct one that is wrong in
+            # the direction the edge happens to be travelling.
+            if CALL_DESKTOP_SHARE_SURFACE in surfaces:
+                assistant_desktop_on_stage = bool(
+                    surfaces[CALL_DESKTOP_SHARE_SURFACE],
+                )
                 _publish_assistant_screenshare_state()
             if surfaces.get("user_screen_share_active") is False:
                 _clear_visual_context(source="user")
@@ -4042,10 +4312,17 @@ async def entrypoint(ctx: agents.JobContext):
         return await greeting_client.generate(messages=greeting_messages)
 
     assistant._fast_brain_system_prompt = system_prompt
-    assistant._fast_brain_history_provider = lambda: _extract_chat_messages(
-        session.history,
-        tail=8,
-    )
+
+    def _fast_brain_history() -> list[dict]:
+        # Attribution is decided per call, not per session: a meet that starts
+        # 1:1 and becomes a group has to start labelling mid-call.
+        return _extract_chat_messages(
+            session.history,
+            tail=8,
+            attribute_speakers=assistant._is_multi_party_call(),
+        )
+
+    assistant._fast_brain_history_provider = _fast_brain_history
 
     opening_mode = opening_config["mode"]
 

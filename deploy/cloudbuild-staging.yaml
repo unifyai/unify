@@ -21,7 +21,7 @@ steps:
     UNILLM_SHA=$$(git ls-remote https://github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
     umask 077
     printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.branding_key
-    BRANDING_SHA=$$(GIT_SSH_COMMAND="ssh -i /workspace/.branding_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git ls-remote git@github.com:unifyai/branding.git refs/heads/staging | cut -f1)
+    BRANDING_SHA=$$(GIT_SSH_COMMAND="ssh -i /workspace/.branding_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git ls-remote git@github.com:unifyai/branding.git refs/heads/main | cut -f1)
     rm -f /workspace/.branding_key
     echo "$${UNISDK_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt

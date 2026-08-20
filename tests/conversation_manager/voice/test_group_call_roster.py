@@ -141,6 +141,86 @@ class TestUnifyMeetRoster:
         assert call_manager.other_call_participant_names == ["Ada"]
 
 
+class TestPeerAssistantRoster:
+    """Peer assistants, which ``other_call_participant_names`` leaves out.
+
+    Needed because a call can be a group without a second human on it: one
+    person plus two assistants is a room where a turn may belong to somebody
+    else, and counting humans alone reads that as 1:1.
+    """
+
+    def test_peers_are_named_and_the_assistant_is_not(self, call_manager, monkeypatch):
+        monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 42)
+        _unify_meet(
+            call_manager,
+            [
+                {"kind": "human", "display_name": "Ada"},
+                {"kind": "assistant", "display_name": "Lila D", "assistant_id": 42},
+                {"kind": "assistant", "display_name": "Bo Bot", "assistant_id": 99},
+            ],
+        )
+        assert call_manager.other_call_assistant_names == ["Bo Bot"]
+
+    def test_the_assistant_is_excluded_by_name_when_ids_are_missing(
+        self,
+        call_manager,
+    ):
+        """Counting itself would read a 1:1 meet as a group of two.
+
+        A roster crosses a wire, so the id it should carry may not be there. The
+        cost of over-counting is asymmetric — it puts a 1:1 call on group timing
+        — so an assistant entry that cannot be told apart from this one is not a
+        peer.
+        """
+        _unify_meet(
+            call_manager,
+            [
+                {"kind": "human", "display_name": "Ada"},
+                {"kind": "assistant", "display_name": _OWN_NAME},
+            ],
+        )
+        assert call_manager.other_call_assistant_names == []
+
+    def test_humans_are_not_peers(self, call_manager):
+        _unify_meet(
+            call_manager,
+            [
+                {"kind": "human", "display_name": "Ada"},
+                {"kind": "human", "display_name": "Bo"},
+            ],
+        )
+        assert call_manager.other_call_assistant_names == []
+
+    def test_a_nameless_peer_is_dropped(self, call_manager):
+        """A peer named "" would render an empty slot in the restraint copy."""
+        _unify_meet(
+            call_manager,
+            [
+                {"kind": "assistant", "display_name": "", "assistant_id": 99},
+                {"kind": "assistant", "assistant_id": 98},
+            ],
+        )
+        assert call_manager.other_call_assistant_names == []
+
+    @pytest.mark.parametrize("channel", ["phone_call", "whatsapp_call"])
+    def test_telephony_has_no_peers(self, call_manager, channel):
+        call_manager._call_channel = channel
+        call_manager.unify_meet_participants = [
+            {"kind": "assistant", "display_name": "Bo Bot", "assistant_id": 99},
+        ]
+        assert call_manager.other_call_assistant_names == []
+
+    def test_a_browser_meet_reports_no_peers(self, call_manager):
+        """Recall rosters do not mark bots, so a co-assistant there is
+        indistinguishable from a notetaker and is counted as a person by
+        ``other_call_participant_names`` instead."""
+        call_manager._call_channel = "google_meet"
+        call_manager.unify_meet_participants = [
+            {"kind": "assistant", "display_name": "Bo Bot", "assistant_id": 99},
+        ]
+        assert call_manager.other_call_assistant_names == []
+
+
 class TestRosterFollowsTheLiveCall:
     def test_a_browser_meet_does_not_read_the_org_roster(self, call_manager):
         """The two shapes use different keys, so crossing them reads as empty

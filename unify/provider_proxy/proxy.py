@@ -48,6 +48,7 @@ from unify.provider_proxy.classify import (
     Locator,
     classify,
 )
+from unify.provider_proxy import tenants
 from unify.provider_proxy.filter import filter_changes, filter_listing
 from unify.provider_proxy.session import ProxySession, current_session, set_session
 
@@ -78,6 +79,35 @@ def _not_found() -> JSONResponse:
     return JSONResponse(
         status_code=404,
         content={"error": {"code": "itemNotFound", "message": "Item not found."}},
+    )
+
+
+def _authorisation_required(tenant_id: str) -> httpx.Response:
+    """The owning organisation has not approved this app.
+
+    Distinct from 404 on purpose. Falling through with a home-tenant token
+    produces an upstream 404 that is indistinguishable from the item not
+    existing, which is precisely the confusion that hid a live shared folder --
+    so a known-but-unauthorised owner says so instead.
+    """
+    # An ``httpx.Response`` rather than a ``JSONResponse``: this is returned
+    # from ``_forward``, whose result every caller hands to
+    # ``_passthrough_response``.
+    return httpx.Response(
+        403,
+        json={
+            "error": {
+                "code": "authorisationRequired",
+                "message": (
+                    "This content belongs to another organisation "
+                    f"(tenant {tenant_id}) that has not approved access for "
+                    "this assistant. Their administrator must grant it once; "
+                    "the content itself is reachable, the approval is not yet "
+                    "in place."
+                ),
+                "tenantId": tenant_id,
+            },
+        },
     )
 
 
@@ -126,6 +156,7 @@ async def _forward(
     body: Optional[bytes],
     *,
     follow_redirects: bool = False,
+    resource_tenant: Optional[str] = None,
 ) -> httpx.Response:
     """Forward to the upstream provider, injecting the real token.
 
@@ -149,6 +180,16 @@ async def _forward(
         token = runtime_oauth.refresh_provider_access_token(provider)
     if not token:
         return _reconnect_response(provider)
+
+    if provider == "microsoft" and resource_tenant:
+        # The item belongs to another organisation. A token issued for this
+        # assistant's tenant cannot address a drive in theirs -- Graph answers
+        # 404, which reads as "no such item" rather than "wrong credential".
+        if resource_tenant != tenants.home_tenant(token):
+            foreign = await tenants.token_for_tenant(resource_tenant)
+            if foreign is None:
+                return _authorisation_required(resource_tenant)
+            token = foreign
 
     try:
         async with _make_client(follow_redirects) as http:
@@ -430,6 +471,53 @@ def _parse_query(query_string: str) -> dict[str, str]:
     return out
 
 
+def _with_allow_external(query_string: str) -> str:
+    """Return *query_string* with Graph's ``allowexternal`` opt-in applied.
+
+    A caller-supplied value wins, so an explicit ``allowexternal=false`` still
+    narrows the listing to the account's own tenant.
+    """
+    if "allowexternal" in _parse_query(query_string):
+        return query_string
+    return (
+        f"{query_string}&allowexternal=true" if query_string else "allowexternal=true"
+    )
+
+
+def _with_all_drives(query_string: str, *, listing: bool) -> str:
+    """Return *query_string* with Drive's shared-content opt-ins applied.
+
+    ``includeItemsFromAllDrives`` is only meaningful when enumerating, so it is
+    added for listings alone. Caller-supplied values win in both cases.
+    """
+    present = _parse_query(query_string)
+    additions = [] if "supportsAllDrives" in present else ["supportsAllDrives=true"]
+    if listing and "includeItemsFromAllDrives" not in present:
+        additions.append("includeItemsFromAllDrives=true")
+    if not additions:
+        return query_string
+    joined = "&".join(additions)
+    return f"{query_string}&{joined}" if query_string else joined
+
+
+def _resource_tenant_for(c: Classification) -> Optional[str]:
+    """The tenant owning the drive this request addresses, if known.
+
+    Learned from listings rather than probed, so this costs nothing and is
+    already populated by the time the assistant traverses into a shared folder.
+    ``None`` means the home tenant applies -- either the drive is ours or we
+    have not been told otherwise, and the ordinary credential is correct.
+    """
+    if c.provider != "microsoft":
+        return None
+    for loc in (c.target, c.parent):
+        if loc is not None and getattr(loc, "drive_id", ""):
+            owner = tenants.tenant_for_drive(loc.drive_id)
+            if owner:
+                return owner
+    return None
+
+
 def _is_ms_shares_path(rest_path: str) -> bool:
     segs = [s for s in rest_path.split("/") if s]
     if segs and segs[0] in ("v1.0", "beta"):
@@ -470,6 +558,22 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
         incoming_headers.setdefault("prefer", "redeemSharingLinkIfNecessary")
 
     c = classify(provider, method, rest_path, query)
+
+    if provider == "microsoft" and c.operation == "sharedWithMe":
+        # Graph omits items shared from *other* tenants unless the caller asks
+        # for them, so the default response silently hides exactly the folders a
+        # user means when they say "someone shared this with me". Its absence is
+        # indistinguishable from a revoked grant at the call site -- an empty
+        # list either way -- so it is applied here rather than left to callers.
+        query_string = _with_allow_external(query_string)
+
+    if provider == "google" and c.kind in (KIND_FILE_READ, KIND_FILE_WRITE):
+        # The same omission Graph makes, in Drive's vocabulary: without these a
+        # Shared Drive and everything shared into the account are absent from an
+        # otherwise successful response. Every first-party Drive caller in this
+        # repo already sets them; the sandbox path did not, which left the one
+        # caller writing requests ad hoc as the only one getting a short answer.
+        query_string = _with_all_drives(query_string, listing=c.is_listing)
 
     if c.kind == KIND_NON_FILE:
         resp = await _forward(
@@ -523,6 +627,7 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             # ordinary drive listings never redirect, so this is inert there.
             follow_redirects=_locator_is_share(parent_loc)
             or _locator_is_share(c.parent),
+            resource_tenant=_resource_tenant_for(c),
         )
         if resp.status_code >= 400:
             return _passthrough_response(resp, rewrite)
@@ -530,6 +635,10 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             payload = resp.json()
         except (ValueError, TypeError):
             return _passthrough_response(resp, rewrite)
+        # A sharedWithMe response names each item's owning tenant and drive.
+        # Reading them now means traversal into the folder already knows which
+        # organisation to authenticate against.
+        tenants.learn_from_listing(payload)
         if c.changes_list:
             filtered = await filter_changes(provider, payload, rewrite)
         else:

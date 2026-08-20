@@ -168,7 +168,16 @@ class DispatchManifest(BaseModel):
 
     dispatch_id: str
     created_at: str = Field(default_factory=utc_now_iso)
-    source: Literal["dispatch_pipeline", "pipeline_control"] = "dispatch_pipeline"
+    # Every origin that can publish a dispatch has to be named here. The
+    # assistant's own ingestion path publishes through the brokered control
+    # plane, and omitting it meant a validated model rejected the one caller
+    # users actually reach -- fifteen files downloaded and none parsed, because
+    # the manifest describing them could not be written.
+    source: Literal[
+        "dispatch_pipeline",
+        "pipeline_control",
+        "ingestion_manager",
+    ] = "dispatch_pipeline"
     mode: str = ""
     config_path: str = ""
     job_ids: list[str] = Field(default_factory=list)
