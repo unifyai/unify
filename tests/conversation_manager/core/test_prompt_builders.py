@@ -1634,3 +1634,25 @@ class TestVoiceMultiPartyBlock:
         """Otherwise a new voice reads as the same person under a new name."""
         prompt = _build_voice(call_participant_names=["Ada", "Bo"])
         assert "not the only person who might speak" in prompt
+
+
+class TestSystemPromptStaysClockFree:
+    """The system prompt carries no wall-clock timestamp.
+
+    Provider prompt caching is all-or-nothing over system+tools, so a
+    minute-granularity clock in the system prompt would invalidate the cache
+    on every minute rollover. The clock lives at the tail of the rendered
+    state snapshot instead (``domains/renderer.py``).
+    """
+
+    # The rendering shape of prompt_helpers.now(), e.g.
+    # "Friday, June 13, 2025 at 12:00 PM". Regex-based so the guarantee holds
+    # no matter what the clock reads when the suite runs.
+    CLOCK_SHAPE = r"[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M"
+
+    def test_system_prompt_contains_no_wall_clock_timestamp(self):
+        import re
+
+        prompt = _build()
+        assert not re.search(self.CLOCK_SHAPE, prompt)
+        assert "Current time:" not in prompt

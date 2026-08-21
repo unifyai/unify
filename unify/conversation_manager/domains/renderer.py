@@ -735,6 +735,11 @@ class Renderer:
         )
         _conversations_ms = _mark_step()
 
+        # The wall clock closes the snapshot rather than living in the system
+        # prompt: a minute rollover then only re-tokenizes the snapshot tail
+        # instead of invalidating the provider's system+tools cache.
+        time_render = f"Current time: {prompt_now()}."
+
         sections = [
             s
             for s in [
@@ -746,6 +751,7 @@ class Renderer:
                 completed_render,
                 recent_tools_render,
                 convs_render,
+                time_render,
             ]
             if s
         ]

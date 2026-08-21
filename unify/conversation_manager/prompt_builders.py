@@ -3003,7 +3003,7 @@ def build_system_prompt(
 
     # Build the full prompt using PromptParts for structured output.
     #
-    # Section order (1-17):
+    # Section order (1-16):
     #   1. Setup readiness (when applicable)
     #   2. Role + Bio (identity)
     #   3. Accessible shared teams (where memory lives)
@@ -3021,7 +3021,11 @@ def build_system_prompt(
     #   14. Onboarding reference (regular assistants only)
     #   15. Voice calls guide (when on a voice call)
     #   16. Scenarios
-    #   17. Current time
+    #
+    # The wall clock is deliberately absent: it lives at the tail of the
+    # rendered state snapshot (domains/renderer.py) so the system prompt
+    # stays byte-stable across minute rollovers and keeps the provider's
+    # system+tools cache warm.
     parts = PromptParts()
 
     # 1. Setup readiness.
@@ -3415,9 +3419,6 @@ When contacts communicate in a non-English language, I match their language in m
 ---------
 - If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{voice_session_scenarios_section}{meet_join_scenarios}""",
     )
-
-    # 17. Current time (dynamic content — changes per call).
-    parts.add(f"Current time: {now()}.", static=False)
 
     return parts
 
