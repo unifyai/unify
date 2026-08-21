@@ -146,6 +146,11 @@ async def test_turn_review_runs_on_response_with_tool_activity():
             assert "_transcript_note" in note
             assert "Stored function 7" in note["_transcript_note"]["text"]
 
+            compact = inner._queue.get_nowait()
+            assert compact == {
+                "_compact_transcript": {"reviewed_tool_results": 1},
+            }
+
             relayed = []
             while not handle._notification_q.empty():
                 relayed.append(handle._notification_q.get_nowait())

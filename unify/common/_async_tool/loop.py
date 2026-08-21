@@ -56,6 +56,7 @@ from .messages import (
     is_loop_authored_message,
     loop_user_notice,
     extract_substantive_text,
+    compact_reviewed_tool_results,
 )
 from .tools_data import (
     ToolsData,
@@ -1725,6 +1726,7 @@ async def async_tool_loop_inner(
                 _is_sentinel = isinstance(extra, dict) and (
                     "_mirror" in extra
                     or "_transcript_note" in extra
+                    or "_compact_transcript" in extra
                     or extra.get("_replay")
                 )
                 # Transcript-note sentinel: a background process (e.g. a
@@ -1740,6 +1742,23 @@ async def async_tool_loop_inner(
                             await _msg_dispatcher.append_msgs(
                                 [loop_user_notice(_note)],
                             )
+                    except Exception:
+                        pass
+                    continue
+                # Transcript-compaction sentinel: a completed storage review
+                # has consolidated the covered turns, so their raw tool
+                # payloads shed their bulk. Processed only at drain points —
+                # never mid-dispatch.
+                if isinstance(extra, dict) and "_compact_transcript" in extra:
+                    try:
+                        _n = int(
+                            (extra.get("_compact_transcript") or {}).get(
+                                "reviewed_tool_results",
+                            )
+                            or 0,
+                        )
+                        if _n > 0:
+                            compact_reviewed_tool_results(client, _n)
                     except Exception:
                         pass
                     continue
@@ -4379,6 +4398,26 @@ async def async_tool_loop_inner(
                                 await _msg_dispatcher.append_msgs(
                                     [loop_user_notice(_note)],
                                 )
+                        except Exception:
+                            pass
+                        continue
+
+                    # Transcript-compaction sentinels: the covered turns were
+                    # consolidated by a storage review; shed their raw tool
+                    # payloads and stay in persist wait.
+                    if (
+                        isinstance(interjection, dict)
+                        and "_compact_transcript" in interjection
+                    ):
+                        try:
+                            _n = int(
+                                (interjection.get("_compact_transcript") or {}).get(
+                                    "reviewed_tool_results",
+                                )
+                                or 0,
+                            )
+                            if _n > 0:
+                                compact_reviewed_tool_results(client, _n)
                         except Exception:
                             pass
                         continue

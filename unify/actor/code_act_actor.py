@@ -1812,6 +1812,11 @@ def _start_storage_check_loop(
             "'Proactive Storage Already Performed').\n\n"
             "- Focus on what the latest turn(s) added since the last "
             "review pass.\n"
+            "- Steady state is cheap: when the latest turn(s) only "
+            "re-executed already-stored procedures and the requester added "
+            "no new requirement, amendment or correction, there is nothing "
+            "to do — say so in one sentence and finish immediately, "
+            "without searching the stores first.\n"
             "- Prefer updating an existing stored entry over adding a "
             "near-duplicate: when this session already stored the "
             "procedure and a later turn refined its spec, apply the "
@@ -2321,7 +2326,10 @@ class _StorageCheckHandle(SteerableToolHandle):
             )
             # Leave the librarian's summary in the live session's transcript
             # so the next request can execute what was stored instead of
-            # re-deriving the procedure. Transcript-only: no LLM turn fires.
+            # re-deriving the procedure, and let the reviewed turns shed
+            # their raw tool payloads — the review is the checkpoint that
+            # makes them safe to compact. Both are transcript-only: no LLM
+            # turn fires.
             queue = getattr(self._inner, "_queue", None)
             if queue is not None:
                 queue.put_nowait(
@@ -2332,6 +2340,13 @@ class _StorageCheckHandle(SteerableToolHandle):
                                 "note, not a user message]\n"
                                 f"{summary}"
                             ),
+                        },
+                    },
+                )
+                queue.put_nowait(
+                    {
+                        "_compact_transcript": {
+                            "reviewed_tool_results": tool_count,
                         },
                     },
                 )
