@@ -17,6 +17,24 @@ import pytest
 
 from unify.actor.code_act_actor import CodeActActor
 from unify.actor.prompt_builders import build_code_act_prompt
+from unify.session_details import SESSION_DETAILS, AssistantDetails
+
+
+@pytest.fixture()
+def desktop_entitled_assistant():
+    """A session whose assistant holds the managed Computer Use add-on.
+
+    The computer prompt sections are only rendered for an entitled
+    assistant; without this, ambient session details default to
+    unentitled and the environment context is the unavailability stub.
+    """
+    original = SESSION_DETAILS.assistant
+    SESSION_DETAILS.assistant = AssistantDetails(
+        desktop_mode="ubuntu",
+        managed_desktop_status="active",
+    )
+    yield SESSION_DETAILS.assistant
+    SESSION_DETAILS.assistant = original
 
 
 class _DummyEnv:
@@ -89,7 +107,9 @@ def test_code_act_prompt_has_primary_execute_code_and_session_tools_and_no_legac
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_includes_computer_primitives_and_selection_contracts():
+def test_code_act_prompt_includes_computer_primitives_and_selection_contracts(
+    desktop_entitled_assistant,
+):
     actor = CodeActActor()
     try:
         prompt = build_code_act_prompt(
@@ -257,7 +277,7 @@ def test_incremental_execution_present_and_execution_rules_not_duplicated():
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_platform_capabilities_index():
+def test_code_act_prompt_platform_capabilities_index(desktop_entitled_assistant):
     """Platform self-knowledge depth lives in builtin guidance; the prompt
     carries a static capabilities index with one consult-path line per
     guidance-backed or gated domain, rendered only when discovery tools
@@ -333,7 +353,7 @@ def test_external_and_oauth_sections_gate_independently():
 
 
 @pytest.mark.timeout(30)
-def test_policy_contracts_have_a_guarded_destination():
+def test_policy_contracts_have_a_guarded_destination(desktop_entitled_assistant):
     """Every guarded contract has an explicit destination. The ten policy
     contracts stay inline in the prompt (retrieval may miss and gates may
     not fire); the two mechanism contracts are asserted at their docstring
@@ -662,7 +682,9 @@ def test_custom_environment_empty_prompt_context_excluded():
 
 
 @pytest.mark.timeout(30)
-def test_computer_environment_prompt_context_from_registry():
+def test_computer_environment_prompt_context_from_registry(
+    desktop_entitled_assistant,
+):
     """ComputerEnvironment should derive prompt context from registry."""
     from unify.function_manager.primitives import ComputerPrimitives
     from unify.actor.environments.computer import ComputerEnvironment
@@ -691,7 +713,9 @@ def test_computer_environment_prompt_context_from_registry():
 
 
 @pytest.mark.timeout(30)
-def test_computer_environment_managed_desktop_filesystem_paths():
+def test_computer_environment_managed_desktop_filesystem_paths(
+    desktop_entitled_assistant,
+):
     """Computer prompt teaches VM home/Downloads layout, not /home/unityuser."""
     from unify.function_manager.primitives import ComputerPrimitives
     from unify.actor.environments.computer import ComputerEnvironment
@@ -859,3 +883,44 @@ def test_guidelines_both_compose():
     idx_base = prompt.index("Always respond in formal English.")
     idx_overlay = prompt.index("Check all contact fields.")
     assert idx_base < idx_overlay
+
+
+@pytest.mark.timeout(30)
+def test_storage_notice_matches_session_mode():
+    """The skill-storage notice must describe the schedule the run actually
+    gets: one-shot acts consolidate after the final result; persistent
+    sessions consolidate after each completed turn and surface background
+    notes the model should act on for repeat deliverables."""
+    actor = CodeActActor()
+    tools = dict(actor.get_tools("act"))
+
+    one_shot = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+        can_store=True,
+    )
+    assert "after you return your result" in one_shot
+    assert "after each completed turn" not in one_shot
+
+    session = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+        can_store=True,
+        persist=True,
+    )
+    assert "after each completed turn" in session
+    assert "after you return your result" not in session
+    # The convergence contract: repeat requests are one execution and a
+    # report, and amendments edit the stored function in place rather than
+    # triggering a fresh replan.
+    assert "do not re-derive the procedure inline" in session
+    assert "one execution and a report" in session
+    assert "`overwrite=True` edit" in session
+
+    without_store = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+        can_store=False,
+        persist=True,
+    )
+    assert "Skill Storage" not in without_store
