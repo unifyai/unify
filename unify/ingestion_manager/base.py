@@ -145,6 +145,27 @@ class BaseIngestionManager(ABC):
     # ── observing ─────────────────────────────────────────────────────────
 
     @abstractmethod
+    def reconcile(self, run_id: str) -> List["TableReconciliation"]:
+        """Check what landed against what the source held, per table.
+
+        The honest closing step of an ingestion, and the one a row count cannot
+        perform alone: a run can report every row committed while each row holds
+        no values, in which case the count agrees with a table that is useless.
+        So this reports both how many rows are stored and which columns are
+        blank in every row sampled.
+
+        Use it after a run reaches a terminal state, and before telling anyone
+        the data is ready. ``complete`` on each result is the single question --
+        it is false both when rows are missing and when the rows that arrived
+        came without their values.
+
+        Parameters
+        ----------
+        run_id : str
+            The handle returned by ``submit``.
+        """
+
+    @abstractmethod
     def get_status(self, run_id: str) -> RunStatus:
         """Report where a run has got to, and what to do about it.
 
