@@ -154,6 +154,8 @@ class ProactiveSpeech:
         Returns (decision, llm_log_path) where llm_log_path is the unillm
         request+response file for the LLM call that produced this decision.
         """
+        from unify.common.prompt_helpers import now
+
         client = new_slow_brain_llm_client(
             origin="ProactiveSpeech",
             # Same slow-brain model as ConversationManager; pin "high" so this
@@ -162,8 +164,15 @@ class ProactiveSpeech:
             reasoning_effort="high",
         )
         client.set_response_format(ProactiveDecision)
+        # The decision is about time — how long the silence has run and how
+        # long to let it run — and the CM system prompt this builds on is
+        # deliberately clock-free (provider caching), so this single-shot
+        # surface stamps its own fresh clock at assembly time.
+        system_content = (
+            f"{system_prompt}\n\n{PROACTIVE_PROMPT}\n\nCurrent time: {now()}."
+        )
         messages = [
-            {"role": "system", "content": f"{system_prompt}\n\n{PROACTIVE_PROMPT}"},
+            {"role": "system", "content": system_content},
             *chat_history,
         ]
         several_people = len(other_participants) >= GROUP_CALL_MIN_PARTICIPANTS
