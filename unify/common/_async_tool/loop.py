@@ -1723,8 +1723,26 @@ async def async_tool_loop_inner(
                 except asyncio.QueueEmpty:
                     break
                 _is_sentinel = isinstance(extra, dict) and (
-                    "_mirror" in extra or extra.get("_replay")
+                    "_mirror" in extra
+                    or "_transcript_note" in extra
+                    or extra.get("_replay")
                 )
+                # Transcript-note sentinel: a background process (e.g. a
+                # storage review) leaves a loop-authored note in the
+                # transcript without granting an LLM turn — the model reads
+                # it whenever it next speaks.
+                if isinstance(extra, dict) and "_transcript_note" in extra:
+                    try:
+                        _note = str(
+                            (extra.get("_transcript_note") or {}).get("text") or "",
+                        )
+                        if _note:
+                            await _msg_dispatcher.append_msgs(
+                                [loop_user_notice(_note)],
+                            )
+                    except Exception:
+                        pass
+                    continue
                 if not _is_sentinel:
                     if not _had_interjections:
                         _had_interjections = True
@@ -4342,6 +4360,28 @@ async def async_tool_loop_inner(
                         continue
 
                     interjection = interject_waiter.result()
+
+                    # Transcript-note sentinels are transcript-only: append the
+                    # loop-authored note and stay in persist wait. The model
+                    # reads it on its next granted turn.
+                    if (
+                        isinstance(interjection, dict)
+                        and "_transcript_note" in interjection
+                    ):
+                        try:
+                            _note = str(
+                                (interjection.get("_transcript_note") or {}).get(
+                                    "text",
+                                )
+                                or "",
+                            )
+                            if _note:
+                                await _msg_dispatcher.append_msgs(
+                                    [loop_user_notice(_note)],
+                                )
+                        except Exception:
+                            pass
+                        continue
 
                     # Mirror sentinels are transcript-only (no user message).
                     # Process them in-place and stay in persist wait — resuming
