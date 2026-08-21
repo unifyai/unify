@@ -84,6 +84,10 @@ class TableWork:
     context: str
     handle: TableInputHandle
     declared_rows: int
+    # The source file this table was extracted from. Reporting only: the
+    # engine never reads it, but a progress number is meaningless to a
+    # caller who cannot tell which of fifteen files it belongs to.
+    source_path: str = ""
     columns: List[str] = field(default_factory=list)
     chunk_size: int = 500
     # Rows are the wrong unit for a payload limit: the same count carries wildly
