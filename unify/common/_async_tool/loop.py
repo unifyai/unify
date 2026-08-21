@@ -56,7 +56,7 @@ from .messages import (
     is_loop_authored_message,
     loop_user_notice,
     extract_substantive_text,
-    compact_reviewed_tool_results,
+    compact_reviewed_messages,
 )
 from .tools_data import (
     ToolsData,
@@ -1753,12 +1753,12 @@ async def async_tool_loop_inner(
                     try:
                         _n = int(
                             (extra.get("_compact_transcript") or {}).get(
-                                "reviewed_tool_results",
+                                "reviewed_messages",
                             )
                             or 0,
                         )
                         if _n > 0:
-                            compact_reviewed_tool_results(client, _n)
+                            compact_reviewed_messages(client, _n)
                     except Exception:
                         pass
                     continue
@@ -4412,12 +4412,12 @@ async def async_tool_loop_inner(
                         try:
                             _n = int(
                                 (interjection.get("_compact_transcript") or {}).get(
-                                    "reviewed_tool_results",
+                                    "reviewed_messages",
                                 )
                                 or 0,
                             )
                             if _n > 0:
-                                compact_reviewed_tool_results(client, _n)
+                                compact_reviewed_messages(client, _n)
                         except Exception:
                             pass
                         continue

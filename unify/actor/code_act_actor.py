@@ -1263,8 +1263,17 @@ def _prepare_trajectory_for_storage_review(
       verbatim for that reason.
     * Any other oversized tool result keeps its head and tail around an
       elision marker.
+
+    Provider reasoning payloads (encrypted blobs, reasoning summaries) are
+    dropped outright: the librarian judges visible actions and results,
+    and an encrypted chain of thought is unreadable bulk in its prompt.
     """
+    from unify.common._async_tool.messages import strip_reasoning_payloads
+
     prepared = make_messages_safe_for_context_dump(messages)
+    for _msg in prepared:
+        if isinstance(_msg, dict):
+            strip_reasoning_payloads(_msg)
 
     name_by_call_id: dict[str, str] = {}
     for msg in prepared:
@@ -2233,7 +2242,11 @@ class _StorageCheckHandle(SteerableToolHandle):
             if tool_count < self._reviewed_tool_msg_count:
                 self._reviewed_tool_msg_count = tool_count
             if tool_count > self._reviewed_tool_msg_count:
-                await self._run_one_turn_review(trajectory, tool_count)
+                await self._run_one_turn_review(
+                    trajectory,
+                    tool_count,
+                    reviewed_messages=len(trajectory),
+                )
             if not self._turn_review_rerun:
                 return
 
@@ -2241,6 +2254,8 @@ class _StorageCheckHandle(SteerableToolHandle):
         self,
         trajectory: list[dict],
         tool_count: int,
+        *,
+        reviewed_messages: int,
     ) -> None:
         ask_tools: dict = {}
         try:
@@ -2346,7 +2361,7 @@ class _StorageCheckHandle(SteerableToolHandle):
                 queue.put_nowait(
                     {
                         "_compact_transcript": {
-                            "reviewed_tool_results": tool_count,
+                            "reviewed_messages": reviewed_messages,
                         },
                     },
                 )

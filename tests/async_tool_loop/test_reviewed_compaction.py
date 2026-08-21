@@ -1,10 +1,12 @@
-"""Unit tests for ``compact_reviewed_tool_results``.
+"""Unit tests for ``compact_reviewed_messages``.
 
 After a storage review consolidates a stretch of a persistent session,
-the raw tool payloads it covered are dead weight in every later dispatch.
-The compactor stubs their *content* in place — identity, ordering and
-tool_call pairing untouched — and re-baselines the watermark hash so the
-append-only integrity check treats the rewrite as sanctioned.
+that stretch's raw machinery is dead weight in every later dispatch: tool
+payloads and provider reasoning blobs get re-billed on every call. The
+compactor stubs tool contents and strips reasoning payloads in place —
+identity, ordering and tool_call pairing untouched — and re-baselines the
+watermark hash so the append-only integrity check treats the rewrite as
+sanctioned.
 """
 
 import json
@@ -12,7 +14,7 @@ from types import SimpleNamespace
 
 from unify.common._async_tool.messages import (
     _REVIEW_COMPACTION_MARKER,
-    compact_reviewed_tool_results,
+    compact_reviewed_messages,
 )
 
 BIG = "x" * 2000
@@ -27,6 +29,18 @@ def _tool_msg(content, name="execute_code", call_id="c1"):
     return {"role": "tool", "name": name, "tool_call_id": call_id, "content": content}
 
 
+def _assistant_msg(content="done", reasoning=True):
+    msg = {"role": "assistant", "content": content}
+    if reasoning:
+        msg["provider_specific_fields"] = {
+            "reasoning_details": [
+                {"type": "reasoning.encrypted", "data": "gAAAA" + "r" * 3000},
+            ],
+            "reasoning": "long chain of thought " * 50,
+        }
+    return msg
+
+
 def test_stubs_large_final_tool_results_and_reports_savings():
     msgs = [
         {"role": "user", "content": "do it"},
@@ -35,20 +49,35 @@ def test_stubs_large_final_tool_results_and_reports_savings():
         {"role": "assistant", "content": "done"},
     ]
     original_identity = msgs[2]
-    saved = compact_reviewed_tool_results(_client(msgs), tool_message_count=1)
+    saved = compact_reviewed_messages(_client(msgs), reviewed_message_count=4)
     assert saved > 1000
     assert msgs[2] is original_identity, "message identity must be preserved"
     assert _REVIEW_COMPACTION_MARKER in msgs[2]["content"]
     assert msgs[2]["content"].startswith("x" * 100)
     assert len(msgs[2]["content"]) < len(BIG)
-    # User and assistant messages are never touched.
+    # User messages and visible assistant words are never touched.
     assert msgs[0]["content"] == "do it"
     assert msgs[3]["content"] == "done"
 
 
-def test_only_the_reviewed_prefix_is_compacted():
+def test_strips_reasoning_payloads_from_reviewed_assistants_only():
+    msgs = [
+        _assistant_msg("first"),
+        _tool_msg(SMALL),
+        _assistant_msg("second"),
+    ]
+    saved = compact_reviewed_messages(_client(msgs), reviewed_message_count=1)
+    assert saved > 2000
+    assert "provider_specific_fields" not in msgs[0]
+    assert msgs[0]["content"] == "first"
+    assert (
+        "provider_specific_fields" in msgs[2]
+    ), "assistants beyond the reviewed span keep their reasoning payloads"
+
+
+def test_only_the_reviewed_span_is_compacted():
     msgs = [_tool_msg(BIG, call_id="c1"), _tool_msg(BIG, call_id="c2")]
-    compact_reviewed_tool_results(_client(msgs), tool_message_count=1)
+    compact_reviewed_messages(_client(msgs), reviewed_message_count=1)
     assert _REVIEW_COMPACTION_MARKER in msgs[0]["content"]
     assert msgs[1]["content"] == BIG, "unreviewed tool results stay verbatim"
 
@@ -60,9 +89,16 @@ def test_small_placeholder_image_and_compacted_contents_are_skipped():
     small = _tool_msg(SMALL)
     msgs = [placeholder, already, with_image, small]
     before = [m["content"] for m in msgs]
-    saved = compact_reviewed_tool_results(_client(msgs), tool_message_count=4)
+    saved = compact_reviewed_messages(_client(msgs), reviewed_message_count=4)
     assert saved == 0
     assert [m["content"] for m in msgs] == before
+
+
+def test_span_larger_than_transcript_is_clamped():
+    msgs = [_tool_msg(BIG)]
+    saved = compact_reviewed_messages(_client(msgs), reviewed_message_count=50)
+    assert saved > 1000
+    assert _REVIEW_COMPACTION_MARKER in msgs[0]["content"]
 
 
 def test_list_content_of_text_parts_is_flattened_and_stubbed():
@@ -74,7 +110,7 @@ def test_list_content_of_text_parts_is_flattened_and_stubbed():
             ],
         ),
     ]
-    saved = compact_reviewed_tool_results(_client(msgs), tool_message_count=1)
+    saved = compact_reviewed_messages(_client(msgs), reviewed_message_count=1)
     assert saved > 1000
     assert isinstance(msgs[0]["content"], str)
     assert _REVIEW_COMPACTION_MARKER in msgs[0]["content"]
@@ -83,7 +119,7 @@ def test_list_content_of_text_parts_is_flattened_and_stubbed():
 def test_list_content_with_non_text_parts_is_left_alone():
     content = [{"type": "text", "text": BIG}, {"type": "image_url", "url": "u"}]
     msgs = [_tool_msg(content)]
-    saved = compact_reviewed_tool_results(_client(msgs), tool_message_count=1)
+    saved = compact_reviewed_messages(_client(msgs), reviewed_message_count=1)
     assert saved == 0
     assert msgs[0]["content"] is content
 
@@ -98,7 +134,7 @@ def test_watermark_hash_rebaselined_under_invariant_checks(monkeypatch):
     client._sent_watermark_hash = messages_mod._hash_msgs_slice(msgs[:1])
     stale = client._sent_watermark_hash
 
-    compact_reviewed_tool_results(client, tool_message_count=1)
+    compact_reviewed_messages(client, reviewed_message_count=1)
 
     assert client._sent_watermark_hash != stale
     assert client._sent_watermark_hash == messages_mod._hash_msgs_slice(msgs[:1])
