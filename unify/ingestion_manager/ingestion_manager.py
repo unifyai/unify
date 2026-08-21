@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from unify.common.context_names import assert_all_valid
 from unify.common.context_registry import ContextRegistry, TableContext
 from unify.common.model_to_fields import model_to_fields
 from unify.common.pipeline import (
@@ -61,6 +62,7 @@ from unify.ingestion_manager.types.request import (
     IngestionTarget,
 )
 from unify.ingestion_manager.types.run import (
+    FileProgress,
     TERMINAL_STATES,
     IngestionEventRow,
     IngestionRun,
@@ -213,6 +215,25 @@ class IngestionManager(BaseIngestionManager):
 
         return ManagerRegistry.get_file_manager()
 
+    def _destinations_for(self, request: IngestionRequest) -> List[str]:
+        """Every context path this request will try to create.
+
+        A table target names one path outright. A collection derives one per
+        file, so the names are only knowable here -- which is exactly why they
+        have to be checked here rather than trusted downstream.
+        """
+        names: List[str] = []
+        target = request.target
+        if getattr(target, "kind", "") == "table":
+            names.append(str(target.context))
+        elif getattr(target, "kind", "") == "collection" and target.name:
+            names.append(str(target.name))
+        # The run's own bookkeeping contexts are created by the same rule, and a
+        # bad ``destination`` would fail there first with a less obvious message.
+        names.append(self._write_table(RUNS_TABLE, request.destination))
+        names.append(self._write_table(EVENTS_TABLE, request.destination))
+        return names
+
     def _write_table(self, table: str, destination: Optional[str]) -> str:
         root = ContextRegistry.write_root(self, table, destination=destination)
         return f"{root.strip('/')}/{table}"
@@ -298,6 +319,14 @@ class IngestionManager(BaseIngestionManager):
             post_ingest=post_ingest,
             destination=destination,
         )
+
+        # Every destination this run will create, checked against the backend's
+        # own naming rule before anything is published. The backend reports a
+        # violation by naming the rule and not the value, from a worker pod the
+        # caller cannot read, four retries into a dispatch -- so an unacceptable
+        # name became a poison message the fleet retried indefinitely rather
+        # than a refusal at the call that named it.
+        assert_all_valid(self._destinations_for(request), what="destination")
 
         # Counted before the tier is chosen, so the decision rests on a
         # measurement. A stored table is counted by one server-side aggregate
@@ -1211,6 +1240,62 @@ class IngestionManager(BaseIngestionManager):
 
     # ── observing ─────────────────────────────────────────────────────────
 
+    def _files_for(
+        self,
+        row: Dict[str, Any],
+        events: List[Dict[str, Any]],
+    ) -> List[FileProgress]:
+        """Per-file progress, assembled from what the run already recorded.
+
+        The stage counters say two of fifteen files parsed; they never said
+        which two. Everything needed to answer that is already written -- the
+        staged request names the files, and per-file events carry state, rows
+        and destination -- so this reads rather than measures.
+
+        A file with no event yet is reported as queued and unclaimed, which is
+        the distinction that matters: unclaimed means it is waiting for
+        capacity, and claimed-but-uncommitted means it is working. Only the
+        first is a reason to look for a cause, and collapsing them into
+        "queued" is what made a starved batch indistinguishable from a slow one.
+        """
+        paths = [str(p) for p in (row.get("source_paths") or [])]
+        by_path: Dict[str, Dict[str, Any]] = {}
+        for event in events:
+            path = str(event.get("source_path") or "")
+            if not path:
+                continue
+            # Later events supersede earlier ones for the same file.
+            by_path[path] = event
+
+        progress: List[FileProgress] = []
+        for path in paths or sorted(by_path):
+            event = by_path.get(path) or {}
+            rows_written = int(event.get("rows_written") or 0)
+            has_event = bool(event)
+            file_state = str(
+                event.get("state") or ("queued" if not has_event else "running"),
+            )
+            progress.append(
+                FileProgress(
+                    path=path,
+                    state=file_state,  # type: ignore[arg-type]
+                    # A committed row proves a worker took it up. An event
+                    # without rows still proves a claim; no event at all does
+                    # not.
+                    claimed=has_event or rows_written > 0,
+                    rows_written=rows_written,
+                    declared_rows=(
+                        int(event["declared_rows"])
+                        if event.get("declared_rows") is not None
+                        else None
+                    ),
+                    context=event.get("context") or None,
+                    parked=int(event.get("parked") or 0),
+                    error=event.get("error") or None,
+                ),
+            )
+        return progress
+
     @functools.wraps(BaseIngestionManager.get_status, updated=())
     def get_status(self, run_id: str) -> RunStatus:
         row, runs_context = self._find_run(run_id)
@@ -1222,6 +1307,7 @@ class IngestionManager(BaseIngestionManager):
         contexts = row.get("contexts") or []
         parked = int(row.get("parked") or 0)
         state = row.get("state") or "queued"
+        files = self._files_for(row, events)
 
         return RunStatus(
             # The key the caller was handed, never the row's auto-counted id.
@@ -1231,6 +1317,7 @@ class IngestionManager(BaseIngestionManager):
             # names an identifier that appears nowhere else in the plan.
             run_id=str(row["run_key"]),
             state=state,  # type: ignore[arg-type]
+            files=files,
             executed_as=row.get("executed_as"),
             stages=stages_from_events(events, run_state=state),
             contexts=contexts,
@@ -1247,6 +1334,8 @@ class IngestionManager(BaseIngestionManager):
                 error=row.get("error"),
                 executed_as=row.get("executed_as"),
                 contexts=contexts,
+                files_claimed=sum(1 for f in files if f.claimed),
+                files_total=len(files) or None,
             ),
         )
 
