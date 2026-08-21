@@ -26,6 +26,7 @@ import pytest
 
 from unify.common.llm_helpers import method_to_schema
 from unify.contact_manager.simulated import SimulatedContactManager
+from unify.conversation_manager import conversation_manager as cm_module
 from unify.conversation_manager.domains.brain_tools import (
     ConversationManagerBrainTools,
 )
@@ -83,10 +84,6 @@ def mock_cm():
 
     cm = MagicMock()
     cm.mode = Mode.TEXT
-    # Console shut by default. `show_in_console` is offered on presence rather
-    # than on medium, so leaving this to MagicMock's truthiness would quietly
-    # add the tool to every fixture that never meant to open a console.
-    cm.console_action_catalogue.return_value = ""
     cm.contact_index = ContactIndex()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
@@ -368,32 +365,22 @@ class TestActionToolsAsTools:
             "update_contacts",
             "query_past_transcripts",
             "wait",
+            "show_in_console",
         }
         assert set(tools.keys()) == expected
 
-    def test_offers_console_navigation_while_the_console_is_open(self, mock_cm):
-        """Offered on presence, not on medium — this fixture is a text session."""
-        from unify.conversation_manager.domains.brain_action_tools import (
-            ConversationManagerBrainActionTools,
-        )
+    def test_console_navigation_is_always_offered(self, mock_cm):
+        """Membership is fixed so a presence flip never reshapes the tools array.
 
-        mock_cm.console_action_catalogue.return_value = "- `section:chat` — Chat"
+        Tool definitions precede messages in provider prompt-cache keys, so
+        the tool stays even while no console is open; a call at that point
+        answers with a corrective error instead of a vanished tool.
+        """
         tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
 
         assert "show_in_console" in tools
         # Still a text session, so nothing voice-only came with it.
         assert "guide_voice_agent" not in tools
-
-    def test_withholds_console_navigation_when_the_console_is_shut(self, mock_cm):
-        """Nobody is there to watch, so the move cannot be narrated truthfully."""
-        from unify.conversation_manager.domains.brain_action_tools import (
-            ConversationManagerBrainActionTools,
-        )
-
-        mock_cm.console_action_catalogue.return_value = ""
-        tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-
-        assert "show_in_console" not in tools
 
     def test_excludes_phone_tools_without_number(self, mock_cm):
         """send_sms and make_call are excluded when assistant has no phone."""
@@ -714,6 +701,82 @@ class TestActionToolsAsTools:
         assert {"contact_id", "team_id", "channel_id", "chat_topic"}.issubset(
             teams_props,
         )
+
+
+class _ConsolePresenceCM:
+    """The slice of ConversationManager that ``show_in_console`` touches.
+
+    Binds the real presence methods so the call-time contract runs through
+    production code; only the mode attribute and the session logger are stubs.
+    """
+
+    record_console_presence = cm_module.ConversationManager.record_console_presence
+    console_is_open = cm_module.ConversationManager.console_is_open
+    console_action_catalogue = cm_module.ConversationManager.console_action_catalogue
+
+    def __init__(self, mode) -> None:
+        self.mode = mode
+        self._console_guidance: dict[str, str] = {}
+        self._console_guidance_version = ""
+        self._console_presence_at = None
+        self._session_logger = MagicMock()
+
+
+class TestShowInConsoleCallTime:
+    """A shut console answers at call time, not through tool membership."""
+
+    def _host_and_tools(self, mode):
+        host = _ConsolePresenceCM(mode)
+        return host, ConversationManagerBrainActionTools(host)
+
+    @pytest.mark.asyncio
+    async def test_closed_console_returns_a_corrective_error(self):
+        """No throw, no state mutation — just a pointer at the console pane."""
+        from unify.conversation_manager.cm_types.mode import Mode
+
+        host, tools = self._host_and_tools(Mode.TEXT)
+
+        result = await tools.show_in_console(targets=["section:integrations"])
+
+        assert result["status"] == "error"
+        assert "no console is currently open" in result["error"].lower()
+        # The failed call left the console state untouched.
+        assert host.console_is_open() is False
+        assert host.console_action_catalogue() == ""
+
+    @pytest.mark.asyncio
+    async def test_open_console_moves_to_a_catalogued_target(self):
+        """With the console open, a catalogued target is accepted and staged."""
+        from unify.conversation_manager.cm_types.mode import Mode
+
+        host, tools = self._host_and_tools(Mode.MEET)
+        host.record_console_presence(
+            version="v1",
+            brief="b",
+            full="f",
+            actions="- `section:integrations` — Integrations",
+        )
+
+        result = await tools.show_in_console(targets=["section:integrations"])
+
+        assert result == {"status": "showing", "targets": ["section:integrations"]}
+
+    @pytest.mark.asyncio
+    async def test_open_console_rejects_an_uncatalogued_target(self):
+        from unify.conversation_manager.cm_types.mode import Mode
+
+        host, tools = self._host_and_tools(Mode.MEET)
+        host.record_console_presence(
+            version="v1",
+            brief="b",
+            full="f",
+            actions="- `section:integrations` — Integrations",
+        )
+
+        result = await tools.show_in_console(targets=["route:/nowhere"])
+
+        assert result["status"] == "error"
+        assert "route:/nowhere" in result["error"]
 
 
 class TestSlowBrainDirectOutboundMarker:

@@ -714,6 +714,7 @@ async def _decide_with_stub_llm(
     *,
     delay: int,
     content: str = "Any luck with that?",
+    system_prompt: str = "Test",
     **roster,
 ) -> tuple[ProactiveDecision, list[dict]]:
     """Run ``decide`` against a canned LLM answer; return it and the messages."""
@@ -734,10 +735,42 @@ async def _decide_with_stub_llm(
     ):
         decision, _ = await ProactiveSpeech().decide(
             chat_history=[{"role": "user", "content": "…"}],
-            system_prompt="Test",
+            system_prompt=system_prompt,
             **roster,
         )
     return decision, captured
+
+
+@pytest.mark.asyncio
+class TestProactiveSpeechClock:
+    """The silence decision reads a fresh wall clock from its own prompt.
+
+    The CM system prompt it builds on is deliberately clock-free so provider
+    caching survives minute rollovers; the timestamp this time-centric
+    decision needs is stamped onto the decision prompt itself at assembly
+    time.
+    """
+
+    async def test_decision_system_message_ends_with_current_time(self):
+        from unify.common.prompt_helpers import now
+        from unify.conversation_manager.domains.proactive_speech import (
+            PROACTIVE_PROMPT,
+        )
+        from unify.conversation_manager.prompt_builders import build_system_prompt
+
+        cm_prompt = build_system_prompt(
+            bio="A helpful assistant.",
+            contact_id=1,
+            first_name="Alice",
+            surname="Smith",
+        ).flatten()
+
+        _, messages = await _decide_with_stub_llm(delay=5, system_prompt=cm_prompt)
+
+        content = messages[0]["content"]
+        assert content.startswith(cm_prompt)
+        assert PROACTIVE_PROMPT in content
+        assert content.endswith(f"Current time: {now()}.")
 
 
 def _group_block(messages: list[dict]) -> str:

@@ -2,13 +2,14 @@
 tests/conversation_manager/core/test_console_presence.py
 ========================================================
 
-Console orientation text reaches the runtime on the presence heartbeat, and is
-only put in a prompt while the user is actually looking at the Console.
+Console orientation text reaches the runtime on the presence heartbeat and then
+stays for the session.
 
-Someone who emailed hours ago has no Console open, so describing its surfaces to
-them is prompt bloat that also invites the assistant to talk about a screen
-nobody is looking at. These cover the delivery, the gate, and the boundary
-between them.
+The provider prompt cache is all-or-nothing over system+tools, so the system
+prompt must not reshape itself when the presence window opens or closes; the
+live open/closed signal rides in the state snapshot's console pane instead.
+These cover the delivery, the session-sticky text, the presence window behind
+``console_is_open()``, and the prompt built from them.
 """
 
 from __future__ import annotations
@@ -71,11 +72,11 @@ def host(clock) -> _PresenceHost:
 
 
 # =============================================================================
-# The gate
+# The presence window and the session-sticky text
 # =============================================================================
 
 
-class TestPresenceGate:
+class TestPresenceWindow:
     def test_no_guidance_before_any_presence(self, host):
         """A session that began over email has never heard from the Console."""
         assert host.console_guidance("brief") == ""
@@ -87,24 +88,25 @@ class TestPresenceGate:
         assert host.console_guidance("brief") == BRIEF
         assert host.console_guidance("full") == FULL
 
-    def test_guidance_withheld_once_presence_goes_stale(self, host, clock):
+    def test_guidance_survives_presence_expiry(self, host, clock):
+        """Stepping away from the Console must not reshape the system prompt."""
         host.record_console_presence(version="v1", brief=BRIEF, full=FULL)
         clock.advance(CONSOLE_PRESENCE_TTL_S + 1)
 
-        assert host.console_guidance("brief") == ""
+        assert host.console_guidance("brief") == BRIEF
 
-    def test_guidance_survives_right_up_to_the_ttl(self, host, clock):
+    def test_presence_window_holds_right_up_to_the_ttl(self, host, clock):
         """The window must not be so tight that an idle-but-present user flaps."""
         host.record_console_presence(version="v1", brief=BRIEF, full=FULL)
         clock.advance(CONSOLE_PRESENCE_TTL_S - 1)
 
-        assert host.console_guidance("brief") == BRIEF
+        assert host.console_is_open() is True
 
     def test_ttl_outlasts_consoles_keep_warm_interval(self):
-        """Console keep-warm is every 5 minutes; the gate must be looser than that.
+        """Console keep-warm is every 5 minutes; the window must be looser.
 
-        If it were not, a present-but-idle user would drop out of the block
-        between beats, and every flip costs a prompt-cache miss.
+        If it were not, a present-but-idle user would flap between open and
+        closed in the snapshot's console pane between beats.
         """
         console_keep_warm_s = 5 * 60
         assert CONSOLE_PRESENCE_TTL_S > console_keep_warm_s
@@ -115,7 +117,7 @@ class TestPresenceGate:
         host.record_console_presence(version="v1")
         clock.advance(CONSOLE_PRESENCE_TTL_S - 1)
 
-        assert host.console_guidance("brief") == BRIEF
+        assert host.console_is_open() is True
 
     def test_unknown_detail_yields_nothing(self, host):
         host.record_console_presence(version="v1", brief=BRIEF, full=FULL)
@@ -142,7 +144,7 @@ class TestHeartbeatPayload:
         host.record_console_presence(version="v1")
         clock.advance(2)
 
-        assert host.console_guidance("brief") == BRIEF
+        assert host.console_is_open() is True
 
     def test_a_new_version_replaces_the_text(self, host):
         host.record_console_presence(version="v1", brief=BRIEF, full=FULL)
@@ -173,7 +175,7 @@ CATALOGUE = "Places I can take my boss\n- `section:integrations` — Integration
 
 
 class TestActionCatalogue:
-    def test_catalogue_available_while_the_console_is_open(self, host):
+    def test_catalogue_available_once_published(self, host):
         host.record_console_presence(
             version="v1",
             brief=BRIEF,
@@ -184,11 +186,12 @@ class TestActionCatalogue:
         assert host.console_is_open() is True
         assert host.console_action_catalogue() == CATALOGUE
 
-    def test_catalogue_withheld_once_presence_goes_stale(self, host, clock):
-        """The tool is gated on this, so a shut console withdraws the ability.
+    def test_catalogue_survives_presence_expiry(self, host, clock):
+        """Only the presence signal closes; the catalogue stays for the session.
 
-        Taking someone to a page they are not looking at accomplishes nothing,
-        and narrating the move would be a plain falsehood.
+        The snapshot's console pane pairs the catalogue with the live
+        open/closed signal, and ``show_in_console`` checks ``console_is_open``
+        at call time — so the catalogue itself never blinks.
         """
         host.record_console_presence(
             version="v1",
@@ -199,27 +202,11 @@ class TestActionCatalogue:
         clock.advance(CONSOLE_PRESENCE_TTL_S + 1)
 
         assert host.console_is_open() is False
-        assert host.console_action_catalogue() == ""
+        assert host.console_action_catalogue() == CATALOGUE
 
     def test_no_catalogue_before_any_presence(self, host):
         assert host.console_is_open() is False
         assert host.console_action_catalogue() == ""
-
-    def test_catalogue_and_guidance_open_and_close_together(self, host, clock):
-        host.record_console_presence(
-            version="v1",
-            brief=BRIEF,
-            full=FULL,
-            actions=CATALOGUE,
-        )
-        assert bool(host.console_guidance("brief")) == bool(
-            host.console_action_catalogue(),
-        )
-
-        clock.advance(CONSOLE_PRESENCE_TTL_S + 1)
-        assert bool(host.console_guidance("brief")) == bool(
-            host.console_action_catalogue(),
-        )
 
 
 # =============================================================================
@@ -271,8 +258,8 @@ class TestPromptInjection:
 
         assert BRIEF in prompt
 
-    def test_block_absent_when_the_gate_withheld_it(self):
-        """An off-console session builds the same prompt minus the block."""
+    def test_block_absent_when_the_console_never_joined(self):
+        """A session the Console never joined builds the prompt minus the block."""
         with_block = build_system_prompt(**self._BASE, console_guidance=BRIEF).flatten()
         without_block = build_system_prompt(**self._BASE, console_guidance="").flatten()
 
@@ -287,3 +274,38 @@ class TestPromptInjection:
         ).flatten()
 
         assert FULL in prompt
+
+    def test_system_prompt_is_identical_before_and_after_presence_expiry(
+        self,
+        host,
+        clock,
+    ):
+        """Once guidance arrives, presence flips leave the system prompt alone.
+
+        The provider prompt cache is all-or-nothing over system+tools, so the
+        prompt built while the boss is on the Console must be byte-identical
+        to the one built after they step away; only the snapshot's console
+        pane may change.
+        """
+        host.record_console_presence(
+            version="v1",
+            brief=BRIEF,
+            full=FULL,
+            actions=CATALOGUE,
+        )
+
+        assert host.console_is_open() is True
+        while_open = build_system_prompt(
+            **self._BASE,
+            console_guidance=host.console_guidance("brief"),
+        ).flatten()
+
+        clock.advance(CONSOLE_PRESENCE_TTL_S + 1)
+
+        assert host.console_is_open() is False
+        while_closed = build_system_prompt(
+            **self._BASE,
+            console_guidance=host.console_guidance("brief"),
+        ).flatten()
+
+        assert while_open == while_closed

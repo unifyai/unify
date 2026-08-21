@@ -252,13 +252,15 @@ def build_brain_spec(
         authorized_humans=authorized_humans,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNIFY_CONSOLE_UI,
-        # Empty unless Console has reported the user present recently. The
-        # Coordinator walks users around the UI, so it takes the deeper variant
-        # Console publishes; regular assistants take the surface list.
+        # Empty until Console first publishes it, then kept for the session
+        # (presence flips must not reshape the system prompt). The Coordinator
+        # walks users around the UI, so it takes the deeper variant Console
+        # publishes; regular assistants take the surface list. The live
+        # open/closed signal and navigation catalogue ride in the state
+        # snapshot instead.
         console_guidance=cm.console_guidance(
             "full" if SESSION_DETAILS.is_coordinator else "brief",
         ),
-        console_action_catalogue=cm.console_action_catalogue(),
         coordinator_onboarding_active=cm.coordinator_onboarding_active,
         coordinator_onboarding_render=cm.coordinator_onboarding_render,
         coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,

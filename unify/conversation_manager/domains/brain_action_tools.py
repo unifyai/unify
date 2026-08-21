@@ -2357,9 +2357,12 @@ class ConversationManagerBrainActionTools:
         """
         Take my boss to a page in the console while I talk them through it.
 
-        Offered whenever my boss has the console open, whatever we are talking
+        Works whenever my boss has the console open, whatever we are talking
         over — a Meet, a phone call, SMS, email, chat. If they are reading my
-        reply with the console in another tab, they can watch it happen.
+        reply with the console in another tab, they can watch it happen. The
+        state snapshot's console pane is the live signal: it says whether the
+        console is open right now, and calling this while it is closed returns
+        an error instead of moving anything.
 
         On a **Unify Meet** I call this alongside ``guide_voice_agent`` and mark
         the moments in that spoken line with ``[[1]]``, ``[[2]]``, … — one marker
@@ -2376,10 +2379,10 @@ class ConversationManagerBrainActionTools:
 
             show_in_console(targets=["section:integrations"])
 
-        Every target must be one of the ids listed for me under console
-        navigation targets. Those are the only places I can go; if what my boss
-        wants is not among them I say where it lives and let them click, rather
-        than moving them somewhere near it.
+        Every target must be one of the ids the console pane lists under
+        console navigation targets. Those are the only places I can go; if what
+        my boss wants is not among them I say where it lives and let them
+        click, rather than moving them somewhere near it.
 
         This moves the page my boss is looking at, so I use it while I am
         actually showing them something — alongside a message that says what they
@@ -2391,12 +2394,16 @@ class ConversationManagerBrainActionTools:
             targets: Navigation target ids, in the order they should happen. On a
                 Meet, one per ``[[n]]`` marker in the spoken line.
         """
-        catalogue = self._cm.console_action_catalogue()
-        if not catalogue:
+        if not self._cm.console_is_open():
             return {
                 "status": "error",
-                "error": "The console is not open, so there is nothing to show.",
+                "error": (
+                    "No console is currently open, so there is nothing to "
+                    "show. The state snapshot's console pane says when one "
+                    "is open again."
+                ),
             }
+        catalogue = self._cm.console_action_catalogue()
         unknown = [t for t in targets if f"`{catalogue_form(t)}`" not in catalogue]
         if unknown:
             return {
@@ -2638,12 +2645,13 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
-        # Offered whenever Console reports the boss present, whatever medium
-        # this conversation is on. Someone reading a text reply with the Console
-        # open can watch a page change exactly as well as someone on a call; the
-        # only thing that makes it pointless is nobody being there to see it.
-        if self._cm.console_action_catalogue():
-            tools["show_in_console"] = self.show_in_console
+        # Membership is fixed: tool definitions precede messages in provider
+        # prompt-cache keys, so offering this only while the Console is open
+        # would re-bill the whole static prompt every time the boss opened or
+        # closed it. Whether a console is open right now is resolved at call
+        # time — a closed console gets a corrective error, mirroring the
+        # steering tools' stale-handle path.
+        tools["show_in_console"] = self.show_in_console
         if self._cm.initialized:
             tools["act"] = self.act
             tools["ask_about_contacts"] = self.ask_about_contacts

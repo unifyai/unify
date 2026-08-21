@@ -895,6 +895,110 @@ class TestRenderStateWithTracking:
         assert "<in_flight_actions>" in result.full_render
         assert "<active_conversations>" in result.full_render
 
+    def test_snapshot_ends_with_the_current_time_pane(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """The wall clock closes the snapshot, not the system prompt.
+
+        Keeping the clock out of the system prompt keeps that prompt
+        byte-stable across minute rollovers (the provider cache is
+        all-or-nothing over system+tools); the snapshot tail is the one
+        place a per-turn timestamp is cheap.
+        """
+        from unify.common.prompt_helpers import now
+
+        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
+
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            last_snapshot=last_snapshot,
+        )
+
+        assert result.full_render.split("\n\n")[-1] == f"Current time: {now()}."
+
+    def test_snapshot_has_no_console_pane_before_the_console_publishes(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """A session the Console never joined carries no console pane at all.
+
+        With no console knowledge in the system prompt there is nothing to
+        scope, so the pane is absent rather than rendered closed.
+        """
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert "<console" not in result.full_render
+        assert result.full_render.split("\n\n")[-1].startswith("Current time:")
+
+    def test_snapshot_console_pane_lists_targets_while_the_console_is_open(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """An open console renders the open signal plus its drivable targets.
+
+        The pane sits second-to-last so presence churn re-tokenizes only the
+        snapshot tail; the clock pane stays last.
+        """
+        from unify.common.prompt_helpers import now
+
+        catalogue = "- `section:integrations` — Integrations"
+
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
+            console_open=True,
+            console_action_catalogue=catalogue,
+        )
+
+        assert "<console status='open'>" in result.full_render
+        assert catalogue in result.full_render
+        assert result.full_render.endswith(f"</console>\n\nCurrent time: {now()}.")
+
+    def test_snapshot_console_pane_shrinks_to_a_closed_notice_when_shut(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """Once published, a shut console renders a one-line closed notice.
+
+        The catalogue disappears with the console — a target nobody can watch
+        being driven is not offered — but the pane itself stays so the model
+        knows `show_in_console` would error right now.
+        """
+        from unify.common.prompt_helpers import now
+
+        catalogue = "- `section:integrations` — Integrations"
+
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
+            console_open=False,
+            console_action_catalogue=catalogue,
+        )
+
+        assert "<console status='closed'>" in result.full_render
+        assert catalogue not in result.full_render
+        assert result.full_render.endswith(f"</console>\n\nCurrent time: {now()}.")
+
     def test_forwards_meet_screen_share_flag(
         self,
         renderer,
