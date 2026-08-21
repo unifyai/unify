@@ -3152,7 +3152,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         active_work = ACTIVE_WORK.snapshot()
         if active_work.active_count > 0:
-            return True, f"active_work({active_work.active_count})"
+            # Named, not just counted. A bare count says a declaration is
+            # holding the pod without saying which subsystem made it, which is
+            # most of what you want to know when a pod outlives its welcome --
+            # or when `proxy_load_bearing` says one is missing. Distinct labels
+            # only: ten parallel chunk writers are one thing worth reporting.
+            labels = ",".join(sorted({str(w["label"]) for w in active_work.works}))
+            return True, f"active_work({active_work.active_count}:{labels})"
 
         # Voice lives in a separate process, so its LLM calls advance that
         # process's EventBus and never this one. The parent only sees per-turn

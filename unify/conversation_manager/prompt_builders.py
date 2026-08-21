@@ -1063,6 +1063,29 @@ def _build_coordinator_knowledge_tool_listing() -> str:
     )
 
 
+def _build_coordinator_credential_placement_block() -> str:
+    """Credential-placement semantics for Twin, with no Console layout in them.
+
+    Console publishes its own navigation text, and only while a Console is
+    actually open, so anything shaped like "click the tab on the right" belongs
+    there and not here. What belongs here is the part that holds either way:
+    who a credential belongs to, and how it reaches them. Twin owns placing
+    shared credentials, and without these semantics the destination and the
+    refusal to handle the credential itself are both left to improvisation.
+    """
+    return """Credentials and connected apps
+------------------------------
+Placing credentials is my surface, so I own the question of *who a credential belongs to* — and I never take the credential itself.
+
+- **Never through me.** I do not accept an API key, client secret, service-account JSON, OAuth code, refresh token, or password in a message, and I never read one back. When someone offers to paste one, I decline and point at where it goes instead.
+- **OAuth consent is theirs to complete, in their own browser.** An OAuth connection authorizes when the user signs in and consents on the provider's own screen; there is no code for them to hand me afterwards. A long-lived credential — an API key, a service-account JSON — is a different animal: it is *stored*. When someone conflates the two, I separate them explicitly rather than answering only the half I was asked about.
+- **One owner per credential.** A stored credential lives in exactly one destination and never falls back to another: `personal` when one colleague alone needs it, or `team:<id>` when the access is genuinely shared across that team, whether by several assistants or by the people in it. I place it with whoever owns the work, and I do not park shared access on the user personally by default.
+- **Least privilege, and a read before it counts as live.** I ask for the narrowest scope the work needs, and treat the first read as validation before any recurring work is considered running.
+- **A credential is not the data it reaches.** Sensitive business material — an export, a budget, patient records — is stored and scoped as data. It does not belong in a credential store, and keeping the two apart keeps two different decisions from collapsing into one.
+- **Recurring work belongs to a colleague or a task, never to me.** I set the access up; the standing job runs on the colleague or task that owns it.
+- **I do not recite where to click from memory.** When someone needs the exact screen, I offer to walk them through it on a screen share rather than inventing a navigation path."""
+
+
 def _build_coordinator_onboarding_narration_block() -> str:
     """Reactive-narration guidance for Twin's onboarding flow.
 
@@ -2925,6 +2948,7 @@ def build_system_prompt(
     coordinator_admin_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
+    coordinator_credential_placement_block = ""
     coordinator_console_literacy_block = ""
     coordinator_onboarding_progress_block = ""
     coordinator_act_query_guidance_block = ""
@@ -2937,6 +2961,9 @@ def build_system_prompt(
             _build_coordinator_act_query_guidance_block(
                 is_multiplayer=is_multiplayer,
             )
+        )
+        coordinator_credential_placement_block = (
+            _build_coordinator_credential_placement_block()
         )
         # Console orientation, published by the running Console. Empty when
         # this deployment has no Console front-end, or when Console could not
@@ -3145,6 +3172,12 @@ Messages from the current turn have **NEW** tag prepended:
     # narration block above only covers how to react to each event.
     if coordinator_onboarding_progress_block:
         parts.add(coordinator_onboarding_progress_block)
+
+    # Layout-free credential semantics first, so the Console orientation
+    # below reads as "and here is where that lives today" rather than as the
+    # only thing said about credentials.
+    if coordinator_credential_placement_block:
+        parts.add(coordinator_credential_placement_block)
 
     if coordinator_console_literacy_block:
         parts.add(coordinator_console_literacy_block)

@@ -564,6 +564,42 @@ async def test_resume_allows_llm_turn(client):
 
 @pytest.mark.asyncio
 @_handle_project
+async def test_result_propagates_caller_cancellation(client):
+    """
+    A caller's own timeout must surface as ``TimeoutError``, not as a value.
+
+    ``result()`` reports a loop that died on its own as the stopped notice.
+    An *unshielded* ``wait_for`` instead cancels the awaiting task, and
+    answering that with the stopped notice hands the caller a value its
+    timeout never produced: the run reads as a loop that finished without an
+    answer, and the real cause — the caller ran out of patience — is lost.
+    Callers that want the loop to outlive their own timeout shield the await,
+    as ``test_resume_allows_llm_turn`` above does.
+    """
+    client.set_system_message(
+        "Immediately reply ONLY with the word OK. Do not call any tools.",
+    )
+
+    h = start_async_tool_loop(
+        client,
+        message="start",
+        tools={},
+        timeout=120,
+    )
+
+    # Pause so the loop cannot finish on its own before the timeout fires.
+    await h.pause()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(h.result(), timeout=1)
+
+    # Cancelling the await tears the loop down with it — the cost of not
+    # shielding, and the reason the notice would have been misleading.
+    assert h.done(), "unshielded cancellation should have ended the loop"
+
+
+@pytest.mark.asyncio
+@_handle_project
 async def test_steer_schema_stable_and_state_enforced_across_pause_resume_cycles(
     client,
 ):
