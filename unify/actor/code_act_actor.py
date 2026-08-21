@@ -1157,6 +1157,36 @@ _STORAGE_SUB_AGENT_PATTERNS = (
     "right tool selection, scoping, or behavioral guidelines.\n\n"
 )
 
+_STORAGE_RECURRING_DELIVERABLE = (
+    "## Recurring Deliverables Without A Task\n\n"
+    "A deliverable produced in live conversation can be recurring even "
+    "though no scheduled task exists: the requester hands the job over "
+    'once ("every week, ..."), then simply asks again each time. '
+    "Convergence works exactly as it does for a recurring task, with the "
+    "conversation as the trigger:\n\n"
+    "- The first successful production of the deliverable is the evidence "
+    "for a stored function: skeleton in deterministic code, each judging "
+    "substep at its own notch on the dial (usually a scoped "
+    "`query_llm(...)` call with a stable contract). Name the function "
+    "after the deliverable.\n"
+    "- Stated-but-dormant requirements are part of the procedure. A rule "
+    'the requester stated ("if X ever happens, do Y") belongs in the '
+    "stored function even when no observed input exercised it — the "
+    "statement is the evidence. What must never be frozen in is structure "
+    "that was neither stated nor observed; outside the stated-plus-"
+    "observed envelope the function raises or returns early rather than "
+    "guessing.\n"
+    "- Later instances refine in place, never duplicate: format feedback, "
+    "renames, and amendments from the requester are edits to the existing "
+    "stored function (`FunctionManager_add_functions` with "
+    "`overwrite=True`), not new near-duplicate entries.\n"
+    "- Say so in your summary. After storing or updating the deliverable's "
+    "function, state its name, numeric `function_id`, and calling "
+    "convention plainly — the live session reads your summary and should "
+    "execute the stored function the next time the deliverable is "
+    "requested instead of re-deriving the procedure inline.\n\n"
+)
+
 _STORAGE_BASE_INSTRUCTIONS = (
     "## Instructions\n\n"
     "1. Review the trajectory for reusable patterns.\n"
@@ -1233,8 +1263,17 @@ def _prepare_trajectory_for_storage_review(
       verbatim for that reason.
     * Any other oversized tool result keeps its head and tail around an
       elision marker.
+
+    Provider reasoning payloads (encrypted blobs, reasoning summaries) are
+    dropped outright: the librarian judges visible actions and results,
+    and an encrypted chain of thought is unreadable bulk in its prompt.
     """
+    from unify.common._async_tool.messages import strip_reasoning_payloads
+
     prepared = make_messages_safe_for_context_dump(messages)
+    for _msg in prepared:
+        if isinstance(_msg, dict):
+            strip_reasoning_payloads(_msg)
 
     name_by_call_id: dict[str, str] = {}
     for msg in prepared:
@@ -1633,8 +1672,15 @@ def _start_storage_check_loop(
     stop_reason: str | None = None,
     proactive_summaries: list[str] | None = None,
     post_run_review_context: PostRunReviewContext | None = None,
+    live_session: bool = False,
 ) -> "AsyncToolLoopHandle | None":
     """Start a loop that reviews a completed trajectory for reusable knowledge.
+
+    With ``live_session=True`` the trajectory belongs to a persistent
+    session that is still running: the review covers the turns completed
+    so far, ``original_result`` is the latest turn's response, and the
+    librarian's summary is delivered back into the live session as a
+    background note.
 
     The loop maintains three complementary stores:
 
@@ -1763,6 +1809,35 @@ def _start_storage_check_loop(
             "be worth storing.\n\n"
         )
 
+    live_session_section = ""
+    if live_session:
+        live_session_section = (
+            "## Live Session Turn Review\n\n"
+            "The trajectory below is a persistent interactive session that "
+            "is still running; the agent has just completed a request turn "
+            "and is waiting for the next instruction. You are reviewing "
+            "mid-session — earlier turns are included as context and may "
+            "already have been reviewed (prior passes appear under "
+            "'Proactive Storage Already Performed').\n\n"
+            "- Focus on what the latest turn(s) added since the last "
+            "review pass.\n"
+            "- Steady state is cheap: when the latest turn(s) only "
+            "re-executed already-stored procedures and the requester added "
+            "no new requirement, amendment or correction, there is nothing "
+            "to do — say so in one sentence and finish immediately, "
+            "without searching the stores first.\n"
+            "- Prefer updating an existing stored entry over adding a "
+            "near-duplicate: when this session already stored the "
+            "procedure and a later turn refined its spec, apply the "
+            "refinement with `FunctionManager_add_functions` "
+            "(`overwrite=True`).\n"
+            "- Your final summary is delivered to the live session as a "
+            "background note. Make it actionable: name what changed "
+            "(function names, numeric ids, calling conventions) so the "
+            "session can execute stored functions on the next request "
+            "rather than re-deriving procedures.\n\n"
+        )
+
     task_entrypoint_section = ""
     if task_entrypoint_review:
         metadata = dict(task_entrypoint_review.get("metadata") or {})
@@ -1809,27 +1884,56 @@ def _start_storage_check_loop(
             f"```json\n{metadata_json}\n```\n\n"
         )
 
+    role_line = (
+        (
+            "You are a skill librarian. A CodeActActor is running a "
+            "persistent interactive session and has just completed a "
+            "request turn. Your job is to review the session trajectory so "
+            "far and decide whether anything is worth persisting for future "
+            "reuse. Often nothing is — that is perfectly fine.\n\n"
+        )
+        if live_session
+        else (
+            "You are a skill librarian. A CodeActActor has just completed a task. "
+            "Your job is to review the execution trajectory and decide whether "
+            "anything is worth persisting for future reuse. Often nothing is — "
+            "that is perfectly fine.\n\n"
+        )
+    )
+    # The recurring-deliverable doctrine covers conversational convergence;
+    # a task-bound run has its own entrypoint-review section instead.
+    recurring_deliverable_section = (
+        "" if task_entrypoint_review else _STORAGE_RECURRING_DELIVERABLE
+    )
+    trajectory_header = (
+        "## Session Trajectory So Far\n\n"
+        if live_session
+        else "## Completed Trajectory\n\n"
+    )
+    result_header = (
+        "## Latest Turn Response\n\n" if live_session else "## Final Result\n\n"
+    )
+
     # Static doctrine first, volatile trajectory last: every storage loop
     # shares the same byte-identical prefix (role + doctrine + instructions),
     # so provider prompt caching only pays cold tokens for the per-run tail.
     system_prompt = (
-        "You are a skill librarian. A CodeActActor has just completed a task. "
-        "Your job is to review the execution trajectory and decide whether "
-        "anything is worth persisting for future reuse. Often nothing is — "
-        "that is perfectly fine.\n\n"
+        f"{role_line}"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
         f"{_STORAGE_THREE_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
+        f"{recurring_deliverable_section}"
         f"{instructions}"
         "\n\n"
         f"{stop_context_section}"
+        f"{live_session_section}"
         f"{task_entrypoint_section}"
         f"{inner_storage_section}"
         f"{completed_tools_section}"
         f"{proactive_storage_section}"
-        "## Completed Trajectory\n\n"
+        f"{trajectory_header}"
         f"{trajectory_json}\n\n"
-        "## Final Result\n\n"
+        f"{result_header}"
         f"{original_result}"
     )
 
@@ -2004,6 +2108,7 @@ class _StorageCheckHandle(SteerableToolHandle):
         actor: "CodeActActor",
         post_run_review_context: PostRunReviewContext | None = None,
         meter: Optional[RunMeter] = None,
+        turn_reviews_enabled: bool = False,
     ) -> None:
         self._inner = inner
         self._actor = actor
@@ -2019,6 +2124,20 @@ class _StorageCheckHandle(SteerableToolHandle):
         self._stopped: bool = False
         self._stop_reason: Optional[str] = None
         self._active_relay: Optional[asyncio.Task] = None
+
+        # Turn-boundary reviews for persistent sessions. A persist=True loop
+        # never self-completes, so Phase 2 alone would defer distillation to
+        # whenever the session is finally stopped — a session that performs
+        # the same deliverable every turn would never converge. Instead, each
+        # completed turn that ran tools gets a mid-session review of the
+        # trajectory so far; its summary is recorded for the final review and
+        # delivered back into the live loop as a transcript note.
+        self._turn_reviews_enabled = bool(turn_reviews_enabled)
+        self._turn_review_task: Optional[asyncio.Task] = None
+        self._turn_review_handle: Optional["AsyncToolLoopHandle"] = None
+        self._turn_review_rerun: bool = False
+        self._latest_turn_response: str = ""
+        self._reviewed_tool_msg_count: int = 0
 
         # Start the two-phase lifecycle manager.
         self._lifecycle_task = asyncio.create_task(self._run_lifecycle())
@@ -2053,15 +2172,210 @@ class _StorageCheckHandle(SteerableToolHandle):
         self,
         source: "SteerableToolHandle",
     ) -> None:
-        """Forward notifications from *source* into our queue until cancelled."""
+        """Forward notifications from *source* into our queue until cancelled.
+
+        ``type="response"`` notifications are the persist-mode turn
+        boundary — the loop has finished a request and re-entered its wait
+        state — so they are also the trigger for mid-session storage
+        reviews when those are enabled.
+        """
         try:
             while True:
                 notif = await source.next_notification()
                 await self._notification_q.put(notif)
+                if (
+                    self._turn_reviews_enabled
+                    and isinstance(notif, dict)
+                    and notif.get("type") == "response"
+                ):
+                    self._note_turn_boundary(str(notif.get("content") or ""))
         except asyncio.CancelledError:
             pass
         except Exception:
             pass
+
+    def _note_turn_boundary(self, latest_response: str) -> None:
+        """Schedule a mid-session storage review for a completed turn.
+
+        At most one review runs at a time; a boundary that arrives while
+        one is in flight coalesces into a single re-run against the
+        then-current trajectory.
+        """
+        if self._phase != "task":
+            return
+        self._latest_turn_response = latest_response
+        if self._turn_review_task is not None and not self._turn_review_task.done():
+            self._turn_review_rerun = True
+            return
+        self._turn_review_task = asyncio.create_task(self._run_turn_reviews())
+
+    @staticmethod
+    def _tool_activity_count(messages: list) -> int:
+        """Completed tool results in the transcript — the 'work happened' signal."""
+        return sum(
+            1 for m in messages if isinstance(m, dict) and m.get("role") == "tool"
+        )
+
+    def _snapshot_inner_trajectory(self) -> list[dict]:
+        try:
+            client = getattr(self._inner, "_client", None)
+            if client is not None:
+                return make_messages_safe_for_context_dump(
+                    list(getattr(client, "messages", []) or []),
+                )
+        except Exception:
+            pass
+        return []
+
+    async def _run_turn_reviews(self) -> None:
+        """Run mid-session storage reviews until no boundary is pending.
+
+        A turn with no new completed tool activity (pure conversation) is
+        skipped — there is nothing new to distill. Compaction can shrink
+        the transcript; the watermark follows it down so counting stays
+        monotone against the live message list.
+        """
+        while True:
+            self._turn_review_rerun = False
+            trajectory = self._snapshot_inner_trajectory()
+            tool_count = self._tool_activity_count(trajectory)
+            if tool_count < self._reviewed_tool_msg_count:
+                self._reviewed_tool_msg_count = tool_count
+            if tool_count > self._reviewed_tool_msg_count:
+                await self._run_one_turn_review(
+                    trajectory,
+                    tool_count,
+                    reviewed_messages=len(trajectory),
+                )
+            if not self._turn_review_rerun:
+                return
+
+    async def _run_one_turn_review(
+        self,
+        trajectory: list[dict],
+        tool_count: int,
+        *,
+        reviewed_messages: int,
+    ) -> None:
+        ask_tools: dict = {}
+        try:
+            ask_tools = getattr(self._inner._task, "get_ask_tools", lambda: {})()
+        except Exception:
+            pass
+        completed_tool_metadata: dict = {}
+        try:
+            completed_tool_metadata = getattr(
+                self._inner._task,
+                "get_completed_tool_metadata",
+                lambda: {},
+            )()
+        except Exception:
+            pass
+
+        proactive_summaries: list[str] = []
+        _ctx = _CURRENT_AGENT_CONTEXT.get(None)
+        if _ctx is not None:
+            proactive_summaries = list(_ctx.proactive_storage_summaries)
+
+        _tr_suffix = _token_hex(2)
+        _tr_call_id = new_call_id()
+        _tr_parent = TOOL_LOOP_LINEAGE.get([])
+        _tr_parent_lineage = list(_tr_parent) if isinstance(_tr_parent, list) else []
+        _tr_hierarchy = [
+            *_tr_parent_lineage,
+            f"StorageCheck(CodeActActor.act)({_tr_suffix})",
+        ]
+        _tr_lineage_token = TOOL_LOOP_LINEAGE.set(_tr_hierarchy)
+        _tr_suffix_token = _PENDING_LOOP_SUFFIX.set(_tr_suffix)
+        try:
+            await publish_manager_method_event(
+                _tr_call_id,
+                "CodeActActor",
+                "StorageCheck",
+                phase="incoming",
+                display_label=_DEFAULT_STORAGE_REVIEW_LABEL,
+                hierarchy=_tr_hierarchy,
+                instructions=_DEFAULT_STORAGE_REVIEW_INSTRUCTIONS,
+            )
+            storage_handle = _start_storage_check_loop(
+                trajectory=trajectory,
+                ask_tools=ask_tools,
+                completed_tool_metadata=completed_tool_metadata,
+                actor=self._actor,
+                original_result=self._latest_turn_response,
+                parent_lineage=_tr_parent_lineage,
+                proactive_summaries=proactive_summaries or None,
+                live_session=True,
+            )
+            if storage_handle is None:
+                return
+            self._turn_review_handle = storage_handle
+            try:
+                summary = await storage_handle.result()
+            except Exception as exc:
+                logger.warning(
+                    f"Turn StorageCheck failed: {type(exc).__name__}: {exc}",
+                )
+                await self._notification_q.put(
+                    {
+                        "type": "turn_storage_review_complete",
+                        "message": (
+                            f"StorageCheck failed: {type(exc).__name__}: {exc}"
+                        ),
+                        "success": False,
+                    },
+                )
+                return
+            finally:
+                self._turn_review_handle = None
+
+            self._reviewed_tool_msg_count = tool_count
+            if _ctx is not None:
+                _ctx.proactive_storage_summaries.append(summary)
+            await self._notification_q.put(
+                {
+                    "type": "turn_storage_review_complete",
+                    "message": summary,
+                    "success": True,
+                },
+            )
+            # Leave the librarian's summary in the live session's transcript
+            # so the next request can execute what was stored instead of
+            # re-deriving the procedure, and let the reviewed turns shed
+            # their raw tool payloads — the review is the checkpoint that
+            # makes them safe to compact. Both are transcript-only: no LLM
+            # turn fires.
+            queue = getattr(self._inner, "_queue", None)
+            if queue is not None:
+                queue.put_nowait(
+                    {
+                        "_transcript_note": {
+                            "text": (
+                                "[background skill consolidation — automated "
+                                "note, not a user message]\n"
+                                f"{summary}"
+                            ),
+                        },
+                    },
+                )
+                queue.put_nowait(
+                    {
+                        "_compact_transcript": {
+                            "reviewed_messages": reviewed_messages,
+                        },
+                    },
+                )
+        finally:
+            await publish_manager_method_event(
+                _tr_call_id,
+                "CodeActActor",
+                "StorageCheck",
+                phase="outgoing",
+                display_label=_DEFAULT_STORAGE_REVIEW_LABEL,
+                hierarchy=_tr_hierarchy,
+            )
+            TOOL_LOOP_LINEAGE.reset(_tr_lineage_token)
+            _PENDING_LOOP_SUFFIX.reset(_tr_suffix_token)
 
     async def abandon_storage_review(self, *, reason: str) -> None:
         """End the storage phase now, without waiting for the review to finish.
@@ -2086,6 +2400,16 @@ class _StorageCheckHandle(SteerableToolHandle):
 
         if self._completion_event.is_set():
             return
+        turn_handle = self._turn_review_handle
+        if turn_handle is not None:
+            try:
+                await turn_handle.stop(reason=reason)
+            except Exception:
+                pass
+        turn_task = self._turn_review_task
+        if turn_task is not None and not turn_task.done():
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
         handle = self._storage_handle
         if handle is not None:
             try:
@@ -2192,6 +2516,14 @@ class _StorageCheckHandle(SteerableToolHandle):
                 return
 
             self._phase = "storage"
+
+            # A mid-session turn review still in flight finishes first: its
+            # summary joins ``proactive_storage_summaries``, so the final
+            # review below builds on it instead of running concurrently
+            # against the same trajectory.
+            turn_task = self._turn_review_task
+            if turn_task is not None and not turn_task.done():
+                await asyncio.gather(turn_task, return_exceptions=True)
 
             _sc_suffix = _token_hex(2)
             _sc_call_id = new_call_id()
@@ -5904,6 +6236,7 @@ class CodeActActor(BaseCodeActActor):
             discovery_first_policy=self.tool_policy is _USE_DEFAULT,
             include_external_app_integration=has_integration_packages,
             include_oauth_helper=has_workspace_oauth,
+            persist=bool(persist),
         )
         logger.debug(
             f"⏱️ [CodeActActor.act +{_act_ms()}] prompt built "
@@ -6122,12 +6455,16 @@ class CodeActActor(BaseCodeActActor):
         post_run_review_context = current_post_run_review_context.get()
 
         # Wrap in StorageCheckHandle for post-completion function review.
+        # Persistent sessions additionally review at each completed turn —
+        # a persist loop never self-completes, so without turn reviews a
+        # recurring conversational deliverable would never distill.
         if effective_can_store or post_run_review_context is not None:
             handle = _StorageCheckHandle(
                 inner=handle,
                 actor=self,
                 post_run_review_context=post_run_review_context,
                 meter=run_meter,
+                turn_reviews_enabled=effective_can_store and bool(persist),
             )
             # Tracked so ``close()`` can end a review still in flight. The
             # set is weak: a finished handle the caller has dropped must not
