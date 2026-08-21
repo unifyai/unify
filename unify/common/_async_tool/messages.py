@@ -166,6 +166,73 @@ def _rebaseline_watermark_hash(client) -> None:
         client._sent_watermark_hash = _hash_msgs_slice(client.messages[:watermark])
 
 
+_REVIEW_COMPACTION_MARKER = "[compacted after skill review:"
+_REVIEW_COMPACTION_MIN_CHARS = 800
+_REVIEW_COMPACTION_HEAD_CHARS = 300
+
+
+def compact_reviewed_tool_results(client, tool_message_count: int) -> int:
+    """Stub the bulky contents of already-reviewed tool results in place.
+
+    Once a storage review has consolidated a stretch of the transcript into
+    stored functions, guidance and claims, the raw tool payloads it covered
+    are dead weight: every later dispatch of a long-lived session re-pays
+    them, and so does every later review. This pass replaces the *content*
+    of the first ``tool_message_count`` tool-role messages with a head
+    slice plus an omission marker — message identity, ordering and
+    tool_call pairing are untouched, so nothing holding a reference to a
+    message dict ever sees it disappear.
+
+    Deliberately conservative: placeholders/progress replies, small
+    contents, image-bearing parts, and already-compacted messages are left
+    verbatim. User and assistant messages are never touched — requests,
+    requirements and conclusions keep their words; only reviewed payloads
+    shed their bulk.
+
+    Mutating below the sent watermark is sanctioned here the same way an
+    escape-hatch splice is: the watermark hash is re-baselined afterwards,
+    trading provider prefix cache for a permanently smaller transcript.
+
+    Returns the number of characters removed.
+    """
+    saved = 0
+    seen_tool_msgs = 0
+    for msg in list(getattr(client, "messages", None) or []):
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        seen_tool_msgs += 1
+        if seen_tool_msgs > tool_message_count:
+            break
+        if is_non_final_tool_reply(msg):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            if any(
+                not (isinstance(part, dict) and part.get("type") == "text")
+                for part in content
+            ):
+                continue
+            text = "\n".join(str(part.get("text") or "") for part in content)
+        else:
+            continue
+        if len(text) < _REVIEW_COMPACTION_MIN_CHARS:
+            continue
+        if _REVIEW_COMPACTION_MARKER in text or "[img:" in text:
+            continue
+        stub = (
+            f"{text[:_REVIEW_COMPACTION_HEAD_CHARS]}\n… "
+            f"{_REVIEW_COMPACTION_MARKER} "
+            f"{len(text) - _REVIEW_COMPACTION_HEAD_CHARS} chars omitted]"
+        )
+        msg["content"] = stub
+        saved += len(text) - len(stub)
+    if saved:
+        _rebaseline_watermark_hash(client)
+    return saved
+
+
 async def emit_completion_pair(
     result: str,
     call_id: str,

@@ -476,21 +476,22 @@ _STORAGE_DEFERRED_NOTICE = textwrap.dedent("""
 _STORAGE_SESSION_NOTICE = textwrap.dedent("""
     ### Skill Storage
 
-    You can proactively store reusable skills at any point with the
-    `store_skills` tool — useful after a complex subtask that discovered
-    non-obvious configuration or composition strategies, when the user
-    explicitly asks to store a skill, or before transitioning phases. In
-    this persistent session, a dedicated skill-consolidation process also
+    In this persistent session, a dedicated skill-consolidation process
     reviews your trajectory automatically **after each completed turn**
-    (and again when the session ends), so `store_skills` is a judgment
-    call, not a routine step — skip it for trivial operations.
+    (and again when the session ends). Do not call `store_skills` for
+    work a completed turn already contains — the automatic review covers
+    it. Reserve `store_skills` for mid-turn moments: something worth
+    keeping is at risk before a risky continuation, or the user
+    explicitly asks to store a skill right now.
 
     Consolidation results arrive in the conversation as bracketed
     background notes. When a note (or your own storage) reports a stored
-    function covering a deliverable that is requested again, execute the
-    stored function (`execute_function`, or by name inside
-    `execute_code`) instead of re-deriving the procedure inline. When the
-    requester amends the deliverable's spec, apply the amendment as an
+    function covering a deliverable that is requested again, the whole
+    turn is one execution and a report: call the stored function
+    (`execute_function`, or by name inside `execute_code`), then relay
+    its result — do not re-derive the procedure inline, and do not
+    re-verify work the function already validates. When the requester
+    amends the deliverable's spec, apply the amendment as an
     `overwrite=True` edit to that stored function so the stored procedure
     tracks the live spec.
 

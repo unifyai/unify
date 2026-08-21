@@ -886,9 +886,11 @@ def test_storage_notice_matches_session_mode():
     )
     assert "after each completed turn" in session
     assert "after you return your result" not in session
-    # The convergence contract: repeat requests run the stored function and
-    # amendments edit it in place rather than triggering a fresh replan.
-    assert "instead of re-deriving the procedure inline" in session
+    # The convergence contract: repeat requests are one execution and a
+    # report, and amendments edit the stored function in place rather than
+    # triggering a fresh replan.
+    assert "do not re-derive the procedure inline" in session
+    assert "one execution and a report" in session
     assert "`overwrite=True` edit" in session
 
     without_store = build_code_act_prompt(

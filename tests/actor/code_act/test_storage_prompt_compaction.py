@@ -340,6 +340,9 @@ def test_storage_check_prompt_live_session_framing():
 
     assert "persistent interactive session" in prompt
     assert "## Live Session Turn Review" in prompt
+    # Steady state must be cheap: a no-op review concludes immediately
+    # instead of paying for store searches every turn.
+    assert "say so in one sentence and finish immediately" in prompt
     assert "## Session Trajectory So Far" in prompt
     assert "## Latest Turn Response" in prompt
     assert "## Completed Trajectory" not in prompt
