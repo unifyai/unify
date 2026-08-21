@@ -2278,10 +2278,12 @@ class AssistantPresenceObserved(Event):
     as presence-only context: no LLM run is requested and no user-visible reply
     is composed.
 
-    It also carries the Console's own orientation text, because that text is
-    only worth putting in a prompt while the user is actually looking at the
-    Console. Low-frequency heartbeats carry the full text and the rest carry
-    only ``console_guidance_version``, so the runtime converges on the current
+    It also carries the Console's own orientation text, which the runtime
+    keeps in the system prompt for the rest of the session once it arrives;
+    the live open/closed signal rides in the state snapshot instead, so
+    presence flips never reshape the cached system prompt. Low-frequency
+    heartbeats carry the full text and the rest carry only
+    ``console_guidance_version``, so the runtime converges on the current
     text within a few minutes of a Console deploy or a pod restart without
     every heartbeat paying for it.
     """

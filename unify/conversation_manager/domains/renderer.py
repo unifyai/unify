@@ -659,6 +659,8 @@ class Renderer:
         vm_ready: bool = True,
         file_sync_complete: bool = True,
         has_desktop: bool = False,
+        console_open: bool = False,
+        console_action_catalogue: str = "",
     ) -> SnapshotState:
         """Render the full conversation state.
 
@@ -735,11 +737,19 @@ class Renderer:
         )
         _conversations_ms = _mark_step()
 
+        console_render = self.render_console_state(
+            console_open=console_open,
+            console_action_catalogue=console_action_catalogue,
+        )
+
         # The wall clock closes the snapshot rather than living in the system
         # prompt: a minute rollover then only re-tokenizes the snapshot tail
         # instead of invalidating the provider's system+tools cache.
         time_render = f"Current time: {prompt_now()}."
 
+        # The console pane sits late for the same reason the clock sits last:
+        # both flip with per-turn state, and churn near the end of the
+        # snapshot re-tokenizes the fewest trailing tokens.
         sections = [
             s
             for s in [
@@ -751,6 +761,7 @@ class Renderer:
                 completed_render,
                 recent_tools_render,
                 convs_render,
+                console_render,
                 time_render,
             ]
             if s
@@ -794,6 +805,44 @@ class Renderer:
         )
 
         return snapshot_state
+
+    @staticmethod
+    def render_console_state(
+        *,
+        console_open: bool,
+        console_action_catalogue: str,
+    ) -> str:
+        """Render Console presence and, while it is open, its navigation targets.
+
+        This pane is the live half of the console contract: the orientation
+        text stays in the system prompt for the whole session (blanking it
+        with presence would wipe the provider's all-or-nothing system+tools
+        cache — see ``ConversationManager.console_guidance``), so whether
+        ``show_in_console`` would land right now is answered here instead.
+
+        The pane renders only while a catalogue is published: open renders
+        the drivable targets, closed renders a one-line notice. No catalogue
+        — a session the Console never joined, or a Console that publishes an
+        empty catalogue because navigation is disallowed — renders no pane,
+        and ``show_in_console`` answers with a corrective error either way.
+        """
+        if not console_action_catalogue:
+            return ""
+        if not console_open:
+            return (
+                "<console status='closed'>\n"
+                "The user's Console is closed right now — `show_in_console` "
+                "would return an error instead of moving anything. Do not "
+                "offer to show pages until this pane reads open again.\n"
+                "</console>"
+            )
+        return (
+            "<console status='open'>\n"
+            "The user has the Console open — `show_in_console` can move it "
+            "right now.\n\n"
+            f"{console_action_catalogue}\n"
+            "</console>"
+        )
 
     @staticmethod
     def render_infrastructure_state(

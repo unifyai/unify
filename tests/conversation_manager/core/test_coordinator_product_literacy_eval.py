@@ -1550,10 +1550,9 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         coordinator_onboarding_active=False,
         coordinator_onboarding_render=None,
         onboarding_clicked_trigger_steps=[],
-        # Console is not open in these scenarios, so the runtime publishes no
-        # orientation text or action catalogue.
+        # Console never published guidance in these scenarios, so there is
+        # no orientation text.
         console_guidance=lambda detail="brief": "",
-        console_action_catalogue=lambda: "",
     )
 
 

@@ -1036,27 +1036,29 @@ class ConversationManager(metaclass=SingletonABCMeta):
         return time.monotonic() - self._console_presence_at <= CONSOLE_PRESENCE_TTL_S
 
     def console_action_catalogue(self) -> str:
-        """Navigation targets Console currently offers, or ``""`` when it is shut.
+        """The most recently published navigation targets, or ``""`` if none.
 
-        Gated with the orientation text and for the same reason, plus one of its
-        own: taking someone to a page they are not looking at accomplishes
-        nothing, so the tool that consumes this is withheld along with it.
+        Not blanked by the presence window (see ``console_guidance`` for the
+        cache rationale) — but unlike the guidance text, Console may
+        legitimately publish an empty catalogue (navigation disallowed for
+        this teammate), so empty means "no drivable targets", not "console
+        never seen". The catalogue feeds the state snapshot's console pane;
+        whether a move would land right now is ``console_is_open()``'s
+        question, answered at ``show_in_console`` call time.
         """
-        if not self.console_is_open():
-            return ""
         return self._console_guidance.get("actions", "")
 
     def console_guidance(self, detail: str = "brief") -> str:
-        """Console orientation text, but only while the user is on the Console.
+        """Console orientation text, kept for the session once it arrives.
 
-        Someone who emailed hours ago is not looking at a screen, so describing
-        it to them is prompt bloat that also invites the assistant to talk about
-        a surface nobody has open. The window is generous relative to Console's
-        keep-warm heartbeat so an idle-but-present user does not flicker in and
-        out of it, since each flip costs a prompt-cache miss.
+        The provider prompt cache is all-or-nothing over system+tools, so
+        letting the presence window blank this section would wipe a warm cache
+        every time the boss stepped away from the Console and again on their
+        return. The text therefore stays put and changes only when the Console
+        publishes a new content-hash version — at most one extra miss per
+        session. Whether the Console is open right now is the state snapshot's
+        job (its console pane), not this text's.
         """
-        if not self.console_is_open():
-            return ""
         return self._console_guidance.get(detail, "")
 
     async def capture_assistant_screenshot(
@@ -2588,6 +2590,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+                console_open=self.console_is_open(),
+                console_action_catalogue=self.console_action_catalogue(),
             )
         finally:
             # render_state is synchronous, so the transient row is always the
@@ -4444,6 +4448,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+                console_open=self.console_is_open(),
+                console_action_catalogue=self.console_action_catalogue(),
             )
             brain_spec = build_brain_spec(self, snapshot_state=snapshot_state)
 
