@@ -57,6 +57,8 @@ from .messages import (
     loop_user_notice,
     extract_substantive_text,
     compact_reviewed_messages,
+    strip_reasoning_payloads,
+    _rebaseline_watermark_hash,
 )
 from .tools_data import (
     ToolsData,
@@ -4341,6 +4343,23 @@ async def async_tool_loop_inner(
                 # Reset for the next turn
                 _persist_response_content = None
                 _persist_response_emitted = False
+
+                # A parked turn's chain of thought is never consulted again:
+                # the next dispatch starts from a fresh user interjection, so
+                # provider reasoning payloads (encrypted blobs, reasoning
+                # summaries) on every completed assistant message are pure
+                # re-billed bulk from here on. Shed them now rather than
+                # waiting for a storage review to cover the span — reviews
+                # lag turns, and the lag is paid on every call in between.
+                try:
+                    _shed = 0
+                    for _m in client.messages or []:
+                        if isinstance(_m, dict) and _m.get("role") == "assistant":
+                            _shed += strip_reasoning_payloads(_m)
+                    if _shed:
+                        _rebaseline_watermark_hash(client)
+                except Exception:
+                    pass
 
                 logger.info(
                     "Persist mode: waiting for next interjection...",
