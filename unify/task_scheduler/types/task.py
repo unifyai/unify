@@ -142,6 +142,18 @@ class TaskBase(AuthoredRow):
         ),
         json_schema_extra={"ui_editable": True},
     )
+    user_paused: bool = Field(
+        default=False,
+        description=(
+            "Whether a person has paused this task, as distinct from whether "
+            "its source has armed it. `enabled` is rewritten by whatever "
+            "installed the task on every reconcile; this is a standing "
+            "instruction from whoever owns the assistant and outranks that "
+            "arming, so a paused task stays paused across reinstalls and pod "
+            "restarts."
+        ),
+        json_schema_extra={"ui_editable": True},
+    )
     custom_key: Optional[str] = Field(
         default=None,
         description=(
