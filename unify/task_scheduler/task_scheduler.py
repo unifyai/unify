@@ -2055,7 +2055,58 @@ class TaskScheduler(BaseTaskScheduler):
                     logs=log_ids,
                     entries={"enabled": enabled},
                 )
+            if not enabled:
+                self._withdraw_open_occurrence(task)
         return last_result
+
+    def _withdraw_open_occurrence(self, task: Task) -> None:
+        """Retire the occurrence a disarmed definition would still have fired.
+
+        Disarming the definition is not enough on its own. Projection has
+        already minted the next occurrence and it sits in the ledger as
+        ``scheduled``; the dispatcher works from that row, so the wake still
+        arrives, the run is refused with "task is disabled", and the refusal
+        is recorded as a failed start -- which now also tells the owner their
+        task failed. Pausing something is supposed to be quiet.
+
+        Withdrawing it closes that: no wake, no pod, no failure to explain.
+        Re-arming projects a fresh occurrence, so nothing is lost but the one
+        the user asked not to happen.
+
+        Best-effort: the definition is already disarmed by the time this runs,
+        so the worst case is the old behaviour rather than a broken pause.
+        """
+
+        from .machine_state import get_open_task_execution, update_task_run_record
+
+        try:
+            open_run = get_open_task_execution(
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                task_id=int(task.task_id),
+                destination=task.destination,
+            )
+            if open_run is None or not open_run.run_key:
+                return
+            update_task_run_record(
+                TaskRunReference(
+                    assistant_id=open_run.assistant_id or "",
+                    run_key=open_run.run_key,
+                    source_task_log_id=open_run.source_task_log_id,
+                ),
+                {
+                    "state": ExecutionState.cancelled.value,
+                    "completed_at": _now_iso(),
+                    "result_summary": (
+                        "Withdrawn: the task was paused before this occurrence "
+                        "was due, so it was never dispatched."
+                    ),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Could not withdraw the open occurrence for task %s",
+                task.task_id,
+            )
 
     def list_custom_tasks(
         self,
@@ -2138,19 +2189,6 @@ class TaskScheduler(BaseTaskScheduler):
                 continue
             if (entries.get("enabled") is not False) == enabled:
                 continue
-            if enabled and entries.get("user_paused"):
-                # Somebody turned this off on purpose. The installer arms what
-                # it planted on every install and every boot reconcile, so
-                # without this a person pausing a workflow's task watches it
-                # come back by itself at the next pod start -- a control that
-                # appears to work and silently does not. Arming is the
-                # source's business; whether the user wants it running is
-                # theirs, and theirs outranks.
-                logger.info(
-                    "Leaving task %s held: paused by the user",
-                    task_id,
-                )
-                continue
             if enabled:
                 task = self._get_task_or_raise(int(task_id))
                 if self._one_shot_already_ran(task) is not None:
@@ -2158,40 +2196,6 @@ class TaskScheduler(BaseTaskScheduler):
             self._set_tasks_enabled(task_ids=int(task_id), enabled=enabled)
             touched.append(int(task_id))
         return touched
-
-    def set_task_user_paused(
-        self,
-        *,
-        task_id: int,
-        paused: bool,
-    ) -> dict[str, Any]:
-        """Record that a person, not a source, decided whether this task runs.
-
-        Held separately from ``enabled`` because they answer different
-        questions. ``enabled`` is the source's arming state, rewritten on
-        every install and boot reconcile; this is a standing instruction from
-        whoever owns the assistant, and it survives them. Setting it also
-        applies it, so a caller does not have to write both.
-        """
-
-        task = self._get_task_or_raise(task_id)
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id}",
-                limit=1,
-                return_ids_only=False,
-            )
-            if not log_objs:
-                return {"outcome": "definition_missing", "task_id": task_id}
-            self._write_log_entries(
-                logs=log_objs[0].id,
-                entries={"user_paused": bool(paused), "enabled": not paused},
-            )
-        return {
-            "outcome": "paused" if paused else "resumed",
-            "task_id": task_id,
-            "user_paused": bool(paused),
-        }
 
     def _workflow_run_settings(
         self,
