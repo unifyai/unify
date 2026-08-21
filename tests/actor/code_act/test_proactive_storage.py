@@ -95,6 +95,46 @@ def test_storage_prompt_encourages_bounded_agent_loop_distillation():
     assert "unknown-state debugging" in prompt
 
 
+def test_storage_prompt_carries_the_distillation_dial():
+    """The unified frame: skeleton vs joints, per-substep dial, asymmetric
+    failure costs, the evidence rule, tripwires, and reversibility."""
+    prompt = _STORAGE_WHAT_CAN_BE_STORED
+
+    assert "### The distillation dial" in prompt
+    assert "a dial, not a switch" in prompt
+    assert "skeleton" in prompt
+    assert "joints" in prompt
+    assert "choosing a notch per substep" in prompt
+    # Asymmetric failure visibility: too late is loud/cheap, too early is
+    # quiet/expensive; placement errors mirror the same asymmetry.
+    assert "Distilling too little is loud" in prompt
+    assert "Distilling too much is quiet" in prompt
+    assert "processes an anomaly as if it were normal" in prompt
+    assert "costs cents" in prompt
+    assert "costs correctness" in prompt
+    # Evidence rule and tripwires.
+    assert "Freeze only observed invariance" in prompt
+    assert "Preserve the surprise signal" in prompt
+    assert "raise or return early" in prompt
+    # Reversibility keeps the dial from causing under-distillation.
+    assert "Distillation is reversible" in prompt
+    # Model choice is folded into the same decision.
+    assert "### Model choice is part of distillation" in prompt
+    assert "keep the cheapest model that passes" in prompt
+
+
+def test_sub_agent_storage_is_gated_on_the_dial():
+    """Storing an actor.act config must first survive the dial check."""
+    from unify.actor.code_act_actor import _STORAGE_SUB_AGENT_PATTERNS
+
+    prompt = _STORAGE_SUB_AGENT_PATTERNS
+    assert "First apply the distillation dial" in prompt
+    assert "plan discovered at runtime" in prompt
+    assert "instead of preserving the agent wrapper" in prompt
+    assert "unsafe_effectful" in prompt
+    assert "Calls that survive this test" in prompt
+
+
 # ---------------------------------------------------------------------------
 # 1. Symbolic: store_skills tool availability
 # ---------------------------------------------------------------------------

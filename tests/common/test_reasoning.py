@@ -122,6 +122,14 @@ def test_query_llm_docstring_contains_actor_usage_guidance():
     assert "billable UniLLM call" in doc
     assert "substring checks" in doc
     assert "label-specific canned prose or templates" in doc
+    # The stateless contract: each call is a memoryless transform.
+    assert "Stateless contract" in doc
+    assert "retains nothing between calls" in doc
+    assert "there is no before" in doc
+    # Model A/B trials happen at authoring/storage time, on known-good cases.
+    assert "trial them" in doc
+    assert "bake in the cheapest model" in doc
+    assert "never in the hot path" in doc
 
 
 def test_llm_query_prompt_context_uses_introspected_signatures():
