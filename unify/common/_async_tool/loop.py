@@ -4233,10 +4233,15 @@ async def async_tool_loop_inner(
             # a substantive answer already sitting in the transcript — a
             # model that has nothing left to add after answering can still
             # return empty content on a later turn, and that must not erase
-            # the answer. Every consumer below (multi-handle, persist, the
-            # plain return) reads final_content after this point, so
-            # resolving it once here covers all of them.
-            if final_content is None:
+            # the answer. Multi-handle and the plain return read
+            # final_content after this point, so resolving it once here
+            # covers both. Persist mode is exempt: it never finalizes here —
+            # an empty turn surfaces nothing and re-enters the persist wait,
+            # and with response_format the turn's answer is the
+            # response-tool payload rather than text content, so the
+            # nudge/loud-fail below would inject spurious turns and then
+            # terminate a loop that only an explicit stop may end.
+            if final_content is None and not persist:
                 _substantive_content = None
                 for _hist_msg in reversed(client.messages):
                     _hist_role = _hist_msg.get("role")
