@@ -1131,8 +1131,9 @@ _CONSOLE_BLOCK = "Console knowledge\n-----------------\nSurfaces go here."
 class TestConsoleKnowledge:
     """Console orientation comes from the running Console, not from this module.
 
-    The prompt carries whatever text Console publishes, verbatim, and carries
-    nothing when Console publishes nothing.
+    The prompt carries whatever text Console publishes, verbatim, framed by a
+    standing note scoping it to the state snapshot's live console pane; it
+    carries nothing when Console publishes nothing.
     """
 
     def test_console_block_is_passed_through_verbatim(self):
@@ -1146,6 +1147,24 @@ class TestConsoleKnowledge:
     def test_coordinator_takes_the_same_block(self):
         prompt = _build(is_coordinator=True, console_guidance=_CONSOLE_BLOCK)
         assert _CONSOLE_BLOCK in prompt
+
+    def test_guidance_carries_the_standing_applicability_note(self):
+        """The block stays for the session, so the note scopes when it applies.
+
+        Presence flips must not reshape the system prompt (the provider cache
+        is all-or-nothing over system+tools); the note points the model at the
+        snapshot's console pane for the live open/closed signal instead.
+        """
+        note_fragment = "state snapshot's console pane"
+
+        for is_coordinator in (False, True):
+            prompt = _build(
+                is_coordinator=is_coordinator,
+                console_guidance=_CONSOLE_BLOCK,
+            )
+            assert note_fragment in prompt
+
+        assert note_fragment not in _build()
 
 
 # ---------------------------------------------------------------------------
@@ -1191,8 +1210,8 @@ class TestConsoleUIGate:
 
         The Coordinator's fast brain freelanced contradictory "where do I click"
         answers when it held the same navigation knowledge, and this prompt is
-        built in the LiveKit worker subprocess, which cannot see the Console
-        presence the block is gated on.
+        built in the LiveKit worker subprocess, which never receives the
+        guidance Console publishes to the slow brain.
         """
         for is_coordinator in (False, True):
             prompt = _build_voice(is_coordinator=is_coordinator)
@@ -1634,3 +1653,25 @@ class TestVoiceMultiPartyBlock:
         """Otherwise a new voice reads as the same person under a new name."""
         prompt = _build_voice(call_participant_names=["Ada", "Bo"])
         assert "not the only person who might speak" in prompt
+
+
+class TestSystemPromptStaysClockFree:
+    """The system prompt carries no wall-clock timestamp.
+
+    Provider prompt caching is all-or-nothing over system+tools, so a
+    minute-granularity clock in the system prompt would invalidate the cache
+    on every minute rollover. The clock lives at the tail of the rendered
+    state snapshot instead (``domains/renderer.py``).
+    """
+
+    # The rendering shape of prompt_helpers.now(), e.g.
+    # "Friday, June 13, 2025 at 12:00 PM". Regex-based so the guarantee holds
+    # no matter what the clock reads when the suite runs.
+    CLOCK_SHAPE = r"[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M"
+
+    def test_system_prompt_contains_no_wall_clock_timestamp(self):
+        import re
+
+        prompt = _build()
+        assert not re.search(self.CLOCK_SHAPE, prompt)
+        assert "Current time:" not in prompt

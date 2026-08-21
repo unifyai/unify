@@ -22,10 +22,14 @@ handle so holds scored wrong instead of held (`held_outcome`/`run_stats`
 now public); and the precondition probe vetoed scheduler-dispatched runs
 by reasoning about the wall clock ("not due yet") — its prompt now names
 due-ness as the scheduler's authority alone. The tier-0 contracts caught
-injected drift exactly as designed (rl fires 5–6). Open questions for the
-post-fix rerun: does repair engage once verdicts parse (rl pre-fix shows
+injected drift exactly as designed (rl fires 5–6). Post-fix re-measurement is deliberately
+deferred while the verification implementation evolves (a rerun round was
+started 2026-08-21 and cancelled); when it resumes, its open questions
+are: does repair engage once verdicts parse (rl pre-fix shows
 `repair_tokens=0` through six post-drift fires), and does sd_page's
 silent wrong-batch delivery — the one true capability loss — persist.
+Full pre-fix evidence: colleague `2c8f84b`, `f1764e5`, `faff798`,
+`a8f0479`.
 Orchestra treats `held` as terminal (`07641c6b`). Written against
 `staging` @ `5ec185ada` (2026-08-17). Line numbers below are approximate
 as of that commit; symbols are exact. Re-verify both before editing.

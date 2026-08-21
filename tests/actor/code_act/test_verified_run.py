@@ -32,6 +32,15 @@ from unify.task_scheduler.types.execution import ExecutionState
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _verification_enabled(monkeypatch):
+    """This module exercises the verification machinery itself; the master
+    switch defaults off, so hold it on for every test here."""
+    from unify.settings import SETTINGS
+
+    monkeypatch.setattr(SETTINGS.function.verification, "enabled", True)
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────

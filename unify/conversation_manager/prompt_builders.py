@@ -1066,9 +1066,10 @@ def _build_coordinator_knowledge_tool_listing() -> str:
 def _build_coordinator_credential_placement_block() -> str:
     """Credential-placement semantics for Twin, with no Console layout in them.
 
-    Console publishes its own navigation text, and only while a Console is
-    actually open, so anything shaped like "click the tab on the right" belongs
-    there and not here. What belongs here is the part that holds either way:
+    Console publishes its own navigation text, surfaced to the model only
+    while a Console is actually open, so anything shaped like "click the tab
+    on the right" belongs there and not here. What belongs here is the part
+    that holds either way:
     who a credential belongs to, and how it reaches them. Twin owns placing
     shared credentials, and without these semantics the destination and the
     refusal to handle the credential itself are both left to improvisation.
@@ -1433,11 +1434,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "this time. If the user asks for Saturday's dinner before "
             "correcting me, or before the Beat 5 save completes, I steer "
             "back gently and re-offer whatever is still needed first.",
-            "  7. Tell the user to open the Actions tab themselves before and "
-            "during each act run so they can watch the work live — I have no "
-            "tool to navigate the Console for them; call out the storage node "
-            "when it appears. Brain nudges and attachment intro messages are "
-            "not deliverables.",
+            "  7. Get the user watching the Actions tab before and during "
+            "each act run so they can see the work live — take them there "
+            "with `show_in_console` when the state snapshot's console pane "
+            "lists the target (without an open console the call just returns "
+            "an error), and tell them to open the tab themselves otherwise; "
+            "call out the storage node when it appears. Brain nudges and "
+            "attachment intro messages are not deliverables.",
             "  8. On a live in-app Unify Meet call: narrate spoken beats via "
             "`guide_voice_agent`, but the receipt attachments and all three "
             "deliverables (naive, corrected, replay) MUST still be sent as "
@@ -2701,6 +2704,26 @@ NOT: first the action, then in a separate response the acknowledgment. That is i
 **Exception:** On a voice call, verbal communication suffices for everything — acknowledgments, results, progress updates. Do not supplement with text messages."""
 
 
+def _frame_console_guidance(console_guidance: str) -> str:
+    """Pair Console-published orientation with its standing applicability note.
+
+    The orientation stays in the system prompt for the whole session once it
+    arrives — the provider prompt cache is all-or-nothing over system+tools,
+    so blinking the section with the presence window would wipe a warm cache
+    on every console open/close. The note keeps that stable text honest: it
+    applies only while the state snapshot's console pane reports the Console
+    open.
+    """
+    return (
+        f"{console_guidance}\n\n"
+        "The Console knowledge above applies while my boss actually has the "
+        "Console open — which they may not, right now. The state snapshot's "
+        "console pane is the live signal: it reports whether the Console is "
+        "open and, when it is, lists the navigation targets "
+        "``show_in_console`` can drive."
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Public builders
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2740,7 +2763,6 @@ def build_system_prompt(
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
     console_guidance: str = "",
-    console_action_catalogue: str = "",
     coordinator_onboarding_active: bool = True,
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
@@ -2967,8 +2989,13 @@ def build_system_prompt(
         )
         # Console orientation, published by the running Console. Empty when
         # this deployment has no Console front-end, or when Console could not
-        # be reached — in both cases the section is simply omitted.
-        coordinator_console_literacy_block = console_guidance
+        # be reached — in both cases the section is simply omitted. Once it
+        # arrives it stays for the session, scoped by the same standing note
+        # as the regular-assistant variant.
+        if console_guidance:
+            coordinator_console_literacy_block = _frame_console_guidance(
+                console_guidance,
+            )
         if console_ui_present:
             # ``coordinator_onboarding_active`` gates onboarding-specific
             # scaffolding (reactive narration and the live progress block).
@@ -3003,7 +3030,7 @@ def build_system_prompt(
 
     # Build the full prompt using PromptParts for structured output.
     #
-    # Section order (1-17):
+    # Section order (1-16):
     #   1. Setup readiness (when applicable)
     #   2. Role + Bio (identity)
     #   3. Accessible shared teams (where memory lives)
@@ -3021,7 +3048,11 @@ def build_system_prompt(
     #   14. Onboarding reference (regular assistants only)
     #   15. Voice calls guide (when on a voice call)
     #   16. Scenarios
-    #   17. Current time
+    #
+    # The wall clock is deliberately absent: it lives at the tail of the
+    # rendered state snapshot (domains/renderer.py) so the system prompt
+    # stays byte-stable across minute rollovers and keeps the provider's
+    # system+tools cache warm.
     parts = PromptParts()
 
     # 1. Setup readiness.
@@ -3339,15 +3370,13 @@ When contacts communicate in a non-English language, I match their language in m
         parts.add(_build_base_proactive_meeting_offers_block())
 
     # 13. Console knowledge, published by the running Console. The Coordinator
-    #     takes the deeper variant alongside its own orientation block.
+    #     takes the deeper variant alongside its own orientation block. Kept
+    #     for the whole session once it arrives — presence flips must not
+    #     reshape the system prompt (the provider cache is all-or-nothing over
+    #     system+tools) — so a standing note scopes it to the state snapshot's
+    #     live open/closed signal.
     if not is_coordinator and console_guidance:
-        parts.add(console_guidance)
-
-    # 13b. Navigation targets, present only while a Console is open to be
-    #      driven. Paired with the ``show_in_console`` tool, which is withheld
-    #      on the same condition.
-    if console_action_catalogue:
-        parts.add(console_action_catalogue)
+        parts.add(_frame_console_guidance(console_guidance))
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
     #     carries this surface). The FAQ is omitted when no Console front-end
@@ -3415,9 +3444,6 @@ When contacts communicate in a non-English language, I match their language in m
 ---------
 - If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{voice_session_scenarios_section}{meet_join_scenarios}""",
     )
-
-    # 17. Current time (dynamic content — changes per call).
-    parts.add(f"Current time: {now()}.", static=False)
 
     return parts
 

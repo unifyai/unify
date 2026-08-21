@@ -213,6 +213,47 @@ class NativeCsvBackend(BaseFileParserBackend):
             )
 
 
+def _best_delimiter(sample_text: str, quotechar: str = '"') -> str:
+    """Choose the delimiter that splits the sample most consistently.
+
+    ``csv.Sniffer`` raises on any sample it cannot read confidently, and a
+    64 KB window cut mid-row is enough to do it. The historical fallback was a
+    comma, which for a tab-delimited export yields exactly one field per row --
+    and a single-column frame reads downstream as "no tabular content", so the
+    file was dropped rather than visibly misparsed. Five files in one staging
+    run were lost that way, having been correctly identified as tab-delimited by
+    everything except the parser.
+
+    Deciding from the content instead: each candidate is scored on how many
+    sample rows agree on a field count above one. A real delimiter partitions
+    every row the same way; a wrong one produces either one field or ragged
+    noise. Extension and sniffer opinion become hints, never the decision.
+    """
+    lines = [line for line in sample_text.splitlines() if line.strip()]
+    # Drop a possibly-truncated final line so a cut-off row cannot skew the
+    # count for whichever delimiter happens to appear in it.
+    if len(lines) > 2:
+        lines = lines[:-1]
+    if not lines:
+        return ","
+
+    best = (0, 0, ",")
+    for candidate in (",", "\t", ";", "|"):
+        counts: dict[int, int] = {}
+        for row in csv.reader(lines, delimiter=candidate, quotechar=quotechar):
+            counts[len(row)] = counts.get(len(row), 0) + 1
+        usable = {n: c for n, c in counts.items() if n > 1}
+        if not usable:
+            continue
+        fields = max(usable, key=lambda n: (usable[n], n))
+        agreeing = usable[fields]
+        # More rows agreeing wins; ties break toward the wider split, since a
+        # delimiter that finds more columns in the same rows is the real one.
+        if (agreeing, fields) > (best[0], best[1]):
+            best = (agreeing, fields, candidate)
+    return best[2]
+
+
 def _detect_csv_dialect(path: Path) -> dict[str, object]:
     with path.open("rb") as fh:
         sample_bytes = fh.read(65536)
@@ -234,10 +275,13 @@ def _detect_csv_dialect(path: Path) -> dict[str, object]:
         sniffed = csv.Sniffer().sniff(sample_text, delimiters=",;\t|")
         has_header = bool(csv.Sniffer().has_header(sample_text))
     except csv.Error:
-        sniffed = csv.get_dialect("excel")
+        # No dialect guess available. Measure rather than assume a comma.
+        sniffed = None
 
-    delimiter = getattr(sniffed, "delimiter", ",") or ","
     quotechar = getattr(sniffed, "quotechar", '"') or '"'
+    delimiter = getattr(sniffed, "delimiter", "") or ""
+    if not delimiter:
+        delimiter = _best_delimiter(sample_text, quotechar=quotechar)
     preview_rows = _preview_csv_rows(
         sample_text,
         delimiter=delimiter,

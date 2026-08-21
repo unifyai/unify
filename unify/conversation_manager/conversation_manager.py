@@ -1036,27 +1036,29 @@ class ConversationManager(metaclass=SingletonABCMeta):
         return time.monotonic() - self._console_presence_at <= CONSOLE_PRESENCE_TTL_S
 
     def console_action_catalogue(self) -> str:
-        """Navigation targets Console currently offers, or ``""`` when it is shut.
+        """The most recently published navigation targets, or ``""`` if none.
 
-        Gated with the orientation text and for the same reason, plus one of its
-        own: taking someone to a page they are not looking at accomplishes
-        nothing, so the tool that consumes this is withheld along with it.
+        Not blanked by the presence window (see ``console_guidance`` for the
+        cache rationale) — but unlike the guidance text, Console may
+        legitimately publish an empty catalogue (navigation disallowed for
+        this teammate), so empty means "no drivable targets", not "console
+        never seen". The catalogue feeds the state snapshot's console pane;
+        whether a move would land right now is ``console_is_open()``'s
+        question, answered at ``show_in_console`` call time.
         """
-        if not self.console_is_open():
-            return ""
         return self._console_guidance.get("actions", "")
 
     def console_guidance(self, detail: str = "brief") -> str:
-        """Console orientation text, but only while the user is on the Console.
+        """Console orientation text, kept for the session once it arrives.
 
-        Someone who emailed hours ago is not looking at a screen, so describing
-        it to them is prompt bloat that also invites the assistant to talk about
-        a surface nobody has open. The window is generous relative to Console's
-        keep-warm heartbeat so an idle-but-present user does not flicker in and
-        out of it, since each flip costs a prompt-cache miss.
+        The provider prompt cache is all-or-nothing over system+tools, so
+        letting the presence window blank this section would wipe a warm cache
+        every time the boss stepped away from the Console and again on their
+        return. The text therefore stays put and changes only when the Console
+        publishes a new content-hash version — at most one extra miss per
+        session. Whether the Console is open right now is the state snapshot's
+        job (its console pane), not this text's.
         """
-        if not self.console_is_open():
-            return ""
         return self._console_guidance.get(detail, "")
 
     async def capture_assistant_screenshot(
@@ -2588,6 +2590,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+                console_open=self.console_is_open(),
+                console_action_catalogue=self.console_action_catalogue(),
             )
         finally:
             # render_state is synchronous, so the transient row is always the
@@ -3187,13 +3191,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
 
         # A turn mid-flight. The EventBus only stamps on *completion*, so a
-        # single long call is a silent window on that clock.
+        # single long call is a silent window on that clock. `running_task` is
+        # an asyncio Task, so `done()` is authoritative -- it cannot go stale.
         running_task = getattr(self.debouncer, "running_task", None)
         if running_task is not None and not running_task.done():
             return True, "slow_brain_turn"
 
-        if self.in_flight_actions:
-            return True, f"in_flight_actions({len(self.in_flight_actions)})"
+        # `in_flight_actions` is deliberately NOT consulted. It answers "which
+        # handles can I steer?", not "is work happening?" -- and a persist-mode
+        # act parks in it indefinitely by design, waiting for an interjection
+        # that may never come. Reading presence as liveness therefore made any
+        # assistant that ever ran `act(persist=True)` immortal: one pod held a
+        # parked handle for 99 minutes while the EventBus went 96 minutes
+        # without a publish. A running action needs no help from this registry
+        # -- its code holds ACTIVE_WORK and its turns show as slow_brain_turn.
+        #
+        # Retiring a pod does discard the parked session's Python state. That
+        # has been true at every timeout this system has shipped; durable
+        # session state is the fix for it, not a pod that never exits.
 
         return False, ""
 
@@ -3225,6 +3240,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         from unify.events.event_bus import EventBus
 
         ghost_counter = 0
+        suspect_streak = 0
 
         while True:
             await asyncio.sleep(self.inactivity_check_interval)
@@ -3314,6 +3330,37 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
             ghost_publish = ghost_counter >= ghost_checks_needed
 
+            # A declaration standing while *both* clocks are long past the
+            # timeout is the shape of one that has gone stale -- real work moves
+            # at least one clock. Reported, never acted on: a call silent for
+            # twenty minutes looks exactly like a call flag nobody cleared, and
+            # the only way to tell them apart is to go and look. Retiring on a
+            # suspicion would hang up on whoever was still holding, so the
+            # absolute bound stays with the 12h stale-runtime sweep, which
+            # defers live calls by design.
+            #
+            # On its own streak rather than the heartbeat's wall-clock window:
+            # an anomaly should announce itself on the first check that sees it,
+            # not whenever the clock next lands in a 30s slot of a 180s cycle.
+            if (
+                is_busy
+                and pubsub_idle > self.inactivity_timeout
+                and eventbus_idle > self.inactivity_timeout
+            ):
+                suspect_streak += 1
+                if suspect_streak == 1 or suspect_streak % 20 == 0:
+                    self._session_logger.info(
+                        "inactivity_check",
+                        f"Declaration suspect: busy={busy_reason} held while "
+                        f"pubsub_idle={pubsub_idle:.0f}s and "
+                        f"eventbus_idle={eventbus_idle:.0f}s both exceed "
+                        f"timeout={self.inactivity_timeout}s "
+                        f"(streak={suspect_streak}); not retiring on a "
+                        "suspicion -- verify the declaration is real",
+                    )
+            else:
+                suspect_streak = 0
+
             if int(current_time) % 180 < self.inactivity_check_interval:
                 extra = ""
                 if ghost_counter > 0:
@@ -3340,6 +3387,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     # measurement. If it stops appearing, the proxy is
                     # redundant and can leave the decision entirely.
                     extra += " proxy_load_bearing=eventbus"
+
                 self._session_logger.info(
                     "inactivity_check",
                     f"Idle check: last_activity={self._last_activity_source}, "
@@ -4400,6 +4448,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+                console_open=self.console_is_open(),
+                console_action_catalogue=self.console_action_catalogue(),
             )
             brain_spec = build_brain_spec(self, snapshot_state=snapshot_state)
 

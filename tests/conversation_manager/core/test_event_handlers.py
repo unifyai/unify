@@ -2636,8 +2636,8 @@ class TestMeetInteractionEventHandlers:
     async def test_assistant_presence_observed_records_console_guidance(self, mock_cm):
         """The heartbeat hands Console's orientation text to the runtime.
 
-        Delivery rides on presence because the text is only worth putting in a
-        prompt while the user is looking at the screen it describes.
+        Delivery rides on presence because a Console must be running to
+        publish it; once recorded, the runtime keeps the text for the session.
         """
         event = AssistantPresenceObserved(
             reason="keepwarm",

@@ -478,6 +478,13 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
     assert "keyword ladders" in prompt
     assert "keep the query_llm(...) call" in prompt
     assert "inside the stored function" in prompt
+    # Statelessness and the code -> query_llm -> sub-agent dial are prompt-level
+    # doctrine; the full frame lives in the storage-review prompt.
+    assert "stateless — a memoryless" in prompt
+    assert "never in the model" in prompt
+    assert "a dial, not a mode switch" in prompt
+    assert "lowest notch that preserves the judgment" in prompt
+    assert "whose plan must be discovered at runtime" in prompt
     # The consult path replaces the inline model-selection tables.
     assert "help(query_llm)" in prompt
     assert "Choosing A Model For `query_llm(...)`" not in prompt

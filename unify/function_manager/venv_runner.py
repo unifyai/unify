@@ -407,6 +407,15 @@ async def query_llm(
     handles bounded unstructured-data work that would be brittle if implemented
     as keyword matching or canned templates.
 
+    **Stateless contract.** Every ``query_llm(...)`` call is a fresh,
+    memoryless transform: the model sees exactly the ``system`` and ``prompt``
+    (and ``images``) of this call and retains nothing between calls. Put all
+    evidence the judgment needs into the prompt, hold all accumulating state
+    in Python variables, and never write a prompt that refers to an earlier
+    call ("as before", "the previous email") — there is no before. This is
+    what makes the call safe to nest inside loops, branches, and stored
+    functions: same inputs, same contract, no hidden session.
+
     **Text and images.** ``query_llm`` takes a string ``prompt``. For screenshots
     or other raster images, pass them through ``images=[...]`` (local path, PNG
     bytes, or ``data:image/...`` URL). Images are scaled to the same
@@ -563,6 +572,16 @@ async def query_llm(
     Do this research while authoring or storing the function, then bake the
     selected endpoint into the function. Do not put benchmark browsing or
     model shopping inside the hot path of a recurring task.
+
+    When two or three candidate endpoints look plausible, do not guess —
+    trial them. The live trajectory (or the function's fixtures) already
+    contains concrete inputs with known-good outputs: replay those cases
+    through each candidate with the same prompt and `response_format`,
+    compare against the known-good results, and bake in the cheapest model
+    that passes cleanly. Keep the trial cases as fixtures
+    (`FunctionManager_add_functions(fixtures=...)`) where the function is
+    pure, so later model or prompt changes replay them automatically. Run
+    trials at authoring/storage time only — never in the hot path.
 
     Use `list_llms()` to inspect the supported endpoint strings registered
     in the current runtime. Use `list_llms("openrouter")` or another

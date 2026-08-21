@@ -397,6 +397,17 @@ def _build_sandbox_environment_section() -> str:
           classifiers, templates pretending to be judgment. A
           deterministic pre-filter may narrow the set; the judgment
           itself is a real `query_llm(...)` call.
+        - Every `query_llm(...)` call is stateless — a memoryless
+          unstructured -> structured (or -> unstructured) transform.
+          Put all the evidence the judgment needs in the prompt; hold
+          running state in Python variables, never in the model — there
+          is no session between calls.
+        - Plain code -> `query_llm(...)` -> a sub-agent
+          (`primitives.actor.act`) is a dial, not a mode switch: take
+          the lowest notch that preserves the judgment. Exact logic is
+          plain code; a bounded judgment is one `query_llm(...)` call
+          nested in your control flow; reserve a sub-agent for
+          sub-tasks whose plan must be discovered at runtime.
         - Pass a Pydantic `response_format=` (and `temperature=0.0`) when
           downstream Python branches on the result; images via
           `images=[...]`. For reuse, keep the query_llm(...) call
