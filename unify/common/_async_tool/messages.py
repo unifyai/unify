@@ -171,23 +171,51 @@ _REVIEW_COMPACTION_MIN_CHARS = 800
 _REVIEW_COMPACTION_HEAD_CHARS = 300
 
 
-def compact_reviewed_tool_results(client, tool_message_count: int) -> int:
-    """Stub the bulky contents of already-reviewed tool results in place.
+_REASONING_PAYLOAD_KEYS = ("provider_specific_fields", "reasoning_details", "reasoning")
+
+
+def strip_reasoning_payloads(msg: dict) -> int:
+    """Drop provider reasoning machinery from one message, in place.
+
+    Encrypted reasoning blobs and reasoning summaries exist so a provider
+    can continue an in-flight chain of thought; once the turn that
+    produced them is over they are pure re-billed bulk — often the
+    largest single component of a long-lived transcript. The visible
+    ``content`` is never touched. Returns the serialized characters
+    removed (approximate, for accounting).
+    """
+    saved = 0
+    for key in _REASONING_PAYLOAD_KEYS:
+        if key in msg and msg[key] is not None:
+            try:
+                saved += len(json.dumps(msg[key], default=str))
+            except (TypeError, ValueError):
+                saved += 0
+            msg.pop(key, None)
+    return saved
+
+
+def compact_reviewed_messages(client, reviewed_message_count: int) -> int:
+    """Shed the bulk of an already-reviewed transcript span, in place.
 
     Once a storage review has consolidated a stretch of the transcript into
-    stored functions, guidance and claims, the raw tool payloads it covered
-    are dead weight: every later dispatch of a long-lived session re-pays
-    them, and so does every later review. This pass replaces the *content*
-    of the first ``tool_message_count`` tool-role messages with a head
-    slice plus an omission marker — message identity, ordering and
-    tool_call pairing are untouched, so nothing holding a reference to a
-    message dict ever sees it disappear.
+    stored functions, guidance and claims, that stretch's raw machinery is
+    dead weight: every later dispatch of a long-lived session re-pays it,
+    and so does every later review. Within the first
+    ``reviewed_message_count`` messages this pass:
 
-    Deliberately conservative: placeholders/progress replies, small
-    contents, image-bearing parts, and already-compacted messages are left
-    verbatim. User and assistant messages are never touched — requests,
-    requirements and conclusions keep their words; only reviewed payloads
-    shed their bulk.
+    * replaces bulky *tool* result contents with a head slice plus an
+      omission marker, and
+    * strips provider reasoning payloads (encrypted blobs, reasoning
+      summaries) from assistant messages — a completed turn's chain of
+      thought is not needed to continue the session.
+
+    Message identity, ordering and tool_call pairing are untouched, so
+    nothing holding a reference to a message dict ever sees it disappear.
+    User-facing words — requests, requirements, the assistant's visible
+    replies — stay verbatim. Placeholders/progress replies, small
+    contents, image-bearing parts, and already-compacted messages are
+    left alone.
 
     Mutating below the sent watermark is sanctioned here the same way an
     escape-hatch splice is: the watermark hash is re-baselined afterwards,
@@ -196,13 +224,16 @@ def compact_reviewed_tool_results(client, tool_message_count: int) -> int:
     Returns the number of characters removed.
     """
     saved = 0
-    seen_tool_msgs = 0
-    for msg in list(getattr(client, "messages", None) or []):
-        if not isinstance(msg, dict) or msg.get("role") != "tool":
+    messages = list(getattr(client, "messages", None) or [])
+    span = messages[: max(0, min(reviewed_message_count, len(messages)))]
+    for msg in span:
+        if not isinstance(msg, dict):
             continue
-        seen_tool_msgs += 1
-        if seen_tool_msgs > tool_message_count:
-            break
+        if msg.get("role") == "assistant":
+            saved += strip_reasoning_payloads(msg)
+            continue
+        if msg.get("role") != "tool":
+            continue
         if is_non_final_tool_reply(msg):
             continue
         content = msg.get("content")

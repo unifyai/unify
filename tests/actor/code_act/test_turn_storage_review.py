@@ -148,7 +148,7 @@ async def test_turn_review_runs_on_response_with_tool_activity():
 
             compact = inner._queue.get_nowait()
             assert compact == {
-                "_compact_transcript": {"reviewed_tool_results": 1},
+                "_compact_transcript": {"reviewed_messages": 4},
             }
 
             relayed = []

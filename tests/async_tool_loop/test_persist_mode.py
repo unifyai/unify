@@ -727,7 +727,7 @@ async def test_persist_mode_compact_sentinel_stubs_reviewed_tool_results(llm_con
     )
 
     handle._queue.put_nowait(
-        {"_compact_transcript": {"reviewed_tool_results": 1}},
+        {"_compact_transcript": {"reviewed_messages": 50}},
     )
 
     async def _compacted() -> bool:
