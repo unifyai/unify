@@ -119,6 +119,46 @@ class TableReconciliation(BaseModel):
         )
 
 
+class AttemptState(BaseModel):
+    """Whether an attempt still holds a file, and whether it can be taken over.
+
+    A stalled run and a slow one look identical from progress alone: both sit at
+    the same row count with a terminal-looking silence. The difference is whether
+    the lease behind the work is still being renewed, which is the only fact that
+    distinguishes "working, be patient" from "dead, take it over".
+
+    Deliberately carries no worker or pod identity. ``attempt_id`` is an opaque
+    handle the engine generates; naming the machine holding a lease would widen
+    what a prompt injection can reach for no diagnostic gain, since the
+    actionable question is only whether takeover is safe.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: str = Field(description="Opaque handle for the holding attempt.")
+    heartbeat_age_s: Optional[float] = Field(
+        default=None,
+        description=(
+            "Seconds since the holder last renewed. Growing past the lease TTL "
+            "is what makes an attempt recoverable."
+        ),
+    )
+    expired: bool = Field(
+        default=False,
+        description=(
+            "Whether the lease has lapsed. True means no live writer owns this "
+            "work and a retry can take it over without contending."
+        ),
+    )
+    takeover_count: int = Field(
+        default=0,
+        description=(
+            "Times this work has already changed hands. Repeated takeovers mean "
+            "attempts are dying rather than the work being slow."
+        ),
+    )
+
+
 class FileProgress(BaseModel):
     """How one file within a run is doing.
 
@@ -134,14 +174,28 @@ class FileProgress(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(description="Source file this describes.")
-    state: RunState = Field(description="Where this file has got to.")
-    claimed: bool = Field(
-        default=False,
+    observed: bool = Field(
+        default=True,
         description=(
-            "Whether a worker has taken this file up. A file that is queued and "
-            "unclaimed is waiting for capacity; one that is queued and claimed "
-            "is working and has simply not committed yet. Only the first is a "
-            "reason to look for a cause."
+            "Whether anything actually measured this file. False means only the "
+            "path is known and every other field is unset -- the case for a run "
+            "executing on the worker fleet, which does not report per file. "
+            "False is not 'queued': absence of a measurement is not evidence "
+            "that no work happened."
+        ),
+    )
+    state: Optional[RunState] = Field(
+        default=None,
+        description="Where this file has got to, or null when not observed.",
+    )
+    claimed: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether a worker has taken this file up, or null when not "
+            "observed. A file that is queued and unclaimed is waiting for "
+            "capacity; one that is queued and claimed is working and has "
+            "simply not committed yet. Only the first is a reason to look for "
+            "a cause -- and only when it was actually observed."
         ),
     )
     rows_written: int = Field(default=0, description="Rows committed so far.")
@@ -158,6 +212,24 @@ class FileProgress(BaseModel):
         description="Records set aside after exhausting retries.",
     )
     error: Optional[str] = None
+    attempts: List[AttemptState] = Field(
+        default_factory=list,
+        description=(
+            "Leases currently recorded against this file's tables. Empty means "
+            "nothing holds it. An entry with expired=True is recoverable; one "
+            "without is being actively worked and must not be disturbed."
+        ),
+    )
+
+    @property
+    def recoverable(self) -> bool:
+        """Whether a retry could take this file over without contending.
+
+        True only when something holds it and everything holding it has lapsed.
+        A file nothing holds is not 'recoverable' -- there is nothing to
+        recover, and reporting it as such invites a retry that fixes nothing.
+        """
+        return bool(self.attempts) and all(a.expired for a in self.attempts)
 
     @property
     def fraction(self) -> Optional[float]:
@@ -218,6 +290,13 @@ class IngestionEventRow(AuthoredRow):
     state: Optional[str] = None
     done: Optional[int] = None
     total: Optional[int] = None
+    # Per-file identity and measurement. Without these an event records that a
+    # run committed rows and never which file they came from -- which is what
+    # left a fifteen-file batch reporting one aggregate and nothing else.
+    source_path: Optional[str] = None
+    context: Optional[str] = None
+    rows_written: Optional[int] = None
+    declared_rows: Optional[int] = None
 
 
 class IngestionRunRecord(AuthoredRow):
@@ -344,6 +423,14 @@ class RetryResult(BaseModel):
     requeued: int = 0
     state: RunState = "queued"
     detail: Optional[str] = None
+    files: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Files this retry was aimed at. Empty means the whole run. Echoed "
+            "back because a retry that silently matched nothing is "
+            "indistinguishable from one that worked."
+        ),
+    )
 
 
 class IngestionSummary(BaseModel):
