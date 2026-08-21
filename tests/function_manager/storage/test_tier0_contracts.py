@@ -34,6 +34,16 @@ from unify.function_manager.verification.tier0 import (
     signature_from_source,
 )
 
+
+@pytest.fixture(autouse=True)
+def _verification_enabled(monkeypatch):
+    """This module exercises tier-0 verification through the global settings;
+    the master switch defaults off, so hold it on for every test here."""
+    from unify.settings import SETTINGS
+
+    monkeypatch.setattr(SETTINGS.function.verification, "enabled", True)
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Contracts from hints
 # ────────────────────────────────────────────────────────────────────────────

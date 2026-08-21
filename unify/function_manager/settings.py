@@ -21,6 +21,14 @@ class VerificationSettings(BaseModel):
     settings, never at a call site.
     """
 
+    #: Master switch over the entire verification subsystem. Off, every
+    #: stored function runs trusted immediately: ``derive_verify`` never
+    #: demands passes (per-function ``always_verify`` pins included) and
+    #: ``spot_check_rate`` never samples, so no verifier LLM calls, holds,
+    #: rewinds, or spot checks happen anywhere. Off by default on staging
+    #: (2026-08-21) while the subsystem settles; re-enable with
+    #: ``UNIFY_FUNCTION_verification__enabled=true``.
+    enabled: bool = False
     model: Optional[str] = None
     tier0_always: bool = True
     required_passes: Dict[SideEffectClass, int] = Field(
