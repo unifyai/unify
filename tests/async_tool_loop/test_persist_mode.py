@@ -595,3 +595,80 @@ async def test_persist_mode_survives_ask_mirror(llm_config):
     await handle.stop()
     result = await handle.result()
     assert result == "processed stopped early, no result"
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_persist_mode_transcript_note_appends_without_llm_turn(llm_config):
+    """A ``_transcript_note`` sentinel leaves a loop-authored note in the
+    transcript without granting an LLM turn.
+
+    Background processes (e.g. a mid-session storage review) use this to
+    inform the model of stored functions without waking it: the note must
+    appear in ``client.messages`` while the loop stays in persist wait,
+    and the assistant must produce no new message until a real
+    interjection arrives.
+    """
+    client = new_llm_client(**llm_config)
+
+    handle = start_async_tool_loop(
+        client,
+        message="Say hello and nothing else.",
+        tools={"echo": echo},
+        persist=True,
+        timeout=60,
+    )
+
+    async def _has_assistant_response() -> bool:
+        return any(
+            m.get("role") == "assistant" and m.get("content")
+            for m in (client.messages or [])
+        )
+
+    await _wait_for_condition(_has_assistant_response, poll=0.05, timeout=30.0)
+    await asyncio.sleep(0.3)
+    assert not handle.done(), "Loop should be in persist wait"
+
+    assistant_count_before = sum(
+        1 for m in (client.messages or []) if m.get("role") == "assistant"
+    )
+
+    handle._queue.put_nowait(
+        {"_transcript_note": {"text": "[background note] NOTE-MARKER-XYZ"}},
+    )
+
+    async def _note_appended() -> bool:
+        return any(
+            m.get("role") == "user" and "NOTE-MARKER-XYZ" in str(m.get("content", ""))
+            for m in (client.messages or [])
+        )
+
+    await _wait_for_condition(_note_appended, poll=0.05, timeout=10.0)
+
+    note_msg = next(
+        m
+        for m in client.messages
+        if m.get("role") == "user" and "NOTE-MARKER-XYZ" in str(m.get("content", ""))
+    )
+    assert note_msg.get(
+        "_loop_authored",
+    ), "Note must be loop-authored, not a genuine user turn"
+
+    # The note grants no LLM turn: the loop stays in persist wait with no
+    # new assistant message. (A bounded quiet window is the only way to
+    # assert an absence of activity.)
+    await asyncio.sleep(1.0)
+    assistant_count_after = sum(
+        1 for m in (client.messages or []) if m.get("role") == "assistant"
+    )
+    assert (
+        assistant_count_after == assistant_count_before
+    ), "A transcript note must not wake the LLM"
+    assert not handle.done(), "Loop should still be in persist wait"
+
+    # A real interjection still works, and the model can now see the note.
+    await handle.interject("Now use the echo tool with 'test'.")
+    await _wait_for_tool_request(client, "echo")
+
+    await handle.stop()
+    await handle.result()

@@ -473,6 +473,42 @@ _STORAGE_DEFERRED_NOTICE = textwrap.dedent("""
     `compress_context`.
 """).strip()
 
+_STORAGE_SESSION_NOTICE = textwrap.dedent("""
+    ### Skill Storage
+
+    You can proactively store reusable skills at any point with the
+    `store_skills` tool — useful after a complex subtask that discovered
+    non-obvious configuration or composition strategies, when the user
+    explicitly asks to store a skill, or before transitioning phases. In
+    this persistent session, a dedicated skill-consolidation process also
+    reviews your trajectory automatically **after each completed turn**
+    (and again when the session ends), so `store_skills` is a judgment
+    call, not a routine step — skip it for trivial operations.
+
+    Consolidation results arrive in the conversation as bracketed
+    background notes. When a note (or your own storage) reports a stored
+    function covering a deliverable that is requested again, execute the
+    stored function (`execute_function`, or by name inside
+    `execute_code`) instead of re-deriving the procedure inline. When the
+    requester amends the deliverable's spec, apply the amendment as an
+    `overwrite=True` edit to that stored function so the stored procedure
+    tracks the live spec.
+
+    **Direct writes vs trajectory storage**: user-requested "remember
+    this" writes go directly to the libraries
+    (`GuidanceManager_add_guidance`, `KnowledgeManager_add_knowledge`
+    after search, `FunctionManager_add_functions` / `_delete_function`).
+    `store_skills` extracts reusable implementations, compositional
+    strategies, and durable claims from what you just did — not direct
+    user-requested mutations.
+
+    **Before compression**: when the context window nears capacity,
+    `store_skills` and `compress_context` become the only tools available.
+    Call `store_skills` first (with a specific request) if the trajectory
+    holds unstored skills worth preserving; otherwise go straight to
+    `compress_context`.
+""").strip()
+
 _TASK_SCHEDULING = textwrap.dedent("""
     ### Durable Scheduled And Triggered Tasks
 
@@ -747,6 +783,7 @@ def build_code_act_prompt(
     discovery_first_policy: bool = False,
     include_external_app_integration: bool = True,
     include_oauth_helper: bool = True,
+    persist: bool = False,
 ) -> str:
     """Build the system prompt for the CodeActActor.
 
@@ -776,6 +813,13 @@ def build_code_act_prompt(
         Independent of ``include_external_app_integration`` — a
         workspace-email assistant with zero integration packages keeps
         the OAuth section. When gated off, the index line remains.
+    persist:
+        When ``True``, the skill-storage notice describes the persistent
+        session's schedule — automatic consolidation after each completed
+        turn, with results surfaced as background notes — and instructs
+        the session to execute stored functions on repeat requests for the
+        same deliverable. When ``False`` (one-shot act), the notice keeps
+        the post-result consolidation description.
     """
     from unify.common.prompt_helpers import render_tools_block
 
@@ -857,7 +901,12 @@ def build_code_act_prompt(
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
         if can_store:
-            parts.append(_STORAGE_DEFERRED_NOTICE)
+            # A persistent session's consolidation runs per completed turn,
+            # not after a final result the loop never produces — the notice
+            # must describe the schedule the session actually gets.
+            parts.append(
+                _STORAGE_SESSION_NOTICE if persist else _STORAGE_DEFERRED_NOTICE,
+            )
 
         # ── Per-assistant / dynamic tail ──
         parts.append(_build_filesystem_context())

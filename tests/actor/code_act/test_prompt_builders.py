@@ -859,3 +859,42 @@ def test_guidelines_both_compose():
     idx_base = prompt.index("Always respond in formal English.")
     idx_overlay = prompt.index("Check all contact fields.")
     assert idx_base < idx_overlay
+
+
+@pytest.mark.timeout(30)
+def test_storage_notice_matches_session_mode():
+    """The skill-storage notice must describe the schedule the run actually
+    gets: one-shot acts consolidate after the final result; persistent
+    sessions consolidate after each completed turn and surface background
+    notes the model should act on for repeat deliverables."""
+    actor = CodeActActor()
+    tools = dict(actor.get_tools("act"))
+
+    one_shot = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+        can_store=True,
+    )
+    assert "after you return your result" in one_shot
+    assert "after each completed turn" not in one_shot
+
+    session = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+        can_store=True,
+        persist=True,
+    )
+    assert "after each completed turn" in session
+    assert "after you return your result" not in session
+    # The convergence contract: repeat requests run the stored function and
+    # amendments edit it in place rather than triggering a fresh replan.
+    assert "instead of re-deriving the procedure inline" in session
+    assert "`overwrite=True` edit" in session
+
+    without_store = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+        can_store=False,
+        persist=True,
+    )
+    assert "Skill Storage" not in without_store
