@@ -458,13 +458,21 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             },
         )
 
-    def _verification_run_stats(self) -> dict[str, Any]:
+    @property
+    def run_stats(self) -> dict[str, Any]:
         """Verification and token accounting exposed by the inner handle, if any."""
         from unify.common.llm_meter import handle_run_stats
 
         return handle_run_stats(self._actor_handle)
 
-    def _held_outcome(self) -> Any:
+    @property
+    def held_outcome(self) -> Any:
+        """The inner run's hold, when it finished without performing its effect.
+
+        ``None`` for a run that delivered normally. Forwarded from the actor
+        handle so a caller holding only this task handle can distinguish a
+        held run from a completed one without parsing the result text.
+        """
         return getattr(self._actor_handle, "held_outcome", None)
 
     @functools.wraps(BaseActiveTask.result, updated=())
@@ -476,9 +484,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         try:
             ret = await self._actor_handle.result()
             if not self._was_stopped:
-                final_status = (
-                    "held" if self._held_outcome() is not None else "completed"
-                )
+                final_status = "held" if self.held_outcome is not None else "completed"
 
         except Exception as e:
             error = e
@@ -494,8 +500,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         finally:
             try:
                 if final_status and not self._was_stopped:
-                    extra = self._verification_run_stats()
-                    held = self._held_outcome()
+                    extra = self.run_stats
+                    held = self.held_outcome
                     if held is not None:
                         extra["held_reason"] = f"{held.code}: {held.reason}"
                         extra["held_payload"] = getattr(held, "payload", None)
