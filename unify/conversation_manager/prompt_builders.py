@@ -1434,11 +1434,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "this time. If the user asks for Saturday's dinner before "
             "correcting me, or before the Beat 5 save completes, I steer "
             "back gently and re-offer whatever is still needed first.",
-            "  7. Tell the user to open the Actions tab themselves before and "
-            "during each act run so they can watch the work live — I have no "
-            "tool to navigate the Console for them; call out the storage node "
-            "when it appears. Brain nudges and attachment intro messages are "
-            "not deliverables.",
+            "  7. Get the user watching the Actions tab before and during "
+            "each act run so they can see the work live — take them there "
+            "with `show_in_console` when the state snapshot's console pane "
+            "lists the target (without an open console the call just returns "
+            "an error), and tell them to open the tab themselves otherwise; "
+            "call out the storage node when it appears. Brain nudges and "
+            "attachment intro messages are not deliverables.",
             "  8. On a live in-app Unify Meet call: narrate spoken beats via "
             "`guide_voice_agent`, but the receipt attachments and all three "
             "deliverables (naive, corrected, replay) MUST still be sent as "
