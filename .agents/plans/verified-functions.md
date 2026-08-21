@@ -11,11 +11,24 @@ purpose-tagged token accounting; docs. In `colleague` (branch
 tokens by purpose in the unify arm's ledger, `plot_distillation_curve.py`,
 README/DESIGN updates including the "held scores below correct" rule — all
 self-testing. First live runs recorded (colleague `614b7b4`): the hermes arm
-on all four experiments; the unify arm's first attempt hit an unfunded
-staging tenant, so §7's "publish the loss, the fix, the new result" is still
-open for unify. Orchestra treats `held` as terminal (`07641c6b`). Written against `staging` @ `5ec185ada`
-(2026-08-17). Line numbers below are approximate as of that commit; symbols
-are exact. Re-verify both before editing.
+on all four experiments. The unify arm's pre-fix round is measured and
+committed (colleague `2c8f84b`, `f1764e5`, `faff798` and the standing
+results sweep): edge_week 2/10 on all four variants, cwr 8/12, rl 4/20,
+sd_units 2/20, sd_page 8/20. Three defects account for every
+verifier-attributable loss, all fixed: verifier verdicts returned as
+schema-shaped tool calls parsed as UNSURE and silently held every fire
+after the first (unillm `284b459`); a held run was invisible on the task
+handle so holds scored wrong instead of held (`held_outcome`/`run_stats`
+now public); and the precondition probe vetoed scheduler-dispatched runs
+by reasoning about the wall clock ("not due yet") — its prompt now names
+due-ness as the scheduler's authority alone. The tier-0 contracts caught
+injected drift exactly as designed (rl fires 5–6). Open questions for the
+post-fix rerun: does repair engage once verdicts parse (rl pre-fix shows
+`repair_tokens=0` through six post-drift fires), and does sd_page's
+silent wrong-batch delivery — the one true capability loss — persist.
+Orchestra treats `held` as terminal (`07641c6b`). Written against
+`staging` @ `5ec185ada` (2026-08-17). Line numbers below are approximate
+as of that commit; symbols are exact. Re-verify both before editing.
 
 **Thesis.** A recurring task's steady state is a stored function firing with
 no model in the loop. Today the harness reaches that state by one librarian
