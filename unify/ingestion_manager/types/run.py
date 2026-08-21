@@ -52,6 +52,54 @@ TERMINAL_STATES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"}
 RetryScope = Literal["dlq", "stale", "all"]
 
 
+class FileProgress(BaseModel):
+    """How one file within a run is doing.
+
+    A run's stage counters say two of fifteen files have parsed; they do not say
+    *which* two, how far either has got, or where a stuck one stopped. Splitting
+    a batch into one run per file was the only way to recover that, which traded
+    away the single handle that made the batch observable at all.
+
+    Built from the checkpoints the dispatched path already writes, so this
+    surfaces what was measured rather than measuring anything new.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="Source file this describes.")
+    state: RunState = Field(description="Where this file has got to.")
+    claimed: bool = Field(
+        default=False,
+        description=(
+            "Whether a worker has taken this file up. A file that is queued and "
+            "unclaimed is waiting for capacity; one that is queued and claimed "
+            "is working and has simply not committed yet. Only the first is a "
+            "reason to look for a cause."
+        ),
+    )
+    rows_written: int = Field(default=0, description="Rows committed so far.")
+    declared_rows: Optional[int] = Field(
+        default=None,
+        description="Rows the source was measured to hold, when known.",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Destination this file's rows are landing in.",
+    )
+    parked: int = Field(
+        default=0,
+        description="Records set aside after exhausting retries.",
+    )
+    error: Optional[str] = None
+
+    @property
+    def fraction(self) -> Optional[float]:
+        """Committed over declared, or ``None`` when the total is not yet known."""
+        if not self.declared_rows:
+            return None
+        return min(self.rows_written / self.declared_rows, 1.0)
+
+
 class StageProgress(BaseModel):
     """How one stage of a run is doing.
 
@@ -187,6 +235,13 @@ class RunStatus(BaseModel):
     executed_as: Optional[Literal["inline", "dispatched"]] = None
 
     stages: List[StageProgress] = Field(default_factory=list)
+    files: List[FileProgress] = Field(
+        default_factory=list,
+        description=(
+            "One entry per source file, so a batch stays one run without losing "
+            "the per-file detail that would otherwise require one run each."
+        ),
+    )
     contexts: List[str] = Field(default_factory=list)
     rows_written: int = 0
     files_processed: int = 0
