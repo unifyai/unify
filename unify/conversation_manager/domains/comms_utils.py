@@ -1411,6 +1411,52 @@ async def send_slack_message(
             return result
 
 
+async def send_telegram_message(
+    *,
+    chat_id: str,
+    body: str = "",
+    reply_to_message_id: int | None = None,
+) -> dict:
+    """Send a Telegram message via the gateway.
+
+    Args:
+        chat_id: Telegram chat ID (user or group).
+        body: The text content to send.
+        reply_to_message_id: Optional message ID to reply to.
+
+    Returns:
+        dict with ``success`` and optionally ``message_id`` / ``chat_id``.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None:
+        return {"success": False}
+
+    body = normalize_outbound_plain_text(body)
+
+    payload: dict = {
+        "chat_id": chat_id,
+        "body": body,
+        "assistant_id": agent_id,
+    }
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/telegram/send",
+            headers=_assistant_headers(),
+            json=payload,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(f"{ICONS['comms_outbound']} Telegram send failed: {e}")
+                return {"success": False}
+            result = await response.json()
+            result["success"] = True
+            return result
+
+
 async def find_ms_teams_bot_conversation_route(
     *,
     conversation_type: str = "personal",

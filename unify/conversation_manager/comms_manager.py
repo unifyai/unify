@@ -150,6 +150,23 @@ def _already_seen_slack(message_key: str) -> bool:
     return False
 
 
+_seen_telegram_ids: dict[str, float] = {}
+_TELEGRAM_DEDUP_TTL = 300.0
+
+
+def _already_seen_telegram(message_id: str) -> bool:
+    """Return True if this Telegram message_id was already processed recently."""
+    now = time.time()
+    cutoff = now - _TELEGRAM_DEDUP_TTL
+    expired = [k for k, t in _seen_telegram_ids.items() if t < cutoff]
+    for k in expired:
+        del _seen_telegram_ids[k]
+    if message_id in _seen_telegram_ids:
+        return True
+    _seen_telegram_ids[message_id] = now
+    return False
+
+
 # In-memory dedup for inbound Unify Teams bot activities. The Bot Connector
 # retries delivery when a webhook ack is slow, so we guard on the stable
 # activity id the same way the Graph Teams and Slack paths do.
@@ -377,6 +394,7 @@ events_map: dict[str, Event] = {
     "teams_chat": TeamsMessageReceived,
     "teams_channel": TeamsChannelMessageReceived,
     "ms_teams_bot": MsTeamsBotMessageReceived,
+    "telegram": TelegramMessageReceived,
 }
 
 
@@ -1902,6 +1920,96 @@ class CommsManager:
                         await publish(
                             "app:comms:slack_message",
                             events_map[thread](**common_kwargs).to_json(),
+                        )
+
+                    if attachments:
+                        schedule(add_unify_message_attachments(attachments))
+
+                    if is_new_unknown:
+                        await publish(
+                            "app:comms:unknown_contact_created",
+                            UnknownContactCreated(
+                                contact=contact,
+                                medium=medium_for_blacklist,
+                                message_preview=content[:100] if content else "",
+                            ).to_json(),
+                        )
+
+                    ack_now()
+                    return
+
+                if thread == "telegram":
+                    sender_telegram_id = event.get("sender_telegram_id", "")
+                    message_id = event.get("message_id", "")
+                    chat_id = event.get("chat_id", "")
+                    is_group = event.get("is_group", False)
+                    attachments = event.get("attachments") or []
+
+                    if message_id and _already_seen_telegram(message_id):
+                        LOGGER.debug(
+                            f"{DEFAULT_ICON} Skipping duplicate Telegram message {message_id}",
+                        )
+                        ack_now()
+                        return
+
+                    medium_for_blacklist = (
+                        Medium.TELEGRAM_GROUP_MESSAGE
+                        if is_group
+                        else Medium.TELEGRAM_MESSAGE
+                    )
+
+                    if _is_blacklisted(medium_for_blacklist, sender_telegram_id):
+                        LOGGER.debug(
+                            f"{DEFAULT_ICON} Ignoring blacklisted Telegram from: {sender_telegram_id}",
+                        )
+                        ack_now()
+                        return
+
+                    contact = next(
+                        (
+                            c
+                            for c in contacts
+                            if c.get("telegram_id") == sender_telegram_id
+                        ),
+                        None,
+                    )
+                    is_new_unknown = False
+                    if contact is None:
+                        contact = _get_or_create_unknown_contact(
+                            medium_for_blacklist,
+                            sender_telegram_id,
+                        )
+                        is_new_unknown = contact is not None
+
+                    if contact is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to resolve contact for Telegram from: {sender_telegram_id}",
+                        )
+                        ack_now()
+                        return
+
+                    if is_group:
+                        telegram_event = TelegramGroupMessageReceived(
+                            contact=contact,
+                            content=content,
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            attachments=attachments,
+                        )
+                        await publish(
+                            "app:comms:telegram_group_message",
+                            telegram_event.to_json(),
+                        )
+                    else:
+                        await publish(
+                            "app:comms:telegram_message",
+                            TelegramMessageReceived(
+                                contact=contact,
+                                content=content,
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                attachments=attachments,
+                            ).to_json(),
                         )
 
                     if attachments:

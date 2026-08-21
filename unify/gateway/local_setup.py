@@ -318,6 +318,32 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
         ),
     ),
     ChannelSetup(
+        name="telegram",
+        title="Telegram",
+        summary="Telegram Bot API webhook ingress plus outbound send and status routes.",
+        credentials=(
+            CredentialSpec("TELEGRAM_BOT_TOKEN", "Telegram bot token from @BotFather"),
+            CredentialSpec("TELEGRAM_ASSISTANT_ID", "Assistant ID to route inbound messages to"),
+            CredentialSpec(
+                "TELEGRAM_WEBHOOK_SECRET",
+                "Secret token for webhook signature verification",
+                required=False,
+            ),
+        ),
+        callbacks=(CallbackSpec("Telegram webhook URL", "/telegram/webhook"),),
+        public_https_required=True,
+        signup_url="https://t.me/BotFather",
+        dashboard_url="https://t.me/BotFather",
+        setup_steps=(
+            "Create a bot via @BotFather on Telegram and save the bot token.",
+            "Set the webhook URL via the Telegram Bot API setWebhook method.",
+            "Optionally set a secret_token for webhook verification.",
+        ),
+        notes=(
+            "Use `https://api.telegram.org/bot<token>/setWebhook?url=<webhook_url>&secret_token=<secret>` to register.",
+        ),
+    ),
+    ChannelSetup(
         name="email",
         title="Generic Email",
         summary="Generic email send and attachment routes.",

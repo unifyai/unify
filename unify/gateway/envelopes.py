@@ -78,6 +78,7 @@ KNOWN_THREADS: frozenset[str] = frozenset(
         "whatsapp_call_not_answered",
         "whatsapp_call_sent",
         "discord",
+        "telegram",
         "teams_chat",
         "teams_channel",
         "unify_message_reaction",

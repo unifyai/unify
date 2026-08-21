@@ -47,6 +47,8 @@ class Medium(StrEnum):
     TEAMS_CHANNEL_MESSAGE = "teams_channel_message"
     MS_TEAMS_BOT_MESSAGE = "ms_teams_bot_message"
     MS_TEAMS_BOT_CHANNEL_MESSAGE = "ms_teams_bot_channel_message"
+    TELEGRAM_MESSAGE = "telegram_message"
+    TELEGRAM_GROUP_MESSAGE = "telegram_group_message"
     UNIFY_REACTION = "unify_reaction"
     WHATSAPP_REACTION = "whatsapp_reaction"
 
@@ -166,6 +168,16 @@ MEDIUM_REGISTRY: dict[Medium, MediumInfo] = {
         ),
         mode=Mode.TEXT,
     ),
+    Medium.TELEGRAM_MESSAGE: MediumInfo(
+        value=Medium.TELEGRAM_MESSAGE,
+        description="A direct message sent via a Telegram bot.",
+        mode=Mode.TEXT,
+    ),
+    Medium.TELEGRAM_GROUP_MESSAGE: MediumInfo(
+        value=Medium.TELEGRAM_GROUP_MESSAGE,
+        description="A message in a Telegram group chat, triggered by messaging the bot.",
+        mode=Mode.TEXT,
+    ),
     Medium.UNIFY_REACTION: MediumInfo(
         value=Medium.UNIFY_REACTION,
         description="An emoji reaction on a Unify console chat message.",
@@ -204,4 +216,6 @@ MEDIUM_TO_CONTACT_FIELD: dict[Medium, str] = {
     Medium.TEAMS_MEET: "email_address",
     Medium.MS_TEAMS_BOT_MESSAGE: "email_address",
     Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE: "email_address",
+    Medium.TELEGRAM_MESSAGE: "telegram_id",
+    Medium.TELEGRAM_GROUP_MESSAGE: "telegram_id",
 }

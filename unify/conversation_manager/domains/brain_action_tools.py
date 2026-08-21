@@ -596,6 +596,61 @@ class ConversationManagerBrainActionTools:
         )
 
     @slow_brain_direct_comms
+    @wraps(CommsPrimitives.send_telegram_message)
+    async def send_telegram_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        telegram_id: str | None = None,
+        chat_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._comms.send_telegram_message(
+            contact_id=contact_id,
+            content=content,
+            telegram_id=telegram_id,
+            chat_id=chat_id,
+        )
+
+    @slow_brain_direct_comms
+    async def send_telegram_message_to_boss(
+        self,
+        *,
+        content: str,
+    ) -> dict[str, Any]:
+        """Send a Telegram direct message to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact. It cannot be used to message anyone else. If my boss asks me
+        to draft or send a Telegram message on their behalf, route that work
+        through ``act`` instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        """
+        return await self._comms.send_telegram_message(
+            contact_id=self._boss_contact_id(),
+            content=content,
+        )
+
+    @slow_brain_direct_comms
+    @wraps(CommsPrimitives.send_telegram_group_message)
+    async def send_telegram_group_message(
+        self,
+        *,
+        chat_id: str,
+        content: str,
+        contact_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        return await self._comms.send_telegram_group_message(
+            chat_id=chat_id,
+            content=content,
+            contact_id=contact_id,
+        )
+
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_teams_message)
     async def send_teams_message(
         self,

@@ -45,6 +45,8 @@ from unify.conversation_manager.events import (
     SlackChannelMessageSent,
     SlackMessageSent,
     SMSSent,
+    TelegramGroupMessageSent,
+    TelegramMessageSent,
     TeamsChannelCreated,
     TeamsChannelMessageSent,
     TeamsMeetCreated,
@@ -76,6 +78,7 @@ _DETAIL_LABELS = {
     "whatsapp_number": "WhatsApp number",
     "discord_id": "Discord ID",
     "slack_user_id": "Slack user ID",
+    "telegram_id": "Telegram ID",
 }
 
 _VOICE_SESSION_CLEAR_TIMEOUT_SECONDS = 15.0
@@ -2450,6 +2453,231 @@ class CommsPrimitives:
                 "thread_ts": thread_ts or "",
                 "contact_id": anchor_contact_id,
             },
+            history_metadata={
+                "contact_display_name": _get_contact_display_name(anchor_contact),
+            },
+        )
+
+    async def send_telegram_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        telegram_id: str | None = None,
+        chat_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an assistant-owned Telegram direct message to an existing contact.
+
+        Use this for one-to-one Telegram replies. For group chat posts, use
+        ``send_telegram_group_message`` instead.
+
+        - If the contact already has a Telegram ID on file, omit ``telegram_id``.
+        - If the contact is missing a Telegram ID but you know it, pass it via
+          ``telegram_id`` and the contact record will be updated before the message
+          is sent.
+
+        Parameters
+        ----------
+        contact_id : int | str
+            Recipient contact from ``active_conversations`` or from contact
+            search/create tools.
+        content : str
+            Message body to send.
+        telegram_id : str | None, optional
+            Recipient Telegram user ID when the contact does not already have one
+            on file.
+        chat_id : str | None, optional
+            Telegram chat ID. Defaults to the contact's telegram_id (private chat).
+
+        Returns
+        -------
+        dict[str, Any]
+            ``{"status": "ok"}`` on success, or an error payload.
+        """
+        contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
+        offline_reservation = None
+        contact = self._get_contact(contact_id=contact_id)
+        topic = "app:comms:telegram_message_sent"
+
+        outbound_error = self._check_outbound_allowed(contact)
+        if outbound_error:
+            return await self._surface_comms_error(
+                outbound_error,
+                topic,
+                contact_id=contact_id,
+                medium=Medium.TELEGRAM_MESSAGE,
+                offline_reservation=offline_reservation,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata={
+                    "contact_id": contact_id,
+                    "telegram_id": (contact or {}).get("telegram_id") or telegram_id or "",
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(contact),
+                },
+            )
+
+        detail_error, contact = self._resolve_or_attach_detail(
+            contact=contact,
+            contact_id=contact_id,
+            field_name="telegram_id",
+            inline_value=telegram_id,
+            medium_label="Telegram",
+        )
+        if detail_error:
+            return await self._surface_comms_error(
+                detail_error,
+                topic,
+                contact_id=contact_id,
+                medium=Medium.TELEGRAM_MESSAGE,
+                offline_reservation=offline_reservation,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata={
+                    "contact_id": contact_id,
+                    "telegram_id": (contact or {}).get("telegram_id") or telegram_id or "",
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(contact),
+                },
+            )
+
+        offline_reservation, offline_response = self._reserve_offline_operation(
+            method_name="send_telegram_message",
+            medium=Medium.TELEGRAM_MESSAGE,
+            target_kind="contact",
+            target_metadata={
+                "contact_id": (contact or {}).get("contact_id") or contact_id,
+                "telegram_id": (contact or {}).get("telegram_id") or telegram_id or "",
+            },
+            contact_id=(contact or {}).get("contact_id") or contact_id,
+        )
+        if offline_response is not None:
+            return offline_response
+
+        resolved_chat_id = chat_id or (contact or {}).get("telegram_id") or ""
+        response = await comms_utils.send_telegram_message(
+            chat_id=resolved_chat_id,
+            body=content,
+        )
+        if response.get("success"):
+            fresh_contact = self._get_contact(contact_id=contact_id) or contact or {}
+            event = TelegramMessageSent(
+                contact=fresh_contact,
+                content=content,
+                **self._onboarding_event_kwargs(Medium.TELEGRAM_MESSAGE),
+            )
+            await self._publish_comms_event(topic, event)
+            self._record_offline_success(
+                offline_reservation,
+                attempted_content=content,
+                receiver_ids=[fresh_contact.get("contact_id") or contact_id],
+                target_metadata={
+                    "contact_id": fresh_contact.get("contact_id") or contact_id,
+                    "telegram_id": resolved_chat_id,
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(fresh_contact),
+                },
+                provider_response=response,
+            )
+            return {"status": "ok"}
+
+        return await self._surface_comms_error(
+            "Failed to send Telegram message",
+            topic,
+            contact_id=contact_id,
+            medium=Medium.TELEGRAM_MESSAGE,
+            offline_reservation=offline_reservation,
+            attempted_content=content,
+            receiver_ids=[contact_id],
+            target_metadata={
+                "contact_id": contact_id,
+                "telegram_id": resolved_chat_id or telegram_id or "",
+            },
+            history_metadata={
+                "contact_display_name": _get_contact_display_name(contact),
+            },
+        )
+
+    async def send_telegram_group_message(
+        self,
+        *,
+        chat_id: str,
+        content: str,
+        contact_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        """Post a message into a Telegram group chat.
+
+        Parameters
+        ----------
+        chat_id : str
+            Telegram group chat ID.
+        content : str
+            Message body to send.
+        contact_id : int | str | None, optional
+            Contact who triggered this reply (for attribution).
+
+        Returns
+        -------
+        dict[str, Any]
+            ``{"status": "ok"}`` on success, or an error payload.
+        """
+        content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
+        topic = "app:comms:telegram_group_message_sent"
+
+        anchor_contact_id = _coerce_contact_id(contact_id) if contact_id is not None else None
+        anchor_contact = self._get_contact(contact_id=anchor_contact_id) if anchor_contact_id else None
+
+        offline_reservation, offline_response = self._reserve_offline_operation(
+            method_name="send_telegram_group_message",
+            medium=Medium.TELEGRAM_GROUP_MESSAGE,
+            target_kind="channel",
+            target_metadata={"chat_id": chat_id, "contact_id": anchor_contact_id},
+            contact_id=anchor_contact_id,
+        )
+        if offline_response is not None:
+            return offline_response
+
+        response = await comms_utils.send_telegram_message(
+            chat_id=chat_id,
+            body=content,
+        )
+        if response.get("success"):
+            event = TelegramGroupMessageSent(
+                contact=anchor_contact or {},
+                content=content,
+                chat_id=chat_id,
+                **self._onboarding_event_kwargs(Medium.TELEGRAM_GROUP_MESSAGE),
+            )
+            await self._publish_comms_event(topic, event)
+            self._record_offline_success(
+                offline_reservation,
+                attempted_content=content,
+                receiver_ids=[anchor_contact_id] if anchor_contact_id is not None else None,
+                target_metadata={"chat_id": chat_id, "contact_id": anchor_contact_id},
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(anchor_contact),
+                },
+                provider_response=response,
+            )
+            return {"status": "ok"}
+
+        return await self._surface_comms_error(
+            "Failed to send Telegram group message",
+            topic,
+            contact_id=anchor_contact_id,
+            medium=Medium.TELEGRAM_GROUP_MESSAGE,
+            offline_reservation=offline_reservation,
+            attempted_content=content,
+            receiver_ids=[anchor_contact_id] if anchor_contact_id is not None else None,
+            target_metadata={"chat_id": chat_id, "contact_id": anchor_contact_id},
             history_metadata={
                 "contact_display_name": _get_contact_display_name(anchor_contact),
             },
