@@ -1429,6 +1429,35 @@ class TestBusyDeclarationHoldsThePodOpen:
                 await turn
 
     @pytest.mark.asyncio
+    async def test_a_parked_persist_session_does_not_hold_the_pod(
+        self,
+        event_broker,
+    ):
+        """A registered handle is not work in progress.
+
+        `act(persist=True)` parks in `in_flight_actions` waiting for an
+        interjection that may never arrive, so presence in that registry says
+        "this handle is steerable", never "something is running". Reading it as
+        liveness made every assistant that used persist mode immortal: one
+        staging pod held a parked handle for 99 minutes while its EventBus went
+        96 minutes without a single publish.
+
+        The registry predates the idle check by two months and was never
+        consulted by it at either the 420s or 3600s timeout -- a parked session
+        has always been discarded on retirement, and the transcript is what
+        carries the conversation into the next pod.
+        """
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        from unify.events.event_bus import EventBus
+
+        EventBus.last_publish_monotonic = time.monotonic() - 100.0
+        cm.in_flight_actions = {8091: {"query": "monitor the ingestion"}}
+
+        assert not await self._survives(cm, stop_event)
+        assert cm.shutdown_reason == "idle_timeout"
+
+    @pytest.mark.asyncio
     async def test_pool_work_outliving_its_caller_is_not_an_idle_pod(
         self,
         event_broker,
@@ -1644,3 +1673,71 @@ class TestTheBusyReasonNamesWhatIsHoldingThePod:
         finally:
             for handle in handles:
                 handle.end()
+
+
+class TestStaleDeclarationIsReportedNotActedOn:
+    """A declaration standing while both clocks are stale is reported only.
+
+    Real work moves at least one clock, so a declaration that outlives both is
+    the shape of one that has gone stale. It is not proof: a call silent for
+    twenty minutes looks identical to a call flag nobody cleared, and the only
+    difference between them is whether somebody is still holding. Retiring on
+    this signal would hang up on them, so the pod says what it sees and keeps
+    serving; the 12h stale-runtime sweep is the absolute backstop.
+    """
+
+    def _cm(self, event_broker, stop_event):
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        cm = ConversationManager(
+            event_broker=event_broker,
+            job_name="test-job",
+            user_id="user_1",
+            assistant_id="assistant_1",
+            user_first_name="Test",
+            user_surname="User",
+            assistant_first_name="Test",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="American",
+            assistant_about="Test bio",
+            assistant_number="+15555550000",
+            assistant_email="assistant@test.com",
+            user_number="+15555551111",
+            user_email="user@test.com",
+            stop=stop_event,
+        )
+        cm.inactivity_check_interval = 0.05
+        cm.inactivity_timeout = 0.1
+        cm.last_activity_time = cm.loop.time() - 100.0
+        return cm
+
+    @pytest.mark.asyncio
+    async def test_a_long_silent_call_is_reported_and_kept_alive(
+        self,
+        event_broker,
+    ):
+        from unify.events.event_bus import EventBus
+
+        stop_event = asyncio.Event()
+        cm = self._cm(event_broker, stop_event)
+        # Both clocks far past the timeout, with a call still declared.
+        EventBus.last_publish_monotonic = time.monotonic() - 100.0
+        cm.call_manager._active_job = True
+
+        logged = []
+        cm._session_logger.info = lambda tag, msg, *a, **k: logged.append(msg)
+
+        check_task = asyncio.create_task(cm.check_inactivity())
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=0.6)
+            pytest.fail("A declared call must not be retired on a suspicion")
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            check_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await check_task
+
+        assert cm.shutdown_reason is None
+        assert any("Declaration suspect: busy=active_call" in m for m in logged), logged
