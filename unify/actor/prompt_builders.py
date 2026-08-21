@@ -1048,6 +1048,13 @@ PRECONDITION_PROBE_STATIC_PREFIX = "\n\n".join(
     the arguments point at a state that is simply not there (the row was
     deleted, the message was already sent), `leaf` when the function's own
     precondition is unsatisfiable as written.
+
+    Whether this run should be happening at all is not yours to judge: the
+    scheduler decided that when it dispatched the run, and schedules, wake
+    times and due-ness are its authority alone. A run may legitimately arrive
+    early, late or on demand — a catch-up after downtime, an explicit
+    run-now, a rehearsal against a simulated clock. Judge the state the
+    effect acts on, never the calendar.
         """).strip(),
         _VERIFIER_OUTPUT_SCHEMA,
     ],
@@ -1347,7 +1354,7 @@ def build_precondition_probe_prompt(
         PRECONDITION_PROBE_STATIC_PREFIX,
         stable_block,
         volatile
-        + "\n\n## Question\n\nDoes the world satisfy this precondition right now, so that the effect should run?",
+        + "\n\n## Question\n\nDoes the world, as it is right now, satisfy this precondition for this call?",
     )
 
 
