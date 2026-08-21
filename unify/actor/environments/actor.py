@@ -365,17 +365,31 @@ class _ActorRunner:
 
         When to use
         -----------
+        - The sub-task is genuinely open-ended: its plan must be discovered
+          at runtime — changing tool discovery, unknown-state debugging,
+          broad strategy selection, or exploration where each step depends
+          on what the last one revealed.
         - The overall task decomposes naturally into independent sub-problems
           that benefit from focused, isolated reasoning.
         - A sub-task requires multi-step work that would clutter or distract
-          the main agent's context window.
-        - You want to isolate a sub-task's execution state (sessions,
-          variables) from the main agent's sandbox.
-        - You want to keep the main agent's context clean for high-level
-          orchestration.
+          the main agent's context window, or you want to isolate its
+          execution state (sessions, variables) from the main sandbox and
+          keep the main context clean for high-level orchestration.
 
         When NOT to use
         ---------------
+        - The sub-step is a bounded semantic judgment inside control flow
+          you already command — classify, extract, score, route, summarize
+          into fields, draft. That is a stateless
+          ``query_llm(..., response_format=...)`` call nested in your own
+          code, not an agent: an actor per bounded judgment pays agent
+          overhead (its own prompt, loop, and reasoning) for work a single
+          call does better. Plain code -> ``query_llm(...)`` -> an actor is
+          a dial — take the lowest notch that preserves the judgment.
+        - A stable procedure for the sub-task already exists or should:
+          discover and run the stored function (with ``query_llm(...)`` at
+          its semantic joints) instead of re-deriving the procedure
+          agentically on every run.
         - The task is simple enough to handle directly with ``execute_code``.
         - You need intermediate results from the sub-task to inform logic in
           the same code block (use ``execute_code`` with stateful sessions).
