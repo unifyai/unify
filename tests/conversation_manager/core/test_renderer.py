@@ -895,6 +895,32 @@ class TestRenderStateWithTracking:
         assert "<in_flight_actions>" in result.full_render
         assert "<active_conversations>" in result.full_render
 
+    def test_snapshot_ends_with_the_current_time_pane(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """The wall clock closes the snapshot, not the system prompt.
+
+        Keeping the clock out of the system prompt keeps that prompt
+        byte-stable across minute rollovers (the provider cache is
+        all-or-nothing over system+tools); the snapshot tail is the one
+        place a per-turn timestamp is cheap.
+        """
+        from unify.common.prompt_helpers import now
+
+        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
+
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            last_snapshot=last_snapshot,
+        )
+
+        assert result.full_render.split("\n\n")[-1] == f"Current time: {now()}."
+
     def test_forwards_meet_screen_share_flag(
         self,
         renderer,

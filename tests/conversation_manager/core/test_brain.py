@@ -208,6 +208,39 @@ class TestBrainSpecStateMessage:
         assert msg["content"][0]["type"] == "text"
         assert msg["content"][0]["text"] == spec.state_prompt
 
+    def test_snapshot_clock_reaches_both_state_message_variants(self):
+        """The snapshot's trailing ``Current time`` pane reaches the model.
+
+        The clock rides at the tail of the rendered snapshot rather than in
+        the system prompt, so both state-message shapes — plain text and the
+        multimodal screenshot variant — must carry it through verbatim.
+        """
+        from unify.common.prompt_helpers import now
+        from unify.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.notifications import NotificationBar
+        from unify.conversation_manager.domains.renderer import Renderer
+
+        snapshot = Renderer().render_state(
+            ContactIndex(),
+            NotificationBar(),
+            in_flight_actions={},
+            last_snapshot=datetime(2026, 2, 13, 11, 0, 0, tzinfo=timezone.utc),
+        )
+        expected_tail = f"Current time: {now()}."
+        assert snapshot.full_render.endswith(expected_tail)
+
+        plain = _make_brain_spec(state_prompt=snapshot.full_render).state_message()
+        assert plain["content"].endswith(expected_tail)
+
+        ts = datetime(2026, 2, 13, 12, 0, 0, tzinfo=timezone.utc)
+        multimodal = _make_brain_spec(
+            state_prompt=snapshot.full_render,
+            screenshots=[
+                ScreenshotEntry(FAKE_B64, "Click that button", ts, "assistant"),
+            ],
+        ).state_message()
+        assert multimodal["content"][0]["text"].endswith(expected_tail)
+
     def test_screenshot_header_present(self):
         """The multimodal message includes a header explaining the screenshots."""
         ts = datetime(2026, 2, 13, 12, 0, 0, tzinfo=timezone.utc)
