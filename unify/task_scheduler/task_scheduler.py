@@ -481,6 +481,57 @@ class TaskScheduler(BaseTaskScheduler):
             "task_execution_context": context,
         }
 
+    def detach_entrypoint_from_definition(
+        self,
+        *,
+        task_id: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Drop a task's symbolic entrypoint so future runs plan from scratch.
+
+        An entrypoint is an optimisation: the task ran through the full actor
+        loop before one existed, and dropping it costs speed and determinism
+        but never correctness. That asymmetry is what makes detaching the
+        right answer to an entrypoint that cannot be made to work -- one that
+        dangles, that was derived against a description since rewritten, or
+        that keeps being refused before it can run.
+
+        Without this, such a task delivers nothing on every occurrence
+        forever: the run holds, the definition still names the entrypoint,
+        and the next wake repeats it. Detaching converts a permanent outage
+        into a slower success, and the next successful run may distil a
+        fresh entrypoint of its own.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        with self._use_task_destination(task.destination):
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                limit=1,
+                return_ids_only=False,
+            )
+            if not log_objs:
+                return {"outcome": "definition_missing", "task_id": task_id}
+            previous = log_objs[0].entries.get("entrypoint")
+            if previous is None:
+                return {"outcome": "no_entrypoint", "task_id": task_id}
+            self._write_log_entries(
+                logs=log_objs[0].id,
+                entries={"entrypoint": None},
+            )
+            logger.warning(
+                "Detached entrypoint %s from task %s: %s",
+                previous,
+                task_id,
+                reason,
+            )
+            return {
+                "outcome": "entrypoint_detached",
+                "task_id": task_id,
+                "function_id": int(previous),
+                "reason": reason,
+            }
+
     def _attach_entrypoint_to_definition(
         self,
         *,
@@ -2087,6 +2138,19 @@ class TaskScheduler(BaseTaskScheduler):
                 continue
             if (entries.get("enabled") is not False) == enabled:
                 continue
+            if enabled and entries.get("user_paused"):
+                # Somebody turned this off on purpose. The installer arms what
+                # it planted on every install and every boot reconcile, so
+                # without this a person pausing a workflow's task watches it
+                # come back by itself at the next pod start -- a control that
+                # appears to work and silently does not. Arming is the
+                # source's business; whether the user wants it running is
+                # theirs, and theirs outranks.
+                logger.info(
+                    "Leaving task %s held: paused by the user",
+                    task_id,
+                )
+                continue
             if enabled:
                 task = self._get_task_or_raise(int(task_id))
                 if self._one_shot_already_ran(task) is not None:
@@ -2094,6 +2158,40 @@ class TaskScheduler(BaseTaskScheduler):
             self._set_tasks_enabled(task_ids=int(task_id), enabled=enabled)
             touched.append(int(task_id))
         return touched
+
+    def set_task_user_paused(
+        self,
+        *,
+        task_id: int,
+        paused: bool,
+    ) -> dict[str, Any]:
+        """Record that a person, not a source, decided whether this task runs.
+
+        Held separately from ``enabled`` because they answer different
+        questions. ``enabled`` is the source's arming state, rewritten on
+        every install and boot reconcile; this is a standing instruction from
+        whoever owns the assistant, and it survives them. Setting it also
+        applies it, so a caller does not have to write both.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        with self._use_task_destination(task.destination):
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                limit=1,
+                return_ids_only=False,
+            )
+            if not log_objs:
+                return {"outcome": "definition_missing", "task_id": task_id}
+            self._write_log_entries(
+                logs=log_objs[0].id,
+                entries={"user_paused": bool(paused), "enabled": not paused},
+            )
+        return {
+            "outcome": "paused" if paused else "resumed",
+            "task_id": task_id,
+            "user_paused": bool(paused),
+        }
 
     def _workflow_run_settings(
         self,
@@ -3866,7 +3964,32 @@ class _TaskSyncAdapter(CustomSyncAdapter):
             return False
         if not self._entrypoint_resolves(int(stored)):
             return True
-        return live_row.get("custom_hash") != fields.get("custom_hash")
+        return self._distillation_base_moved(live_row, fields)
+
+    @staticmethod
+    def _distillation_base_moved(
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        """Whether the source changed in a way a distillation depends on.
+
+        Not the whole content hash. That covers every synced field -- name,
+        priority, tags, schedule, repeat -- so a cosmetic edit read as "the
+        base moved" and threw away a working distillation, forcing a full
+        re-derivation on the next run. Stamping a timezone onto a schedule
+        did exactly that once.
+
+        A distillation is derived from what the task asked for, so only the
+        fields that state the request can invalidate it: the description it
+        was distilled against, and the response policy that governs what the
+        result has to be. Everything else changes when the task runs, not
+        what it does.
+        """
+
+        for field in ("description", "response_policy"):
+            if str(live_row.get(field) or "") != str(fields.get(field) or ""):
+                return True
+        return False
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
