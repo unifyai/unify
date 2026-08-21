@@ -719,6 +719,13 @@ async def test_persist_mode_compact_sentinel_stubs_reviewed_tool_results(llm_con
     await asyncio.sleep(0.3)
     assert not handle.done(), "Loop should be in persist wait"
 
+    # Parking a completed turn sheds provider reasoning payloads — the next
+    # dispatch starts from a fresh interjection, so they are re-billed bulk.
+    for m in client.messages:
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            assert not m.get("provider_specific_fields")
+            assert not m.get("reasoning_details")
+
     tool_msg = next(m for m in client.messages if m.get("role") == "tool")
     original_len = len(str(tool_msg.get("content")))
     assert original_len > 1000
