@@ -63,6 +63,7 @@ from unify.ingestion_manager.types.request import (
 )
 from unify.ingestion_manager.types.run import (
     FileProgress,
+    TableReconciliation,
     TERMINAL_STATES,
     IngestionEventRow,
     IngestionRun,
@@ -76,6 +77,27 @@ from unify.ingestion_manager.types.run import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Rows inspected per table when judging whether a column carries data. Enough
+# for a column that is populated to show it, small enough to cost one read.
+_RECONCILE_SAMPLE = 25
+# Bookkeeping columns that are legitimately absent from source data, so their
+# emptiness says nothing about whether the ingest worked.
+_RECONCILE_IGNORED = frozenset({"row_id", "authoring_assistant_id"})
+
+
+def _is_blank(value: Any) -> bool:
+    """Whether a stored value carries nothing.
+
+    The string ``"None"`` counts. A row whose columns hold the four characters
+    of Python's ``str(None)`` is as empty as one holding nulls, and treating it
+    as populated is what let a table of 13,000 valueless rows read as complete.
+    """
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text in ("", "-", "None", "null", "NaN")
+
 
 RUNS_TABLE = "Ingestion/Runs"
 EVENTS_TABLE = "Ingestion/Events"
@@ -1295,6 +1317,45 @@ class IngestionManager(BaseIngestionManager):
                 ),
             )
         return progress
+
+    @functools.wraps(BaseIngestionManager.reconcile, updated=())
+    def reconcile(self, run_id: str) -> List[TableReconciliation]:
+        status = self.get_status(run_id)
+        dm = self._get_dm()
+        expected = {f.context: f.declared_rows for f in status.files if f.context}
+
+        results: List[TableReconciliation] = []
+        for context in status.contexts:
+            stored = int(dm.reduce(context, metric="count") or 0)
+            sample = dm.filter(context, limit=_RECONCILE_SAMPLE) or []
+
+            # Which columns carry nothing in any sampled row. A count alone
+            # cannot see this, and the failure it exists for looked healthy by
+            # count: a run reported every row committed while each row held the
+            # string "None" in every data column.
+            seen: Dict[str, bool] = {}
+            for row in sample:
+                values = {
+                    **(row.get("entries") or {}),
+                    **(row.get("derived_entries") or {}),
+                }
+                for name, value in values.items():
+                    if name.startswith("_") or name in _RECONCILE_IGNORED:
+                        continue
+                    seen[name] = seen.get(name, False) or not _is_blank(value)
+
+            results.append(
+                TableReconciliation(
+                    context=context,
+                    source_rows=expected.get(context),
+                    stored_rows=stored,
+                    empty_columns=sorted(
+                        n for n, populated in seen.items() if not populated
+                    ),
+                    sampled_rows=len(sample),
+                ),
+            )
+        return results
 
     @functools.wraps(BaseIngestionManager.get_status, updated=())
     def get_status(self, run_id: str) -> RunStatus:

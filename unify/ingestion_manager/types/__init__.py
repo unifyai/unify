@@ -23,6 +23,7 @@ from unify.ingestion_manager.types.run import (
     RetryScope,
     RunState,
     FileProgress,
+    TableReconciliation,
     RunStatus,
     StageProgress,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "TERMINAL_STATES",
     "RetryScope",
     "FileProgress",
+    "TableReconciliation",
     "StageProgress",
     "LogEntry",
     "IngestionEventRow",

@@ -52,6 +52,73 @@ TERMINAL_STATES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"}
 RetryScope = Literal["dlq", "stale", "all"]
 
 
+class TableReconciliation(BaseModel):
+    """Whether what landed in a table matches what the source held.
+
+    Row counts alone were not enough to catch the failure this exists for: a
+    run reported 13,000 rows committed and every data column in every one of
+    them held the string "None". The count was right and the table was useless,
+    so a check that only counts agrees with a run that wrote nothing.
+
+    Hence ``empty_columns``: a column that is blank in every sampled row is
+    reported, because a table whose columns are uniformly blank did not ingest
+    its data whatever its row count says.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: str = Field(description="Table that was checked.")
+    source_rows: Optional[int] = Field(
+        default=None,
+        description="Rows the source was measured to hold, when known.",
+    )
+    stored_rows: int = Field(default=0, description="Rows now in the table.")
+    empty_columns: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Columns blank in every sampled row. Non-empty here means the rows "
+            "arrived without their values, which a row count cannot detect."
+        ),
+    )
+    sampled_rows: int = Field(
+        default=0,
+        description="Rows inspected to judge column population.",
+    )
+
+    @property
+    def complete(self) -> bool:
+        """Whether the table holds what the source did, with data in it."""
+        if self.empty_columns:
+            return False
+        if self.source_rows is None:
+            return self.stored_rows > 0
+        return self.stored_rows >= self.source_rows
+
+    @property
+    def summary(self) -> str:
+        """One line a person or an actor can act on."""
+        if self.empty_columns:
+            shown = ", ".join(self.empty_columns[:5])
+            return (
+                f"{self.context}: {self.stored_rows} row(s) stored but "
+                f"{len(self.empty_columns)} column(s) are blank in every row "
+                f"sampled ({shown}). The rows arrived without their values, so "
+                "the count is not evidence of a successful ingest."
+            )
+        if self.source_rows is None:
+            return f"{self.context}: {self.stored_rows} row(s) stored."
+        if self.stored_rows >= self.source_rows:
+            return (
+                f"{self.context}: complete -- {self.stored_rows} of "
+                f"{self.source_rows} row(s)."
+            )
+        missing = self.source_rows - self.stored_rows
+        return (
+            f"{self.context}: {self.stored_rows} of {self.source_rows} row(s), "
+            f"{missing} missing."
+        )
+
+
 class FileProgress(BaseModel):
     """How one file within a run is doing.
 
