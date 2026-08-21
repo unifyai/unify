@@ -2073,6 +2073,11 @@ class TaskScheduler(BaseTaskScheduler):
         Re-arming projects a fresh occurrence, so nothing is lost but the one
         the user asked not to happen.
 
+        A run already under way is left alone, which is this method's caller's
+        stated contract: disarming stops the next wake, and stopping current
+        work is a cancel. "Open" spans ``running`` too, so the state has to be
+        checked rather than assumed from openness.
+
         Best-effort: the definition is already disarmed by the time this runs,
         so the worst case is the old behaviour rather than a broken pause.
         """
@@ -2086,6 +2091,8 @@ class TaskScheduler(BaseTaskScheduler):
                 destination=task.destination,
             )
             if open_run is None or not open_run.run_key:
+                return
+            if open_run.state == ExecutionState.running.value:
                 return
             update_task_run_record(
                 TaskRunReference(
