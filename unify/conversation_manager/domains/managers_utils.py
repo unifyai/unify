@@ -149,13 +149,18 @@ _MESSAGE_PRODUCING_EVENTS = {
 }
 
 
-async def hydrate_global_thread(cm: "ConversationManager") -> None:
+async def hydrate_global_thread(cm: "ConversationManager") -> int:
     """Populate the shared global deque from persisted EventBus Comms events.
 
     Called after initialization to restore conversation state from the previous
     session.  Hydrated (historical) messages are prepended to the global thread
     so that any messages that arrived during initialization keep their correct
     chronological position at the end.
+
+    Returns the number of messages restored — zero both when there is
+    genuinely no prior conversation and when the deployment does not persist
+    the Comms stream. The caller records it so the initialization-complete
+    notification can tell the brain the truth about what was loaded.
     """
     from unify.conversation_manager.domains.contact_index import ContactIndex
 
@@ -180,7 +185,7 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
         LOGGER.info(
             f"{ICONS['managers_worker']} [Hydration] No Comms events found, skipping hydration",
         )
-        return
+        return 0
 
     # Bus events come in descending order (most recent first), reverse for chronological
     bus_events.reverse()
@@ -891,6 +896,7 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
     LOGGER.info(
         f"{ICONS['managers_worker']} [Hydration] Restored {restored} messages from {len(bus_events)} Comms events",
     )
+    return restored
 
 
 async def publish_bus_events(event):
@@ -2779,7 +2785,11 @@ async def init_conv_manager(
             if hydration_future is not None:
                 try:
                     _t0 = perf_counter()
-                    await asyncio.wrap_future(hydration_future)
+                    # The count feeds the initialization-complete notification:
+                    # "history has been loaded" is only said when it is true.
+                    cm._hydrated_history_count = int(
+                        await asyncio.wrap_future(hydration_future) or 0,
+                    )
                     log_startup_timing(
                         LOGGER,
                         "⏱️ [StartupTiming] managers.init_conv_manager.await_hydration duration=%.2fs",
