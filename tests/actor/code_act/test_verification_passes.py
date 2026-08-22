@@ -396,17 +396,25 @@ def test_static_review_flags_contract_mismatch_and_caches_per_hash():
     row = fm._get_function_data_by_name(name="paid_orders")
     passes = VerifierPasses(function_manager=fm)
 
+    # The persist runs off-loop in an executor; capture its completion
+    # future so the test joins the write instead of polling wall-clock.
+    persist_writes = []
+    _persist = fm.persist_static_review_nowait
+
+    def _capturing_persist(fn_row, record):
+        future = _persist(fn_row, record)
+        persist_writes.append(future)
+        return future
+
+    fm.persist_static_review_nowait = _capturing_persist
+
     broken = asyncio.run(passes.static_review(row))
     assert broken.verdict == "FAIL" and broken.fault == "leaf", broken
 
     # Persisted and cached: the second call under the same hash asks no model.
-    persisted = None
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        persisted = fm._get_function_data_by_name(name="paid_orders")
-        if persisted.get("static_review"):
-            break
-        time.sleep(0.2)
+    (write,) = persist_writes
+    write.result(timeout=300)  # a lost write raises its real failure here
+    persisted = fm._get_function_data_by_name(name="paid_orders")
     assert persisted["static_review"]["verdict"] == "FAIL"
     assert persisted["static_review"]["function_hash"] == fm.function_trust_hash(
         persisted,

@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import builtins
+import concurrent.futures
 import dataclasses
 import hashlib
 from contextlib import contextmanager
@@ -3215,7 +3216,10 @@ class FunctionManager(BaseFunctionManager):
             if fn.get("verified_hash") != current and rows:
                 fn["verified_hash"] = current
             static = fn.get("static_review")
-            if isinstance(static, dict) and static.get("function_hash") != current:
+            stale_static = (
+                isinstance(static, dict) and static.get("function_hash") != current
+            )
+            if stale_static:
                 fn["static_review"] = None
             verify = derive_verify(
                 fn,
@@ -3225,9 +3229,13 @@ class FunctionManager(BaseFunctionManager):
             updates = {
                 "ledger": fn["ledger"],
                 "verified_hash": fn.get("verified_hash"),
-                "static_review": fn.get("static_review"),
                 "verify": verify,
             }
+            if stale_static:
+                # Written only to clear a stale cache: echoing the read value
+                # back would clobber a static-review persist landing between
+                # this fold's read and its write.
+                updates["static_review"] = None
             unisdk.update_logs(
                 logs=[log.id],
                 context=self._compositional_ctx,
@@ -3367,32 +3375,47 @@ class FunctionManager(BaseFunctionManager):
                 seed.add(int(entries["function_id"]))
         return self.invalidate_trust(seed) if seed else []
 
-    def _write_off_loop(self, fn: Callable[[], None], *, what: str) -> None:
+    def _write_off_loop(
+        self,
+        fn: Callable[[], None],
+        *,
+        what: str,
+    ) -> "concurrent.futures.Future[None]":
         """Run a ledger write without blocking the caller's event loop.
 
         Bounded retry: one immediate retry, then the failure is logged. A
-        lost row only delays trust; it never grants it.
+        lost row only delays trust; it never grants it. The returned future
+        resolves once the attempt (including its retry) has finished,
+        carrying the final failure if the write was lost; fire-and-forget
+        callers ignore it.
         """
+        done: "concurrent.futures.Future[None]" = concurrent.futures.Future()
 
         def _attempt() -> None:
             for attempt in (1, 2):
                 try:
                     fn()
+                    done.set_result(None)
                     return
                 except Exception as exc:
                     if attempt == 2:
                         logger.warning("%s failed after retry: %s", what, exc)
+                        done.set_exception(exc)
 
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             _attempt()
-            return
+            return done
         loop.run_in_executor(None, _attempt)
+        return done
 
-    def record_verification_nowait(self, row: VerificationRow) -> None:
+    def record_verification_nowait(
+        self,
+        row: VerificationRow,
+    ) -> "concurrent.futures.Future[None]":
         """Append a verdict row without awaiting the write."""
-        self._write_off_loop(
+        return self._write_off_loop(
             lambda: self.record_verification(row),
             what=f"Verification row write for function {row.function_id}",
         )
@@ -3401,11 +3424,11 @@ class FunctionManager(BaseFunctionManager):
         self,
         fn: Dict[str, Any],
         fields: Dict[str, Any],
-    ) -> None:
+    ) -> "concurrent.futures.Future[None]":
         """Persist captured fixtures for ``fn`` without awaiting the write."""
         function_id = int(fn["function_id"])
         context = fn.get("_context")
-        self._write_off_loop(
+        return self._write_off_loop(
             lambda: self._persist_verification_fields(
                 function_id=function_id,
                 fields=fields,
@@ -3418,11 +3441,11 @@ class FunctionManager(BaseFunctionManager):
         self,
         fn: Dict[str, Any],
         record: StaticReviewRecord,
-    ) -> None:
+    ) -> "concurrent.futures.Future[None]":
         """Persist a static-review verdict onto the row without awaiting the write."""
         function_id = int(fn["function_id"])
         context = fn.get("_context")
-        self._write_off_loop(
+        return self._write_off_loop(
             lambda: self._persist_verification_fields(
                 function_id=function_id,
                 fields={"static_review": record.model_dump(mode="json")},
