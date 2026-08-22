@@ -299,6 +299,49 @@ class TestEventBusSurvivesAnInProcessReboot:
             owner.close()
 
     @pytest.mark.asyncio
+    async def test_operations_queue_bound_to_a_dead_loop_is_replaced(self):
+        """A successor's operations listener must not die on the old queue.
+
+        The module-level queue binds to the loop that first awaits it; a
+        rebooted session's listener then dies on its first ``get`` with
+        "bound to a different event loop" — silently, after logging that it
+        started — and every queued operation (EventBus persistence among
+        them) accumulates unprocessed forever.
+        """
+        from unify.conversation_manager.domains import managers_utils
+
+        old_queue = asyncio.Queue()
+        dead = asyncio.new_event_loop()
+
+        async def bind_and_abandon():
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(old_queue.get(), timeout=0.01)
+
+        await asyncio.to_thread(dead.run_until_complete, bind_and_abandon())
+        dead.close()
+
+        original_queue = managers_utils._operations_queue
+        original_lock = managers_utils._init_lock
+        original_loop = managers_utils._module_loop
+        managers_utils._operations_queue = old_queue
+        managers_utils._module_loop = dead
+        try:
+            await managers_utils.queue_operation(asyncio.sleep, 0)
+
+            assert managers_utils._operations_queue is not old_queue
+            assert managers_utils._module_loop is asyncio.get_running_loop()
+            # The new queue accepts and serves work on this loop.
+            item = await asyncio.wait_for(
+                managers_utils._operations_queue.get(),
+                timeout=1.0,
+            )
+            assert item[0] is asyncio.sleep
+        finally:
+            managers_utils._operations_queue = original_queue
+            managers_utils._init_lock = original_lock
+            managers_utils._module_loop = original_loop
+
+    @pytest.mark.asyncio
     async def test_hydration_frozen_on_a_dead_loop_restarts_lazily(self):
         """A predecessor frozen mid-hydration must not wedge join_initialization."""
         bus = self._bare_bus()
