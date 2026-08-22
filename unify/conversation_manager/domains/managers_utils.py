@@ -2202,6 +2202,34 @@ async def update_session_contacts(
 # Queueing operations that need managers
 
 _operations_queue = asyncio.Queue()
+_module_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _adopt_running_loop() -> None:
+    """Recreate module-level asyncio primitives when their owning loop died.
+
+    The queue and init lock are process-global, but they bind to the event
+    loop that first awaits them. An in-process reboot — a fresh
+    ConversationManager on a new loop over the same durable world — must not
+    inherit them: a bound queue makes the successor's operations listener die
+    on its first ``get`` (RuntimeError: bound to a different event loop),
+    after which every queued operation — EventBus persistence among them —
+    silently accumulates unprocessed; a lock held by a task frozen on the
+    dead loop blocks the successor's init outright. The predecessor's queued
+    operations die with it, exactly as they would with its process. A live
+    owning loop is never preempted.
+    """
+    global _operations_queue, _init_lock, _module_loop
+    loop = asyncio.get_running_loop()
+    owner = _module_loop
+    if owner is loop:
+        return
+    if owner is not None and owner.is_running() and not owner.is_closed():
+        return
+    if owner is not None:
+        _operations_queue = asyncio.Queue()
+        _init_lock = asyncio.Lock()
+    _module_loop = loop
 
 
 async def queue_operation(async_func: callable, *args, **kwargs) -> None:
@@ -2209,6 +2237,7 @@ async def queue_operation(async_func: callable, *args, **kwargs) -> None:
     Queue an async operation to be executed when managers are initialized.
     The operation will be processed by listen_to_operations().
     """
+    _adopt_running_loop()
     await _operations_queue.put((async_func, args, kwargs))
 
 
@@ -2232,6 +2261,7 @@ async def listen_to_operations(cm: "ConversationManager") -> None:
     Worker loop that processes queued operations once initialized.
     Should be started as a background task alongside init_conv_manager.
     """
+    _adopt_running_loop()
     # Wait for initialization to complete
     await wait_for_initialization(cm)
     ensure_runtime_context()
@@ -2734,6 +2764,7 @@ async def init_conv_manager(
     """
     LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Processing startup")
 
+    _adopt_running_loop()
     async with _init_lock:
         start_time = perf_counter()
         if cm.initialized:
