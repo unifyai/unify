@@ -3,8 +3,9 @@ Tests for CodeActActor prompt builder quality.
 
 These tests are intentionally "high-signal string assertions" rather than
 snapshot tests. They verify that:
-- The prompt exposes the correct primary tools (`execute_code` + session tools)
-  using introspected signatures/docstrings (not hardcoded copies).
+- The prompt teaches the JSON-call convention and defers each tool's
+  contract to its schema (the loop renders every callable's docstring and
+  signature into the tool list riding each request) — no second rendering.
 - The prompt contains diverse examples: sessions, computer, primitives, mixed.
 - The prompt contains no legacy `execute_python_code` references.
 """
@@ -79,31 +80,50 @@ def _real_envs_mixed() -> Mapping[str, Any]:
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_has_primary_execute_code_and_session_tools_and_no_legacy_name():
+def test_code_act_prompt_defers_tool_contracts_to_schemas_and_no_legacy_name():
+    """The prompt teaches the JSON-call convention only; each tool's contract
+    lives in its schema (docstring → description via the loop), never in a
+    second in-prompt rendering of signatures/docstrings."""
     actor = CodeActActor()
-    try:
-        prompt = build_code_act_prompt(
-            environments=_real_envs_mixed(),
-            tools=dict(actor.get_tools("act")),
-        )
-    finally:
-        pass
+    tools = dict(actor.get_tools("act"))
+    prompt = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=tools,
+    )
 
     assert "execute_python_code" not in prompt
-    assert "execute_code" in prompt
-    assert "list_sessions" in prompt
-    assert "inspect_state" in prompt
-    assert "close_session" in prompt
-    assert "close_all_sessions" in prompt
-    assert '"signature": "async def execute_code(thought:' in prompt
-    assert "Execute arbitrary code in a specified language and state mode." in prompt
+    assert "### Tools" in prompt
+    assert "structured JSON tool calls" in prompt
+    assert "is its schema" in prompt
 
-    # Introspection-based docstring snippet from the actual tool implementation.
+    # No second rendering of the contracts the tool list already carries.
+    assert '"signature":' not in prompt
+    assert "#### Execution & Session Tools" not in prompt
+    assert "#### Additional Tools" not in prompt
+    assert "Tools (name → argspec):" not in prompt
+
+    # The contracts still reach the model: the loop converts each callable's
+    # docstring into its schema description on every request.
+    import inspect as _inspect
+
+    from unify.common.prompt_helpers import unwrap_tool_callable
+
+    for name in (
+        "execute_function",
+        "execute_code",
+        "list_sessions",
+        "inspect_state",
+        "close_session",
+        "close_all_sessions",
+    ):
+        assert name in tools
+        assert _inspect.getdoc(unwrap_tool_callable(tools[name]))
+    ec_doc = _inspect.getdoc(unwrap_tool_callable(tools["execute_code"])) or ""
+    assert "Execute arbitrary code in a specified language and state mode." in ec_doc
+    assert "multi-step composition" in ec_doc.lower()
+
+    # Selection policy (not contract) stays inline in the prompt.
     assert "multi-step composition" in prompt.lower()
-    assert (
-        "multi-language + multi-session" in prompt.lower()
-        or "multi-session" in prompt.lower()
-    )
 
 
 @pytest.mark.timeout(30)
@@ -358,7 +378,7 @@ def test_policy_contracts_have_a_guarded_destination(desktop_entitled_assistant)
     contracts stay inline in the prompt (retrieval may miss and gates may
     not fire); the two mechanism contracts are asserted at their docstring
     destinations — `call_kwargs` exact typing in the `execute_function`
-    docstring (which feeds the prompt and the JSON schema), verbatim
+    docstring (which feeds the tool's JSON schema on every request), verbatim
     identifier copying in the `TaskScheduler.ask`/`.update` docstrings
     behind help()/FM search."""
     actor = CodeActActor()
@@ -421,9 +441,10 @@ def test_policy_contracts_have_a_guarded_destination(desktop_entitled_assistant)
     assert "Values keep the callee's own" in ef_doc
     assert '``{"max_results": 5}``' in ef_doc
     assert '``{"max_results": "5"}``' in ef_doc
-    # The docstring renders into the prompt's Tools JSON block, so the
-    # contract still reaches the model inline.
-    assert "Values keep the callee's own" in prompt
+    # The docstring becomes the tool's schema description on every request,
+    # so the contract still reaches the model inline — without a second
+    # rendering in the prompt itself.
+    assert "Values keep the callee's own" not in prompt
 
     # Mechanism destination B: verbatim identifier copying lives in the
     # TaskScheduler docstrings surfaced by help() and FM search.
