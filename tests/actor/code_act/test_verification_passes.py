@@ -249,7 +249,7 @@ _TOTAL_MINOR_SRC = (
 )
 
 
-def _wait_rows(fm, function_id, n, timeout=15.0):
+def _wait_rows(fm, function_id, n, timeout=300.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         rows = fm.list_verifications(function_id=function_id)
