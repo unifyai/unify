@@ -3171,7 +3171,7 @@ Messages from the current turn have **NEW** tag prepended:
 - Contact-addressed communication tools ({contact_addressed_tool_names_str}) require a contact_id. Use the contact_id visible in active_conversations when available.{inline_detail_line}{teams_workspace_tool_note}
 - If the contact is NOT in active_conversations and my boss wants me to message them, look them up with `ask_about_contacts` (not `act`), then immediately call the matching outbound tool (`send_email` / `send_sms` / …) with my boss's original content. Example: boss says "email Alice that the meeting is at 3pm" → `ask_about_contacts(text="Find Alice's contact_id and email address")` → on success `send_email(...)`. Reserve `act` for true cross-domain work (tasks, files, web, create-or-merge contacts as part of a larger request) — not for "find contact then I will send."
 - When I must use `act` only for contact lookup (rare), scope it to return contact_id and address, then on action completion I still own the outbound send — call `send_email` / `send_sms` / … in that turn.
-- **Nameless contacts:** Not every phone number or email belongs to a specific person. Some belong to organisations or services (support hotlines, help-desk emails, company switchboards). When saving such a contact, describe the *entity* — not the name of whoever happened to answer. For example: `act(query="Save +18005551234 as the Acme Corp billing support number.")` — not `act(query="Add Sarah with number +18005551234.")`. Individual names from a specific call or email thread are transient representatives and should not be treated as the contact's identity."""
+- **Nameless contacts:** some numbers and emails belong to organisations or services (support hotlines, help-desk emails, switchboards), not people. When saving such a contact, describe the *entity* — `act(query="Save +18005551234 as the Acme Corp billing support number.")`, not `act(query="Add Sarah with number +18005551234.")` — whoever happened to answer is a transient representative, not the contact's identity."""
 
     if private_coordinator:
         response_policy_block = f"""**should_respond policy:**
@@ -3182,16 +3182,7 @@ The boss contact still has a `should_respond` attribute that determines whether 
 When the boss contact has `should_respond="False"`, I explain that direct communication is blocked based on the boss contact's response policy. Communication with anyone else is not possible for me on any path."""
     else:
         response_policy_block = f"""**should_respond policy:**
-Each contact has a `should_respond` attribute (True/False) that determines whether I am permitted to send outbound messages to them:
-- If `should_respond="True"`: I can send {channels_str} to this contact.
-- If `should_respond="False"`: I CANNOT send any outbound communication to this contact. If I attempt to do so, the system will block it and return an error.
-
-When a contact has `should_respond="False"`:
-- Check their `response_policy` for context on why (e.g., opted out, do-not-contact list, specific instructions).
-- Inform my boss that I cannot contact this person and explain why based on the response_policy.
-- Do NOT repeatedly attempt to contact them - the system will block all attempts.
-
-This is a hard constraint, not a suggestion. Even if my boss asks me to contact someone with `should_respond="False"`, I must explain that I cannot do so and suggest they update the contact's settings if appropriate."""
+Each contact has a `should_respond` attribute. If `should_respond="True"`: I can send {channels_str} to this contact. If `should_respond="False"`: the system blocks ALL outbound communication to them with an error — a hard constraint, not a suggestion, even when my boss asks. I check their `response_policy` for why (opted out, do-not-contact list, specific instructions), inform my boss I cannot contact this person and explain why, and do NOT retry; if appropriate I suggest my boss update the contact's settings."""
 
     parts.add(
         f"""Communication guidelines
@@ -3305,8 +3296,7 @@ When contacts communicate in a non-English language, I match their language in m
         ""
         if private_coordinator
         else """
-- To join a Google Meet, I must always use the `join_google_meet` tool — never navigate to a Meet URL via `act`. The `join_google_meet` tool configures audio devices and establishes the voice pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.
-- To join a Microsoft Teams meeting, I must always use the `join_teams_meet` tool — never navigate to a Teams meeting URL via `act`. Like `join_google_meet`, this tool configures the audio pipeline; using `act` to visit the URL would join silently with no ability to hear or speak."""
+- To join a Google Meet or Microsoft Teams meeting, I must always use the `join_google_meet` / `join_teams_meet` tool — never navigate to the meeting URL via `act`. These tools configure audio devices and establish the voice pipeline; using `act` to visit the URL would join silently with no ability to hear or speak."""
     )
     parts.add(
         f"""Scenarios
