@@ -2232,13 +2232,40 @@ def _adopt_running_loop() -> None:
     _module_loop = loop
 
 
+# A backlog this deep means nothing is consuming the queue: the listener
+# normally drains an operation in milliseconds, and producers enqueue one
+# per handled event. Growth past this line is a missing/dead
+# listen_to_operations, not load.
+_OPERATIONS_QUEUE_BACKLOG_WARN_AT = 50
+_operations_backlog_warned = False
+
+
 async def queue_operation(async_func: callable, *args, **kwargs) -> None:
     """
     Queue an async operation to be executed when managers are initialized.
     The operation will be processed by listen_to_operations().
     """
+    global _operations_backlog_warned
     _adopt_running_loop()
     await _operations_queue.put((async_func, args, kwargs))
+    # An unbounded queue with no consumer fails silently: every enqueued
+    # operation — EventBus persistence among them — simply never happens,
+    # and nothing anywhere says so. Embedders that boot the CM without
+    # spawning listen_to_operations have lost whole conversation streams
+    # this way. One warning per backlog episode turns that black hole into
+    # a grep-able line.
+    depth = _operations_queue.qsize()
+    if depth >= _OPERATIONS_QUEUE_BACKLOG_WARN_AT:
+        if not _operations_backlog_warned:
+            _operations_backlog_warned = True
+            LOGGER.warning(
+                f"{ICONS['managers_worker']} [ManagersWorker] Operations "
+                f"queue backlog reached {depth} with nothing draining it — "
+                "is listen_to_operations running? Queued work (EventBus "
+                "persistence among it) is not being executed.",
+            )
+    elif depth < _OPERATIONS_QUEUE_BACKLOG_WARN_AT // 2:
+        _operations_backlog_warned = False
 
 
 async def wait_for_initialization(
