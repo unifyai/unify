@@ -76,6 +76,11 @@ IDLE_SMALLTALK_RECENT_COMMS_SECONDS = 20.0
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
+# Upper bound a slow-brain turn holds for boot hydration before rendering
+# anyway. Hydration is one EventBus search (seconds); a hold that outlives
+# this bound means hydration is stuck, and an eager reply from the
+# pre-hydration view beats indefinite silence.
+BOOT_HYDRATION_MAX_WAIT_SECONDS = 30.0
 ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS = 120
 # How long a Console presence heartbeat keeps the Console orientation block in
 # the prompt. Comfortably longer than Console's keep-warm interval so a user who
@@ -404,6 +409,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # initialization state
         self.initialized: bool = False
+        # Open ⇒ slow-brain turns may render. ``init_conv_manager`` closes it
+        # for the window between boot and global-thread hydration; hydration
+        # completion (restored, empty, or failed) reopens it. Steady-state
+        # turns therefore never wait on it. See ``_run_llm`` for why a turn
+        # must not render from a pre-hydration view.
+        self._hydration_gate: asyncio.Event = asyncio.Event()
+        self._hydration_gate.set()
         self.ready_for_brain: bool = True
         self.vm_ready: bool = False
         self.file_sync_complete: bool = False
@@ -2400,6 +2412,33 @@ class ConversationManager(metaclass=SingletonABCMeta):
         from datetime import datetime, timezone
 
         from ..events.cost_attribution import COST_ATTRIBUTION
+
+        # Hold the turn while boot hydration is still landing. A reply
+        # rendered from a pre-hydration view answers with confident ignorance
+        # about a conversation whose history is seconds from appearing, and
+        # the post-init follow-up turn cannot reliably repair a wrong first
+        # answer already sent. Serving during init is otherwise unchanged:
+        # the gate reopens the moment hydration resolves, well before manager
+        # init finishes, so pre-init replies still happen — just never from
+        # an empty view of a non-empty conversation.
+        if not self._hydration_gate.is_set():
+            _gate_t0 = _rl_time.perf_counter()
+            try:
+                await asyncio.wait_for(
+                    self._hydration_gate.wait(),
+                    timeout=BOOT_HYDRATION_MAX_WAIT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                LOGGER.warning(
+                    f"{DEFAULT_ICON} [ConversationManager] Boot hydration "
+                    f"still pending after {BOOT_HYDRATION_MAX_WAIT_SECONDS:.0f}s "
+                    "— rendering this turn without hydrated history",
+                )
+            log_startup_timing(
+                LOGGER,
+                "⏱️ [StartupTiming] first_reply.hydration_gate_wait duration=%.2fs",
+                _rl_time.perf_counter() - _gate_t0,
+            )
 
         _preamble_t0 = _rl_time.perf_counter()
         _last_preamble_step = _preamble_t0

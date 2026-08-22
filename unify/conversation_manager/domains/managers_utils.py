@@ -149,6 +149,20 @@ _MESSAGE_PRODUCING_EVENTS = {
 }
 
 
+async def run_boot_hydration(cm: "ConversationManager") -> int:
+    """Hydrate the global thread, then reopen the slow-brain render gate.
+
+    The gate must reopen on every outcome — restored history, an empty
+    store, or a failed search — because a turn held at the gate degrades to
+    the pre-hydration view after its bounded wait anyway; keeping the gate
+    closed past hydration buys nothing but latency.
+    """
+    try:
+        return await hydrate_global_thread(cm)
+    finally:
+        cm._hydration_gate.set()
+
+
 async def hydrate_global_thread(cm: "ConversationManager") -> int:
     """Populate the shared global deque from persisted EventBus Comms events.
 
@@ -2300,12 +2314,14 @@ def _init_managers(
 
     # 1b. Kick off hydration concurrently — it only needs unify.init() and
     # EventBus config (both done). Runs on the main event loop while the
-    # remaining managers initialize in this thread.
+    # remaining managers initialize in this thread. Completion reopens the
+    # slow-brain render gate ``init_conv_manager`` closed, releasing any
+    # turn held for a hydrated view without waiting for the rest of init.
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] Starting concurrent hydration...",
     )
     cm._hydration_future = asyncio.run_coroutine_threadsafe(
-        hydrate_global_thread(cm),
+        run_boot_hydration(cm),
         loop,
     )
 
@@ -2726,6 +2742,16 @@ async def init_conv_manager(
             )
             return
 
+        # Close the slow-brain render gate for the boot window. An inbound
+        # that lands mid-boot still queues a turn, but that turn holds at
+        # render time until hydration resolves (see
+        # ``ConversationManager._run_llm``), so the first reply after a wake
+        # never answers from an empty conversation view while the history
+        # that would answer it is seconds from landing. ``run_boot_hydration``
+        # reopens it; the ``finally`` below covers boots that die before the
+        # hydration task ever gets created.
+        cm._hydration_gate.clear()
+
         try:
             # Get the main event loop to pass to managers that need it
             loop = asyncio.get_running_loop()
@@ -2921,3 +2947,8 @@ async def init_conv_manager(
             # the pod instead.
             cm.unserviceable_reason = f"manager initialization failed: {e}"
             raise
+        finally:
+            # Idempotent: hydration completion normally reopened this long
+            # ago. Guarantees no path out of a boot — success or failure —
+            # leaves brain turns holding until their timeout.
+            cm._hydration_gate.set()
