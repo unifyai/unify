@@ -2,6 +2,7 @@ import asyncio
 import collections
 import contextlib
 import json
+import math
 import time
 import traceback
 from datetime import datetime
@@ -3100,7 +3101,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             # Initialization is triggered by StartupEvent handler which
             # sets details before starting init. Do not duplicate here.
 
-            while True:
+            # A retired session stops listening: once `stop` is set the broker
+            # has been (or is about to be) closed, so nothing new can arrive,
+            # and an in-process successor must not find this loop still
+            # holding the old session's machinery.
+            while not self.stop.is_set():
                 msg = await pubsub.get_message(
                     timeout=2,
                     ignore_subscribe_messages=True,
@@ -3281,16 +3286,33 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ghost_counter = 0
         suspect_streak = 0
 
-        while True:
+        while not self.stop.is_set():
             await asyncio.sleep(self.inactivity_check_interval)
+            # An explicit retirement (stop_async, SIGTERM) sets `stop` from
+            # outside this loop; every internal exit already breaks after
+            # `_request_shutdown`, so this check only ends the watch when
+            # somebody else decided the session is over.
+            if self.stop.is_set():
+                break
             # A duration, not a check count. The previous constant (20 checks)
             # was tuned when the timeout was 420s, so it silently became a
             # different policy every time the timeout moved. Read per pass
-            # because the timeout is mutable at runtime.
+            # because the timeout is mutable at runtime. A disabled timeout
+            # (``inf``, via UNIFY_INACTIVITY_TIMEOUT_SECONDS=0) falls back to
+            # the 600s floor: the ghost branch can never fire then (pubsub
+            # can never out-idle an infinite timeout), but ``int(inf)`` would
+            # kill this whole loop with OverflowError on its first pass.
             ghost_checks_needed = max(
                 2,
                 int(
-                    max(600.0, self.inactivity_timeout)
+                    max(
+                        600.0,
+                        (
+                            self.inactivity_timeout
+                            if math.isfinite(self.inactivity_timeout)
+                            else 600.0
+                        ),
+                    )
                     / self.inactivity_check_interval,
                 ),
             )
@@ -4197,8 +4219,52 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
             await asyncio.sleep(2)
 
+    async def _retire_in_flight_actions(self) -> None:
+        """Discard the in-flight action registry the way a pod exit does.
+
+        Idle retirement discards a parked session's Python state by exiting
+        the process; an in-process retirement must do that discarding itself,
+        and it must not wait on work that may never finish — a persist-mode
+        act parked for an interjection, or a provider call that has hung.
+        Every handle gets one stop request under a single shared grace
+        period; whatever ignores it is abandoned along with the registry.
+        """
+        stops = []
+        for handle_data in list(self.in_flight_actions.values()):
+            handle = handle_data.get("handle")
+            if handle is None:
+                continue
+            if hasattr(handle, "trigger_completion"):
+                handle.trigger_completion()
+            else:
+                # Stopping an already-finished handle is a no-op, so no
+                # done() probe — its signature varies across handle types.
+                stops.append(
+                    asyncio.ensure_future(handle.stop(reason="session retired")),
+                )
+        if stops:
+            done, pending = await asyncio.wait(stops, timeout=5.0)
+            for task in done:
+                if not task.cancelled() and task.exception() is not None:
+                    self._session_logger.info(
+                        "session_end",
+                        f"In-flight action stop failed during retirement: "
+                        f"{task.exception()!r}",
+                    )
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._session_logger.info(
+                    "session_end",
+                    f"Abandoned {len(pending)} in-flight action(s) that did "
+                    "not stop within the retirement grace period",
+                )
+        self.in_flight_actions.clear()
+        self.completed_actions.clear()
+
     async def cleanup(self):
         """Clean up any running call processes and file sync."""
+        await self._retire_in_flight_actions()
         await self.store_chat_history()
         refresh_task = self._coordinator_state_refresh_task
         if refresh_task is not None and not refresh_task.done():
