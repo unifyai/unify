@@ -607,8 +607,24 @@ class EventBus:
         finally:
             self._prefill_done.set()
 
-        if self._periodic_flush_task is None:
-            self._periodic_flush_task = asyncio.create_task(self._periodic_flush_loop())
+        self._ensure_periodic_flush_task()
+
+    def _ensure_periodic_flush_task(self) -> None:
+        """Keep the periodic flusher alive on the current running loop.
+
+        The flusher is a task on whatever loop first touched the bus. An
+        embedder that replaces its event loop mid-process (an in-process CM
+        reboot) strands that task on the dead loop; without this check every
+        later publish buffers into ``_pending_writes`` forever, no row
+        reaches Orchestra, and the next boot's hydration truthfully finds
+        nothing to restore.
+        """
+        task = self._periodic_flush_task
+        if task is not None and not task.done() and not task.get_loop().is_closed():
+            return
+        self._periodic_flush_task = asyncio.get_running_loop().create_task(
+            self._periodic_flush_loop(),
+        )
 
     async def _periodic_flush_loop(self) -> None:
         """Background task that drains _pending_writes at a fixed cadence."""
@@ -958,6 +974,7 @@ class EventBus:
 
         self._adopt_running_loop()
         self._lazy_start_hydration_if_needed()
+        self._ensure_periodic_flush_task()
         # Best-effort wait for hydration so row_id counters are initialised.
         # If prefill failed (e.g. Orchestra 500s), degrade gracefully: assign
         # row_ids from zero and keep routing events in-process.  Persistence
