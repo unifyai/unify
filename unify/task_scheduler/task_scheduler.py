@@ -52,7 +52,7 @@ from ..common.custom_sync import (
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.sync_lease import exclusive_sync_lease
-from ..common.log_utils import create_logs as unity_create_logs
+from ..common.log_utils import assigned_row_id, create_logs as unity_create_logs
 from ..common.llm_client import new_llm_client
 from ..common.llm_helpers import methods_to_tool_dict
 from ..common.metrics_utils import reduce_logs
@@ -1781,7 +1781,7 @@ class TaskScheduler(BaseTaskScheduler):
                 {**task_details, **_sync_identity} if _sync_identity else task_details
             )
             log = self._store.log(entries=entries, new=True)
-            task_id = int(log.entries["task_id"])
+            task_id = assigned_row_id(log, "task_id", context=self._store.context)
             if self._num_tasks_cached is not None:
                 self._num_tasks_cached += 1
 
