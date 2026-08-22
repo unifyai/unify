@@ -19,10 +19,10 @@ from unify.manager_registry import ManagerRegistry
 pytestmark = pytest.mark.no_unify_context
 
 # Budgets sit just above the measured rendered size at the last tightening.
-ACTOR_SYSTEM_PROMPT_BUDGET = 15_300
+ACTOR_SYSTEM_PROMPT_BUDGET = 10_400
 ACTOR_ACT_TOOL_SCHEMAS_BUDGET = 14_500
 STORAGE_REVIEW_DOCTRINE_BUDGET = 4_700
-CM_SYSTEM_PROMPT_BUDGET = 12_800
+CM_SYSTEM_PROMPT_BUDGET = 11_100
 VOICE_AGENT_PROMPT_BUDGET = 2_800
 
 
