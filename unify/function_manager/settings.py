@@ -11,6 +11,7 @@ from typing import Dict, Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .activation import ActivationSettings
 from .types.verification import SideEffectClass
 
 
@@ -73,6 +74,7 @@ class FunctionSettings(BaseSettings):
 
     IMPL: str = "real"
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
+    activation: ActivationSettings = Field(default_factory=ActivationSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="UNIFY_FUNCTION_",

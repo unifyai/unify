@@ -4415,6 +4415,22 @@ class CodeActActor(BaseCodeActActor):
                 if stored_venv_id is not None:
                     resolved_venv_id = int(stored_venv_id)
 
+                # The synthesized-call path prepends the raw implementation
+                # and runs it in the sandbox, shadowing any boundary-wrapped
+                # callable — so the usage trace is fed here, where the row
+                # is in hand, or this invocation would go unremembered.
+                if isinstance(function_data, dict):
+                    note_use = getattr(
+                        self.function_manager,
+                        "_note_function_use",
+                        None,
+                    )
+                    if callable(note_use):
+                        try:
+                            note_use(function_data)
+                        except Exception:  # noqa: BLE001 - never break a call
+                            pass
+
                 import time as _ef_time
                 import logging as _ef_logging
 
