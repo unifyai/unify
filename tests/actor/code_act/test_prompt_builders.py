@@ -620,7 +620,7 @@ def test_discovery_first_examples_no_longer_model_execute_code_as_default_fallba
     )
     assert "Use `execute_code` for *everything* (Python + shell)" not in prompt
     assert (
-        "If one exact function or primitive call is enough, use execute_function"
+        "if one exact function or primitive call is enough, use execute_function"
         in prompt
     )
 

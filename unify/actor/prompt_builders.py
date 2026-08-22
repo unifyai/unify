@@ -43,27 +43,18 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     name via `execute_function`.
 
     Always search **FunctionManager, GuidanceManager, and KnowledgeManager**
-    before deciding how to execute:
-
-    1. `FunctionManager_search_functions` — find existing implementations
-    2. `GuidanceManager_search` — find procedures and composition strategies
-    3. `KnowledgeManager_search` — find durable domain claims
-    4. Prefer healthy matches (empty `stale_reasons`); stale entries are
-       second-class — disclose the debt if used and repair via
-       update/re-link.
-    5. Use what you find: call a relevant function via `execute_function`,
-       follow relevant guidance, use relevant claims (fetch full text
-       with `get_knowledge` when needed).
-    6. A no-hit is **not** permission to immediately write new code.
-       Search is a discovery step, not an execution decision.
-    7. After discovery, choose the minimal correct execution path:
-       - if the request or discovery step already identifies one exact function
-         or primitive call, use `execute_function`
-       - use `execute_code` only when the task genuinely requires
-         multi-step composition.
-
-    Search/filter results truncate long entries: when a discovered entry
-    is actually relevant, fetch the complete body with
+    (`FunctionManager_search_functions`, `GuidanceManager_search`,
+    `KnowledgeManager_search`) before deciding how to execute, then use
+    what you find: call a relevant function via `execute_function`, follow
+    relevant guidance, use relevant claims. Prefer healthy matches (empty
+    `stale_reasons`); stale entries are second-class — disclose the debt
+    if used and repair via update/re-link. A no-hit is **not** permission to immediately write new code.
+    Search is a discovery step, not an execution decision. After discovery,
+    choose the minimal correct execution path —
+    if the request or discovery step already identifies one exact function
+    or primitive call, use `execute_function`; use `execute_code` only
+    when the task genuinely requires multi-step composition. Search/filter results truncate long entries: when a
+    discovered entry is actually relevant, fetch the complete body with
     `GuidanceManager_get_guidance` / `KnowledgeManager_get_knowledge` — do
     not act on a truncated preview.
 
@@ -174,9 +165,9 @@ _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
        only families whose tools are absent. Do not answer in plain text
        first, do not serialize families across turns, and call only tools
        that appear in the current tool list.
-    2. Then choose the minimal correct execution path.
-    3. If one exact function or primitive call is enough, use execute_function.
-    4. Use execute_code only when the task genuinely needs multi-step
+    2. Then choose the minimal correct execution path:
+       if one exact function or primitive call is enough, use execute_function;
+       use execute_code only when the task genuinely needs multi-step
        composition, branching, iteration, or combining intermediate results.
 """).strip()
 
