@@ -4415,6 +4415,22 @@ class CodeActActor(BaseCodeActActor):
                 if stored_venv_id is not None:
                     resolved_venv_id = int(stored_venv_id)
 
+                # The synthesized-call path prepends the raw implementation
+                # and runs it in the sandbox, shadowing any boundary-wrapped
+                # callable — so the usage trace is fed here, where the row
+                # is in hand, or this invocation would go unremembered.
+                if isinstance(function_data, dict):
+                    note_use = getattr(
+                        self.function_manager,
+                        "_note_function_use",
+                        None,
+                    )
+                    if callable(note_use):
+                        try:
+                            note_use(function_data)
+                        except Exception:  # noqa: BLE001 - never break a call
+                            pass
+
                 import time as _ef_time
                 import logging as _ef_logging
 
@@ -5405,8 +5421,13 @@ class CodeActActor(BaseCodeActActor):
                     "deployment-owned (custom_hash set); refusing repair. Fix the "
                     "bundle source and re-sync via deployment reconcile.",
                 )
+        # The repairer keeps the verdict history: it is being asked to answer
+        # a verdict, and the prior ones on the same function are what tell it
+        # whether this objection is new or whether its own last attempt
+        # caused it.
         snapshot_for_prompt = strip_ledger_internals(
             [row for row in (function_snapshot or []) if isinstance(row, dict)],
+            keep_verdict_history=True,
         )
         tools = methods_to_tool_dict(
             fm.search_functions,

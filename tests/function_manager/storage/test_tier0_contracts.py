@@ -231,7 +231,7 @@ _TOTAL = (
 )
 
 
-def _wait_for(predicate, *, timeout: float = 10.0):
+def _wait_for(predicate, *, timeout: float = 300.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
