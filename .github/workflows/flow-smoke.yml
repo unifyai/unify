@@ -241,18 +241,18 @@ jobs:
           exit 1
         fi
 
-    # Mints an installation token that can read orchestra and nothing
-    # else, then revokes it when the job ends. 4606137 is the
+    # Mints an installation token that can read the private sibling repos
+    # and nothing else, then revokes it when the job ends. 4606137 is the
     # unifyai-ci-clone App, which holds Contents: Read only; an App id is
     # not a secret.
-    - name: Mint a token that can read orchestra
+    - name: Mint a token that can read the private sibling repos
       id: clone-token
       uses: actions/create-github-app-token@v3
       with:
         app-id: '4606137'
         private-key: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
         owner: ${{ github.repository_owner }}
-        repositories: orchestra
+        repositories: orchestra,unisdk,unillm
 
     - name: Clone orchestra repo for local deployment
       uses: actions/checkout@v4
@@ -269,6 +269,7 @@ jobs:
         repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: unisdk
+        token: ${{ steps.clone-token.outputs.token }}
         fetch-depth: 1
 
     - name: Clone unillm repo
@@ -277,6 +278,7 @@ jobs:
         repository: unifyai/unillm
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: unillm
+        token: ${{ steps.clone-token.outputs.token }}
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud

@@ -67,11 +67,25 @@ jobs:
       with:
         path: unify
 
+    # Mints an installation token that can read the private sibling repos
+    # and nothing else, then revokes it when the job ends. 4606137 is the
+    # unifyai-ci-clone App, which holds Contents: Read only; an App id is
+    # not a secret.
+    - name: Mint a token that can read the private sibling repos
+      id: clone-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: '4606137'
+        private-key: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: unisdk,unillm
+
     - name: Checkout unisdk (sibling editable dep)
       uses: actions/checkout@v6
       with:
         repository: unifyai/unisdk
         path: unisdk
+        token: ${{ steps.clone-token.outputs.token }}
         # Unity on staging is locked against unisdk/unillm staging tips; PRs and
         # pushes targeting main must resolve against main siblings so the check
         # matches post-merge behavior on main.
@@ -82,6 +96,7 @@ jobs:
       with:
         repository: unifyai/unillm
         path: unillm
+        token: ${{ steps.clone-token.outputs.token }}
         ref: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && 'main' || 'staging' }}
 
     - name: Install uv
