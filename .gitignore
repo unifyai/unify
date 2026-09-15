@@ -100,3 +100,6 @@ droid/
 # some of it (agent CLI transcripts, resolved provider config) carries
 # plaintext API keys, so nothing under here is ever re-tracked.
 benchmarks/*/
+
+# Brand assets referenced by the README are tracked.
+!assets/brand/

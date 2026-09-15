@@ -1,25 +1,24 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unify-github-readme-banner-dark.png" alt="Unify" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/unify/main/assets/brand/unify-readme-banner-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/unify/main/assets/brand/unify-readme-banner-light.png" alt="unify" width="100%">
+  </picture>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2f9d97.svg?style=for-the-badge&labelColor=241a2b" alt="MIT License"></a>
-  <a href="https://docs.unify.ai"><img src="https://img.shields.io/badge/Docs-docs.unify.ai-6e4a86?style=for-the-badge&labelColor=241a2b" alt="Docs"></a>
-  <a href="https://github.com/unifyai/unify/actions"><img src="https://img.shields.io/github/actions/workflow/status/unifyai/unify/tests.yml?branch=staging&style=for-the-badge&labelColor=241a2b" alt="CI"></a>
-  <a href="https://discord.com/invite/sXyFF8tDtm"><img src="https://img.shields.io/badge/Discord-3478f6?style=for-the-badge&logo=discord&logoColor=f3ead9&labelColor=241a2b" alt="Discord"></a>
-  <a href="https://unify.ai"><img src="https://img.shields.io/badge/Built%20by-Unify-f3ead9?style=for-the-badge&labelColor=241a2b" alt="Built by Unify"></a>
+  <a href="https://unify.ai">unify.ai</a> · <a href="https://discord.com/invite/sXyFF8tDtm">Discord</a> · <a href="LICENSE">MIT license</a>
 </p>
 
-# Unify
+# unify
 
-**Unify provides AI teammates that actually talk to you. No prompting, no CLI, no configuration ceremony. Just hop on a call, share your screen, introduce yourself, explain how they can help, or start thinking out loud. Unify gives them the brain, memory, tools, and steering loop to fill in the gaps 🤖**
+**unify provides AI teammates that actually talk to you. No prompting, no CLI, no configuration ceremony. Just hop on a call, share your screen, introduce yourself, explain how they can help, or start thinking out loud. unify gives them the brain, memory, tools, and steering loop to fill in the gaps**
 
 Run this repo locally to work with one teammate and trace how they think, or use the hosted product at [console.unify.ai](https://console.unify.ai) to hire, configure, and collaborate with multiple teammates. The shape is deliberately human-in-the-loop: AI to help you keep moving, not replace the person steering them.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hero-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hero-architecture-light.png" alt="Unify architecture: the user talks directly with the Slow Brain (ConversationManager) over normal messages and events, or through the Fast Brain during live calls; the Slow Brain dispatches steerable act(...) work to CodeActActor, which composes execute_code, execute_function, FunctionManager, GuidanceManager, and typed primitives." width="820">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hero-architecture-light.png" alt="unify architecture: the user talks directly with the Slow Brain (ConversationManager) over normal messages and events, or through the Fast Brain during live calls; the Slow Brain dispatches steerable act(...) work to CodeActActor, which composes execute_code, execute_function, FunctionManager, GuidanceManager, and typed primitives." width="820">
   </picture>
 </p>
 
@@ -31,13 +30,13 @@ After a successful run they **promote what worked into a personal skill library*
 
 **At a glance, vs the closest open-source alternatives:**
 
-|  | Unify | OpenClaw | Hermes Agent |
+|  | unify | OpenClaw | Hermes Agent |
 |---|---|---|---|
-| Persistent reasoning loop *above* the tool-caller | ✅ | — | — |
-| Mid-flight steering (pause / redirect / interject) | ✅ | abort + redeliver | text injection |
-| Typed memory tables (contacts, knowledge, tasks) | ✅ | markdown / JSONL | markdown + SQLite |
-| Auto-grown skill library (executable code + prose) | ✅ | skills | skills |
-| Schedules + triggers in plain English | ✅ | cron + webhook YAML | cron |
+| Persistent reasoning loop *above* the tool-caller | ✓ | — | — |
+| Mid-flight steering (pause / redirect / interject) | ✓ | abort + redeliver | text injection |
+| Typed memory tables (contacts, knowledge, tasks) | ✓ | markdown / JSONL | markdown + SQLite |
+| Auto-grown skill library (executable code + prose) | ✓ | skills | skills |
+| Schedules + triggers in plain English | ✓ | cron + webhook YAML | cron |
 
 Full architectural comparison with diagrams is [further down](#where-unify-sits-in-the-open-source-landscape).
 
@@ -45,7 +44,7 @@ Full architectural comparison with diagrams is [further down](#where-unify-sits-
 
 ## Install
 
-**Prerequisites:** Python 3.12+, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2. Get a Unify API key and create one at [console.unify.ai](https://console.unify.ai).
+**Prerequisites:** Python 3.12+, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2. Get a unify API key and create one at [console.unify.ai](https://console.unify.ai).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/unifyai/unify/staging/scripts/install.sh | bash
@@ -78,7 +77,7 @@ Get your `UNIFY_KEY` and `ASSISTANT_ID` from [console.unify.ai](https://console.
 
 ## Voice — talking to them in the browser
 
-Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. Voice uses LiveKit Cloud for browser Meet, SIP calls, and Unify voice workers, so set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` alongside your speech keys.
+Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. Voice uses LiveKit Cloud for browser Meet, SIP calls, and unify voice workers, so set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` alongside your speech keys.
 
 Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one** TTS provider). The install wizard prompts for these; to add them later, edit `~/.unity/unity/.env` and run `unify setup`.
 
@@ -137,9 +136,9 @@ When they are mid-task in the local chat REPL, steer them the same way you would
 > msg What step are you on?
 ```
 
-Each `msg` publishes a normal inbound Unify chat message. The ConversationManager wakes the slow brain, which can answer you or redirect in-flight Actor work through its usual action-steering tools (`interject_*`, `ask_*`, `stop_*`, etc.).
+Each `msg` publishes a normal inbound unify chat message. The ConversationManager wakes the slow brain, which can answer you or redirect in-flight Actor work through its usual action-steering tools (`interject_*`, `ask_*`, `stop_*`, etc.).
 
-**Voice:** type `meet` to open a LiveKit browser session, then speak through your mic. Utterances follow the same Unify Meet path as production voice — no separate steering syntax.
+**Voice:** type `meet` to open a LiveKit browser session, then speak through your mic. Utterances follow the same unify Meet path as production voice — no separate steering syntax.
 
 Use `trace`, `tree`, or `show_logs` for debugging while work is in-flight, or send another `msg` when you want to steer.
 
@@ -178,15 +177,15 @@ They         ▸  Three tasks running at once.
 ## Highlights
 
 <table>
-<tr><td><b>🎙️ Takes calls like a person</b></td><td>Voice, phone, and video calls with screen-share and webcam streamed in real time — a participant in the conversation, not a tool that initiates one.</td></tr>
-<tr><td><b>✋ Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running — including operations <i>nested inside other operations</i>, all the way down.</td></tr>
-<tr><td><b>🧠 Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow — not a chain of one-tool-at-a-time JSON decisions.</td></tr>
-<tr><td><b>📞 One identity across every channel</b></td><td>Chat, SMS, email, phone, voice, video — all feed the same memory. Sarah is the same Sarah whether she texted, called, or mailed.</td></tr>
-<tr><td><b>📚 Structured memory, not transcript soup</b></td><td>Contacts, knowledge, tasks, and files live in typed, queryable tables — distilled from conversations every fifty messages, not piled into markdown.</td></tr>
-<tr><td><b>⚙️ Learns reusable skills, and earns trust in them</b></td><td>After a successful trajectory, they save both the underlying Python (with metadata + venv) and the procedural prose for using it — the next session composes them into a plan instead of re-deriving. Stored functions carry a verification ledger: independent verifier passes check every call until trust is earned, and any change to the code, its dependencies, its environment or its linked guidance puts it back on the ramp.</td></tr>
-<tr><td><b>🔀 Concurrent work, independently steerable</b></td><td>Multiple actions run at once — pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
-<tr><td><b>⏰ Schedules and triggers in plain English</b></td><td><i>"Every Monday at 9, digest this week's GitHub notifications"</i>, <i>"ping me whenever a CI run on `main` fails"</i> — natural-language <code>Task</code> rows that graduate into stored functions, and run with no model in the loop once every function they call is verified.</td></tr>
-<tr><td><b>🔌 Local-first, fully open</b></td><td>Runtime, persistence backend, LLM client, and Python SDK are all MIT-licensed and run locally with one Docker command. Hosted backend optional.</td></tr>
+<tr><td><b>Takes calls like a person</b></td><td>Voice, phone, and video calls with screen-share and webcam streamed in real time — a participant in the conversation, not a tool that initiates one.</td></tr>
+<tr><td><b>Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running — including operations <i>nested inside other operations</i>, all the way down.</td></tr>
+<tr><td><b>Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow — not a chain of one-tool-at-a-time JSON decisions.</td></tr>
+<tr><td><b>One identity across every channel</b></td><td>Chat, SMS, email, phone, voice, video — all feed the same memory. Sarah is the same Sarah whether she texted, called, or mailed.</td></tr>
+<tr><td><b>Structured memory, not transcript soup</b></td><td>Contacts, knowledge, tasks, and files live in typed, queryable tables — distilled from conversations every fifty messages, not piled into markdown.</td></tr>
+<tr><td><b>Learns reusable skills, and earns trust in them</b></td><td>After a successful trajectory, they save both the underlying Python (with metadata + venv) and the procedural prose for using it — the next session composes them into a plan instead of re-deriving. Stored functions carry a verification ledger: independent verifier passes check every call until trust is earned, and any change to the code, its dependencies, its environment or its linked guidance puts it back on the ramp.</td></tr>
+<tr><td><b>Concurrent work, independently steerable</b></td><td>Multiple actions run at once — pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
+<tr><td><b>Schedules and triggers in plain English</b></td><td><i>"Every Monday at 9, digest this week's GitHub notifications"</i>, <i>"ping me whenever a CI run on `main` fails"</i> — natural-language <code>Task</code> rows that graduate into stored functions, and run with no model in the loop once every function they call is verified.</td></tr>
+<tr><td><b>Local-first, fully open</b></td><td>Runtime, persistence backend, LLM client, and Python SDK are all MIT-licensed and run locally with one Docker command. Hosted backend optional.</td></tr>
 </table>
 
 ---
@@ -195,12 +194,12 @@ They         ▸  Three tasks running at once.
 
 A persistent **interaction loop** (`ConversationManager`) stays present across every medium and keeps thinking while work is in flight. When something needs deeper reasoning, it dispatches a **background reasoner** (`Actor`) that writes Python plans over a back office of typed state managers. Every operation returns a live, steerable handle, and those handles nest — a correction the user makes in chat propagates *down* through the dispatched action into whatever manager call is currently running. That is the technical backbone of the product promise: keep the human in control while they do the tedious work.
 
-This is the same **interaction loop / background reasoner** split [recently articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/) — they put it *inside the model* (one model trained to interact natively); Unify arrives at the same shape at the harness level. When interaction-native models ship publicly, they would replace Unify's fast/slow-brain split end-to-end.
+This is the same **interaction loop / background reasoner** split [recently articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/) — they put it *inside the model* (one model trained to interact natively); unify arrives at the same shape at the harness level. When interaction-native models ship publicly, they would replace unify's fast/slow-brain split end-to-end.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/architecture-flow-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/architecture-flow-light.png" alt="Unify's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/architecture-flow-light.png" alt="unify's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
   </picture>
 </p>
 
@@ -231,7 +230,7 @@ When the Actor calls `primitives.contacts.ask(...)`, the `ContactManager` return
 
 ### CodeAct — the Actor writes Python programs
 
-Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. Unify's Actor writes a single sandboxed Python program per turn over typed `primitives.*`:
+Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. unify's Actor writes a single sandboxed Python program per turn over typed `primitives.*`:
 
 ```python
 contacts = await primitives.contacts.ask(
@@ -327,9 +326,9 @@ State Managers (each runs its own async LLM tool loop)
 
 ---
 
-## Where Unify sits in the open-source landscape
+## Where unify sits in the open-source landscape
 
-OpenClaw and Hermes Agent are excellent — both are mature personal assistants with wide messaging surfaces, large contributor communities, and well-trodden install paths. Unify is making a different architectural bet, and the easiest way to see it is to draw all three using the same visual language: identical panel, identical box and arrow grammar, identical colour semantics, now wrapped in the same grainy warm/plum brand surface used across Unify. Every visual difference between the three diagrams below maps to a real architectural difference; nothing is stylistic.
+OpenClaw and Hermes Agent are excellent — both are mature personal assistants with wide messaging surfaces, large contributor communities, and well-trodden install paths. unify is making a different architectural bet, and the easiest way to see it is to draw all three using the same visual language: identical panel, identical box and arrow grammar, identical colour semantics, now wrapped in the same grainy warm/plum brand surface used across unify. Every visual difference between the three diagrams below maps to a real architectural difference; nothing is stylistic.
 
 The colour palette is locked across all three diagrams and means exactly one thing each:
 
@@ -339,16 +338,16 @@ The colour palette is locked across all three diagrams and means exactly one thi
 - **White** — passive structural tiers (channels / surfaces / mediums, tools, state, dispatcher daemon).
 
 <details open>
-<summary><b>Unify</b> — persistent reasoning loop above a supervised Actor, with a dual-brain conversation tier</summary>
+<summary><b>unify</b> — persistent reasoning loop above a supervised Actor, with a dual-brain conversation tier</summary>
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-light.png" alt="Unify architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, tasks, transcripts, files, images, web, secrets, functions) plus KnowledgeManager/GuidanceManager JSON tools; primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-light.png" alt="unify architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, tasks, transcripts, files, images, web, secrets, functions) plus KnowledgeManager/GuidanceManager JSON tools; primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
   </picture>
 </p>
 
-Unify puts a persistent reasoning loop (`ConversationManager`, pink) *above* the tool-caller rather than beside it — the slow brain stays present and keeps reasoning while a dispatched action runs. Real-time voice and video sit on a separate fast brain coordinated over IPC, so the slow brain deliberates without blocking sub-second turn-taking. Below it, a supervised `CodeActActor` writes one Python program per turn over typed `primitives.*`. Long-lived state is a back office of typed managers, not opaque session files. Schedules and triggers are natural-language `Task` rows fired in-process by an asyncio timer wheel (no Cloud Tasks, no K8s) — and inbound-event triggers like *"whenever a CI run on `main` fails"* remain Unify-unique among the three.
+unify puts a persistent reasoning loop (`ConversationManager`, pink) *above* the tool-caller rather than beside it — the slow brain stays present and keeps reasoning while a dispatched action runs. Real-time voice and video sit on a separate fast brain coordinated over IPC, so the slow brain deliberates without blocking sub-second turn-taking. Below it, a supervised `CodeActActor` writes one Python program per turn over typed `primitives.*`. Long-lived state is a back office of typed managers, not opaque session files. Schedules and triggers are natural-language `Task` rows fired in-process by an asyncio timer wheel (no Cloud Tasks, no K8s) — and inbound-event triggers like *"whenever a CI run on `main` fails"* remain unify-unique among the three.
 
 </details>
 
@@ -358,11 +357,11 @@ Unify puts a persistent reasoning loop (`ConversationManager`, pink) *above* the
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/openclaw-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/openclaw-architecture-light.png" alt="OpenClaw architecture: user (white) and cron + webhooks (peach, automation triggers) feed into channels (Telegram, Discord, Slack, SMS, device Nodes); channels hand off to a Gateway daemon (white, channel-first dispatcher with per-session lanes; steer = abort + redeliver) which start/abort runs on a single Pi embedded agent loop (green, single tool-calling loop, no supervising loop); the agent calls tools (core, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the Hermes and Unify diagrams in this section. Architectural deltas vs. the other two: a dedicated Gateway daemon dispatcher tier between channels and the agent (Unify and Hermes have none); cron + webhook automation implemented as an in-process timer + HTTP server inside the Gateway daemon (same mechanism as Hermes, different from Unify)." width="780">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/openclaw-architecture-light.png" alt="OpenClaw architecture: user (white) and cron + webhooks (peach, automation triggers) feed into channels (Telegram, Discord, Slack, SMS, device Nodes); channels hand off to a Gateway daemon (white, channel-first dispatcher with per-session lanes; steer = abort + redeliver) which start/abort runs on a single Pi embedded agent loop (green, single tool-calling loop, no supervising loop); the agent calls tools (core, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the Hermes and unify diagrams in this section. Architectural deltas vs. the other two: a dedicated Gateway daemon dispatcher tier between channels and the agent (unify and Hermes have none); cron + webhook automation implemented as an in-process timer + HTTP server inside the Gateway daemon (same mechanism as Hermes, different from unify)." width="780">
   </picture>
 </p>
 
-OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs onto a single Pi agent loop but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions. Cron, HTTP webhook ingress, and Gmail Pub/Sub run as an in-process timer + HTTP server inside the Gateway. Mid-flight steering doesn't exist — new messages are handled at turn boundaries (`interrupt` aborts, `steer`/`followup` enqueues). `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a principled bet opposite to Unify's. Excellent if you want broad channel coverage and a plugin ecosystem; Unify is shaped for the orthogonal brief.
+OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs onto a single Pi agent loop but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions. Cron, HTTP webhook ingress, and Gmail Pub/Sub run as an in-process timer + HTTP server inside the Gateway. Mid-flight steering doesn't exist — new messages are handled at turn boundaries (`interrupt` aborts, `steer`/`followup` enqueues). `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a principled bet opposite to unify's. Excellent if you want broad channel coverage and a plugin ecosystem; unify is shaped for the orthogonal brief.
 
 </details>
 
@@ -372,11 +371,11 @@ OpenClaw is a local-first control plane with a wide channel matrix and a plugin 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hermes-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hermes-architecture-light.png" alt="Hermes Agent architecture: user (white) and cron + webhooks (peach, automation triggers) feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off directly to a single ~12k-LOC sync agent-loop infrastructure called AIAgent (green; steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the OpenClaw and Unify diagrams in this section. Architectural deltas vs. the other two: surfaces hand off directly to the agent with no dispatcher tier in between (OpenClaw has one, Unify has none either); cron + webhook automation implemented as a background thread + aiohttp webhook server inside the gateway process (same in-process pattern as OpenClaw, different from Unify)." width="780">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hermes-architecture-light.png" alt="Hermes Agent architecture: user (white) and cron + webhooks (peach, automation triggers) feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off directly to a single ~12k-LOC sync agent-loop infrastructure called AIAgent (green; steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the OpenClaw and unify diagrams in this section. Architectural deltas vs. the other two: surfaces hand off directly to the agent with no dispatcher tier in between (OpenClaw has one, unify has none either); cron + webhook automation implemented as a background thread + aiohttp webhook server inside the gateway process (same in-process pattern as OpenClaw, different from unify)." width="780">
   </picture>
 </p>
 
-Hermes pairs a single ~12k-LOC sync agent-loop with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and a mature cron + webhook automation subsystem (background thread + aiohttp server inside the gateway). Steering is text injection into the next tool result; interrupt is a thread-scoped flag. Live telephony isn't in the repo — SMS is, voice is local-only. Excellent if you want a polished personal-agent product with a wide messaging surface; Unify is making a different bet on the orchestration layer — a permanent reasoning loop above the tool-caller, and steering as a first-class signal that nests through every manager call.
+Hermes pairs a single ~12k-LOC sync agent-loop with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and a mature cron + webhook automation subsystem (background thread + aiohttp server inside the gateway). Steering is text injection into the next tool result; interrupt is a thread-scoped flag. Live telephony isn't in the repo — SMS is, voice is local-only. Excellent if you want a polished personal-agent product with a wide messaging surface; unify is making a different bet on the orchestration layer — a permanent reasoning loop above the tool-caller, and steering as a first-class signal that nests through every manager call.
 
 </details>
 
@@ -495,7 +494,7 @@ This repository is one of three MIT-licensed repos that make up the open one-tea
 | Repo | Role |
 |------|------|
 | **unify** (this) | Agent runtime — managers, tool loops, CodeAct, voice, orchestration |
-| **[unisdk](https://github.com/unifyai/unisdk)** | Python SDK — how Unify talks to Orchestra |
+| **[unisdk](https://github.com/unifyai/unisdk)** | Python SDK — how unify talks to Orchestra |
 | **[unillm](https://github.com/unifyai/unillm)** | LLM access layer — OpenAI, Anthropic, or any compatible endpoint |
 | **orchestra** | Persistence backend — FastAPI + Postgres + pgvector; hosted at [console.unify.ai](https://console.unify.ai) |
 
@@ -551,4 +550,4 @@ unify/
 
 MIT — see [LICENSE](LICENSE).
 
-Built by the team at [Unify](https://unify.ai).
+Built by the team at [unify](https://unify.ai).

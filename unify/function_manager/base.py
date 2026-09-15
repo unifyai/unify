@@ -347,12 +347,33 @@ class BaseFunctionManager(BaseStateManager):
         query: str = "",
         n: int = 5,
         include_implementations: bool = True,
+        include_dormant: bool = False,
         _return_callable: bool = False,
         _namespace: Optional[Dict[str, Any]] = None,
         _also_return_metadata: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Search for functions by semantic similarity to a natural‑language query.
+
+        Results are ranked like memory, not just like an index: semantic
+        similarity dominates, and a function's *standing* — how often and
+        how recently it has actually been used, judged against its own
+        usage rhythm — acts as the tiebreaker. Functions whose standing has
+        fully lapsed drop out of results entirely (they still exist and
+        still run; ``filter_functions``/``list_functions`` always see the
+        whole store, and ``include_dormant=True`` brings them back here).
+        Freshly stored functions surface normally: creation counts as a
+        first use.
+
+        Every result carries the ranking components in the open:
+        ``_similarity`` (semantic match, 0–1), ``_standing`` (usage-based
+        memory strength, 0–1 — recency against the function's own rhythm ×
+        log-saturating call count), and ``_retrieval_score`` (the combined
+        rank, ``similarity × (floor + (1−floor) × standing)``), beside the
+        raw trace (``usage_calls``, ``usage_last_called_at``). Read them:
+        a highly similar result with near-zero standing is a plausible but
+        long-unexercised skill, while a moderate match with high standing
+        is a battle-tested recent workhorse.
 
         Each result conforms to the ``Function`` schema and includes a
         ``guidance_ids`` field — a list of identifiers for related guidance
@@ -370,6 +391,11 @@ class BaseFunctionManager(BaseStateManager):
             When ``True``, results include the full source code in the
             ``implementation`` field. When ``False``, implementations are
             omitted to reduce payload size.
+        include_dormant : bool, default ``False``
+            When ``True``, functions whose usage standing has fully lapsed
+            are ranked and returned like any other instead of being dropped
+            from the results. Use when hunting for a skill you believe was
+            stored long ago but has not been exercised recently.
         _return_callable : bool, default ``False``
             When ``True``, return Python callables instead of metadata dicts.
             Implementations SHOULD inject the resulting callables (and any of their
