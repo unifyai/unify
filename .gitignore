@@ -59,18 +59,6 @@ intranet/logs/
 # diagrams below. (Use 'assets/*' rather than 'assets/' so the exceptions take
 # effect — git can't un-ignore a file inside a fully-ignored directory.)
 assets/*
-!assets/hero-architecture.png
-!assets/architecture-flow.png
-!assets/nested-steering-sequence.png
-!assets/openclaw-architecture.png
-!assets/hermes-architecture.png
-!assets/unity-architecture.png
-!assets/demo-course-correct.png
-!assets/demo-live-introspection.png
-!assets/demo-pause-resume.png
-!assets/demo-concurrent-steering.png
-!assets/demo-clarification-bubbling.png
-!assets/demo-stop-one-branch.png
 discord_messages.md
 .cursor/debug.log
 /.cursor/projects/
