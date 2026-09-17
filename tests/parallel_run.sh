@@ -270,7 +270,22 @@ resolve_store_path() {
     echo "$UNIFY_STORE_PATH"
     return 0
   fi
-  echo "$STORES_DIR/${session_name}.sqlite"
+  echo "$STORES_DIR/$(store_basename "$session_name").sqlite"
+}
+
+# A session name can carry a parametrised node id: characters the filesystem
+# rejects and more bytes than one path component allows. The store file keeps
+# a readable prefix and a hash of the full name, the same shape as the log
+# filenames conftest.py writes.
+store_basename() {
+  local name="$1"
+  name="${name//[^A-Za-z0-9._-]/_}"
+  if (( ${#name} > 120 )); then
+    local digest
+    digest=$(printf '%s' "$1" | shasum | cut -c1-8)
+    name="${name:0:111}_${digest}"
+  fi
+  printf '%s' "$name"
 }
 
 # ---------------------------------------------------------------------------
