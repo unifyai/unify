@@ -11,7 +11,6 @@ import json
 import os
 import re
 import signal
-import socket
 import sys
 import tempfile
 import logging
@@ -4150,6 +4149,7 @@ class FunctionManager(BaseFunctionManager):
             errors = {k: v for k, v in results.items() if v.startswith("error")}
             if errors:
                 error_details = "; ".join(f"{k}: {v}" for k, v in errors.items())
+                raise ValueError(f"Failed to add shell function(s): {error_details}")
 
         return results
 
@@ -7208,11 +7208,90 @@ class FunctionManager(BaseFunctionManager):
             if env:
                 script_env.update(env)
 
-            # Set up the RPC server (Unix domain socket)
-            server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            server_socket.bind(str(socket_path))
-            server_socket.listen(5)
-            server_socket.setblocking(False)
+            stdout_output: List[str] = []
+            stderr_output: List[str] = []
+
+            async def read_stdout():
+                """Read stdout in background."""
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    stdout_output.append(line.decode())
+
+            async def read_stderr():
+                """Read stderr in background."""
+                while True:
+                    line = await process.stderr.readline()
+                    if not line:
+                        break
+                    stderr_output.append(line.decode())
+
+            async def handle_rpc_client(
+                reader: asyncio.StreamReader,
+                writer: asyncio.StreamWriter,
+            ) -> None:
+                """Answer one request from a unity-primitive invocation.
+
+                Each invocation opens its own connection, sends one line and
+                reads one line back; the stream server owns the connection
+                and the task serving it for that whole exchange.
+                """
+                try:
+                    data = await reader.readline()
+                    if not data:
+                        return
+
+                    request = json.loads(data.decode("utf-8").strip())
+                    request_id = request.get("id", "")
+                    path = request.get("path", "")
+                    kwargs = request.get("kwargs", {})
+
+                    if path == "_introspect.list_primitives":
+                        response = {
+                            "type": "rpc_result",
+                            "id": request_id,
+                            "result": self._get_primitives_metadata(),
+                        }
+                    else:
+                        try:
+                            result = await self._handle_rpc_call(
+                                path=path,
+                                kwargs=kwargs,
+                                primitives=primitives,
+                            )
+                            response = {
+                                "type": "rpc_result",
+                                "id": request_id,
+                                "result": self._make_json_serializable(result),
+                            }
+                        except ControlledInterruption:
+                            request = (
+                                steering.interruption if steering is not None else None
+                            )
+                            if request is None or not request.stop:
+                                raise
+                            await stop_process(request)
+                            return
+                        except Exception as e:
+                            logger.error(f"RPC error for {path}: {e}", exc_info=True)
+                            response = {
+                                "type": "rpc_error",
+                                "id": request_id,
+                                "error": str(e),
+                            }
+
+                    writer.write((json.dumps(response) + "\n").encode("utf-8"))
+                    await writer.drain()
+                finally:
+                    writer.close()
+
+            # Listen before the script starts so its first invocation can
+            # connect without waiting on the parent.
+            rpc_server = await asyncio.start_unix_server(
+                handle_rpc_client,
+                path=str(socket_path),
+            )
 
             # Start the shell script subprocess
             interpreter = self._get_shell_interpreter(language)
@@ -7242,122 +7321,9 @@ class FunctionManager(BaseFunctionManager):
                 if process.returncode is None:
                     await self._terminate_process_group(process, use_process_group)
 
-            stdout_output: List[str] = []
-            stderr_output: List[str] = []
-
-            async def read_stdout():
-                """Read stdout in background."""
-                while True:
-                    line = await process.stdout.readline()
-                    if not line:
-                        break
-                    stdout_output.append(line.decode())
-
-            async def read_stderr():
-                """Read stderr in background."""
-                while True:
-                    line = await process.stderr.readline()
-                    if not line:
-                        break
-                    stderr_output.append(line.decode())
-
-            async def handle_rpc_client(client_socket: socket.socket):
-                """Handle a single RPC client connection."""
-                loop = asyncio.get_event_loop()
-                try:
-                    # Read request
-                    data = b""
-                    while True:
-                        try:
-                            chunk = await asyncio.wait_for(
-                                loop.sock_recv(client_socket, 4096),
-                                timeout=1.0,
-                            )
-                            if not chunk:
-                                break
-                            data += chunk
-                            if b"\n" in data:
-                                break
-                        except asyncio.TimeoutError:
-                            if process.returncode is not None:
-                                break
-                            continue
-
-                    if not data:
-                        return
-
-                    request = json.loads(data.decode("utf-8").strip())
-                    request_id = request.get("id", "")
-                    path = request.get("path", "")
-                    kwargs = request.get("kwargs", {})
-
-                    # Handle introspection requests
-                    if path == "_introspect.list_primitives":
-                        result = self._get_primitives_metadata()
-                        response = {
-                            "type": "rpc_result",
-                            "id": request_id,
-                            "result": result,
-                        }
-                    else:
-                        # Handle regular RPC calls
-                        try:
-                            result = await self._handle_rpc_call(
-                                path=path,
-                                kwargs=kwargs,
-                                primitives=primitives,
-                            )
-                            result = self._make_json_serializable(result)
-                            response = {
-                                "type": "rpc_result",
-                                "id": request_id,
-                                "result": result,
-                            }
-                        except ControlledInterruption:
-                            request = (
-                                steering.interruption if steering is not None else None
-                            )
-                            if request is None or not request.stop:
-                                raise
-                            await stop_process(request)
-                            return
-                        except Exception as e:
-                            logger.error(f"RPC error for {path}: {e}", exc_info=True)
-                            response = {
-                                "type": "rpc_error",
-                                "id": request_id,
-                                "error": str(e),
-                            }
-
-                    # Send response
-                    response_data = (json.dumps(response) + "\n").encode("utf-8")
-                    await loop.sock_sendall(client_socket, response_data)
-
-                finally:
-                    client_socket.close()
-
-            async def accept_rpc_connections():
-                """Accept and handle RPC connections from shell script."""
-                loop = asyncio.get_event_loop()
-                while process.returncode is None:
-                    try:
-                        client_socket, _ = await asyncio.wait_for(
-                            loop.sock_accept(server_socket),
-                            timeout=0.1,
-                        )
-                        # Handle client in background
-                        asyncio.create_task(handle_rpc_client(client_socket))
-                    except asyncio.TimeoutError:
-                        continue
-                    except Exception as e:
-                        if process.returncode is None:
-                            logger.debug(f"RPC accept error: {e}")
-                        break
-
             # Start all tasks
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
-            rpc_task = asyncio.create_task(accept_rpc_connections())
             watcher = (
                 asyncio.create_task(
                     steering.relay_corrections(implementation, stop_process),
@@ -7440,12 +7406,6 @@ class FunctionManager(BaseFunctionManager):
                     except asyncio.CancelledError:
                         pass
 
-                rpc_task.cancel()
-                try:
-                    await rpc_task
-                except asyncio.CancelledError:
-                    pass
-
                 stdout_task.cancel()
                 stderr_task.cancel()
                 try:
@@ -7457,7 +7417,8 @@ class FunctionManager(BaseFunctionManager):
                 except asyncio.CancelledError:
                     pass
 
-                server_socket.close()
+                rpc_server.close()
+                await rpc_server.wait_closed()
 
                 # Ensure process is terminated
                 if process.returncode is None:
