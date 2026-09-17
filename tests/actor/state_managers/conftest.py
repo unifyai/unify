@@ -25,7 +25,6 @@ def _apply_simulated_impl_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNIFY_KNOWLEDGE_IMPL", impl)
     monkeypatch.setenv("UNIFY_GUIDANCE_IMPL", impl)
     monkeypatch.setenv("UNIFY_SECRET_IMPL", impl)
-    monkeypatch.setenv("UNIFY_WEB_IMPL", impl)
     monkeypatch.setenv("UNIFY_FILE_IMPL", impl)
     monkeypatch.setenv("UNIFY_DATA_IMPL", impl)
 
@@ -33,7 +32,6 @@ def _apply_simulated_impl_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     # This keeps routing tests meaningful (the Actor can actually call these tools).
     monkeypatch.setenv("UNIFY_FILE_ENABLED", "true")
     monkeypatch.setenv("UNIFY_GUIDANCE_ENABLED", "true")
-    monkeypatch.setenv("UNIFY_WEB_ENABLED", "true")
     monkeypatch.setenv("UNIFY_KNOWLEDGE_ENABLED", "true")
 
     # Also update the already-instantiated SETTINGS singleton so ManagerRegistry's
@@ -45,13 +43,11 @@ def _apply_simulated_impl_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(SETTINGS.knowledge, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.guidance, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.secret, "IMPL", impl, raising=False)
-    monkeypatch.setattr(SETTINGS.web, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.file, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.data, "IMPL", impl, raising=False)
 
     monkeypatch.setattr(SETTINGS.file, "ENABLED", True, raising=False)
     monkeypatch.setattr(SETTINGS.guidance, "ENABLED", True, raising=False)
-    monkeypatch.setattr(SETTINGS.web, "ENABLED", True, raising=False)
     monkeypatch.setattr(SETTINGS.knowledge, "ENABLED", True, raising=False)
 
     # Ensure subsequent ManagerRegistry.get_* returns fresh instances per test.

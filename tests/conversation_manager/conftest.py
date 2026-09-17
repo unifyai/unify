@@ -146,7 +146,6 @@ def pytest_configure(config):
     os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
     os.environ["UNIFY_SECRET_ENABLED"] = "false"
     os.environ["UNIFY_SKILL_ENABLED"] = "false"
-    os.environ["UNIFY_WEB_ENABLED"] = "false"
     os.environ["UNIFY_FILE_ENABLED"] = "false"
 
     # Enable incrementing timestamps for **NEW** marker comparisons

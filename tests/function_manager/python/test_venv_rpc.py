@@ -39,10 +39,10 @@ MULTI_PRIMITIVE_FUNCTION = """
 async def multi_primitive_call() -> dict:
     \"\"\"Call multiple primitives.\"\"\"
     contacts_result = await primitives.contacts.ask(question="Who is Alice?")
-    web_result = await primitives.web.ask(question="What is 2+2?")
+    secrets_result = await primitives.secrets.ask(question="What is 2+2?")
     return {
         "contacts": contacts_result,
-        "web": web_result,
+        "secrets": secrets_result,
     }
 """.strip()
 
@@ -91,8 +91,8 @@ def mock_primitives():
     primitives.contacts.list_all = AsyncMock(
         return_value=[{"name": "Alice"}, {"name": "Bob"}],
     )
-    primitives.web = MagicMock()
-    primitives.web.ask = AsyncMock(return_value="4")
+    primitives.secrets = MagicMock()
+    primitives.secrets.ask = AsyncMock(return_value="4")
     return primitives
 
 
@@ -150,9 +150,9 @@ async def test_execute_with_multiple_primitive_calls(
 
         assert result["error"] is None, f"Unexpected error: {result['error']}"
         mock_primitives.contacts.ask.assert_called_once()
-        mock_primitives.web.ask.assert_called_once()
+        mock_primitives.secrets.ask.assert_called_once()
         assert result["result"]["contacts"] == "Alice is a test contact"
-        assert result["result"]["web"] == "4"
+        assert result["result"]["secrets"] == "4"
     finally:
         venv_dir = fm._get_venv_dir(venv_id)
         if venv_dir.exists():
@@ -305,15 +305,15 @@ async def test_partial_failure_in_chain(function_manager_factory):
     partial_failure_func = """
 async def partial_failure() -> dict:
     first = await primitives.contacts.ask(question="first")
-    second = await primitives.web.ask(question="second")
+    second = await primitives.secrets.ask(question="second")
     return {"first": first, "second": second}
 """.strip()
 
     mock_primitives = MagicMock()
     mock_primitives.contacts = MagicMock()
     mock_primitives.contacts.ask = AsyncMock(return_value="success")
-    mock_primitives.web = MagicMock()
-    mock_primitives.web.ask = AsyncMock(
+    mock_primitives.secrets = MagicMock()
+    mock_primitives.secrets.ask = AsyncMock(
         side_effect=RuntimeError("Second call failed"),
     )
 
@@ -462,7 +462,7 @@ async def get_list():
 
     nested_func = """
 async def get_nested():
-    return await primitives.web.ask(question="nested")
+    return await primitives.secrets.ask(question="nested")
 """.strip()
 
     try:
@@ -525,8 +525,8 @@ async def get_nested():
 
         # Test nested dict
         nested_data = {"l1": {"l2": {"l3": {"value": "deep"}}}}
-        mock_p.web = MagicMock()
-        mock_p.web.ask = AsyncMock(return_value=nested_data)
+        mock_p.secrets = MagicMock()
+        mock_p.secrets.ask = AsyncMock(return_value=nested_data)
 
         result = await fm.execute_in_venv(
             venv_id=venv_id,

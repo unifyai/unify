@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from unify.contact_manager.contact_manager import ContactManager
     from unify.transcript_manager.transcript_manager import TranscriptManager
     from unify.secret_manager.secret_manager import SecretManager
-    from unify.web_searcher.web_searcher import WebSearcher
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +137,6 @@ _ALIAS_TO_GETTER: dict[str, str] = {
     "data": "get_data_manager",
     "transcripts": "get_transcript_manager",
     "secrets": "get_secret_manager",
-    "web": "get_web_searcher",
     "files": "get_file_manager",
     "actor": "",
 }
@@ -174,7 +172,7 @@ class Primitives:
         await primitives.contacts.ask(text="...")
 
         # Raises AttributeError:
-        primitives.web  # not in scope
+        primitives.secrets  # not in scope
     """
 
     def __init__(self, *, primitive_scope: Optional[PrimitiveScope] = None) -> None:
@@ -270,11 +268,6 @@ class Primitives:
     def secrets(self) -> "SecretManager":
         """Secret management primitives (ask, update)."""
         return self._get_manager("secrets")
-
-    @property
-    def web(self) -> "WebSearcher":
-        """Web search primitives (ask)."""
-        return self._get_manager("web")
 
     @property
     def files(self) -> "_AsyncPrimitiveWrapper":

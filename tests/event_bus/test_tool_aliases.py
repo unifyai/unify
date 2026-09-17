@@ -268,14 +268,16 @@ def test_sparse_aliases_callable_label():
             {
                 "function": {
                     "name": "execute_function",
-                    "arguments": json.dumps({"function_name": "primitives.web.ask"}),
+                    "arguments": json.dumps(
+                        {"function_name": "primitives.contacts.ask"},
+                    ),
                 },
                 "id": "call_1",
             },
         ],
     }
     assert _build_sparse_aliases(lookup, message) == {
-        "execute_function": "primitives.web.ask",
+        "execute_function": "primitives.contacts.ask",
     }
 
 

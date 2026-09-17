@@ -29,13 +29,8 @@ def _normalize_execute_function_duration(result: Any) -> Any:
 
 
 @pytest.fixture(autouse=True)
-def _force_simulated_web(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force WebSearcher to use the simulated implementation for actor tests."""
-    from unify.settings import SETTINGS
-
-    monkeypatch.setenv("UNIFY_WEB_IMPL", "simulated")
-    monkeypatch.setattr(SETTINGS.web, "IMPL", "simulated", raising=False)
-
+def _reset_manager_registry() -> None:
+    """Give every actor test fresh manager singletons."""
     ManagerRegistry.clear()
 
 

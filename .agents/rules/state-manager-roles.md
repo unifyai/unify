@@ -13,7 +13,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### Actor
 - **Role**: Central intelligence that orchestrates all state managers through code-first plans. Generates and executes Python plans that call primitives and top-level JSON tools.
-- **Scope**: Code-first execution via `act()`. Plans orchestrate `primitives.contacts.*`, `primitives.transcripts.*`, `primitives.files.*`, `primitives.data.*`, `primitives.ingestion.*`, `primitives.web.*`, `primitives.secrets.*` and `primitives.actor.*`, plus top-level JSON tools such as `GuidanceManager_*`, `KnowledgeManager_*` and `FunctionManager_*`. Wires in‑flight handles back to `ConversationManager` for real‑time steering.
+- **Scope**: Code-first execution via `act()`. Plans orchestrate `primitives.contacts.*`, `primitives.transcripts.*`, `primitives.files.*`, `primitives.data.*`, `primitives.ingestion.*`, `primitives.secrets.*` and `primitives.actor.*`, plus top-level JSON tools such as `GuidanceManager_*`, `KnowledgeManager_*` and `FunctionManager_*`. Wires in‑flight handles back to `ConversationManager` for real‑time steering.
 - **Connections**:
   - **Steered by**: `ConversationManager` (primary caller of `act()`).
   - **Steers**: State manager primitives, the typed catalogue JSON tools, and the `ConversationManager` handle (`ask`/`interject`/`get_full_transcript`). Uses `FunctionManager` for function discovery and execution.
@@ -24,7 +24,6 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - Transcripts → `primitives.transcripts.ask` (may call `primitives.contacts.ask` for participants)
   - Knowledge → `KnowledgeManager_search` / `KnowledgeManager_filter` / `KnowledgeManager_get_knowledge`
   - Secrets (metadata/placeholders only) → `primitives.secrets.ask`
-  - Time‑sensitive/web ("today/latest/now") → `primitives.web.ask`
   - About a specific received file (filename known) → `primitives.files.ask`
 - **Mutations (create/edit/delete/merge)**
   - Contacts → `primitives.contacts.update`
@@ -97,13 +96,6 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Connections**:
   - **Steered by**: `Actor` (via `primitives.ingestion.*`); `FileManager` (attachment ingestion).
   - **Steers**: `DataManager.ingest` and the file parse pipeline.
-
-### WebSearcher
-- **Role**: Lightweight, text-based retrieval for quick internet queries (headlines, weather, definitions, current events) via Tavily.
-- **Scope**: ask only (search, extract, crawl, map against the public web); returns a live handle. No gated-site access, no browser automation, no credentials.
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.web.*`).
-  - **Steers**: —
 
 ### SecretManager
 - **Role**: Owner of secrets.

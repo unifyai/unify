@@ -71,7 +71,6 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 | `UNIFY_HOME` | Where the store, embeddings cache and workspace live (default `~/.unify`) |
 | `UNIFY_STORE_PATH` | An explicit path for the SQLite store |
 | `UNIFY_EMBED_MODEL` | Local `fastembed` model for vector columns, or `<model>@openrouter` |
-| `UNIFY_WEB_TAVILY_API_KEY` | Optional [Tavily](https://tavily.com) key for web research |
 | `UNILLM_CACHE` | Cache LLM responses locally; later runs replay identical calls |
 | `ASSISTANT_FIRST_NAME`, `USER_FIRST_NAME`, … | Optional identity for the assistant and its user |
 
@@ -86,7 +85,6 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 - **Memory.** Contacts, knowledge claims, transcripts, files, images and secrets are typed tables in the local store, consolidated from conversations every fifty messages.
 - **Skills.** Functions and guidance the assistant stored after a job that went well, discovered before it writes new code.
 - **Files.** Drop a file path into the chat and the assistant parses it, stores tables it finds, and can answer questions about it.
-- **Web research** when a Tavily key is present.
 
 ---
 
@@ -184,13 +182,13 @@ contacts = await primitives.contacts.ask(
     "Which vendors am I tracking for security updates?"
 )
 for contact in contacts:
-    latest = await primitives.web.ask(
-        f"What's the latest security advisory for {contact}?"
+    latest = await primitives.transcripts.ask(
+        f"What did {contact} last tell us about security updates?"
     )
     print(latest)
 ```
 
-A contacts lookup → external check becomes one coherent plan with real variables, loops, and control flow, rather than separate tool-selection turns round-tripping through tool messages. Durable domain claims are stored via top-level `KnowledgeManager_*` JSON tools (typed claim ledger), not `primitives.knowledge.*`.
+A contacts lookup → transcript check becomes one coherent plan with real variables, loops, and control flow, rather than separate tool-selection turns round-tripping through tool messages. Durable domain claims are stored via top-level `KnowledgeManager_*` JSON tools (typed claim ledger), not `primitives.knowledge.*`.
 
 ### The local store
 
@@ -255,7 +253,6 @@ State Managers (each runs its own async LLM tool loop)
     ├── FileManager          : file parsing and registry
     ├── IngestionManager     : checkpointed, resumable data and file ingestion
     ├── ImageManager         : image storage, vision queries
-    ├── WebSearcher          : web research orchestration
     ├── SecretManager        : encrypted secret storage
     └── DataManager          : low-level data operations
     │

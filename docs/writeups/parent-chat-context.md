@@ -39,7 +39,7 @@ The same argument exists below the conversation layer, at every boundary. When a
 
 ## Who decides
 
-Whether to fork is itself a judgment call, so we gave it to the model doing the dispatching. The conversation layer's `act` tool takes `include_conversation_context`, defaulting to true, with docstring guidance to switch it off when the task is self-contained — a web search, a simple lookup — where the query really is all there is to say. The choice sticks: opt out at dispatch and later interjections into that task skip context forwarding too. Nested loops make the same per-call decision on their own boundaries.
+Whether to fork is itself a judgment call, so we gave it to the model doing the dispatching. The conversation layer's `act` tool takes `include_conversation_context`, defaulting to true, with docstring guidance to switch it off when the task is self-contained — a simple lookup — where the query really is all there is to say. The choice sticks: opt out at dispatch and later interjections into that task skip context forwarding too. Nested loops make the same per-call decision on their own boundaries.
 
 Statelessness stays cheap, in other words, and context stays one keyword argument away. Most frameworks make delegation an API call: the request string is the interface, and anything the worker needs has to be serialized into it. Making the fork a first-class option is an admission that conversations carry more state than any single request can, and that the cheapest time to transfer that state is before anyone has to ask for it.
 

@@ -348,7 +348,7 @@ class ConversationManagerBrainActionTools:
         **Capabilities include:**
 
         - **Retrieval**: Search contact records, query knowledge bases, look up past
-          conversations, find calendar events, search the web, retrieve files
+          conversations, find calendar events, retrieve files
         - **Action**: Update records, modify spreadsheets, store knowledge
         - **Combined**: Find information and act on it (e.g., "find David's email")
 
@@ -415,8 +415,8 @@ class ConversationManagerBrainActionTools:
                 the full rendered conversation snapshot — messages, notifications,
                 and in-flight actions — helping it understand the broader context.
                 Set ``false`` when the action is self-contained and the query
-                alone provides all necessary information (e.g. simple lookups,
-                web searches, or factual questions). Subsequent steering calls
+                alone provides all necessary information (e.g. simple lookups
+                or factual questions). Subsequent steering calls
                 (interject, ask) on this action will also skip context forwarding.
             llm_profile: Optional curated LLM profile for this action. Leave
                 unset for the default actor profile, normally

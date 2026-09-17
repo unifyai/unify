@@ -32,7 +32,6 @@ dependencies = [
     "polars>=1.39.3",
     "jsonschema>=4.20",
     # Web search
-    "tavily-python>=0.7.12",
     # Local embeddings for derived vector columns
     "fastembed>=0.8.0",
 ]

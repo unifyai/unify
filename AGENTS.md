@@ -21,7 +21,7 @@ covers *how to work on the code*, not *what the code does*.
 
 ## What Unify is
 
-Unify implements an AI assistant's brain as a **back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, `FileManager`, `DataManager`, `IngestionManager`, `ImageManager`, `WebSearcher`, `SecretManager`) through code-first plans, and a `ConversationManager` sits above the actor as the persistent interaction loop. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
+Unify implements an AI assistant's brain as a **back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, `FileManager`, `DataManager`, `IngestionManager`, `ImageManager`, `SecretManager`) through code-first plans, and a `ConversationManager` sits above the actor as the persistent interaction loop. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
 
 Everything persists in an in-process SQLite store, `unify/db/` (imported as `from unify import db`). There is no backend service, no accounts and no infrastructure: the only external dependency is an LLM provider reached through the sibling `unillm` repo (editable install via `[tool.uv.sources]` in `pyproject.toml`).
 
@@ -141,7 +141,6 @@ The public API of each state manager is defined by the abstract methods on `Base
 | Files (parse, query) | `primitives.files.*` |
 | Storing new data or files, from any source | `primitives.ingestion.*` (`submit` — there is no `primitives.data.ingest`) |
 | Querying and reshaping stored tables | `primitives.data.*` |
-| Web research (lightweight) | `primitives.web.*` |
 | Secrets (metadata only via `ask`) | `primitives.secrets.*` |
 | Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
 | Stored functions | `FunctionManager_*` (top-level JSON tools) and `execute_function` |
@@ -176,7 +175,6 @@ unify/
 │   ├── file_manager/        # File parsing and registry
 │   ├── ingestion_manager/   # Checkpointed data and file ingestion
 │   ├── image_manager/       # Image storage and vision queries
-│   ├── web_searcher/        # Web research
 │   ├── secret_manager/      # Encrypted secrets
 │   ├── data_manager/        # Low-level data ops
 │   ├── memory_manager/      # Offline consolidation
@@ -519,7 +517,7 @@ After editing anything under `.agents/`, regenerate the aggregate:
 
 ## Base Class Public APIs
 
-The public API for all state managers (`ContactManager`, `TranscriptManager`, `FunctionManager`, `WebSearcher` etc.) is fully contained in the docstrings of the abstract methods defined on the base class `Base{SomeManager}` in `base.py`. All high level usage instructions should be fully encapsulated in these docstrings. These docstrings are then attached to the public methods of any derived class via `@functools.wraps(Base{StateManager}.{public_method}, updated=())`. These docstrings should not make **any** reference to **other managers** (we don't want to lock in any brittle cross-references, as other managers may change) and should also not make any reference to their **internal implementation**, including the private tools used for any particular instantiation of this abstract base class, with a consistent implementation agnostic public API.
+The public API for all state managers (`ContactManager`, `TranscriptManager`, `FunctionManager` etc.) is fully contained in the docstrings of the abstract methods defined on the base class `Base{SomeManager}` in `base.py`. All high level usage instructions should be fully encapsulated in these docstrings. These docstrings are then attached to the public methods of any derived class via `@functools.wraps(Base{StateManager}.{public_method}, updated=())`. These docstrings should not make **any** reference to **other managers** (we don't want to lock in any brittle cross-references, as other managers may change) and should also not make any reference to their **internal implementation**, including the private tools used for any particular instantiation of this abstract base class, with a consistent implementation agnostic public API.
 
 ## Prompts vs Tool Docstrings
 
@@ -536,7 +534,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### Actor
 - **Role**: Central intelligence that orchestrates all state managers through code-first plans. Generates and executes Python plans that call primitives and top-level JSON tools.
-- **Scope**: Code-first execution via `act()`. Plans orchestrate `primitives.contacts.*`, `primitives.transcripts.*`, `primitives.files.*`, `primitives.data.*`, `primitives.ingestion.*`, `primitives.web.*`, `primitives.secrets.*` and `primitives.actor.*`, plus top-level JSON tools such as `GuidanceManager_*`, `KnowledgeManager_*` and `FunctionManager_*`. Wires in‑flight handles back to `ConversationManager` for real‑time steering.
+- **Scope**: Code-first execution via `act()`. Plans orchestrate `primitives.contacts.*`, `primitives.transcripts.*`, `primitives.files.*`, `primitives.data.*`, `primitives.ingestion.*`, `primitives.secrets.*` and `primitives.actor.*`, plus top-level JSON tools such as `GuidanceManager_*`, `KnowledgeManager_*` and `FunctionManager_*`. Wires in‑flight handles back to `ConversationManager` for real‑time steering.
 - **Connections**:
   - **Steered by**: `ConversationManager` (primary caller of `act()`).
   - **Steers**: State manager primitives, the typed catalogue JSON tools, and the `ConversationManager` handle (`ask`/`interject`/`get_full_transcript`). Uses `FunctionManager` for function discovery and execution.
@@ -547,7 +545,6 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - Transcripts → `primitives.transcripts.ask` (may call `primitives.contacts.ask` for participants)
   - Knowledge → `KnowledgeManager_search` / `KnowledgeManager_filter` / `KnowledgeManager_get_knowledge`
   - Secrets (metadata/placeholders only) → `primitives.secrets.ask`
-  - Time‑sensitive/web ("today/latest/now") → `primitives.web.ask`
   - About a specific received file (filename known) → `primitives.files.ask`
 - **Mutations (create/edit/delete/merge)**
   - Contacts → `primitives.contacts.update`
@@ -620,13 +617,6 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Connections**:
   - **Steered by**: `Actor` (via `primitives.ingestion.*`); `FileManager` (attachment ingestion).
   - **Steers**: `DataManager.ingest` and the file parse pipeline.
-
-### WebSearcher
-- **Role**: Lightweight, text-based retrieval for quick internet queries (headlines, weather, definitions, current events) via Tavily.
-- **Scope**: ask only (search, extract, crawl, map against the public web); returns a live handle. No gated-site access, no browser automation, no credentials.
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.web.*`).
-  - **Steers**: —
 
 ### SecretManager
 - **Role**: Owner of secrets.

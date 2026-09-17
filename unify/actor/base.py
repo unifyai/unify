@@ -168,7 +168,7 @@ class BaseActor(ABC):
         **Capabilities include (but are not limited to):**
 
         - **Retrieval**: Search contact records, query knowledge bases, look up past
-          conversations, find calendar events, search the web, retrieve files
+          conversations, find calendar events, retrieve files
         - **Action**: Update records, modify spreadsheets, store knowledge, write and
           run functions
         - **Combined**: Find information and then act on it (e.g., "find David's email

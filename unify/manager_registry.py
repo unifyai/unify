@@ -33,7 +33,6 @@ Available typed methods:
     - get_memory_manager()
     - get_secret_manager()
     - get_transcript_manager()
-    - get_web_searcher()
 """
 
 from __future__ import annotations
@@ -56,7 +55,6 @@ if TYPE_CHECKING:
     from .memory_manager.base import BaseMemoryManager
     from .secret_manager.base import BaseSecretManager
     from .transcript_manager.base import BaseTranscriptManager
-    from .web_searcher.base import BaseWebSearcher
     from .function_manager.primitives.scope import PrimitiveScope
 
 __all__ = [
@@ -617,24 +615,6 @@ class ManagerRegistry:
             **kwargs,
         )
 
-    @classmethod
-    def get_web_searcher(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseWebSearcher":
-        """Get the WebSearcher singleton (respects IMPL settings)."""
-        return cls.get(
-            "web_search",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
 
 class SingletonABCMeta(ABCMeta):
     """Metaclass that enforces the Singleton pattern via ManagerRegistry.
@@ -682,7 +662,6 @@ def _populate_registry() -> None:
     ManagerRegistry.register_settings("knowledge", lambda: SETTINGS.knowledge)
     ManagerRegistry.register_settings("guidance", lambda: SETTINGS.guidance)
     ManagerRegistry.register_settings("secrets", lambda: SETTINGS.secret)
-    ManagerRegistry.register_settings("web_search", lambda: SETTINGS.web)
     ManagerRegistry.register_settings("data", lambda: SETTINGS.data)
     ManagerRegistry.register_settings("files", lambda: SETTINGS.file)
     ManagerRegistry.register_settings("functions", lambda: SETTINGS.function)
@@ -760,15 +739,6 @@ def _populate_registry() -> None:
 
     ManagerRegistry.register_class("secrets", "real", SecretManager)
     ManagerRegistry.register_class("secrets", "simulated", SimulatedSecretManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # WebSearcher implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .web_searcher.web_searcher import WebSearcher
-    from .web_searcher.simulated import SimulatedWebSearcher
-
-    ManagerRegistry.register_class("web_search", "real", WebSearcher)
-    ManagerRegistry.register_class("web_search", "simulated", SimulatedWebSearcher)
 
     # ─────────────────────────────────────────────────────────────────────────
     # IngestionManager implementations

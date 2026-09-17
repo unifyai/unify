@@ -41,7 +41,6 @@ def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
         "transcript",
         "knowledge",
         "guidance",
-        "web",
     ]:
         monkeypatch.setenv(f"UNIFY_{impl_attr.upper()}_IMPL", "simulated")
         if hasattr(SETTINGS, impl_attr):
@@ -53,7 +52,7 @@ def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
             )
 
     # Enable optional managers
-    for enabled_attr in ["guidance", "web", "knowledge"]:
+    for enabled_attr in ["guidance", "knowledge"]:
         monkeypatch.setenv(f"UNIFY_{enabled_attr.upper()}_ENABLED", "true")
         if hasattr(SETTINGS, enabled_attr):
             monkeypatch.setattr(

@@ -195,7 +195,6 @@ class ContextRegistry:
         from unify.knowledge_manager.knowledge_manager import KnowledgeManager
         from unify.secret_manager.secret_manager import SecretManager
         from unify.transcript_manager.transcript_manager import TranscriptManager
-        from unify.web_searcher.web_searcher import WebSearcher
 
         return [
             ContactManager,
@@ -204,7 +203,6 @@ class ContextRegistry:
             ImageManager,
             GuidanceManager,
             SecretManager,
-            WebSearcher,
             FunctionManager,
             DataManager,
             FileManager,

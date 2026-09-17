@@ -34,8 +34,7 @@ issues or pull requests, but not through the private channel.
 
 Unify is a single-user personal-assistant runtime that runs entirely on the
 operator's machine. It has no server component, no accounts and no network
-listener; the only outbound connections are to the LLM provider (and to
-Tavily when web research is enabled).
+listener; the only outbound connection is to the LLM provider.
 
 ### 2.1 Definitions
 
@@ -72,9 +71,8 @@ of inbound surfaces and stored functions is the boundary.
 
 ### 2.3 Credential surfaces
 
-- **`.env`** in the checkout — the LLM provider key and the optional
-  Tavily key. Owned by the operator's user account; readable by anything
-  the operator runs.
+- **`.env`** in the checkout — the LLM provider key. Owned by the
+  operator's user account; readable by anything the operator runs.
 - **`SecretManager`** — exposes a deliberately-narrow public API.
   `primitives.secrets.ask(...)` returns metadata only (names, types,
   placeholders), never the secret value; `primitives.secrets.update(...)`
@@ -110,8 +108,6 @@ real boundary.
 Every byte that reaches the model is attacker-influenceable the moment it
 came from outside the operator's head:
 
-- **Fetched web pages and search results** — `WebSearcher` does not
-  sanitise.
 - **Attached files** — `FileManager.parse` runs document parsers (PDF,
   Office, etc.) on the operator's host.
 
@@ -146,8 +142,8 @@ Unify does not ship one.
   directly.
 - **Operator-chosen exposures** — a world-readable `.env` or store file, or
   a stored function installed without reading it.
-- **Provider-side findings** — bugs in LLM provider APIs or Tavily should
-  be reported to the provider.
+- **Provider-side findings** — bugs in LLM provider APIs should be
+  reported to the provider.
 - **Pre-existing files in the operator's home directory** that Unify does
   not create or write.
 

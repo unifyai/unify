@@ -59,7 +59,6 @@ def pytest_configure(config) -> None:
     os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
     os.environ["UNIFY_SECRET_ENABLED"] = "false"
     os.environ["UNIFY_SKILL_ENABLED"] = "false"
-    os.environ["UNIFY_WEB_ENABLED"] = "false"
     os.environ["UNIFY_MEMORY_ENABLED"] = "false"
 
     # Production actor/model defaults (openai/gpt-5.6-sol@openrouter) come from SETTINGS.

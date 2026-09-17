@@ -288,7 +288,7 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
             StateManagerEnvironment(
                 allowed_methods={
                     "primitives.contacts.ask",
-                    "primitives.web.ask",
+                    "primitives.transcripts.ask",
                 },
             ),
         ],

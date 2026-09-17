@@ -1452,8 +1452,7 @@ def start_async_tool_loop(
         N-1 paid steps. With it ``False`` the step is allowed to finish and be
         used, and the tool result reaches the model on the following turn
         instead. That trades a turn of freshness for the cost of the step, which
-        is only worth it where nobody is waiting on the latency —
-        ``WebSearcher.ask`` is the motivating case.
+        is only worth it where nobody is waiting on the latency.
 
     persist : bool, default False
         If ``True``, the loop does not terminate when the LLM produces content

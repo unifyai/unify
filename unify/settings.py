@@ -26,7 +26,6 @@ from unify.knowledge_manager.settings import KnowledgeSettings
 from unify.memory_manager.settings import MemorySettings
 from unify.secret_manager.settings import SecretSettings
 from unify.transcript_manager.settings import TranscriptSettings
-from unify.web_searcher.settings import WebSettings
 
 
 def _parse_bool(v: Any) -> bool:
@@ -154,7 +153,6 @@ class ProductionSettings(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     secret: SecretSettings = Field(default_factory=SecretSettings)
     transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
-    web: WebSettings = Field(default_factory=WebSettings)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Validators

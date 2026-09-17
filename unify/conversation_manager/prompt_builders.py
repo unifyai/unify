@@ -158,7 +158,7 @@ def _build_base_output_format(
     action_steering_tool_listing: str,
 ) -> str:
     """Build output format block for system prompts."""
-    knowledge_tool_listing = """- `act`: Engage with knowledge, resources, and the world (web search, retrieve files, update records, etc.). Call `act` freely for backend work.
+    knowledge_tool_listing = """- `act`: Engage with knowledge, resources, and the world (retrieve files, update records, run code, etc.). Call `act` freely for backend work.
 - `ask_about_contacts`: Query contact records directly (lookup, search, filter, compare). Faster than `act` for purely contact-related questions.
 - `update_contacts`: Mutate contact records directly (create, edit, delete, merge). Faster than `act` for purely contact-related changes.
 - `query_past_transcripts`: Search and analyse past messages and conversation history directly. Faster than `act` for purely transcript-related questions.

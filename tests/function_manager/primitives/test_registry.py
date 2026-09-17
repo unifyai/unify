@@ -50,7 +50,7 @@ def test_manager_specs_filtered_by_scope():
     aliases = {s.manager_alias for s in specs}
     assert aliases == {"files", "contacts"}
     # Should NOT include unscoped managers
-    assert "web" not in aliases
+    assert "secrets" not in aliases
     assert "knowledge" not in aliases
 
 
@@ -114,7 +114,7 @@ def test_primitive_methods_respects_common_exclusions():
     """primitive_methods() excludes common excluded methods."""
     registry = get_registry()
     # Check for all managers
-    for alias in ["contacts", "files", "web"]:
+    for alias in ["contacts", "files", "secrets"]:
         methods = registry.primitive_methods(manager_alias=alias)
         for excluded in _COMMON_EXCLUDED_METHODS:
             assert (
@@ -161,7 +161,7 @@ def test_prompt_context_includes_scoped_managers():
     assert "primitives.files" in context
     assert "primitives.contacts" in context
     # Should NOT include unscoped managers
-    assert "primitives.web" not in context
+    assert "primitives.secrets" not in context
     assert "primitives.knowledge" not in context
 
 
@@ -182,7 +182,7 @@ def test_prompt_context_multiple_managers_has_general_rules():
     consult pointer instead.
     """
     registry = get_registry()
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "web"}))
+    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "secrets"}))
     context = registry.prompt_context(scope)
     assert "General Rules" in context
     assert "Manager Selection Priorities" not in context
@@ -223,7 +223,7 @@ def test_primitive_row_filter():
     assert "unify.contact_manager.contact_manager.ContactManager" in filter_expr
     assert "unify.file_manager.managers.file_manager.FileManager" in filter_expr
     # Should NOT include unscoped managers
-    assert "WebSearcher" not in filter_expr
+    assert "SecretManager" not in filter_expr
 
 
 def test_primitive_row_filter_single_manager():

@@ -26,7 +26,7 @@ CodeActActor ── Python plans over primitives.* + JSON tools ──►
 │                                                       │
 │  ContactManager    KnowledgeManager   TranscriptManager│
 │  GuidanceManager   FunctionManager    FileManager     │
-│  IngestionManager  ImageManager       WebSearcher     │
+│  IngestionManager  ImageManager                       │
 │  SecretManager     DataManager                        │
 │                                                       │
 │  EventBus ─── typed pub/sub backbone                  │
@@ -449,7 +449,6 @@ unify/
 │   ├── file_manager/
 │   ├── ingestion_manager/
 │   ├── image_manager/
-│   ├── web_searcher/
 │   ├── secret_manager/
 │   ├── data_manager/
 │   ├── events/

@@ -32,7 +32,7 @@ class StateManagerEnvironment(BaseEnvironment):
         time via ``Primitives(primitive_scope=...)``.
     allowed_methods : set[str] | None
         Optional set of fully-qualified method names to expose (e.g.,
-        ``{"primitives.contacts.ask", "primitives.web.ask"}``). When
+        ``{"primitives.contacts.ask", "primitives.transcripts.ask"}``). When
         set, only these methods appear in ``get_tools()`` and
         ``get_prompt_context()``. When ``None`` (default), all methods
         from scoped managers are exposed.
@@ -208,7 +208,7 @@ result this way — your response text handles that.
   | `handle.done()` | `bool` | Completed? |
 
   ```python
-  handle = await primitives.web.ask("Summarise this week's AI news")
+  handle = await primitives.transcripts.ask("Summarise this week's conversations")
   await handle.interject("Also include the Q2 numbers")  # mid-flight
   result = await handle.result()  # wait for completion
   ```""")

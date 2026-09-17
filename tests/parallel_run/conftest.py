@@ -31,6 +31,22 @@ HANG_FIXTURES_DIR = Path(__file__).parent / "hang_fixtures"
 # environment, used only by the store-plumbing and --no-cache coverage.
 STORE_FIXTURES_DIR = Path(__file__).parent / "store_fixtures"
 PYTEST_LOGS_DIR = REPO_ROOT / "logs" / "pytest"
+_FIXTURE_TREES = (FIXTURES_DIR, HANG_FIXTURES_DIR, STORE_FIXTURES_DIR)
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Collect a fixture tree only when the invocation names a path inside it.
+
+    The fixture tests are inputs for the runner tests (some fail or hang on
+    purpose), so collecting a parent directory must not sweep them in, while
+    the nested runner that targets them by path must still find them.
+    """
+    path = Path(collection_path)
+    tree = next((d for d in _FIXTURE_TREES if path == d or d in path.parents), None)
+    if tree is None:
+        return None
+    invoked = [Path(str(arg).split("::")[0]).resolve() for arg in config.args]
+    return not any(p == tree or tree in p.parents for p in invoked)
 
 
 def get_unity_sockets() -> List[str]:

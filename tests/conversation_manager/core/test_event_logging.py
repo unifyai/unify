@@ -108,7 +108,6 @@ async def cm_with_eventbus():
     os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
     os.environ["UNIFY_SECRET_ENABLED"] = "false"
     os.environ["UNIFY_SKILL_ENABLED"] = "false"
-    os.environ["UNIFY_WEB_ENABLED"] = "false"
     os.environ["UNIFY_FILE_ENABLED"] = "false"
     os.environ["UNIFY_INCREMENTING_TIMESTAMPS"] = "true"
     os.environ["TEST"] = "true"

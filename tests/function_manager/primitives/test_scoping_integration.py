@@ -242,8 +242,8 @@ def test_state_manager_env_get_prompt_context_respects_scope():
     assert "#### `primitives.files`" not in context
 
     # Unscoped managers do not appear in the routing overview
-    assert "→ `primitives.web`" not in context
-    assert "#### `primitives.web`" not in context
+    assert "→ `primitives.secrets`" not in context
+    assert "#### `primitives.secrets`" not in context
 
 
 # ────────────────────────────────────────────────────────────────────────────

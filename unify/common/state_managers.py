@@ -13,8 +13,8 @@ class BaseStateManager(ABC):
 
     This abstract base exists solely to provide a single common ancestor for
     manager interfaces such as ContactManager, TranscriptManager, KnowledgeManager,
-    FileManager, FunctionManager, GuidanceManager, ImageManager,
-    SecretManager, and WebSearcher.
+    FileManager, FunctionManager, GuidanceManager, ImageManager and
+    SecretManager.
 
     Purpose
     -------

@@ -66,8 +66,8 @@ def test_registry_get_function_id_contacts_ask():
 def test_registry_get_function_id_web_ask():
     """get_function_id matches the ID from _get_stable_id for web.ask."""
     registry = get_registry()
-    fid = registry.get_function_id("web", "ask")
-    expected = _get_stable_id("WebSearcher", "ask")
+    fid = registry.get_function_id("transcripts", "ask")
+    expected = _get_stable_id("TranscriptManager", "ask")
     assert fid == expected
 
 

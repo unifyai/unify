@@ -41,8 +41,8 @@ async def update_contacts_and_search():
     # Only ContactManager is imported/instantiated
     await primitives.contacts.update(text="Add Alice Smith, alice@example.com")
 
-    # Only WebSearcher is imported/instantiated
-    result = await primitives.web.ask(question="What is the weather in London?")
+    # Only TranscriptManager is imported/instantiated
+    result = await primitives.transcripts.ask(question="What did Alice ask for last week?")
     return result
 ```
 
@@ -56,7 +56,6 @@ async def update_contacts_and_search():
 | `primitives.ingestion` | IngestionManager | `submit`, `get_status`, `get_logs`, `wait`, `retry`, `cancel`, `pause`, `resume`, `reconcile`, ... |
 | `primitives.files` | FileManager | `exists`, `list`, `parse`, `ask`, `describe`, ... |
 | `primitives.secrets` | SecretManager | `ask`, `update` |
-| `primitives.web` | WebSearcher | `ask` |
 
 Knowledge and Guidance are **not** primitives. They are typed catalogues exposed as top-level Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`).
 
@@ -194,17 +193,17 @@ async def research_contact(contact_name: str) -> str:
         question=f"What do we know about {contact_name}?"
     )
 
-    # Search the web for more info
-    web_results = await primitives.web.ask(
-        question=f"Find professional information about {contact_name}"
+    # Look for more in past conversations
+    history = await primitives.transcripts.ask(
+        question=f"What has {contact_name} told us about their role and company?"
     )
 
     # Update the contact with new information
     await primitives.contacts.update(
-        text=f"Update {contact_name} with: {web_results}"
+        text=f"Update {contact_name} with: {history}"
     )
 
-    return f"Updated {contact_name} with web research findings."
+    return f"Updated {contact_name} from conversation history."
 ```
 
 ---
@@ -297,7 +296,7 @@ async def delegated_research(topic: str) -> SteerableToolHandle:
     """
     return await primitives.actor.act(
         request=f"Research the following topic thoroughly: {topic}",
-        prompt_functions=["primitives.web.ask", "primitives.contacts.ask"],
+        prompt_functions=["primitives.transcripts.ask", "primitives.contacts.ask"],
         can_store=False,
         timeout=300,
     )

@@ -16,7 +16,6 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
         "ingestion",
         "transcripts",
         "secrets",
-        "web",
         "data",
         "files",
         "actor",

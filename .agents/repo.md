@@ -8,7 +8,7 @@ covers *how to work on the code*, not *what the code does*.
 
 ## What Unify is
 
-Unify implements an AI assistant's brain as a **back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, `FileManager`, `DataManager`, `IngestionManager`, `ImageManager`, `WebSearcher`, `SecretManager`) through code-first plans, and a `ConversationManager` sits above the actor as the persistent interaction loop. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
+Unify implements an AI assistant's brain as a **back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, `FileManager`, `DataManager`, `IngestionManager`, `ImageManager`, `SecretManager`) through code-first plans, and a `ConversationManager` sits above the actor as the persistent interaction loop. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
 
 Everything persists in an in-process SQLite store, `unify/db/` (imported as `from unify import db`). There is no backend service, no accounts and no infrastructure: the only external dependency is an LLM provider reached through the sibling `unillm` repo (editable install via `[tool.uv.sources]` in `pyproject.toml`).
 
@@ -128,7 +128,6 @@ The public API of each state manager is defined by the abstract methods on `Base
 | Files (parse, query) | `primitives.files.*` |
 | Storing new data or files, from any source | `primitives.ingestion.*` (`submit` — there is no `primitives.data.ingest`) |
 | Querying and reshaping stored tables | `primitives.data.*` |
-| Web research (lightweight) | `primitives.web.*` |
 | Secrets (metadata only via `ask`) | `primitives.secrets.*` |
 | Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
 | Stored functions | `FunctionManager_*` (top-level JSON tools) and `execute_function` |
@@ -163,7 +162,6 @@ unify/
 │   ├── file_manager/        # File parsing and registry
 │   ├── ingestion_manager/   # Checkpointed data and file ingestion
 │   ├── image_manager/       # Image storage and vision queries
-│   ├── web_searcher/        # Web research
 │   ├── secret_manager/      # Encrypted secrets
 │   ├── data_manager/        # Low-level data ops
 │   ├── memory_manager/      # Offline consolidation

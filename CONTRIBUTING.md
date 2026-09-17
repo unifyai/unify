@@ -92,7 +92,7 @@ For PRs that touch a specific subsystem, the table below is a rough guide to who
 | `unify/db/` (the local store) | @djl11 |
 | `unify/contact_manager/`, `unify/knowledge_manager/`, `unify/transcript_manager/` | @djl11 |
 | `unify/file_manager/` (parsing) | @hmahmood24, @djl11 |
-| `unify/function_manager/`, `unify/web_searcher/` | @djl11, @YushaArif99, @juliagsy |
+| `unify/function_manager/` | @djl11, @YushaArif99, @juliagsy |
 | `unify/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
 | `tests/conftest.py`, `tests/parallel_run.sh` | @djl11, @CatB1t |
 

@@ -286,8 +286,6 @@ async def query_llm(
     especially useful for comparing model price, speed, latency, and
     quality/cost tradeoffs across providers. Then supplement with:
     - ARC Prize leaderboard: https://arcprize.org/leaderboard
-    - General web search for recent benchmark, pricing, latency, and
-      reliability information.
 
     Do this research while authoring or storing the function, then bake the
     selected endpoint into the function. Do not put benchmark browsing or

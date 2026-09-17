@@ -3667,7 +3667,7 @@ class CodeActActor(BaseCodeActActor):
 
                 **This is the preferred tool for any task that maps to a single
                 function or primitive call** — a primitive
-                (``primitives.contacts.ask``, ``primitives.web.ask``, …)
+                (``primitives.contacts.ask``, ``primitives.transcripts.ask``, …)
                 or a stored function discovered via FunctionManager. It
                 **structurally guarantees** the returned handle is exposed to
                 the outer loop for steering (ask, stop, pause, resume,

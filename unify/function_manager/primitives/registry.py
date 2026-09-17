@@ -248,17 +248,6 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         examples="Rarely used directly in plans",
     ),
     ManagerSpec(
-        manager_alias="web",
-        manager_registry_key="web_search",
-        primitive_class_path="unify.web_searcher.web_searcher.WebSearcher",
-        excluded_methods=frozenset(),
-        priority=5,
-        domain="Time-Sensitive & External Research",
-        description="Quick one-off internet queries against the public web. Not for gated sites, browser automation, or multi-step web procedures — use Tavily + SecretManager + ComputerPrimitives directly for those",
-        use_when="Fast, simple public-web lookups: current events, weather, news, definitions, quick factual questions",
-        examples="'What is the Eisenhower Matrix?', 'Weather in Berlin today?', 'Latest AI news?', 'Current stock price?'",
-    ),
-    ManagerSpec(
         manager_alias="files",
         manager_registry_key="files",
         primitive_class_path="unify.file_manager.managers.file_manager.FileManager",

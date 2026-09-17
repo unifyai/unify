@@ -23,11 +23,11 @@ def test_valid_single_manager():
 
 def test_valid_multiple_managers():
     """Can create scope with multiple valid managers."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "web"}))
+    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "secrets"}))
     assert len(scope.scoped_managers) == 3
     assert scope.includes("files")
     assert scope.includes("contacts")
-    assert scope.includes("web")
+    assert scope.includes("secrets")
     assert not scope.includes("data")
 
 
@@ -51,10 +51,10 @@ def test_empty_scope_raises():
 
 def test_scope_key_is_deterministic():
     """scope_key is deterministic regardless of insertion order."""
-    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "web"}))
-    scope2 = PrimitiveScope(scoped_managers=frozenset({"web", "files", "contacts"}))
+    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "secrets"}))
+    scope2 = PrimitiveScope(scoped_managers=frozenset({"secrets", "files", "contacts"}))
     assert scope1.scope_key == scope2.scope_key
-    assert scope1.scope_key == "contacts,files,web"
+    assert scope1.scope_key == "contacts,files,secrets"
 
 
 def test_scope_key_single_manager():
@@ -147,7 +147,6 @@ def test_valid_manager_aliases_contains_expected():
         "ingestion",
         "transcripts",
         "secrets",
-        "web",
         "data",
         "files",
         "actor",

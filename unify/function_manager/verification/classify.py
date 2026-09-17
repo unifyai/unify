@@ -90,12 +90,8 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     # secrets
     "primitives.secrets.ask": _S.read_only,
     "primitives.secrets.update": _S.unsafe_effectful,
-    # transcripts / web
+    # transcripts
     "primitives.transcripts.ask": _S.read_only,
-    "primitives.web.ask": _S.read_only,
-    # a fetch reads the public internet but writes the bytes to a path derived
-    # from the URL, so repeating it converges rather than accumulating
-    "primitives.web.fetch": _S.idempotent_effectful,
 }
 
 # Third-party modules that are pure computation; anything else outside the
