@@ -38,7 +38,6 @@ def test_update_delete_invalidate_supersede_builtin_refused():
         is_builtin=True,
         new=True,
         mutable=True,
-        stamp_authoring=True,
     )
     kid = int(log.entries["knowledge_id"])
 

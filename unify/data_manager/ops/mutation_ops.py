@@ -14,10 +14,6 @@ from typing import Any, Dict, List, Optional
 from unify import db
 from unify.db import DuplicateKey, StoreError
 from unify.common.filter_utils import normalize_filter_expr
-from unify.common.authorship import (
-    is_shared_authored_context,
-    strip_authoring_assistant_id,
-)
 from unify.common.log_utils import create_logs as unify_create_logs
 
 logger = logging.getLogger(__name__)
@@ -76,7 +72,6 @@ def insert_rows_impl(
         create_kwargs: Dict[str, Any] = {
             "context": context,
             "entries": rows,
-            "stamp_authoring": is_shared_authored_context(context),
         }
         if on_duplicate is not None:
             create_kwargs["on_duplicate"] = on_duplicate
@@ -143,11 +138,7 @@ def update_rows_impl(
     if filter is None and log_ids is None:
         raise ValueError("Either filter or log_ids must be provided for update_rows")
 
-    cleaned_updates = (
-        strip_authoring_assistant_id(updates)
-        if is_shared_authored_context(context)
-        else dict(updates)
-    )
+    cleaned_updates = dict(updates)
 
     if log_ids is not None and filter is None:
         if not log_ids:

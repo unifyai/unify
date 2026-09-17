@@ -533,7 +533,6 @@ class TranscriptManager(BaseTranscriptManager):
                 **entries,
                 new=True,
                 mutable=True,
-                stamp_authoring=True,
             )
 
             # Build a Message directly from the stored row
@@ -1379,7 +1378,6 @@ class TranscriptManager(BaseTranscriptManager):
             medium=str(payload.get("medium", "")),
             new=True,
             mutable=True,
-            stamp_authoring=True,
         )
 
         # Extract the assigned exchange_id
@@ -1403,7 +1401,6 @@ class TranscriptManager(BaseTranscriptManager):
             **entries,
             new=True,
             mutable=True,
-            stamp_authoring=True,
         )
 
         tm_message_id = int(log.entries.get("message_id", -1))

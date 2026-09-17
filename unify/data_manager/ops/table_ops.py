@@ -11,7 +11,6 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from unify import db
-from unify.common.authorship import fields_with_authoring, is_shared_authored_context
 
 if TYPE_CHECKING:
     from unify.data_manager.types.table import TableDescription
@@ -77,8 +76,6 @@ def create_table_impl(
         logger.error("Creating table context %r failed", context)
         raise
 
-    if is_shared_authored_context(context):
-        fields = fields_with_authoring(fields)
     if fields:
         db.create_fields(fields=fields, context=context)
 

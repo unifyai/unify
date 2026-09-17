@@ -1,7 +1,6 @@
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Literal
 
-from unify.common.authorship import AuthoredRow
 from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
 from .verification import (
@@ -15,7 +14,7 @@ from .verification import (
 )
 
 
-class Function(AuthoredRow):
+class Function(BaseModel):
     """
     Represents a function stored in the FunctionManager.
 

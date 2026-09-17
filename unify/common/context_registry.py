@@ -1,17 +1,14 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Final, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel
 
 from unify import db
-from unify.common.authorship import SHARED_SCOPED_TABLES, fields_with_authoring
 from unify.common.context_store import create_context_checked
 from unify.common.state_managers import BaseStateManager
 
 _log = logging.getLogger(__name__)
-
-_SHARED_SCOPED_TABLES: Final[frozenset[str]] = SHARED_SCOPED_TABLES
 
 
 class TableContext(BaseModel):
@@ -52,18 +49,6 @@ class ContextRegistry:
             return manager.__name__
         except AttributeError:
             return type(manager).__name__
-
-    @classmethod
-    def _is_shared_scoped(cls, table_name: str) -> bool:
-        """Return whether a table carries authorship columns."""
-        if table_name in _SHARED_SCOPED_TABLES:
-            return True
-        parent = table_name
-        while "/" in parent:
-            parent = parent.rsplit("/", 1)[0]
-            if parent in _SHARED_SCOPED_TABLES:
-                return True
-        return False
 
     @classmethod
     def _session_root(cls, manager_name: str, table_name: str) -> str:
@@ -126,11 +111,6 @@ class ContextRegistry:
                         f"{current_context}/{foreign_key['references']}"
                     )
                     resolved_foreign_keys.append(fk_copy)
-            context_fields = context.fields
-            if cls._is_shared_scoped(context.name):
-                context_fields = fields_with_authoring(context_fields)
-                context = context.model_copy(update={"fields": context_fields})
-
             out[context.name] = {
                 "resolved_name": f"{current_context}/{context.name}",
                 "table_context": context,

@@ -5,10 +5,6 @@ from typing import Any, Dict, Mapping, Optional
 from unify import db
 from pydantic import ValidationError
 
-from ..common.authorship import (
-    AUTHORING_ASSISTANT_ID_FIELD,
-    strip_authoring_assistant_id,
-)
 from ..common.log_utils import assigned_row_id, log as unity_log
 from ..common.tool_outcome import ToolOutcome
 from .types.contact import Contact
@@ -60,11 +56,8 @@ _NAMED_UPDATE_FIELDS = frozenset(
 
 def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Split a splat dict into closed ``_create_contact`` kwargs."""
-    payload = strip_authoring_assistant_id(payload)
     named: dict[str, Any] = {}
     for key, value in payload.items():
-        if key == AUTHORING_ASSISTANT_ID_FIELD:
-            continue
         if key == "contact_id":
             named["_contact_id"] = value
         elif key in _NAMED_CREATE_FIELDS:
@@ -76,12 +69,8 @@ def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def partition_update_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Split a splat dict into closed ``update_contact`` kwargs."""
-    # Authorship is stamped at the log boundary, never as a create/update kwarg.
-    payload = strip_authoring_assistant_id(payload)
     named: dict[str, Any] = {}
     for key, value in payload.items():
-        if key == AUTHORING_ASSISTANT_ID_FIELD:
-            continue
         if key in _NAMED_UPDATE_FIELDS:
             named[key] = value
         else:
@@ -261,7 +250,7 @@ def create_contact(
     if contact_details["response_policy"] is None:
         contact_details["response_policy"] = self.DEFAULT_RESPONSE_POLICY
 
-    contact_details = strip_authoring_assistant_id(contact_details)
+    contact_details = contact_details
 
     if not any(v is not None for v in contact_details.values()):
         raise AssertionError("At least one contact detail must be provided.")
@@ -287,7 +276,6 @@ def create_contact(
         **contact_details,
         new=True,
         mutable=True,
-        stamp_authoring=True,
     )
     contact_id = assigned_row_id(log, "contact_id", context=context_name)
     try:
@@ -340,9 +328,7 @@ def update_contact(
         "is_system": is_system,
     }
 
-    updates_dict = strip_authoring_assistant_id(
-        {k: v for k, v in contact_details.items() if v is not None},
-    )
+    updates_dict = {k: v for k, v in contact_details.items() if v is not None}
     if not updates_dict:
         raise ValueError("At least one contact detail must be provided for an update.")
 

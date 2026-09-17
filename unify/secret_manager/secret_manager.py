@@ -851,7 +851,6 @@ class SecretManager(BaseSecretManager):
             **entries,
             new=True,
             mutable=True,
-            stamp_authoring=True,
         )
 
         try:

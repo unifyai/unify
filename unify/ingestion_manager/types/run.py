@@ -22,8 +22,6 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from unify.common.authorship import AuthoredRow
-
 # Lifecycle of a run. `paused` is distinct from `cancelled`: a paused run keeps its
 # queued work and can be resumed, a cancelled one cannot.
 RunState = Literal[
@@ -256,7 +254,7 @@ class LogEntry(BaseModel):
     message: str
 
 
-class IngestionEventRow(AuthoredRow):
+class IngestionEventRow(BaseModel):
     """Row stored in the ``Ingestion/Events`` context.
 
     One append-only line per thing that happened. Stage progress is folded from
@@ -286,7 +284,7 @@ class IngestionEventRow(AuthoredRow):
     declared_rows: Optional[int] = None
 
 
-class IngestionRunRecord(AuthoredRow):
+class IngestionRunRecord(BaseModel):
     """Row stored in the ``Ingestion/Runs`` context.
 
     ``run_id`` is deliberately absent: the backend auto-counts it, and including

@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import Field
-
-from unify.common.authorship import AuthoredRow
+from pydantic import BaseModel, Field
 
 UNASSIGNED_SECRET_ID = -1
 
 
-class Secret(AuthoredRow):
+class Secret(BaseModel):
     """Fixed schema for storing secrets.
 
     The schema is intentionally immutable: columns cannot be added or removed.

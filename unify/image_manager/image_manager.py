@@ -10,7 +10,6 @@ import threading
 from typing import Any, Dict, List, Optional, Union
 
 from ..common.llm_client import new_llm_client
-from ..common.authorship import stamp_authoring_assistant_id
 from ..common.log_utils import log as unity_log, create_logs as unity_create_logs
 from ..common.context_dump import make_messages_safe_for_context_dump
 from unify import db
@@ -950,7 +949,7 @@ class ImageManager(BaseImageManager):
             if isinstance(data_val, (bytes, bytearray)):
                 payload["data"] = base64.b64encode(data_val).decode("utf-8")
             img = Image(**payload)
-            prepared.append(stamp_authoring_assistant_id(img.to_post_json()))
+            prepared.append(img.to_post_json())
             annotations.append(ann)
             auto_caption_flags.append(ac_flag)
 

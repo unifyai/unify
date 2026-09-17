@@ -21,7 +21,6 @@ _EXPECTED_FWD = {
     "images": "imgs",
     "attachments": "atts",
     "metadata": "meta",
-    "authoring_assistant_id": "aaid",
 }
 
 _EXPECTED_INV = {v: k for k, v in _EXPECTED_FWD.items()}

@@ -4,9 +4,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import List, Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from unify.common.authorship import AuthoredRow
 from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
 from .source_ref import SourceRef, coerce_source_refs
@@ -30,7 +29,7 @@ class KnowledgeStatus(StrEnum):
     invalidated = "invalidated"
 
 
-class Knowledge(AuthoredRow):
+class Knowledge(BaseModel):
     """One typed claim in the Knowledge ledger."""
 
     knowledge_id: int = Field(

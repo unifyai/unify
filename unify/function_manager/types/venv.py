@@ -1,11 +1,9 @@
 from typing import Optional
 
-from pydantic import Field
-
-from unify.common.authorship import AuthoredRow
+from pydantic import BaseModel, Field
 
 
-class VirtualEnv(AuthoredRow):
+class VirtualEnv(BaseModel):
     """
     Represents a virtual environment configuration stored in the FunctionManager.
 

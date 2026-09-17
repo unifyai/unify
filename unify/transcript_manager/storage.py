@@ -137,7 +137,6 @@ def ensure_exchanges_records(
                     medium=(eid_to_medium or {}).get(int(eid), ""),
                     new=True,
                     mutable=True,
-                    stamp_authoring=True,
                 )
             except Exception:
                 # Ignore duplicates or backend races

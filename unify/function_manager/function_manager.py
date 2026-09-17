@@ -36,7 +36,6 @@ from typing import (
 from unify import db
 from .shell_pool import ShellPool
 from unify.db import StoreError as _UnifyRequestError
-from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.federated_search import (
@@ -2809,7 +2808,6 @@ class FunctionManager(BaseFunctionManager):
         unity_create_logs(
             context=self._verifications_ctx,
             entries=[payload],
-            stamp_authoring=False,
         )
         self.refresh_trust(int(row.function_id))
 
@@ -3471,7 +3469,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=[
                         {"meta_id": 1, field_name: hashes},
                     ],
-                    stamp_authoring=True,
                 )
         except Exception as e:
             logger.warning("Failed to store %s hash map: %s", field_name, e)
@@ -3561,7 +3558,6 @@ class FunctionManager(BaseFunctionManager):
             created = unity_create_logs(
                 context=self._primitives_ctx,
                 entries=entries,
-                stamp_authoring=True,
                 on_duplicate="skip",
             )
             written_ids = (
@@ -3925,7 +3921,6 @@ class FunctionManager(BaseFunctionManager):
                 unity_create_logs(
                     context=self._compositional_ctx,
                     entries=entries_to_create,
-                    stamp_authoring=True,
                 )
             except Exception as e:
                 logger.error(
@@ -3943,10 +3938,7 @@ class FunctionManager(BaseFunctionManager):
                 db.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
-                    entries=[
-                        strip_authoring_assistant_id(entry)
-                        for entry in entries_to_update
-                    ],
+                    entries=[entry for entry in entries_to_update],
                     overwrite=True,
                 )
                 # Content changed under everything that depends on these
@@ -4123,7 +4115,6 @@ class FunctionManager(BaseFunctionManager):
                 unity_create_logs(
                     context=self._compositional_ctx,
                     entries=entries_to_create,
-                    stamp_authoring=True,
                 )
             except Exception as e:
                 logger.error(
@@ -4141,10 +4132,7 @@ class FunctionManager(BaseFunctionManager):
                 db.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
-                    entries=[
-                        strip_authoring_assistant_id(entry)
-                        for entry in entries_to_update
-                    ],
+                    entries=[entry for entry in entries_to_update],
                     overwrite=True,
                 )
             except Exception as e:
@@ -5569,7 +5557,6 @@ class FunctionManager(BaseFunctionManager):
         result = unity_create_logs(
             context=self._venvs_ctx,
             entries=[{"venv": venv}],
-            stamp_authoring=True,
         )
         # unity_create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:

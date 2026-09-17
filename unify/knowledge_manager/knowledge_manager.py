@@ -335,7 +335,6 @@ class KnowledgeManager(BaseKnowledgeManager):
             **payload,
             new=True,
             mutable=True,
-            stamp_authoring=True,
         )
         knowledge_id = assigned_row_id(log, "knowledge_id", context=self._ctx)
         self.reconcile_sources(knowledge_ids=[knowledge_id])
@@ -495,7 +494,6 @@ class KnowledgeManager(BaseKnowledgeManager):
                 **payload,
                 new=True,
                 mutable=True,
-                stamp_authoring=True,
             )
             new_knowledge_id = assigned_row_id(
                 log,

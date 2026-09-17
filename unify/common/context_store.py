@@ -4,7 +4,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from unify import db
-from unify.common.authorship import fields_with_authoring, is_shared_authored_context
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +96,6 @@ class TableStore:
         self._auto_counting = dict(auto_counting or {})
         self._description = description or ""
         self._fields = dict(fields or {})
-        if is_shared_authored_context(context):
-            self._fields = fields_with_authoring(self._fields)
         self._foreign_keys = list(foreign_keys or [])
 
     def ensure_context(self) -> None:

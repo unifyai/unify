@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from unify.common.authorship import AuthoredRow
 from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
 from ...image_manager.types import AnnotatedImageRefs
@@ -12,7 +11,7 @@ from ...image_manager.types import AnnotatedImageRefs
 UNASSIGNED = -1
 
 
-class Guidance(AuthoredRow):
+class Guidance(BaseModel):
     guidance_id: int = Field(
         default=UNASSIGNED,
         description="Auto-incrementing unique identifier for the guidance entry",

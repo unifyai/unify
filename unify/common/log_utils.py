@@ -28,10 +28,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from unify import db
-from unify.common.authorship import (
-    AUTHORING_ASSISTANT_ID_FIELD,
-    current_authoring_assistant_id,
-)
 from unify.session_details import SESSION_DETAILS
 
 logger = logging.getLogger(__name__)
@@ -147,7 +143,6 @@ def log(
     new: bool = True,
     mutable: bool = False,
     project: Optional[str] = None,
-    stamp_authoring: bool = False,
     **entries: Any,
 ) -> db.Log:
     """
@@ -169,8 +164,6 @@ def log(
     db.Log
         The created log object
     """
-    if stamp_authoring:
-        entries[AUTHORING_ASSISTANT_ID_FIELD] = current_authoring_assistant_id()
     entries = _inject_private_fields(entries)
     return db.log(
         project=project,
@@ -186,7 +179,6 @@ def create_logs(
     *,
     entries: List[Dict[str, Any]],
     project: Optional[str] = None,
-    stamp_authoring: bool = False,
     **kwargs: Any,
 ) -> Any:
     """
@@ -206,22 +198,7 @@ def create_logs(
     List[db.Log]
         The created rows, with ids and auto-counted keys filled in.
     """
-    authoring_assistant_id = (
-        current_authoring_assistant_id() if stamp_authoring else None
-    )
-    entries = [
-        _inject_private_fields(
-            {
-                **entry,
-                **(
-                    {AUTHORING_ASSISTANT_ID_FIELD: authoring_assistant_id}
-                    if stamp_authoring
-                    else {}
-                ),
-            },
-        )
-        for entry in entries
-    ]
+    entries = [_inject_private_fields(dict(entry)) for entry in entries]
     return db.create_logs(
         project=project,
         context=context,

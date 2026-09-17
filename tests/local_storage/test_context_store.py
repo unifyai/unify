@@ -51,9 +51,7 @@ def test_ensure_creates_and_idempotent(monkeypatch):
     def _create_fields(fields, *, context=None, project=None):
         calls["create_fields"] += 1
         assert context == "Test/Contacts"
-        # Contacts is a shared-scoped table, so the authoring column rides
-        # along with the declared fields.
-        assert set(fields) == {"first_name", "surname", "authoring_assistant_id"}
+        assert set(fields) == {"first_name", "surname"}
         assert fields["first_name"] == {"type": "str"}
         assert fields["surname"] == {"type": "str"}
 

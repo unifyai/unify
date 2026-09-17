@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 _RECONCILE_SAMPLE = 25
 # Bookkeeping columns that are legitimately absent from source data, so their
 # emptiness says nothing about whether the ingest worked.
-_RECONCILE_IGNORED = frozenset({"row_id", "authoring_assistant_id"})
+_RECONCILE_IGNORED = frozenset({"row_id"})
 
 
 def _is_blank(value: Any) -> bool:

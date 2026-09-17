@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
-from unify.common.authorship import AuthoredRow
 from unify.file_manager.file_parsers.types.enums import ContentType
 from unify.file_manager.file_parsers.types.formats import FileFormat
 
@@ -16,7 +15,7 @@ UNASSIGNED = -1
 FileIngestionStatus = Literal["queued", "ingesting", "success", "error"]
 
 
-class FileRecordFields(AuthoredRow):
+class FileRecordFields(BaseModel):
     """Common fields for FileRecords index rows (shared by row payload + stored rows)."""
 
     # Core identification
@@ -298,7 +297,7 @@ class FileInfo(BaseModel):
     )
 
 
-class DocumentFields(AuthoredRow):
+class DocumentFields(BaseModel):
     """
     Common fields for per-file `/Content/` (document) rows.
 

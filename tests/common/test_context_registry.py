@@ -94,18 +94,6 @@ def test_lazy_provisioning_is_cached_per_table(provision):
     )
 
 
-def test_shared_scoped_tables_gain_the_authoring_field():
-    from unify.common.authorship import AUTHORING_ASSISTANT_ID_FIELD
-
-    contexts = ContextRegistry._get_contexts_for_manager(
-        RegistryExampleManager,
-        "user123/42",
-    )
-    shared_fields = contexts["Contacts"]["table_context"].fields
-    assert AUTHORING_ASSISTANT_ID_FIELD in shared_fields
-    assert contexts["SearchCache"]["table_context"].fields is None
-
-
 def test_forget_and_refresh_reprovision_the_table(provision):
     ContextRegistry.get_context(RegistryExampleManager, "Contacts")
     ContextRegistry.forget(RegistryExampleManager, "Contacts")

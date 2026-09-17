@@ -11,8 +11,6 @@ from pydantic import (
 )
 from typing import Optional, ClassVar
 
-from unify.common.authorship import AuthoredRow
-
 _log = logging.getLogger(__name__)
 
 # Allow Unicode letters/digits plus space, apostrophe, hyphen, and period.
@@ -77,7 +75,7 @@ class ContactDetailsWhatsApp(ContactDetailsBase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class Contact(AuthoredRow):
+class Contact(BaseModel):
     # Central, single source of truth for shorthand aliases (full → shorthand)
     SHORTHAND_MAP: ClassVar[dict[str, str]] = {
         "contact_id": "cid",

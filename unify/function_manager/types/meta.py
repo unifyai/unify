@@ -6,12 +6,10 @@ Stores the primitives sync state.
 
 from typing import Dict
 
-from pydantic import Field
-
-from unify.common.authorship import AuthoredRow
+from pydantic import BaseModel, Field
 
 
-class FunctionsMeta(AuthoredRow):
+class FunctionsMeta(BaseModel):
     """
     Metadata record for the Functions context.
 

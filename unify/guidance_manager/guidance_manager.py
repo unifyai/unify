@@ -613,7 +613,6 @@ class GuidanceManager(BaseGuidanceManager):
             **payload,
             new=True,
             mutable=True,
-            stamp_authoring=True,
         )
         return {
             "outcome": "guidance created successfully",
