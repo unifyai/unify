@@ -82,6 +82,7 @@ dependencies = [
     "sherpa-onnx>=1.13.3",
     "sherpa-onnx-core>=1.13.3",
     "jsonschema>=4.20",
+    "fastembed>=0.8.0",
 ]
 
 [dependency-groups]
