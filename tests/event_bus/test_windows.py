@@ -45,7 +45,7 @@ async def test_cache_only_skips_backend():
     original_get_logs = __import__("unisdk").get_logs
     spy = MagicMock(side_effect=original_get_logs)
 
-    with patch("unisdk.get_logs", spy):
+    with patch("db.get_logs", spy):
         # Search for fewer events than cache holds
         results = await bus.search(filter="type == 'Message'", limit=3)
 

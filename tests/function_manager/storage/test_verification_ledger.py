@@ -8,8 +8,7 @@ No LLM is involved anywhere in this file.
 import logging
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.function_manager.function_manager import FunctionManager
 from unify.function_manager.primitives.registry import collect_primitives
@@ -592,7 +591,7 @@ def test_librarian_confirmation_survives_overwrite_only_within_bounds():
 @_handle_project
 def test_backfill_classifies_rows_stored_before_the_ledger_once():
     fm = FunctionManager()
-    unisdk.create_logs(
+    db.create_logs(
         context=fm._compositional_ctx,
         entries=[
             {
@@ -607,7 +606,7 @@ def test_backfill_classifies_rows_stored_before_the_ledger_once():
             },
         ],
     )
-    raw = unisdk.get_logs(context=fm._compositional_ctx, filter="name == 'legacy'")[
+    raw = db.get_logs(context=fm._compositional_ctx, filter="name == 'legacy'")[
         0
     ].entries
     assert raw.get("side_effect_class") is None
@@ -618,7 +617,7 @@ def test_backfill_classifies_rows_stored_before_the_ledger_once():
     assert row["verify"] is True
     assert row["contract"]["source"] == "type_hints"
 
-    persisted = unisdk.get_logs(
+    persisted = db.get_logs(
         context=fm._compositional_ctx,
         filter="name == 'legacy'",
     )[0].entries

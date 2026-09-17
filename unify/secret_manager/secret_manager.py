@@ -5,12 +5,11 @@ import functools
 import logging
 import os
 from contextlib import contextmanager
-from threading import Lock, RLock
-from time import monotonic
+from threading import RLock
 from typing import Any, Callable, Dict, List, Optional, Type
 from pydantic import BaseModel
 
-import unisdk
+from unify import db
 from unify.common.llm_client import new_llm_client
 from unify.common.log_utils import log as unity_log, create_logs as unity_create_logs
 from unify.common.authorship import strip_authoring_assistant_id
@@ -49,7 +48,6 @@ from ..common.federated_search import (
 from ..common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
-    TEAM_CONTEXT_PREFIX,
     TableContext,
 )
 
@@ -96,14 +94,6 @@ class SecretManager(BaseSecretManager):
         self._custom_secrets_synced_contexts: set[str] = set()
         self._destination_context_lock = RLock()
         self._destination_write_scoped = False
-        self._assistant_secret_sync_lock = Lock()
-        self._last_assistant_secret_sync_success_at: float | None = None
-        self._last_assistant_secret_sync_failure_at: float | None = None
-        # Raw provider access/refresh tokens live here only -- never in the
-        # Secrets context, .env, or os.environ -- so sandboxed actor code cannot
-        # read them and bypass the workspace file-access allowlist. The trusted
-        # provider proxy reads them via ``get_oauth_token``.
-        self._oauth_tokens: dict[str, str] = {}
 
         # Ensure storage/schema exists deterministically (idempotent)
         self._provision_storage()
@@ -188,10 +178,6 @@ class SecretManager(BaseSecretManager):
 
     def _destination_for_context(self, context: str) -> str:
         """Return the public destination label for a concrete Secrets context."""
-        if context.startswith(TEAM_CONTEXT_PREFIX):
-            parts = context.split("/")
-            if len(parts) >= 2:
-                return f"team:{parts[1]}"
         return PERSONAL_DESTINATION
 
     def _split_destination_filter(
@@ -252,7 +238,7 @@ class SecretManager(BaseSecretManager):
 
     @functools.wraps(BaseSecretManager.clear, updated=())
     def clear(self) -> None:
-        unisdk.delete_context(self._ctx)
+        db.delete_context(self._ctx)
 
         # Force re-provisioning even if previously ensured
         self._ctx = ContextRegistry.refresh(self, SECRETS_TABLE)
@@ -266,7 +252,7 @@ class SecretManager(BaseSecretManager):
 
             for _ in range(3):
                 try:
-                    unisdk.get_fields(context=self._ctx)
+                    db.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -299,323 +285,9 @@ class SecretManager(BaseSecretManager):
             return ("required", {"ask": current_tools["ask"]})
         return ("auto", current_tools)
 
-    # --------------------- Internal helpers (assistant secret sync) ---------- #
-
-    # Allowlist for ``_sync_assistant_secrets``.  Limited to OAuth tokens that
-    # Communication writes to Orchestra's ``AssistantSecret`` table after each
-    # Google / Microsoft OAuth callback — those are the only secrets THIS sync
-    # is responsible for transporting.  Console-pasted integration secrets
-    # (HubSpot, Employment Hero, Matterport, Webex, Salesforce …) live in the
-    # ``/Secrets`` context directly and reach ``os.environ`` via
-    # ``_sync_dotenv``.  They neither need nor go through this sync; mixing
-    # them in here causes the cleanup loop to wipe them, which is the bug
-    # ``61141bba2`` patched.  Concern separation enforced explicitly: keep
-    # this allowlist OAuth-only so the bug class can't reappear.
-    _BUILTIN_OAUTH_SECRET_ALLOWLIST = frozenset(
-        {
-            "GOOGLE_ACCESS_TOKEN",
-            "GOOGLE_REFRESH_TOKEN",
-            "GOOGLE_TOKEN_EXPIRES_AT",
-            "GOOGLE_GRANTED_SCOPES",
-            "MICROSOFT_ACCESS_TOKEN",
-            "MICROSOFT_REFRESH_TOKEN",
-            "MICROSOFT_TOKEN_EXPIRES_AT",
-            "MICROSOFT_GRANTED_SCOPES",
-        },
-    )
-
-    # Backwards-compatible alias for the (small number of) call sites and
-    # tests that read ``OAUTH_SECRET_ALLOWLIST`` directly.  Identical to
-    # the built-in set above.
-    OAUTH_SECRET_ALLOWLIST = _BUILTIN_OAUTH_SECRET_ALLOWLIST
-
-    @classmethod
-    def _resolve_secret_allowlist(cls) -> frozenset[str]:
-        """Return assistant-secret names owned by runtime OAuth sync.
-
-        The set is intentionally limited to refresh-token OAuth metadata.
-        Console-pasted integration credentials already live in the local
-        ``Secrets`` context and reach ``os.environ`` through ``_sync_dotenv``.
-        """
-        try:
-            from unify.common.runtime_oauth import refresh_token_oauth_secret_names
-
-            return (
-                cls._BUILTIN_OAUTH_SECRET_ALLOWLIST | refresh_token_oauth_secret_names()
-            )
-        except Exception:
-            return cls._BUILTIN_OAUTH_SECRET_ALLOWLIST
-
-    @classmethod
-    def _sensitive_oauth_token_names(cls) -> frozenset[str]:
-        """Raw access/refresh token names held in-memory only (never in env)."""
-        try:
-            from unify.common.runtime_oauth import refresh_token_oauth_token_names
-
-            return refresh_token_oauth_token_names()
-        except Exception:
-            return frozenset(
-                {
-                    "GOOGLE_ACCESS_TOKEN",
-                    "GOOGLE_REFRESH_TOKEN",
-                    "MICROSOFT_ACCESS_TOKEN",
-                    "MICROSOFT_REFRESH_TOKEN",
-                },
-            )
-
-    def get_oauth_token(self, name: str) -> str | None:
-        """Return a raw provider token from the in-memory OAuth store.
-
-        Trusted-runtime accessor used by :func:`runtime_oauth.get_provider_access_token`.
-        Never expose the returned value to sandboxed code.
-        """
-        return self._oauth_tokens.get(name)
-
-    def _sync_assistant_secrets(self) -> None:
-        """Mirror runtime OAuth assistant secrets from Orchestra into local state.
-
-        Orchestra is the platform source of truth for assistant-level OAuth
-        secrets written outside this Unity process. Communication refresh jobs
-        persist updated access tokens there; this method pulls those values into
-        Unity's local ``Secrets`` context, then updates ``.env``/``os.environ``
-        so generated code and provider SDKs can use normal environment-based
-        credential discovery.
-
-        The sync is intentionally allowlisted. We mirror refresh-token OAuth
-        keys, but we do not copy arbitrary assistant secrets into the runtime.
-        Failures are best-effort: callers use ``sync_assistant_secrets_if_stale``
-        as the observable gate.
-        """
-        from ..session_details import SESSION_DETAILS
-
-        agent_id = SESSION_DETAILS.assistant.agent_id
-        if agent_id is None:
-            return
-
-        base_url = SETTINGS.ORCHESTRA_URL
-        unify_key = SESSION_DETAILS.unify_key
-        if not base_url or not unify_key:
-            return
-
-        try:
-            from unisdk.utils import http
-
-            # Assistant-scoped secrets read (own UNIFY_KEY, ownership-checked by
-            # Orchestra) instead of the fleet admin key.
-            resp = http.get(
-                f"{base_url}/assistant/{int(agent_id)}/secrets",
-                headers={"Authorization": f"Bearer {unify_key}"},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                return
-            payload = resp.json()
-            secrets_dict: dict = payload.get("secrets") or {}
-        except Exception:
-            return
-
-        # Allowlist is intentionally OAuth-only; integration secrets do not flow
-        # through this sync because they already live in the local Secrets
-        # context and are exported by _sync_dotenv.
-        active_allowlist = self._resolve_secret_allowlist()
-        sensitive = self._sensitive_oauth_token_names()
-
-        written = 0
-        for name, value in secrets_dict.items():
-            if name not in active_allowlist:
-                continue
-            if not isinstance(value, str) or not value:
-                continue
-            # Raw access/refresh tokens are held in-memory only, never mirrored
-            # to the Secrets context / .env / os.environ, so the sandbox cannot
-            # read them. Non-sensitive OAuth metadata (expiry, granted scopes)
-            # still flows to the context/env for scope and freshness checks.
-            if name in sensitive:
-                self._oauth_tokens[name] = value
-                written += 1
-                continue
-            try:
-                existing = unisdk.get_logs(
-                    context=self._ctx,
-                    filter=f"name == {name!r}",
-                    limit=1,
-                    return_ids_only=True,
-                )
-                description = "System-managed OAuth credential (auto-synced)"
-                if existing:
-                    unisdk.update_logs(
-                        logs=[existing[0]],
-                        context=self._ctx,
-                        entries={"value": value, "description": description},
-                        overwrite=True,
-                    )
-                else:
-                    unity_log(
-                        context=self._ctx,
-                        name=name,
-                        value=value,
-                        description=description,
-                        new=True,
-                        mutable=True,
-                        stamp_authoring=True,
-                    )
-                self._env_set(name, value)
-                written += 1
-            except Exception:
-                continue
-
-        logger.info(
-            "[integrations] sync: agent_id=%s orchestra_keys=%d wrote=%d",
-            agent_id,
-            len(secrets_dict),
-            written,
-        )
-
-        # Stale-cleanup is limited to the OAuth secrets owned by this sync.
-        # Console-pasted integration credentials live in the same local Secrets
-        # context but are not removed based on the admin assistant payload.
-        for stale_name in active_allowlist - secrets_dict.keys():
-            if stale_name in sensitive:
-                self._oauth_tokens.pop(stale_name, None)
-                continue
-            try:
-                ids = unisdk.get_logs(
-                    context=self._ctx,
-                    filter=f"name == {stale_name!r}",
-                    limit=1,
-                    return_ids_only=True,
-                )
-                if ids:
-                    unisdk.delete_logs(context=self._ctx, logs=ids[0])
-                    self._env_remove(stale_name)
-            except Exception:
-                continue
-
-    def _sync_workspace_file_policy(self) -> None:
-        """Mirror the workspace file-access allowlist into the runtime policy store.
-
-        Orchestra owns the per-assistant, per-provider Drive/SharePoint
-        allowlist (configured in Console). The localhost provider proxy reads it
-        from this in-process cache to enforce access on every Drive/Graph call;
-        this keeps that cache current. Best-effort: failures leave the prior
-        cache.
-        """
-        from ..session_details import SESSION_DETAILS
-
-        agent_id = SESSION_DETAILS.assistant.agent_id
-        if agent_id is None:
-            return
-
-        base_url = SETTINGS.ORCHESTRA_URL
-        unify_key = SESSION_DETAILS.unify_key
-        if not base_url or not unify_key:
-            return
-
-        from unisdk.utils import http
-
-        from unify.provider_proxy.policy import get_policy_store
-
-        resp = http.get(
-            f"{base_url}/assistant/{int(agent_id)}/workspace-file-access",
-            headers={"Authorization": f"Bearer {unify_key}"},
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            logger.info(
-                "[workspace-policy] sync: agent_id=%s http=%s policies=unchanged",
-                agent_id,
-                resp.status_code,
-            )
-            return
-        info = resp.json().get("info") or {}
-        policies = info.get("policies") or []
-        get_policy_store().set_policies(policies)
-        # This gate can drop files out of a listing and answer 404 for an item
-        # the user can see in their own drive UI, so what it is enforcing has to
-        # be legible after the fact. Without a line here the only evidence of a
-        # mask is the absence of a result, which reads identically to the
-        # provider having nothing to return.
-        logger.info(
-            "[workspace-policy] sync: agent_id=%s %s",
-            agent_id,
-            ", ".join(
-                f"{p.get('provider')}(default_allow={p.get('default_allow')},"
-                f"decisions={len(p.get('decisions') or ())})"
-                for p in policies
-            )
-            or "no policies (unrestricted)",
-        )
-
-    def sync_assistant_secrets_if_stale(
-        self,
-        ttl_seconds: float = 60.0,
-        *,
-        force: bool = False,
-        reason: str = "runtime",
-        failure_cooldown_seconds: float = 10.0,
-    ) -> bool:
-        """Pull assistant secrets through one debounced runtime sync gate.
-
-        This is the single runtime entry point for keeping Unity's local secret
-        state close to Orchestra without adding a network round trip to every
-        actor operation.  Normal callers, including ``execute_code``, call with
-        ``force=False`` and therefore only perform the expensive Orchestra pull
-        once per ``ttl_seconds`` window.  Forced callers use this when freshness
-        matters more than debounce, such as SecretManager construction,
-        ``primitives.secrets.ask(...)``, assistant-update events, or an OAuth
-        helper detecting a missing/near-expiry access token.
-
-        Returns ``True`` only when this invocation actually ran the sync work.
-        Returns ``False`` when the success debounce or failure cooldown skipped
-        work, or when the wrapped sync raised an exception.
-        """
-        now = monotonic()
-        if not force:
-            last_success = self._last_assistant_secret_sync_success_at
-            if last_success is not None and now - last_success < ttl_seconds:
-                return False
-            last_failure = self._last_assistant_secret_sync_failure_at
-            if (
-                last_failure is not None
-                and now - last_failure < failure_cooldown_seconds
-            ):
-                return False
-
-        with self._assistant_secret_sync_lock:
-            now = monotonic()
-            if not force:
-                last_success = self._last_assistant_secret_sync_success_at
-                if last_success is not None and now - last_success < ttl_seconds:
-                    return False
-                last_failure = self._last_assistant_secret_sync_failure_at
-                if (
-                    last_failure is not None
-                    and now - last_failure < failure_cooldown_seconds
-                ):
-                    return False
-            try:
-                self._sync_assistant_secrets()
-                self._sync_dotenv()
-                self._sync_workspace_file_policy()
-            except Exception:
-                self._last_assistant_secret_sync_failure_at = monotonic()
-                logger.warning(
-                    "[integrations] assistant secret sync failed reason=%s",
-                    reason,
-                    exc_info=True,
-                )
-                return False
-            self._last_assistant_secret_sync_success_at = monotonic()
-            self._last_assistant_secret_sync_failure_at = None
-            logger.info(
-                "[integrations] assistant secret sync complete reason=%s",
-                reason,
-            )
-            return True
-
     def _get_secret_value(self, name: str) -> str | None:
         try:
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=self._ctx,
                 filter=f"name == {name!r}",
                 limit=1,
@@ -652,7 +324,7 @@ class SecretManager(BaseSecretManager):
         for code executed via ``os.environ``.
         """
         try:
-            rows = unisdk.get_logs(context=self._ctx)
+            rows = db.get_logs(context=self._ctx)
         except Exception:
             rows = []
         name_to_value: Dict[str, str] = {}
@@ -788,7 +460,7 @@ class SecretManager(BaseSecretManager):
         value_to_name: Dict[str, str] = {}
         for context in self._read_secret_contexts():
             try:
-                rows = unisdk.get_logs(
+                rows = db.get_logs(
                     context=context,
                     from_fields=["name", "value"],
                 )
@@ -1049,7 +721,7 @@ class SecretManager(BaseSecretManager):
             If the credential is not stored in the resolved vault.
         """
         context = self._secret_context_for_destination(destination)
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=f"name == {integration!r}",
             limit=1,
@@ -1278,7 +950,7 @@ class SecretManager(BaseSecretManager):
         names: set[str] = set()
         for context in self._read_secret_contexts():
             try:
-                rows = unisdk.get_logs(
+                rows = db.get_logs(
                     context=context,
                     from_fields=["name"],
                 )
@@ -1350,7 +1022,7 @@ class SecretManager(BaseSecretManager):
             return exc.payload
 
         # Enforce uniqueness of name
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=context,
             filter=f"name == {name!r}",
             limit=1,
@@ -1420,7 +1092,7 @@ class SecretManager(BaseSecretManager):
             return exc.payload
 
         # Find target log id
-        ids = unisdk.get_logs(
+        ids = db.get_logs(
             context=context,
             filter=f"name == {name!r}",
             limit=2,
@@ -1441,7 +1113,7 @@ class SecretManager(BaseSecretManager):
         if not updates:
             raise ValueError("No updates provided.")
 
-        unisdk.update_logs(
+        db.update_logs(
             logs=[log_id],
             context=context,
             entries=updates,
@@ -1488,7 +1160,7 @@ class SecretManager(BaseSecretManager):
         except ToolErrorException as exc:
             return exc.payload
 
-        ids = unisdk.get_logs(
+        ids = db.get_logs(
             context=context,
             filter=f"name == {name!r}",
             limit=2,
@@ -1498,7 +1170,7 @@ class SecretManager(BaseSecretManager):
             raise ValueError(f"No secret found with name '{name}'.")
         if len(ids) > 1:
             raise RuntimeError(f"Multiple secrets found with name '{name}'.")
-        unisdk.delete_logs(context=context, logs=ids[0])
+        db.delete_logs(context=context, logs=ids[0])
         try:
             if self._is_personal_context(context):
                 self._env_remove(name)
@@ -1543,7 +1215,7 @@ class SecretManager(BaseSecretManager):
 
     def _get_stored_custom_secrets_hash(self) -> str:
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -1556,13 +1228,13 @@ class SecretManager(BaseSecretManager):
 
     def _store_custom_secrets_hash(self, hash_value: str) -> None:
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={"custom_secrets_hash": hash_value},
@@ -1578,7 +1250,7 @@ class SecretManager(BaseSecretManager):
             logger.warning("Failed to store custom secrets hash: %s", exc)
 
     def _secret_exists_without_custom_hash(self, name: str) -> bool:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._ctx,
             filter=f"name == {name!r} and custom_hash == None",
             limit=1,
@@ -1590,7 +1262,7 @@ class SecretManager(BaseSecretManager):
         secret_id: int,
         data: Dict[str, Any],
     ) -> None:
-        log_ids = unisdk.get_logs(
+        log_ids = db.get_logs(
             context=self._ctx,
             filter=f"secret_id == {int(secret_id)}",
             limit=1,
@@ -1603,7 +1275,7 @@ class SecretManager(BaseSecretManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "secret_id"},
         )
-        unisdk.update_logs(
+        db.update_logs(
             context=self._ctx,
             logs=[log_ids[0]],
             entries=update_data,
@@ -1641,7 +1313,7 @@ class SecretManager(BaseSecretManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -1739,7 +1411,7 @@ class _SecretSyncAdapter(CustomSyncAdapter):
         self._manager = manager
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._manager._ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._manager._ctx),

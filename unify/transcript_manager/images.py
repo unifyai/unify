@@ -3,8 +3,7 @@ from __future__ import annotations
 import base64
 from typing import Any, Dict, List, Optional
 
-import unisdk
-
+from unify import db
 from ..manager_registry import ManagerRegistry
 from .types.message import Message
 
@@ -22,7 +21,7 @@ def get_images_for_message(self, *, message_id: int) -> List[Dict[str, Any]]:
     logs = []
     transcript_context = self._transcripts_ctx
     for context in self._read_transcript_contexts():
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             filter=f"message_id == {int(message_id)}",
             limit=1,
@@ -146,7 +145,7 @@ def attach_message_images_to_context(
     logs = []
     transcript_context = self._transcripts_ctx
     for context in self._read_transcript_contexts():
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             filter=f"message_id == {int(message_id)}",
             limit=1,

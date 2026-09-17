@@ -3,14 +3,12 @@ import asyncio
 import builtins
 import concurrent.futures
 import dataclasses
-import hashlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
 import functools
 import json
-import keyword
 import os
 import re
 import signal
@@ -39,9 +37,9 @@ from typing import (
     Union,
     TYPE_CHECKING,
 )
-import unisdk
+from unify import db
 from .shell_pool import ShellPool
-from unisdk.utils.http import RequestError as _UnifyRequestError
+from unify.db import StoreError as _UnifyRequestError
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
@@ -123,7 +121,6 @@ from .verification.source_labels import compile_function_source
 from .verification.tier0 import Tier0Checker, signature_from_source, tier0_boundary
 from .settings import VerificationSettings
 from .base import BaseFunctionManager
-from .hash_utils import stable_hash_for_rows
 from ..common.model_to_fields import model_to_fields, with_ui_editable_forced_false
 from ..file_manager.managers.local import LocalFileManager
 from ..image_manager.image_manager import ImageHandle
@@ -140,19 +137,6 @@ from unify.function_manager.primitives.scope import (
     default_runtime_scope,
 )
 from unify.function_manager.primitives.registry import get_registry
-from unify.common.diagnostic_logging import (
-    log_staging_diagnostic,
-)
-from unify.integrations.function_metadata import (
-    function_metadata,
-    integration_app_slug,
-    integration_backend_id,
-    integration_metadata,
-    is_provider_backed_function,
-    provider_function_metadata,
-)
-from unify.integrations.builtins_catalog import list_catalog_tools
-from unify.integrations.embedding_text import normalize_embedding_text
 from .custom_functions import (
     CustomFunctionSyncPartialFailure,
     compute_custom_functions_hash,
@@ -252,7 +236,7 @@ def function_id_resolves(function_id: int) -> bool:
     """
 
     for context in _compositional_contexts():
-        if unisdk.get_logs(
+        if db.get_logs(
             context=context,
             filter=f"function_id == {int(function_id)}",
             limit=1,
@@ -271,7 +255,7 @@ def function_managed_by(function_id: int) -> str | None:
     """
 
     for context in _compositional_contexts():
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             filter=f"function_id == {int(function_id)}",
             limit=1,
@@ -294,14 +278,14 @@ def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
     deleted: list[int] = []
     for context in _compositional_contexts():
         for function_id in function_ids:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=context,
                 filter=f"function_id == {int(function_id)}",
                 limit=1,
             )
             if not logs:
                 continue
-            unisdk.delete_logs(context=context, logs=[logs[0].id])
+            db.delete_logs(context=context, logs=[logs[0].id])
             deleted.append(int(function_id))
     return deleted
 
@@ -619,7 +603,9 @@ class _VenvConnection:
         python_path = await function_manager.prepare_venv(venv_id=venv_id)
         runner_path = function_manager._get_venv_runner_path(venv_id)
 
-        from unify.provider_proxy.session import build_sandbox_env
+        from unify.function_manager.execution_env import (
+            sandbox_env as build_sandbox_env,
+        )
 
         use_process_group = sys.platform != "win32"
         process = await asyncio.create_subprocess_exec(
@@ -2227,7 +2213,7 @@ class FunctionManager(BaseFunctionManager):
             if limit is not None:
                 kwargs["limit"] = limit
             try:
-                logs = unisdk.get_logs(**kwargs)
+                logs = db.get_logs(**kwargs)
             except _UnifyRequestError as e:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if status == 404:
@@ -2235,364 +2221,6 @@ class FunctionManager(BaseFunctionManager):
                 raise
             rows.extend(lg.entries for lg in logs)
         return rows
-
-    def _integration_owner_scope(self) -> Dict[str, Any]:
-        """Best-effort owner scope for provider-backed integration searches."""
-        try:
-            from unify.integrations.primitives import (
-                integration_owner_scope_from_session,
-            )
-
-            scope = integration_owner_scope_from_session()
-        except Exception:
-            scope = {"owner_scope": "assistant"}
-        return scope
-
-    @staticmethod
-    def _provider_integration_function_id(tool_id: str) -> int:
-        """Return the stable FunctionManager row ID for a provider-backed tool.
-
-        Provider-backed tools are materialized rows in ``Functions/Primitives``,
-        so they need the same integer ``function_id`` shape as static primitive
-        methods. The canonical execution identifier remains the provider
-        tool id stored in metadata; this hash-derived value only lets the row
-        participate in existing FunctionManager storage, search, and filtering
-        paths.
-        """
-
-        digest = hashlib.sha256(
-            f"IntegrationPrimitives.provider_backed:{tool_id}".encode(),
-        ).digest()
-        # Match the static primitive ID shape: first 32 hash bits masked into
-        # PostgreSQL's signed int32 positive range. This is deterministic but,
-        # like static primitive IDs, not mathematically collision-proof.
-        return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
-
-    @staticmethod
-    def _integration_schema_properties(
-        input_schema: Dict[str, Any],
-    ) -> tuple[dict[str, Any], set[str]]:
-        properties = (
-            input_schema.get("properties") if isinstance(input_schema, dict) else None
-        )
-        required = (
-            set(input_schema.get("required") or [])
-            if isinstance(input_schema, dict)
-            else set()
-        )
-        if not isinstance(properties, dict) or not properties:
-            return {}, set()
-        return properties, required
-
-    @staticmethod
-    def _integration_schema_type(schema: Any) -> str:
-        if not isinstance(schema, dict):
-            return "Any"
-        if "anyOf" in schema and isinstance(schema["anyOf"], list):
-            types = [
-                FunctionManager._integration_schema_type(item)
-                for item in schema["anyOf"]
-                if isinstance(item, dict) and item.get("type") != "null"
-            ]
-            return " | ".join(dict.fromkeys(types)) if types else "Any"
-        if "oneOf" in schema and isinstance(schema["oneOf"], list):
-            types = [
-                FunctionManager._integration_schema_type(item)
-                for item in schema["oneOf"]
-                if isinstance(item, dict) and item.get("type") != "null"
-            ]
-            return " | ".join(dict.fromkeys(types)) if types else "Any"
-        raw_type = schema.get("type")
-        if isinstance(raw_type, list):
-            non_null = [item for item in raw_type if item != "null"]
-            if not non_null:
-                return "Any"
-            return " | ".join(
-                dict.fromkeys(
-                    FunctionManager._integration_schema_type({"type": item})
-                    for item in non_null
-                ),
-            )
-        if raw_type == "array":
-            item_type = FunctionManager._integration_schema_type(schema.get("items"))
-            return f"list[{item_type}]" if item_type != "Any" else "list"
-        if raw_type == "object":
-            return "dict"
-        if isinstance(raw_type, str):
-            return {
-                "string": "str",
-                "integer": "int",
-                "number": "float",
-                "boolean": "bool",
-            }.get(raw_type, "Any")
-        return "Any"
-
-    @staticmethod
-    def _integration_schema_argspec(input_schema: Dict[str, Any]) -> str:
-        properties, required = FunctionManager._integration_schema_properties(
-            input_schema,
-        )
-        if not properties:
-            return "(**kwargs) -> dict"
-        parts: list[str] = []
-        for name, schema in properties.items():
-            if (
-                not isinstance(name, str)
-                or not name.isidentifier()
-                or keyword.iskeyword(name)
-            ):
-                continue
-            type_name = FunctionManager._integration_schema_type(schema)
-            if (
-                isinstance(schema, dict)
-                and "default" in schema
-                and name not in required
-            ):
-                default = f" = {schema['default']!r}"
-            else:
-                default = "" if name in required else " = None"
-            parts.append(f"{name}: {type_name}{default}")
-        return f"({', '.join(parts)}) -> dict" if parts else "(**kwargs) -> dict"
-
-    @staticmethod
-    def _integration_parameter_doc(input_schema: Dict[str, Any]) -> str:
-        properties, required = FunctionManager._integration_schema_properties(
-            input_schema,
-        )
-        if not properties:
-            return "Parameters\n----------\n**kwargs : Any\n    Provider arguments accepted by the integration tool."
-        lines = ["Parameters", "----------"]
-        for name, schema in properties.items():
-            if not isinstance(name, str):
-                continue
-            type_name = FunctionManager._integration_schema_type(schema)
-            required_label = "required" if name in required else "optional"
-            default_text = ""
-            description = ""
-            if isinstance(schema, dict):
-                if "default" in schema:
-                    default_text = f", default {schema['default']!r}"
-                description = str(
-                    schema.get("description") or schema.get("title") or "",
-                )
-            lines.append(f"{name} : {type_name}")
-            detail = f"{required_label}{default_text}."
-            if description:
-                detail = f"{detail} {description}"
-            lines.append(f"    {detail}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _integration_examples_doc(
-        name: str,
-        examples: list[Any],
-        input_schema: Dict[str, Any],
-        description: str,
-    ) -> str:
-        example_payloads: list[dict[str, Any]] = []
-        for example in examples:
-            if isinstance(example, dict):
-                args = (
-                    example.get("arguments")
-                    or example.get("input")
-                    or example.get("params")
-                    or example
-                )
-                if isinstance(args, dict):
-                    example_payloads.append(args)
-            if len(example_payloads) >= 3:
-                break
-        if not example_payloads:
-            properties, _required = FunctionManager._integration_schema_properties(
-                input_schema,
-            )
-            synthetic: dict[str, Any] = {}
-            for param, schema in properties.items():
-                if not isinstance(param, str) or not isinstance(schema, dict):
-                    continue
-                if "default" in schema:
-                    synthetic[param] = schema["default"]
-                elif param in {"query", "q", "search_query"}:
-                    synthetic[param] = "is:unread"
-                elif param in {"max_results", "limit", "page_size"}:
-                    synthetic[param] = 5
-                elif schema.get("type") == "boolean":
-                    synthetic[param] = False
-                if len(synthetic) >= 3:
-                    break
-            if synthetic:
-                example_payloads.append(synthetic)
-        if not example_payloads:
-            return "Examples\n--------\nNo provider examples are available. Inspect the Parameters section before calling."
-        lines = ["Examples", "--------"]
-        for payload in example_payloads:
-            rendered = ", ".join(f"{key}={value!r}" for key, value in payload.items())
-            lines.append(f"await {name}({rendered})")
-        if "hydrate" in description.lower() or "message_id" in description.lower():
-            lines.append(
-                "For full message bodies, list message IDs first and hydrate individual messages when needed.",
-            )
-        return "\n".join(lines)
-
-    @staticmethod
-    def _integration_embedding_text(
-        *,
-        app_display: str,
-        tool_display: str,
-        tool_name: str,
-        description: str,
-        category_text: str,
-        input_schema: Dict[str, Any],
-        example_prompts: list[Any] | None = None,
-    ) -> str:
-        """Build Layer 1-normalized tool embedding text from value fields only.
-
-        Front-loaded by signal: the app/tool header, the identifier-split
-        tool-name leaf (keyword anchor), the description, harvested categories,
-        parameter names, and any example prompts. The dotted function name,
-        argspec, and raw JSON example dump are intentionally dropped;
-        ``normalize_embedding_text`` then strips noise and splits identifiers
-        across the whole text. Mirrors the Orchestra tool row builder.
-        """
-
-        properties, _required = FunctionManager._integration_schema_properties(
-            input_schema,
-        )
-        parameter_names = ", ".join(str(key) for key in properties.keys())
-        parts = [
-            f"{app_display} - {tool_display}",
-            tool_name,
-            description,
-            category_text,
-            parameter_names,
-        ]
-        parts.extend(str(prompt) for prompt in (example_prompts or []) if prompt)
-        return normalize_embedding_text(parts)
-
-    def _integration_tool_to_function_row(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        tool_id = item["tool_id"]
-        name = item["canonical_name"]
-        app = item.get("app_display_name") or item.get("app_slug") or "integration"
-        tool = item.get("tool_display_name") or name.rsplit(".", 1)[-1]
-        backend = item.get("backend_id") or item.get("provider_backend") or "provider"
-        provider_app_id = item.get("provider_app_id") or item.get("app_slug")
-        provider_tool_id = item.get("provider_tool_id") or item.get(
-            "provider_action_id",
-        )
-        app_icon_url = item.get("app_icon_url") or item.get("icon_url")
-        required_scopes = item.get("required_scopes") or []
-        action_class = item.get("action_class", "read")
-        confirmation_required = bool(item.get("confirmation_required", False))
-        behavior_hints = item.get("behavior_hints") or []
-        input_schema = item.get("input_schema") or item.get("input_schema_json") or {}
-        output_schema = (
-            item.get("output_schema") or item.get("output_schema_json") or {}
-        )
-        examples = item.get("examples") or item.get("examples_json") or []
-        example_prompts = item.get("example_prompts") or []
-        guidance_ids = item.get("guidance_ids") or []
-        signature = self._integration_schema_argspec(input_schema)
-        parameter_doc = self._integration_parameter_doc(input_schema)
-        examples_doc = self._integration_examples_doc(
-            name,
-            examples,
-            input_schema,
-            str(item.get("description") or ""),
-        )
-        usage_prompts = "\n".join(
-            f"- {prompt}" for prompt in example_prompts[:3] if str(prompt).strip()
-        )
-        usage_prompt_section = (
-            f"\n\nExample user requests\n---------------------\n{usage_prompts}"
-            if usage_prompts
-            else ""
-        )
-        docstring = (
-            f"{tool}\n\n"
-            f"Use this {app} integration primitive when you need to {item.get('description', 'run this provider action')}.\n\n"
-            f"Call signature\n--------------\n{name}{signature}\n\n"
-            f"{parameter_doc}\n\n"
-            "Returns\n-------\n"
-            "dict\n"
-            "    Provider execution envelope returned by Orchestra. Treat non-ok "
-            "statuses such as confirmation_required, missing_scope, expired, "
-            "blocked_by_policy, or error as actionable outcomes to explain to "
-            "the user.\n\n"
-            f"{examples_doc}{usage_prompt_section}\n\n"
-            "Safety\n------\n"
-            f"Action class: {action_class}. "
-            f"Confirmation required: {confirmation_required}. "
-            "Use the approved confirmation flow for sensitive, write, destructive, "
-            "or bulk-export actions."
-        )
-        tool_leaf = name.rsplit(".", 1)[-1]
-        item_app_slug = item.get("app_slug")
-        tag_categories = [
-            tag for tag in (item.get("tags") or []) if tag and tag != item_app_slug
-        ]
-        category_text = ", ".join(
-            dict.fromkeys(
-                value for value in (item.get("category"), *tag_categories) if value
-            ),
-        )
-        embedding_text = self._integration_embedding_text(
-            app_display=str(app),
-            tool_display=str(tool),
-            tool_name=tool_leaf,
-            description=str(item.get("description") or ""),
-            category_text=category_text,
-            input_schema=input_schema,
-            example_prompts=example_prompts,
-        )
-        metadata = provider_function_metadata(
-            {
-                "tool_id": tool_id,
-                "backend_id": backend,
-                "app_slug": item.get("app_slug"),
-                "input_schema": input_schema,
-                "output_schema": output_schema,
-                "examples": examples,
-                "source_type": "third_party",
-                "namespace": "primitives.integrations",
-                "provider_app_id": provider_app_id,
-                "provider_tool_id": provider_tool_id,
-                "labels": {
-                    "app_display_name": app,
-                    "app_icon_url": app_icon_url,
-                    "tool_display_name": tool,
-                },
-                "app_display_name": app,
-                "app_icon_url": app_icon_url,
-                "tool_display_name": tool,
-                "required_scopes": required_scopes,
-                "action_class": action_class,
-                "behavior_hints": behavior_hints,
-                "confirmation_required": confirmation_required,
-                "schema_available": item.get("schema_available", True),
-            },
-        )
-        row = {
-            "function_id": self._provider_integration_function_id(tool_id),
-            "language": "python",
-            "name": name,
-            "argspec": signature,
-            "docstring": docstring,
-            "implementation": None,
-            "depends_on": [],
-            "precondition": None,
-            "embedding_text": embedding_text,
-            "guidance_ids": guidance_ids,
-            "verify": confirmation_required
-            or action_class in {"write", "destructive", "bulk_export"},
-            "is_primitive": True,
-            "primitive_class": "unify.integrations.primitives.IntegrationPrimitives",
-            "primitive_method": item.get("function_manager_name")
-            or name.replace(".", "__"),
-            "metadata": metadata,
-        }
-        validated = Function.model_validate(row).model_dump(include=set(row.keys()))
-        validated["description"] = str(item.get("description") or "")
-        return validated
 
     def _function_context_for_root(self, root_context: str, table_name: str) -> str:
         """Return a concrete Functions context under a registry root."""
@@ -2834,8 +2462,8 @@ class FunctionManager(BaseFunctionManager):
         *,
         function_id: int,
         raise_if_missing: bool = True,
-    ) -> Optional[unisdk.Log]:
-        logs = unisdk.get_logs(
+    ) -> Optional[db.Log]:
+        logs = db.get_logs(
             context=self._compositional_ctx,
             filter=f"function_id == {function_id}",
             exclude_fields=list_private_fields(self._compositional_ctx),
@@ -2892,7 +2520,7 @@ class FunctionManager(BaseFunctionManager):
         kept = settings.recent_calls_kept
 
         def _write() -> None:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=ctx,
                 filter=f"function_id == {int(fid)}",
                 from_fields=["function_id", "usage_calls", "usage_recent_calls"],
@@ -2903,7 +2531,7 @@ class FunctionManager(BaseFunctionManager):
             entries = logs[0].entries or {}
             recents = list(entries.get("usage_recent_calls") or [])
             recents.append(now_iso)
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[logs[0].id],
                 context=ctx,
                 entries={
@@ -2931,7 +2559,7 @@ class FunctionManager(BaseFunctionManager):
             ctx = row.get("_federated_context") or self._compositional_ctx
 
             def _write(fid: int = int(fid), ctx: str = ctx) -> None:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=ctx,
                     filter=f"function_id == {fid}",
                     from_fields=["function_id", "usage_search_hits"],
@@ -2940,7 +2568,7 @@ class FunctionManager(BaseFunctionManager):
                 if not logs:
                     return
                 entries = logs[0].entries or {}
-                unisdk.update_logs(
+                db.update_logs(
                     logs=[logs[0].id],
                     context=ctx,
                     entries={
@@ -3384,7 +3012,7 @@ class FunctionManager(BaseFunctionManager):
     ) -> None:
         """Write ledger-owned fields onto the row with ``function_id``."""
         ctx = context or self._compositional_ctx
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=ctx,
             filter=f"function_id == {int(function_id)}",
             from_fields=["function_id"],
@@ -3392,7 +3020,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if not logs:
             raise ValueError(f"No function with id {function_id!r} exists in {ctx}.")
-        unisdk.update_logs(
+        db.update_logs(
             logs=[logs[0].id],
             context=ctx,
             entries=dict(fields),
@@ -3477,7 +3105,7 @@ class FunctionManager(BaseFunctionManager):
                 # back would clobber a static-review persist landing between
                 # this fold's read and its write.
                 updates["static_review"] = None
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[log.id],
                 context=self._compositional_ctx,
                 entries=updates,
@@ -3507,7 +3135,7 @@ class FunctionManager(BaseFunctionManager):
         seed = {int(fid) for fid in function_ids}
         if not seed:
             return []
-        all_logs = unisdk.get_logs(
+        all_logs = db.get_logs(
             context=self._compositional_ctx,
             exclude_fields=list_private_fields(self._compositional_ctx),
         )
@@ -3541,7 +3169,7 @@ class FunctionManager(BaseFunctionManager):
                     reason.model_dump(mode="json")
                     for reason in merge_stale_reasons(existing, stale_reason)
                 ]
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[log.id],
                 context=self._compositional_ctx,
                 entries=fields,
@@ -3552,7 +3180,7 @@ class FunctionManager(BaseFunctionManager):
     def invalidate_trust_for_guidance(self, guidance_id: int) -> List[int]:
         """A linked guidance entry changed or vanished: its functions go back on the ramp."""
         gid = int(guidance_id)
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._compositional_ctx,
             filter=f"{gid} in guidance_ids",
             from_fields=["function_id"],
@@ -3564,7 +3192,7 @@ class FunctionManager(BaseFunctionManager):
         }
         # The guidance row's own function_ids are the authored side of the link.
         gctx = self._guidance_context()
-        guidance_rows = unisdk.get_logs(
+        guidance_rows = db.get_logs(
             context=gctx,
             filter=f"guidance_id == {gid}",
             limit=1,
@@ -3587,7 +3215,7 @@ class FunctionManager(BaseFunctionManager):
 
     def invalidate_trust_for_venv(self, venv_id: int) -> List[int]:
         """The venv content changed: every function running in it goes back on the ramp."""
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._compositional_ctx,
             filter=f"venv_id == {int(venv_id)}",
             from_fields=["function_id"],
@@ -3604,7 +3232,7 @@ class FunctionManager(BaseFunctionManager):
         wanted = {str(n) for n in names}
         if not wanted:
             return []
-        all_logs = unisdk.get_logs(
+        all_logs = db.get_logs(
             context=self._compositional_ctx,
             from_fields=["function_id", "name", "depends_on"],
         )
@@ -3750,7 +3378,7 @@ class FunctionManager(BaseFunctionManager):
         clauses = [f"function_id == {int(function_id)}"]
         if function_hash is not None:
             clauses.append(f"function_hash == {json.dumps(function_hash)}")
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._verifications_ctx,
             filter=" and ".join(clauses),
             limit=limit,
@@ -3836,7 +3464,7 @@ class FunctionManager(BaseFunctionManager):
                 "function_id": int(function_id),
                 "reason": "A rationale is required when confirming an effect class.",
             }
-        unisdk.update_logs(
+        db.update_logs(
             logs=[log.id],
             context=self._compositional_ctx,
             entries={
@@ -3959,7 +3587,7 @@ class FunctionManager(BaseFunctionManager):
                 "function_id": int(function_id),
                 "policy": current.model_dump(mode="json"),
             }
-        unisdk.update_logs(
+        db.update_logs(
             logs=[log.id],
             context=self._compositional_ctx,
             entries={"verification_policy": updated.model_dump(mode="json")},
@@ -3990,10 +3618,10 @@ class FunctionManager(BaseFunctionManager):
 
     @functools.wraps(BaseFunctionManager.clear, updated=())
     def clear(self) -> None:
-        unisdk.delete_context(self._compositional_ctx)
-        unisdk.delete_context(self._primitives_ctx)
-        unisdk.delete_context(self._venvs_ctx)
-        unisdk.delete_context(self._meta_ctx)
+        db.delete_context(self._compositional_ctx)
+        db.delete_context(self._primitives_ctx)
+        db.delete_context(self._venvs_ctx)
+        db.delete_context(self._meta_ctx)
 
         # Reset any manager-local counters or caches
         try:
@@ -4017,7 +3645,7 @@ class FunctionManager(BaseFunctionManager):
 
             for _ in range(3):
                 try:
-                    unisdk.get_fields(context=self._compositional_ctx)
+                    db.get_fields(context=self._compositional_ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -4046,7 +3674,7 @@ class FunctionManager(BaseFunctionManager):
         """Read a hash map field from the singleton Functions/Meta row."""
 
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -4061,13 +3689,13 @@ class FunctionManager(BaseFunctionManager):
         """Store a hash map field on the singleton Functions/Meta row."""
 
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     logs=[logs[0].id],
                     context=self._meta_ctx,
                     entries={field_name: hashes},
@@ -4083,16 +3711,6 @@ class FunctionManager(BaseFunctionManager):
                 )
         except Exception as e:
             logger.warning("Failed to store %s hash map: %s", field_name, e)
-
-    def _get_stored_integration_tool_hash_by_app(self) -> Dict[str, str]:
-        """Retrieve per-app hashes for materialized provider-backed tools."""
-
-        return self._get_stored_hash_map("integration_tool_hash_by_app")
-
-    def _store_integration_tool_hash_by_app(self, hash_by_app: Dict[str, str]) -> None:
-        """Store per-app hashes for materialized provider-backed tools."""
-
-        self._store_hash_map("integration_tool_hash_by_app", hash_by_app)
 
     @staticmethod
     def _compact_function_search_rows(
@@ -4115,745 +3733,8 @@ class FunctionManager(BaseFunctionManager):
                     summary = get_registry()._extract_summary_and_params(doc)
                     compact["docstring"] = summary or doc[:800]
                 compact.pop("embedding_text", None)
-            metadata = function_metadata(compact)
-            integration = integration_metadata(compact)
-            if integration:
-                compact_integration = {
-                    key: value
-                    for key, value in integration.items()
-                    if key not in {"input_schema", "output_schema", "examples"}
-                }
-                compact["metadata"] = {
-                    **metadata,
-                    "integration": compact_integration,
-                }
             compact_rows.append(compact)
         return compact_rows
-
-    @staticmethod
-    def _integration_hash_key(*, backend_id: str | None, app_slug: str) -> str:
-        return f"{backend_id or 'provider'}:{app_slug}"
-
-    @staticmethod
-    def _provider_integration_filter(
-        *,
-        backend_id: str | None = None,
-        app_slug: str | None = None,
-    ) -> str:
-        clauses = ['metadata["source"] == "provider_backed"']
-        if backend_id is not None:
-            clauses.append(
-                f'metadata["integration"]["backend_id"] == {json.dumps(backend_id or "provider")}',
-            )
-        if app_slug is not None:
-            clauses.append(
-                f'metadata["integration"]["app_slug"] == {json.dumps(app_slug)}',
-            )
-        return " and ".join(clauses)
-
-    def _provider_row_matches_app_keys(
-        self,
-        row: Dict[str, Any] | None,
-        app_keys: List[tuple[str | None, str]],
-    ) -> bool:
-        if not row:
-            return False
-        if is_provider_backed_function(row):
-            backend_id = integration_backend_id(row) or "provider"
-            app_slug = integration_app_slug(row) or ""
-        else:
-            return False
-        return any(
-            app_slug == expected_app
-            and (
-                expected_backend is None
-                or backend_id == (expected_backend or "provider")
-            )
-            for expected_backend, expected_app in app_keys
-        )
-
-    @staticmethod
-    def _hash_integration_rows(rows: List[Dict[str, Any]]) -> str:
-        hash_fields = (
-            "name",
-            "argspec",
-            "docstring",
-            "embedding_text",
-            "function_id",
-            "primitive_class",
-            "primitive_method",
-            "metadata",
-            "verify",
-        )
-        return stable_hash_for_rows(rows, fields=hash_fields)
-
-    def _delete_provider_integration_rows_for_apps(
-        self,
-        app_keys: List[tuple[str | None, str]],
-    ) -> int:
-        """Delete materialized provider-backed primitive rows for the given apps."""
-        if not app_keys:
-            return 0
-        filter_expr = " or ".join(
-            f"({self._provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})"
-            for backend_id, app_slug in app_keys
-        )
-        try:
-            logs = unisdk.get_logs(
-                context=self._primitives_ctx,
-                filter=filter_expr,
-                exclude_fields=list_private_fields(self._primitives_ctx),
-            )
-            ids_to_delete = [
-                lg.id
-                for lg in logs or []
-                if self._provider_row_matches_app_keys(
-                    getattr(lg, "entries", None),
-                    app_keys,
-                )
-            ]
-            names_to_delete = {
-                str(lg.entries["name"])
-                for lg in logs or []
-                if lg.id in ids_to_delete and lg.entries.get("name")
-            }
-            if not ids_to_delete:
-                return 0
-            unisdk.delete_logs(
-                context=self._primitives_ctx,
-                logs=ids_to_delete,
-            )
-            # Compositional link-debt updates are best-effort; a successful
-            # delete must still report the removed count.
-            compositional_ctx = getattr(self, "_compositional_ctx", None)
-            if compositional_ctx is not None and names_to_delete:
-                try:
-                    compositional_logs = unisdk.get_logs(
-                        context=compositional_ctx,
-                        exclude_fields=list_private_fields(compositional_ctx),
-                    )
-                    self._append_missing_dependency_reasons(
-                        logs=compositional_logs,
-                        missing_names=names_to_delete,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to append missing-dependency reasons after "
-                        "provider integration delete: %s",
-                        e,
-                    )
-            return len(ids_to_delete)
-        except Exception as e:
-            logger.warning(f"Failed to delete provider integration rows: {e}")
-            return 0
-
-    def _count_provider_integration_rows_for_app(
-        self,
-        *,
-        backend_id: str | None,
-        app_slug: str,
-        expected_rows: int | None = None,
-    ) -> int | None:
-        """Count materialized provider-backed rows for one app.
-
-        This is a re-read of a batch we may have just inserted, so for large
-        apps (GitHub alone is ~900 rows) the count can briefly undercount
-        before the write is fully visible. When *expected_rows* is given,
-        retry a few times with a short delay before accepting a mismatch.
-        """
-        import time as _time  # local import to avoid polluting module namespace
-
-        filter_expr = self._provider_integration_filter(
-            backend_id=backend_id or "provider",
-            app_slug=app_slug,
-        )
-        observed: int | None = None
-        for attempt, delay in enumerate((0.0, 0.25, 0.5)):
-            if delay:
-                _time.sleep(delay)
-            try:
-                rows = unisdk.get_logs(
-                    context=self._primitives_ctx,
-                    filter=filter_expr,
-                    exclude_fields=list_private_fields(self._primitives_ctx),
-                )
-                observed = len(rows or [])
-            except Exception as exc:
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration write verification failed "
-                        "backend_id=%s app_slug=%s attempt=%d error=%s"
-                    ),
-                    backend_id or "provider",
-                    app_slug,
-                    attempt + 1,
-                    exc,
-                    level=logging.WARNING,
-                )
-                observed = None
-            if expected_rows is None or observed == expected_rows:
-                return observed
-        return observed
-
-    def sync_provider_integration_tools(
-        self,
-        *,
-        app_slug: str | None = None,
-        connection_id: str | None = None,
-        operation: str = "materialize",
-        limit: int | None = None,
-    ) -> Dict[str, Any]:
-        """Materialize active provider-backed tools into the Primitives context.
-
-        This is an explicit sync path, not a FunctionManager query-time search.
-        It builds expected rows, compares stable per-app hashes, and only
-        deletes/upserts the affected app rows when changed.
-        """
-        from time import perf_counter
-
-        sync_start = perf_counter()
-
-        def _sync_duration() -> float:
-            return perf_counter() - sync_start
-
-        operation = (
-            "cleanup" if str(operation).strip().lower() == "cleanup" else "materialize"
-        )
-
-        if not self._include_primitives or not self._primitive_scope.includes(
-            "integrations",
-        ):
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync skipped app_slug=%s "
-                    "reason=integrations_not_in_scope duration=%.2fs"
-                ),
-                app_slug or "-",
-                _sync_duration(),
-            )
-            return {
-                "status": "skipped",
-                "reason": "integrations_not_in_scope",
-                "apps": [],
-            }
-        if limit is not None and limit <= 0:
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync failed app_slug=%s "
-                    "reason=invalid_page_limit limit=%d duration=%.2fs"
-                ),
-                app_slug or "-",
-                limit,
-                _sync_duration(),
-            )
-            return {
-                "status": "error",
-                "error": {
-                    "code": "invalid_page_limit",
-                    "message": "Provider integration tool sync requires a positive page limit.",
-                },
-                "apps": [],
-            }
-
-        try:
-            from unify.integrations import ops as integration_ops
-        except Exception as exc:
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync failed app_slug=%s "
-                    "reason=integration_ops_import_error error=%s duration=%.2fs"
-                ),
-                app_slug or "-",
-                exc,
-                _sync_duration(),
-            )
-            return {"status": "error", "error": str(exc), "apps": []}
-
-        owner_scope = self._integration_owner_scope()
-        try:
-            from unify.integrations.sync_state import normalize_app_slug
-        except Exception:
-            normalize_app_slug = lambda value: value.strip().lower()  # type: ignore[assignment]
-        connections = integration_ops.list_connections(**owner_scope)
-        if isinstance(connections, dict) and connections.get("error"):
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync failed app_slug=%s "
-                    "reason=list_connections_error owner_scope=%s error=%s "
-                    "duration=%.2fs"
-                ),
-                app_slug or "-",
-                {
-                    key: owner_scope.get(key)
-                    for key in (
-                        "owner_scope",
-                        "assistant_id",
-                        "user_id",
-                        "org_id",
-                        "team_ids",
-                    )
-                    if key in owner_scope
-                },
-                connections.get("error"),
-                _sync_duration(),
-            )
-            return {"status": "error", "error": connections.get("error"), "apps": []}
-
-        normalized_app = (
-            normalize_app_slug(app_slug)
-            if isinstance(app_slug, str) and app_slug
-            else None
-        )
-        active_connections = []
-        for connection in connections or []:
-            if connection.get("status") != "connected":
-                continue
-            raw_conn_app = connection.get("canonical_app_slug")
-            conn_app = (
-                normalize_app_slug(raw_conn_app)
-                if isinstance(raw_conn_app, str)
-                else raw_conn_app
-            )
-            if normalized_app and conn_app != normalized_app:
-                continue
-            if connection_id and connection.get("connection_id") != connection_id:
-                continue
-            active_connections.append(connection)
-        active_app_slugs_for_log = [
-            connection.get("canonical_app_slug")
-            for connection in active_connections
-            if connection.get("canonical_app_slug")
-        ]
-        log_staging_diagnostic(
-            logger,
-            (
-                "Provider integration sync started app_slug=%s connection_id=%s operation=%s "
-                "owner_scope=%s connections=%d active_connections=%d active_apps=%s"
-            ),
-            normalized_app or "-",
-            connection_id or "-",
-            operation,
-            {
-                key: owner_scope.get(key)
-                for key in (
-                    "owner_scope",
-                    "assistant_id",
-                    "user_id",
-                    "org_id",
-                    "team_ids",
-                )
-                if key in owner_scope
-            },
-            len(connections or []),
-            len(active_connections),
-            active_app_slugs_for_log,
-        )
-
-        current_hashes = self._get_stored_integration_tool_hash_by_app()
-        new_hashes = dict(current_hashes)
-        changed_apps: list[dict[str, Any]] = []
-        unchanged_apps: list[dict[str, Any]] = []
-        removed_apps: list[str] = []
-        sync_errors: list[dict[str, Any]] = []
-
-        if normalized_app and operation == "cleanup":
-            # Rows are connection-agnostic catalogue entries, so a single
-            # disconnect only removes them when no other live connection
-            # still serves the app.
-            remaining_connections = [
-                connection
-                for connection in connections or []
-                if connection.get("status") == "connected"
-                and normalize_app_slug(str(connection.get("canonical_app_slug") or ""))
-                == normalized_app
-                and (
-                    not connection_id
-                    or connection.get("connection_id") != connection_id
-                )
-            ]
-            if connection_id and remaining_connections:
-                removed = 0
-                removed_keys: list[str] = []
-            else:
-                app_keys_to_remove: list[tuple[str | None, str]] = []
-                removed_keys = []
-                for key in list(new_hashes):
-                    if key.endswith(f":{normalized_app}"):
-                        backend_id, _sep, _app = key.partition(":")
-                        app_keys_to_remove.append((backend_id or None, normalized_app))
-                        removed_keys.append(key)
-                        new_hashes.pop(key, None)
-                if not app_keys_to_remove:
-                    app_keys_to_remove = [(None, normalized_app)]
-                removed = self._delete_provider_integration_rows_for_apps(
-                    app_keys_to_remove,
-                )
-            if removed or removed_keys:
-                self._store_integration_tool_hash_by_app(new_hashes)
-            result = {
-                "status": "removed",
-                "apps": [],
-                "removed_apps": removed_keys,
-                "rows_deleted": removed,
-            }
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync completed app_slug=%s "
-                    "operation=cleanup connection_id=%s status=%s "
-                    "removed_apps=%s rows_deleted=%d duration=%.2fs"
-                ),
-                normalized_app,
-                connection_id or "-",
-                result["status"],
-                removed_keys,
-                removed,
-                _sync_duration(),
-            )
-            return result
-
-        if normalized_app and not active_connections:
-            if connection_id:
-                result = {
-                    "status": "error",
-                    "error": {
-                        "code": "provider_connection_not_active",
-                        "message": (
-                            "No connected provider account matched the requested "
-                            f"{normalized_app} connection."
-                        ),
-                    },
-                    "apps": [],
-                    "removed_apps": [],
-                    "rows_deleted": 0,
-                }
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync failed app_slug=%s "
-                        "connection_id=%s reason=provider_connection_not_active "
-                        "connections=%d duration=%.2fs"
-                    ),
-                    normalized_app,
-                    connection_id,
-                    len(connections or []),
-                    _sync_duration(),
-                )
-                return result
-            app_keys_to_remove: list[tuple[str | None, str]] = []
-            for key in list(new_hashes):
-                if key.endswith(f":{normalized_app}"):
-                    backend_id, _sep, _app = key.partition(":")
-                    app_keys_to_remove.append((backend_id or None, normalized_app))
-                    new_hashes.pop(key, None)
-                    removed_apps.append(key)
-            if not app_keys_to_remove:
-                app_keys_to_remove = [(None, normalized_app)]
-            removed = self._delete_provider_integration_rows_for_apps(
-                app_keys_to_remove,
-            )
-            if removed_apps:
-                self._store_integration_tool_hash_by_app(new_hashes)
-            result = {
-                "status": "removed" if removed or removed_apps else "unchanged",
-                "apps": [],
-                "removed_apps": removed_apps,
-                "rows_deleted": removed,
-            }
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync completed app_slug=%s status=%s "
-                    "removed_apps=%s rows_deleted=%d duration=%.2fs"
-                ),
-                normalized_app,
-                result["status"],
-                removed_apps,
-                removed,
-                _sync_duration(),
-            )
-            return result
-
-        tools_response = list_catalog_tools(
-            canonical_app_slug=normalized_app,
-            limit=limit,
-        )
-
-        from unify.integrations.provider_resolution import (
-            PREFERRED_BACKEND_ORDER,
-            WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE,
-        )
-
-        connected_backend_by_app: dict[str, str | None] = {}
-        for connection in active_connections:
-            if (
-                connection.get("credential_storage")
-                == WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE
-            ):
-                # Workspace trigger facade: presents workspace OAuth credentials
-                # as a trigger backend only. It must never register an app as
-                # tool-connected or claim a tool-execution backend.
-                continue
-            raw_conn_app = connection.get("canonical_app_slug")
-            conn_app = (
-                normalize_app_slug(raw_conn_app)
-                if isinstance(raw_conn_app, str)
-                else raw_conn_app
-            )
-            if not isinstance(conn_app, str) or not conn_app:
-                continue
-            raw_backend = connection.get("backend_id")
-            backend = str(raw_backend) if raw_backend else None
-            existing = connected_backend_by_app.get(conn_app)
-            if backend is None:
-                # Connection is live but does not declare a backend; keep the
-                # app active without constraining tool backend_id matching.
-                if conn_app not in connected_backend_by_app:
-                    connected_backend_by_app[conn_app] = None
-                continue
-            if existing and existing != backend:
-
-                def _rank(value: str) -> int:
-                    try:
-                        return PREFERRED_BACKEND_ORDER.index(value)
-                    except ValueError:
-                        return len(PREFERRED_BACKEND_ORDER)
-
-                if _rank(backend) < _rank(existing):
-                    connected_backend_by_app[conn_app] = backend
-                logger.warning(
-                    "Multiple connected backends for app_slug=%s (%s, %s); "
-                    "materializing preferred backend=%s",
-                    conn_app,
-                    existing,
-                    backend,
-                    connected_backend_by_app[conn_app],
-                )
-            else:
-                connected_backend_by_app[conn_app] = backend
-
-        active_app_slugs = set(connected_backend_by_app)
-        rows_by_key: dict[str, list[Dict[str, Any]]] = {}
-        key_to_app: dict[str, tuple[str | None, str]] = {}
-        for item in tools_response or []:
-            if is_provider_backed_function(item):
-                row = dict(item)
-                raw_item_app = integration_app_slug(row)
-                item_app = (
-                    normalize_app_slug(raw_item_app)
-                    if isinstance(raw_item_app, str)
-                    else raw_item_app
-                )
-            else:
-                if item.get("activation_state") not in (None, "connected_ready"):
-                    continue
-                raw_item_app = item.get("app_slug")
-                item_app = (
-                    normalize_app_slug(raw_item_app)
-                    if isinstance(raw_item_app, str)
-                    else raw_item_app
-                )
-                item = {**item, "app_slug": item_app}
-                row = self._integration_tool_to_function_row(item)
-            if not item_app or item_app not in active_app_slugs:
-                continue
-            backend_id = integration_backend_id(row) or "provider"
-            expected_backend = connected_backend_by_app.get(item_app)
-            if expected_backend and backend_id != expected_backend:
-                continue
-            key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
-            rows_by_key.setdefault(key, []).append(row)
-            key_to_app[key] = (backend_id, item_app)
-        log_staging_diagnostic(
-            logger,
-            (
-                "Provider integration sync filtered tools app_slug=%s "
-                "raw_tools=%d active_apps=%s rows_by_key=%s"
-            ),
-            normalized_app or "-",
-            len(tools_response),
-            sorted(active_app_slugs),
-            {key: len(rows) for key, rows in rows_by_key.items()},
-        )
-
-        for key, rows in rows_by_key.items():
-            expected_hash = self._hash_integration_rows(rows)
-            backend_id, item_app = key_to_app[key]
-            if current_hashes.get(key) == expected_hash:
-                observed_rows = self._count_provider_integration_rows_for_app(
-                    backend_id=backend_id,
-                    app_slug=item_app,
-                    expected_rows=len(rows),
-                )
-                if observed_rows is not None and observed_rows == len(rows):
-                    unchanged_apps.append({"key": key, "rows": len(rows)})
-                    log_staging_diagnostic(
-                        logger,
-                        (
-                            "Provider integration sync hash decision key=%s "
-                            "decision=unchanged rows=%d"
-                        ),
-                        key,
-                        len(rows),
-                    )
-                    continue
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync unchanged-hash verification "
-                        "mismatch key=%s expected_rows=%d observed_rows=%s; "
-                        "hash is a hint, not a guarantee -- falling through to "
-                        "the changed path to rematerialize"
-                    ),
-                    key,
-                    len(rows),
-                    observed_rows,
-                    level=logging.WARNING,
-                )
-            deleted = self._delete_provider_integration_rows_for_apps(
-                [(backend_id, item_app)],
-            )
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync hash decision key=%s "
-                    "decision=changed rows=%d rows_deleted=%d"
-                ),
-                key,
-                len(rows),
-                deleted,
-            )
-            log_staging_diagnostic(
-                logger,
-                "Provider integration sync insert attempt key=%s rows=%d",
-                key,
-                len(rows),
-            )
-            try:
-                fully_inserted = self._insert_primitives(rows)
-            except Exception as exc:
-                logger.error(
-                    "Provider integration sync insert failed key=%s rows=%d error=%s",
-                    key,
-                    len(rows),
-                    exc,
-                )
-                sync_errors.append(
-                    {
-                        "key": key,
-                        "code": "provider_primitive_insert_failed",
-                        "message": (
-                            f"Failed to insert provider primitives for {key}: {exc}"
-                        ),
-                    },
-                )
-                continue
-            observed_rows = self._count_provider_integration_rows_for_app(
-                backend_id=backend_id,
-                app_slug=item_app,
-                expected_rows=len(rows),
-            )
-            if observed_rows is None or observed_rows != len(rows):
-                message = (
-                    "Provider integration write verification mismatch "
-                    f"key={key} expected_rows={len(rows)} "
-                    f"observed_rows={observed_rows}"
-                )
-                logger.error(message)
-                sync_errors.append(
-                    {
-                        "key": key,
-                        "code": "provider_write_verification_mismatch",
-                        "message": message,
-                    },
-                )
-                continue
-            if fully_inserted:
-                # Only cache "synced" when this call actually wrote every row
-                # itself. When some rows were already catalogued (skipped),
-                # this session never confirmed their content is current, so
-                # leaving the hash unset means the next sync re-checks
-                # instead of silently trusting a row it didn't write.
-                new_hashes[key] = expected_hash
-            else:
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync key=%s: rows already "
-                        "catalogued, not caching hash so a future sync "
-                        "retries if the definition changes"
-                    ),
-                    key,
-                )
-            changed_apps.append(
-                {
-                    "key": key,
-                    "rows": len(rows),
-                    "rows_deleted": deleted,
-                    "fully_inserted": fully_inserted,
-                },
-            )
-
-        if not normalized_app:
-            active_keys = set(rows_by_key)
-            for key in list(new_hashes):
-                if key not in active_keys and key in current_hashes:
-                    _backend, _sep, old_app = key.partition(":")
-                    deleted = self._delete_provider_integration_rows_for_apps(
-                        [(_backend, old_app)],
-                    )
-                    new_hashes.pop(key, None)
-                    removed_apps.append(key)
-                    if deleted:
-                        logger.debug(
-                            "Removed %s stale provider integration rows for %s",
-                            deleted,
-                            key,
-                        )
-
-        if changed_apps or removed_apps:
-            self._store_integration_tool_hash_by_app(new_hashes)
-
-        if sync_errors:
-            # The first failure is a real per-app error (code/message a
-            # caller can act on); `errors` carries the rest for anyone
-            # inspecting the full multi-app result.
-            result = {
-                "status": "error",
-                "error": sync_errors[0],
-                "errors": sync_errors,
-                "apps": changed_apps,
-                "unchanged_apps": unchanged_apps,
-                "removed_apps": removed_apps,
-            }
-        else:
-            result = {
-                "status": "synced" if changed_apps or removed_apps else "unchanged",
-                "apps": changed_apps,
-                "unchanged_apps": unchanged_apps,
-                "removed_apps": removed_apps,
-            }
-        log_staging_diagnostic(
-            logger,
-            (
-                "Provider integration sync completed app_slug=%s status=%s "
-                "changed_apps=%s unchanged_apps=%s removed_apps=%s errors=%s "
-                "duration=%.2fs"
-            ),
-            normalized_app or "-",
-            result["status"],
-            changed_apps,
-            unchanged_apps,
-            removed_apps,
-            sync_errors,
-            _sync_duration(),
-        )
-        return result
 
     def _delete_primitives_by_function_ids(self, function_ids: list[int]) -> None:
         if not function_ids:
@@ -4864,13 +3745,13 @@ class FunctionManager(BaseFunctionManager):
             if len(ids) == 1
             else f"function_id in [{', '.join(str(function_id) for function_id in ids)}]"
         )
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._primitives_ctx,
             filter=filter_expr,
             exclude_fields=list_private_fields(self._primitives_ctx),
         )
         if logs:
-            unisdk.delete_logs(
+            db.delete_logs(
                 context=self._primitives_ctx,
                 logs=[log.id for log in logs],
             )
@@ -4966,7 +3847,7 @@ class FunctionManager(BaseFunctionManager):
         """Retrieve one source's stored custom functions hash."""
         field = stored_hash_field("custom_functions_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -4986,13 +3867,13 @@ class FunctionManager(BaseFunctionManager):
         """Store one source's custom functions hash in the Meta context."""
         field = stored_hash_field("custom_functions_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: hash_value},
@@ -5010,7 +3891,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _get_custom_functions_from_db(self) -> Dict[str, Dict[str, Any]]:
         """Get all custom functions from the database (those with custom_hash set)."""
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._compositional_ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._compositional_ctx),
@@ -5030,14 +3911,14 @@ class FunctionManager(BaseFunctionManager):
         Scoped to *managed_by*: two sources may each own a function of the
         same name, and a prune must reach only its own.
         """
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._compositional_ctx,
             filter=f"name == '{name}' and {managed_rows_filter(managed_by)}",
             limit=1,
         )
         if not logs:
             return False
-        unisdk.delete_logs(
+        db.delete_logs(
             context=self._compositional_ctx,
             logs=[logs[0].id],
         )
@@ -5073,7 +3954,7 @@ class FunctionManager(BaseFunctionManager):
                 prior=log.entries,
             ),
         )
-        unisdk.update_logs(
+        db.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
             entries=update_data,
@@ -5143,7 +4024,7 @@ class FunctionManager(BaseFunctionManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._compositional_ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -5163,7 +4044,7 @@ class FunctionManager(BaseFunctionManager):
         """Retrieve one source's stored custom venvs hash."""
         field = stored_hash_field("custom_venvs_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -5183,13 +4064,13 @@ class FunctionManager(BaseFunctionManager):
         """Store one source's custom venvs hash in the Meta context."""
         field = stored_hash_field("custom_venvs_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: hash_value},
@@ -5206,7 +4087,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _get_custom_venvs_from_db(self) -> Dict[str, Dict[str, Any]]:
         """Get all custom venvs from the database (those with custom_hash set)."""
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._venvs_ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._venvs_ctx),
@@ -5226,14 +4107,14 @@ class FunctionManager(BaseFunctionManager):
         Scoped to *managed_by*: two sources may each own a venv of the
         same name, and a prune must reach only its own.
         """
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._venvs_ctx,
             filter=f"name == '{name}' and {managed_rows_filter(managed_by)}",
             limit=1,
         )
         if not logs:
             return False
-        unisdk.delete_logs(
+        db.delete_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
         )
@@ -5241,7 +4122,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _update_custom_venv(self, venv_id: int, data: Dict[str, Any]) -> None:
         """Update an existing custom venv."""
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._venvs_ctx,
             filter=f"venv_id == {venv_id}",
             limit=1,
@@ -5251,7 +4132,7 @@ class FunctionManager(BaseFunctionManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "venv_id"},
         )
-        unisdk.update_logs(
+        db.update_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
             entries=update_data,
@@ -5274,7 +4155,7 @@ class FunctionManager(BaseFunctionManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._venvs_ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -5777,7 +4658,7 @@ class FunctionManager(BaseFunctionManager):
         # Batch update existing functions
         if log_ids_to_update and entries_to_update:
             try:
-                unisdk.update_logs(
+                db.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
                     entries=[
@@ -5977,7 +4858,7 @@ class FunctionManager(BaseFunctionManager):
         # Batch update existing functions
         if log_ids_to_update and entries_to_update:
             try:
-                unisdk.update_logs(
+                db.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
                     entries=[
@@ -6035,7 +4916,7 @@ class FunctionManager(BaseFunctionManager):
                 logs = []
                 for context in self._read_compositional_contexts():
                     logs.extend(
-                        unisdk.get_logs(
+                        db.get_logs(
                             context=context,
                             filter=normalized,
                             limit=1,
@@ -6517,7 +5398,7 @@ class FunctionManager(BaseFunctionManager):
         mapping: Dict[str, int] = {}
         for context in self._read_compositional_contexts():
             try:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=context,
                     from_fields=["name", "function_id"],
                 )
@@ -6567,7 +5448,7 @@ class FunctionManager(BaseFunctionManager):
         for context in self._read_compositional_contexts():
             context_rows = [
                 lg.entries
-                for lg in unisdk.get_logs(
+                for lg in db.get_logs(
                     context=context,
                     filter=self._scoped_filter(None),
                     exclude_fields=list_private_fields(context),
@@ -6650,7 +5531,7 @@ class FunctionManager(BaseFunctionManager):
         logs = []
         for context in self._read_compositional_contexts():
             logs.extend(
-                unisdk.get_logs(
+                db.get_logs(
                     context=context,
                     filter=self._scoped_filter(f"name == '{function_name}'"),
                     limit=1,
@@ -6707,7 +5588,7 @@ class FunctionManager(BaseFunctionManager):
         compositional_logs: Optional[List[Any]] = None,
     ) -> set[str]:
         if compositional_logs is None:
-            compositional_logs = unisdk.get_logs(
+            compositional_logs = db.get_logs(
                 context=self._compositional_ctx,
                 exclude_fields=list_private_fields(self._compositional_ctx),
             )
@@ -6744,7 +5625,7 @@ class FunctionManager(BaseFunctionManager):
                 reason.model_dump(mode="json") for reason in existing
             ]:
                 continue
-            unisdk.update_logs(
+            db.update_logs(
                 context=self._compositional_ctx,
                 logs=[log.id],
                 entries={
@@ -6766,7 +5647,7 @@ class FunctionManager(BaseFunctionManager):
         for root in ContextRegistry.read_roots(GuidanceManager, GUIDANCE_TABLE):
             context = f"{root.strip('/')}/{GUIDANCE_TABLE}"
             for function_id, name in deleted_functions:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=context,
                     filter=f"{int(function_id)} in function_ids",
                     exclude_fields=list_private_fields(context),
@@ -6786,7 +5667,7 @@ class FunctionManager(BaseFunctionManager):
                             ),
                         ),
                     )
-                    unisdk.update_logs(
+                    db.update_logs(
                         context=context,
                         logs=[log.id],
                         entries={
@@ -6844,7 +5725,7 @@ class FunctionManager(BaseFunctionManager):
         exclude_fields = list_private_fields(self._compositional_ctx)
 
         def _load_compositional_logs():
-            return unisdk.get_logs(
+            return db.get_logs(
                 context=self._compositional_ctx,
                 exclude_fields=exclude_fields,
             )
@@ -6955,7 +5836,7 @@ class FunctionManager(BaseFunctionManager):
 
         # Batch delete all functions
         if log_ids_to_delete:
-            unisdk.delete_logs(
+            db.delete_logs(
                 context=self._compositional_ctx,
                 logs=log_ids_to_delete,
             )
@@ -6968,7 +5849,7 @@ class FunctionManager(BaseFunctionManager):
         *,
         function_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
-        all_logs = unisdk.get_logs(
+        all_logs = db.get_logs(
             context=self._compositional_ctx,
             exclude_fields=list_private_fields(self._compositional_ctx),
         )
@@ -6998,7 +5879,7 @@ class FunctionManager(BaseFunctionManager):
                 reason.model_dump(mode="json") for reason in function.stale_reasons
             ]:
                 continue
-            unisdk.update_logs(
+            db.update_logs(
                 context=self._compositional_ctx,
                 logs=[log.id],
                 entries={"stale_reasons": serialized},
@@ -7269,7 +6150,7 @@ class FunctionManager(BaseFunctionManager):
     # ------------------------------------------------------------------ #
 
     def _guidance_context(self) -> str:
-        ctxs = unisdk.get_active_context()
+        ctxs = db.get_active_context()
         read_ctx = ctxs.get("read")
         return f"{read_ctx}/Guidance" if read_ctx else "Guidance"
 
@@ -7286,7 +6167,7 @@ class FunctionManager(BaseFunctionManager):
         # Fallback: scan Guidance rows that reference this function via function_ids
         gctx = self._guidance_context()
         try:
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=gctx,
                 filter=f"{int(function_id)} in function_ids",
                 exclude_fields=list_private_fields(gctx),
@@ -7322,7 +6203,7 @@ class FunctionManager(BaseFunctionManager):
                 gids = gids[:limit]
         cond = " or ".join(f"guidance_id == {int(g)}" for g in gids)
         gctx = self._guidance_context()
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=gctx,
             filter=cond or "False",
             exclude_fields=list_private_fields(gctx),
@@ -7443,7 +6324,7 @@ class FunctionManager(BaseFunctionManager):
         limit: Optional[int] = None,
         exclude_fields: Optional[List[str]] = None,
         from_fields: Optional[List[str]] = None,
-    ) -> List[unisdk.Log]:
+    ) -> List[db.Log]:
         """Best-effort venv reads; treat missing contexts as empty."""
         import time as _time
 
@@ -7452,7 +6333,7 @@ class FunctionManager(BaseFunctionManager):
             if delay:
                 _time.sleep(delay)
             try:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._venvs_ctx,
                     filter=filter,
                     limit=limit,
@@ -7533,7 +6414,7 @@ class FunctionManager(BaseFunctionManager):
                     exclude_fields=list_private_fields(context),
                 )
                 if context == self._venvs_ctx
-                else unisdk.get_logs(
+                else db.get_logs(
                     context=context,
                     filter=f"venv_id == {venv_id}",
                     limit=1,
@@ -7560,7 +6441,7 @@ class FunctionManager(BaseFunctionManager):
                         from_fields=None,
                     )
                     if context == self._venvs_ctx
-                    else unisdk.get_logs(
+                    else db.get_logs(
                         context=context,
                         exclude_fields=list_private_fields(context),
                     )
@@ -7587,7 +6468,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if not logs:
             return False
-        unisdk.delete_logs(
+        db.delete_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
         )
@@ -7610,7 +6491,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if not logs:
             return False
-        unisdk.update_logs(
+        db.update_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
             entries={"venv": venv},
@@ -7642,7 +6523,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if log is None:
             return False
-        unisdk.update_logs(
+        db.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
             entries={"venv_id": venv_id},
@@ -7684,7 +6565,7 @@ class FunctionManager(BaseFunctionManager):
         from unify.file_manager.settings import get_local_root
 
         # Get current context for isolation
-        ctx = unisdk.get_active_context()
+        ctx = db.get_active_context()
         ctx_name = ctx.get("read") or ctx.get("write") or "default"
         # Sanitize context name for filesystem use
         safe_ctx = ctx_name.replace("/", "_").replace("\\", "_")
@@ -8143,7 +7024,9 @@ class FunctionManager(BaseFunctionManager):
                 f"  ancestor existence (deepest first): {ancestor_status}",
             )
 
-        from unify.provider_proxy.session import build_sandbox_env
+        from unify.function_manager.execution_env import (
+            sandbox_env as build_sandbox_env,
+        )
 
         steering = active_session()
 
@@ -9333,14 +8216,8 @@ if __name__ == "__main__":
                 return await fn(**call_kwargs)
             return fn(**call_kwargs)
 
-        from unify.provider_proxy.session import scrub_platform_secrets_from_environ
-
         try:
-            # A stored function runs the same caller-authored code as the code
-            # tool does, in the same process, so it needs the same withholding
-            # of platform credentials from the environment it can read.
             with (
-                scrub_platform_secrets_from_environ(),
                 redirect_stdout(
                     stdout_capture,
                 ),
@@ -9530,7 +8407,9 @@ if __name__ == "__main__":
 
             # Build environment for the subprocess (sanitized: no raw provider
             # tokens, plus localhost proxy endpoints).
-            from unify.provider_proxy.session import build_sandbox_env
+            from unify.function_manager.execution_env import (
+                sandbox_env as build_sandbox_env,
+            )
 
             script_env = build_sandbox_env()
             script_env["UNIFY_RPC_SOCKET"] = str(socket_path)
@@ -9920,7 +8799,7 @@ class _VenvSyncAdapter(CustomSyncAdapter):
         self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._manager._venvs_ctx,
             filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._venvs_ctx),
@@ -9971,7 +8850,7 @@ class _VenvSyncAdapter(CustomSyncAdapter):
         two."""
         if self.managed_by != MANAGED_BY_DEPLOYMENT:
             return None
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._venvs_ctx,
             filter=f"name == '{fields['name']}'",
             limit=1,
@@ -10006,7 +8885,7 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._manager._compositional_ctx,
             filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._compositional_ctx),
@@ -10083,7 +8962,7 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         two."""
         if self.managed_by != MANAGED_BY_DEPLOYMENT:
             return None
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._compositional_ctx,
             filter=f"name == '{fields['name']}'",
             limit=1,

@@ -28,7 +28,6 @@ from unify.data_manager.types.ingest import (
     IngestResult,
     PostIngestConfig,
 )
-from unify.common.context_registry import TEAM_CONTEXT_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +158,6 @@ class SimulatedDataManager(BaseDataManager):
                 "Tasks",
                 "Messages",
                 "Exchanges",
-                TEAM_CONTEXT_PREFIX,
             ),
         ):
             return context

@@ -30,8 +30,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
 
-import unisdk as _unify
-
+from unify import db as _unify
 from unify.common.embed_utils import (
     ensure_derived_column as _ensure_derived_column,
     ensure_vector_column as _ensure_vector_column,

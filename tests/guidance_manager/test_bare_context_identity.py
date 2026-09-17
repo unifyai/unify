@@ -14,8 +14,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.common.context_store import ContextIdentityError
 from unify.common.log_utils import MissingRowIdentityError
@@ -25,10 +24,10 @@ from unify.guidance_manager.guidance_manager import GuidanceManager
 
 @_handle_project
 def test_provisioning_refuses_bare_guidance_context():
-    base = unisdk.get_active_context()["write"]
+    base = db.get_active_context()["write"]
 
     # A write racing provisioning auto-creates the context bare.
-    unisdk.log(
+    db.log(
         context=f"{base}/Guidance",
         new=True,
         title="orphan",

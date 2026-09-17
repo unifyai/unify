@@ -12,11 +12,10 @@ from typing import Any
 
 import pytest
 import requests
-import unisdk
-from unisdk.utils import http
-from unisdk.utils.helpers import _create_request_header
-from unisdk.utils.http import RequestError
-
+from unify import db
+from db.utils import http
+from db.utils.helpers import _create_request_header
+from unify.db import StoreError
 from tests.conversation_manager.core.test_coordinator_product_literacy_eval import (
     _BOSS_CONTACT,
     _PRIMARY_LLM_CONFIG,
@@ -62,7 +61,7 @@ def _reset_runtime_context() -> Iterator[None]:
     SESSION_DETAILS.reset()
     ContextRegistry.clear()
     try:
-        unisdk.unset_context()
+        db.unset_context()
     except Exception:
         pass
     try:
@@ -71,7 +70,7 @@ def _reset_runtime_context() -> Iterator[None]:
         SESSION_DETAILS.reset()
         ContextRegistry.clear()
         try:
-            unisdk.unset_context()
+            db.unset_context()
         except Exception:
             pass
 
@@ -173,7 +172,7 @@ def _delete_test_organization(
                 raise_for_status=False,
                 timeout=30,
             )
-        except (RequestError, requests.exceptions.RequestException) as exc:
+        except (StoreError, requests.exceptions.RequestException) as exc:
             last_error = exc
             response = None
         else:
@@ -210,8 +209,8 @@ def _managed_test_organization() -> Iterator[LiveOrganization]:
     admin_key = _require_admin_key()
     user_key = _require_user_key()
     try:
-        owner = unisdk.get_user_basic_info(api_key=user_key)
-    except (RequestError, requests.exceptions.RequestException) as exc:
+        owner = db.get_user_basic_info(api_key=user_key)
+    except (StoreError, requests.exceptions.RequestException) as exc:
         pytest.skip(f"Coordinator persistence eval needs a valid user key: {exc}")
     org_name = f"Coordinator Eval {uuid.uuid4().hex[:12]}"
 
@@ -306,7 +305,7 @@ def _create_test_assistant(
     first_name: str,
     organization: LiveOrganization,
 ) -> dict[str, Any]:
-    return unisdk.create_assistant(
+    return db.create_assistant(
         first_name=first_name,
         surname="Ops",
         config={
@@ -344,12 +343,12 @@ def _activate_assistant_context(
     organization: LiveOrganization,
     assistant: dict[str, Any],
 ) -> None:
-    unisdk.activate(
+    db.activate(
         _ASSISTANTS_PROJECT_NAME,
         overwrite=False,
         api_key=organization.api_key,
     )
-    unisdk.set_context(
+    db.set_context(
         f"{assistant['user_id']}/{assistant['agent_id']}",
         relative=False,
     )
@@ -383,7 +382,7 @@ async def _run_coordinator_code_act_query(query: str) -> Any:
 
 
 def _logs(context: str, organization: LiveOrganization) -> list[Any]:
-    return unisdk.get_logs(
+    return db.get_logs(
         project=_ASSISTANTS_PROJECT_NAME,
         context=context,
         api_key=organization.api_key,
@@ -489,7 +488,7 @@ async def test_coordinator_persists_confirmed_shared_team_guidance():
             "Shared launch coordination memory for revenue operations, "
             "support handoffs, launch SOPs, and escalation rules."
         )
-        team = unisdk.create_team(
+        team = db.create_team(
             organization.organization_id,
             name=f"Launch War Room {suffix}",
             description=team_description,
@@ -497,7 +496,7 @@ async def test_coordinator_persists_confirmed_shared_team_guidance():
         )
         team_id = int(team["team_id"])
         for assistant in (revenue, support):
-            unisdk.add_team_member(
+            db.add_team_member(
                 organization.organization_id,
                 team_id,
                 assistant_id=int(assistant["agent_id"]),

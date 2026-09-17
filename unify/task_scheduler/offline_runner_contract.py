@@ -7,16 +7,12 @@ shape that an offline-execution attempt uses.
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import datetime, timezone
-from typing import Literal
 
 __all__ = [
     "build_offline_runner_env",
     "build_offline_run_key",
-    "build_provider_event_run_key",
     "normalize_run_key_component",
-    "provider_event_offline_env_keys",
 ]
 
 
@@ -28,15 +24,6 @@ _PROVIDER_EVENT_OFFLINE_ENV_KEYS = (
     "UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF",
     "UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
 )
-
-
-def provider_event_offline_env_keys() -> tuple[str, ...]:
-    """Return env-var names required for one offline provider-event run."""
-
-    return _PROVIDER_EVENT_OFFLINE_ENV_KEYS
-
-
-_RUN_KEY_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 
 
 def build_offline_runner_env(
@@ -58,12 +45,6 @@ def build_offline_runner_env(
     job_name: str = "",
     requires_filesystem: bool = False,
     requires_computer: bool = False,
-    provider_event_operation_id: str | None = None,
-    provider_event_run_id: int | None = None,
-    provider_event_binding_id: str | None = None,
-    provider_event_receipt_id: str | None = None,
-    provider_event_context_ref: str | None = None,
-    provider_event_issued_at: str | None = None,
 ) -> dict[str, str]:
     """Build the task-specific env-var dict for one offline_runner subprocess."""
 
@@ -98,50 +79,6 @@ def build_offline_runner_env(
         env["UNIFY_OFFLINE_TASK_JOB_NAME"] = str(job_name)
     if destination:
         env["TASK_DESTINATION"] = str(destination)
-    if wake == "provider_event":
-        if not all(
-            (
-                provider_event_operation_id,
-                provider_event_run_id is not None,
-                provider_event_binding_id,
-                provider_event_receipt_id,
-                provider_event_context_ref,
-                provider_event_issued_at,
-            ),
-        ):
-            raise ValueError(
-                "provider_event offline runs require operation_id, run_id, "
-                "binding_id, receipt_id, event_context_ref, and issued_at",
-            )
-        env.update(
-            {
-                "UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID": str(
-                    provider_event_operation_id,
-                ),
-                "UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID": str(provider_event_run_id),
-                "UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID": str(
-                    provider_event_binding_id,
-                ),
-                "UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID": str(
-                    provider_event_receipt_id,
-                ),
-                "UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF": str(
-                    provider_event_context_ref,
-                ),
-                "UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT": str(
-                    provider_event_issued_at,
-                ),
-            },
-        )
-    # Transition: the process that builds this env and the process that reads
-    # it are different images, and they roll independently. An assistant image
-    # still carrying the pre-rename runner requires UNITY_OFFLINE_*, and
-    # _require_env raises rather than defaulting, so a skewed pair fails every
-    # offline task. Emit both names until the older image is gone.
-    for key in list(env):
-        if key.startswith("UNIFY_OFFLINE_"):
-            env[key.replace("UNIFY_", "UNITY_", 1)] = env[key]
-
     return env
 
 
@@ -175,35 +112,6 @@ def build_offline_run_key(
         )
     tail = "-".join(tail_parts) or "once"
     return f"offline:{wake}:{assistant_id}:" f"{task_id}:{revision_digest}:{tail}"
-
-
-def build_provider_event_run_key(
-    *,
-    assistant_id: str,
-    task_id: int,
-    binding_id: str,
-    revision: str,
-    event_identity_hmac: str,
-    delivery: Literal["live", "offline"] = "offline",
-) -> str:
-    """Build the deterministic provider-event run key.
-
-    Unlike communication-trigger keys, the provider event identity digest is
-    included in full so two identities that share a 12-hex prefix cannot
-    collide through truncation.
-    """
-
-    revision_digest = hashlib.sha256(
-        str(revision or "").encode("utf-8"),
-    ).hexdigest()[:12]
-    binding_part = normalize_run_key_component(binding_id)
-    identity = str(event_identity_hmac).strip()
-    if not identity:
-        raise ValueError("event_identity_hmac is required")
-    return (
-        f"{delivery}:provider_event:{assistant_id}:{task_id}:"
-        f"{binding_part}:{revision_digest}:{identity}"
-    )
 
 
 def normalize_run_key_component(value: str) -> str:

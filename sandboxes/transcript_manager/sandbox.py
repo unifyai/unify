@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import unisdk
+from unify import db
 from sandboxes.utils import TranscriptGenerator
 
 # Ensure repository root resolves for local execution
@@ -140,11 +140,11 @@ async def _main_async() -> None:
 
     # ─────────────────── project version handling ────────────────────
     if args.project_version != -1:
-        commits = unisdk.get_project_commits(args.project_name)
+        commits = db.get_project_commits(args.project_name)
         if commits:
             try:
                 target = commits[args.project_version]
-                unisdk.rollback_project(args.project_name, target["commit_hash"])
+                db.rollback_project(args.project_name, target["commit_hash"])
                 LG.info("[version] Rolled back to commit %s", target["commit_hash"])
             except IndexError:
                 LG.warning(
@@ -229,7 +229,7 @@ async def _main_async() -> None:
 
             # ─────────────── save project snapshot ────────────────
             if raw.lower() in {"save_project", "sp"}:
-                commit_hash = unisdk.commit_project(
+                commit_hash = db.commit_project(
                     args.project_name,
                     commit_message=f"Sandbox save {datetime.utcnow().isoformat()}",
                 ).get("commit_hash")

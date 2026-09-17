@@ -4,8 +4,7 @@ from types import SimpleNamespace
 from tests.helpers import _handle_project
 from tests.task_scheduler.test_task_revision_cas import _provider_event_task
 import pytest
-import unisdk
-
+from unify import db
 from unify.common.context_registry import ContextRegistry
 from unify.common.tool_outcome import ToolErrorException
 from unify.session_details import SESSION_DETAILS
@@ -142,7 +141,7 @@ def test_create_team_task_routes_to_shared_root():
         assert rows[0].assistant_id == SESSION_DETAILS.assistant_context
     finally:
         try:
-            unisdk.delete_context("Teams/987654/Tasks")
+            db.delete_context("Teams/987654/Tasks")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []
@@ -194,7 +193,7 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         assert rows[0].schedule_start_at == initial_start
     finally:
         try:
-            unisdk.delete_context(f"Teams/{team_id}/Tasks")
+            db.delete_context(f"Teams/{team_id}/Tasks")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []
@@ -228,7 +227,7 @@ def test_duplicate_task_id_update_requires_destination():
         assert by_destination["team:987657"] == "Shared duplicate updated"
     finally:
         try:
-            unisdk.delete_context("Teams/987657/Tasks")
+            db.delete_context("Teams/987657/Tasks")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []

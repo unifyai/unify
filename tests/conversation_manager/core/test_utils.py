@@ -985,7 +985,7 @@ class TestCommsPostCodeQuality:
     def test_uses_requests_post_not_http_post(self):
         """The comms POST helper must use requests.post directly, not http.post.
 
-        The http module from unisdk.utils has retry logic baked in. For these
+        The http module from db.utils has retry logic baked in. For these
         fire-and-forget control messages we intentionally want NO retries - the
         timeout is expected and we should move on immediately. Using http.post
         would retry with backoff, which for agent dispatch means dispatching

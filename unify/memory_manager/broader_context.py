@@ -55,9 +55,6 @@ def get_broader_context(
         from unify.memory_manager.memory_manager import (
             MemoryManager,
         )  # noqa: WPS433  – runtime import
-        from unify.common.accessible_teams_block import (
-            build_accessible_teams_block,
-        )  # noqa: WPS433  – runtime import
         from unify.session_details import SESSION_DETAILS  # noqa: WPS433
 
         # ------------------------------------------------------------------
@@ -108,9 +105,6 @@ def get_broader_context(
         if user_bio:
             parts.append(f"\nA bit about {user_name}, who you assist:")
             parts.append(user_bio)
-
-        parts.append("")
-        parts.append(build_accessible_teams_block(SESSION_DETAILS.team_summaries))
 
         if rolling_activity:
             parts.append(

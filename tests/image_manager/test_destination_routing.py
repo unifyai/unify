@@ -5,8 +5,7 @@ import time
 from datetime import UTC, datetime
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.image_manager.image_manager import ImageManager
 from unify.image_manager.utils import make_solid_png_base64
@@ -22,7 +21,7 @@ def _team_id() -> int:
 
 
 def _image_logs(context: str, image_id: int):
-    return unisdk.get_logs(
+    return db.get_logs(
         context=context,
         filter=f"image_id == {int(image_id)}",
         return_ids_only=False,
@@ -31,16 +30,16 @@ def _image_logs(context: str, image_id: int):
 
 def _delete_context_tree(root: str) -> None:
     try:
-        children = list(unisdk.get_contexts(prefix=f"{root}/").keys())
+        children = list(db.get_contexts(prefix=f"{root}/").keys())
     except Exception:
         children = []
     for context in sorted(children, key=len, reverse=True):
         try:
-            unisdk.delete_context(context)
+            db.delete_context(context)
         except Exception:
             pass
     try:
-        unisdk.delete_context(root)
+        db.delete_context(root)
     except Exception:
         pass
 
@@ -79,7 +78,7 @@ def test_image_writes_route_to_space_and_reads_fan_out():
 
     space_context = f"Teams/{team_id}/Images"
     assert _image_logs(im._ctx, personal_id)
-    assert not unisdk.get_logs(
+    assert not db.get_logs(
         context=im._ctx,
         filter=f"caption == '{space_caption}'",
     )
@@ -177,7 +176,7 @@ def test_image_handle_updates_persist_to_original_root():
 
     handle.update_metadata(caption="handle updated in team")
 
-    assert not unisdk.get_logs(
+    assert not db.get_logs(
         context=im._ctx,
         filter="caption == 'handle updated in team'",
     )

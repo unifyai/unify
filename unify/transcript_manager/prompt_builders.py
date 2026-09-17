@@ -18,9 +18,7 @@ from typing import Callable, Dict, Union, List
 # Schemas used in the prompt -------------------------------------------------
 from ..contact_manager.types.contact import Contact
 from .types.message import Message
-from ..common.authorship import AUTHORING_ASSISTANT_ID_FIELD
 from unify.conversation_manager.cm_types import Medium
-from ..session_details import SESSION_DETAILS
 from ..common.prompt_helpers import (
     clarification_guidance,
     sig_dict,
@@ -79,34 +77,6 @@ def _render_two_table_info(
     ]
 
     return "\n".join(lines)
-
-
-def _authoring_attribution_guidance() -> str:
-    """Return shared team transcript attribution policy for ask prompts."""
-
-    if not SESSION_DETAILS.team_ids:
-        return ""
-
-    assistant_id = SESSION_DETAILS.assistant.agent_id
-    assistant_id_label = "unknown" if assistant_id is None else str(assistant_id)
-    authorship_field = f"`{AUTHORING_ASSISTANT_ID_FIELD}`"
-    return textwrap.dedent(
-        f"""
-        Shared transcript attribution
-        ----------------------------
-        • Your own assistant id is `{assistant_id_label}`.
-        • Shared-team transcript rows include {authorship_field}, which identifies which assistant originally had that conversation.
-        • If {authorship_field} matches your assistant id (or is null for legacy rows), treat it as your own prior conversation.
-        • If {authorship_field} differs, treat that row as colleague-authored team knowledge.
-        • When tool results include `message_authoring_attribution`, use each row's `source_label` / `authoring_assistant_name` in your explanation.
-        • Never present colleague-authored conversation as if you previously said it yourself.
-        """,
-    ).strip()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public builders
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def build_ask_prompt(
@@ -277,12 +247,9 @@ def build_ask_prompt(
     two_table_info = _render_two_table_info(
         num_messages=num_messages,
     )
-    attribution_guidance = _authoring_attribution_guidance()
-
     positioning_lines = [
         "Please mention relevant `message_id` and/or `exchange_id` values in your response when possible.",
         "Use the tools to gather missing context before asking the user for clarifications.",
-        attribution_guidance,
         two_table_block,
     ]
     positioning_lines = [ln for ln in positioning_lines if ln]

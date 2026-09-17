@@ -152,7 +152,7 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
     test's CodeActActor handle. Module-scoped async fixtures run on a different
     loop under pytest-asyncio strict mode, which can prevent ActorResult propagation.
     """
-    import unisdk
+    from unify import db
     from tests.settings import SETTINGS
     from unify.conversation_manager.event_broker import reset_event_broker
     from unify.conversation_manager import start_async, stop_async
@@ -164,8 +164,8 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
         test_ctx
     ), "Integration tests require the per-test Unify context from conftest"
 
-    unisdk.activate(SETTINGS.test_project_name, overwrite=False)
-    unisdk.set_context(test_ctx, relative=False, skip_create=False)
+    db.activate(SETTINGS.test_project_name, overwrite=False)
+    db.set_context(test_ctx, relative=False, skip_create=False)
 
     reset_event_broker()
 
@@ -190,8 +190,8 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
     original_init_managers = managers_utils._init_managers
 
     def _init_managers_with_test_context(cm, loop, actor=None):
-        unisdk.activate(SETTINGS.test_project_name, overwrite=False)
-        unisdk.set_context(test_ctx, relative=False, skip_create=True)
+        db.activate(SETTINGS.test_project_name, overwrite=False)
+        db.set_context(test_ctx, relative=False, skip_create=True)
         bind_runtime_context_root(skip_create=True, strict=True)
         ContextRegistry.set_base_context(test_ctx)
         return original_init_managers(cm, loop, actor)
@@ -214,8 +214,8 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
             await managers_utils.init_conv_manager(cm)
         await managers_utils.wait_for_initialization(cm)
 
-        unisdk.activate(SETTINGS.test_project_name, overwrite=False)
-        unisdk.set_context(test_ctx, relative=False, skip_create=True)
+        db.activate(SETTINGS.test_project_name, overwrite=False)
+        db.set_context(test_ctx, relative=False, skip_create=True)
         bind_runtime_context_root(skip_create=True, strict=True)
         ContextRegistry.set_base_context(test_ctx)
 

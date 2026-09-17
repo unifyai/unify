@@ -12,9 +12,7 @@ if TYPE_CHECKING:
 # This is the authoritative list; ToolSurfaceRegistry.MANAGERS must match.
 VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
     {
-        "comms",
         "contacts",
-        "canvas",
         "ingestion",
         "tasks",
         "transcripts",
@@ -22,21 +20,9 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
         "web",
         "data",
         "files",
-        "workspace_email",
-        "integrations",
-        "computer",
         "actor",
-        "coordinator",
     },
 )
-COORDINATOR_MANAGER_ALIAS = "coordinator"
-_NON_COORDINATOR_MANAGER_ALIASES: frozenset[str] = frozenset(
-    alias for alias in VALID_MANAGER_ALIASES if alias != COORDINATOR_MANAGER_ALIAS
-)
-_SCOPED_MANAGERS_BY_ROLE: dict[bool, frozenset[str]] = {
-    True: VALID_MANAGER_ALIASES,
-    False: _NON_COORDINATOR_MANAGER_ALIASES,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,21 +87,9 @@ class PrimitiveScope:
         return cls(scoped_managers=frozenset({manager_alias}))
 
 
-def scoped_managers_for_role(*, is_coordinator: bool) -> frozenset[str]:
-    """Return the canonical manager alias set for the active role."""
-    return _SCOPED_MANAGERS_BY_ROLE[bool(is_coordinator)]
+_DEFAULT_RUNTIME_SCOPE = PrimitiveScope(scoped_managers=VALID_MANAGER_ALIASES)
 
 
-_DEFAULT_RUNTIME_SCOPES: dict[bool, PrimitiveScope] = {
-    role: PrimitiveScope(scoped_managers=aliases)
-    for role, aliases in _SCOPED_MANAGERS_BY_ROLE.items()
-}
-
-
-def default_runtime_scope(*, is_coordinator: bool | None = None) -> PrimitiveScope:
-    """Return the role-scoped default primitive scope for runtime usage."""
-    if is_coordinator is None:
-        from unify.session_details import SESSION_DETAILS
-
-        is_coordinator = bool(getattr(SESSION_DETAILS, "is_coordinator", False))
-    return _DEFAULT_RUNTIME_SCOPES[bool(is_coordinator)]
+def default_runtime_scope() -> PrimitiveScope:
+    """Return the default primitive scope for runtime usage."""
+    return _DEFAULT_RUNTIME_SCOPE

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from unisdk.utils.http import RequestError as UnifyRequestError
+from unify.db import StoreError as UnifyRequestError
 
 from unify.common.federated_search import (
     FederatedSearchContext,
@@ -224,7 +224,7 @@ def test_federated_filter_without_fetcher_delegates_to_server(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "unify.common.federated_search.unisdk.get_logs_federated",
+        "unify.common.federated_search.db.get_logs_federated",
         fake_get_logs_federated,
     )
 
@@ -304,7 +304,7 @@ def test_federated_filter_translates_4xx_into_actionable_tool_error(monkeypatch)
         )
 
     monkeypatch.setattr(
-        "unify.common.federated_search.unisdk.get_logs_federated",
+        "unify.common.federated_search.db.get_logs_federated",
         fake_get_logs_federated_400,
     )
 
@@ -328,7 +328,7 @@ def test_federated_filter_translates_4xx_into_actionable_tool_error(monkeypatch)
         )
 
     monkeypatch.setattr(
-        "unify.common.federated_search.unisdk.get_logs_federated",
+        "unify.common.federated_search.db.get_logs_federated",
         fake_get_logs_federated_500,
     )
 
@@ -347,7 +347,7 @@ def test_federated_count_delegates_to_server_count_only_read(monkeypatch):
         return {"logs": [], "count": 7, "counts": {"a": 3, "b": 4}}
 
     monkeypatch.setattr(
-        "unify.common.federated_search.unisdk.get_logs_federated",
+        "unify.common.federated_search.db.get_logs_federated",
         fake_get_logs_federated,
     )
 
@@ -549,7 +549,7 @@ def test_federated_reduce_falls_back_to_rows_for_grouped_and_exotic_metrics(
         }
 
     monkeypatch.setattr(
-        "unify.common.federated_search.unisdk.get_logs_federated",
+        "unify.common.federated_search.db.get_logs_federated",
         fake_get_logs_federated,
     )
 

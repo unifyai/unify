@@ -11,9 +11,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-import unisdk
-from unisdk.utils.http import RequestError
-
+from unify import db
+from unify.db import StoreError
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.authorship import (
     is_shared_authored_context,
@@ -87,7 +86,7 @@ def insert_rows_impl(
         if on_duplicate is not None:
             create_kwargs["on_duplicate"] = on_duplicate
         result = unify_create_logs(**create_kwargs)
-    except RequestError as exc:
+    except StoreError as exc:
         if (
             ignore_duplicate_composite_key_errors
             and "Duplicate composite key already exists" in str(exc)
@@ -167,7 +166,7 @@ def update_rows_impl(
             context,
             overwrite,
         )
-        unisdk.update_logs(
+        db.update_logs(
             logs=log_ids,
             context=context,
             entries=cleaned_updates,
@@ -178,7 +177,7 @@ def update_rows_impl(
     filter_expr = normalize_filter_expr(filter)
     logger.debug("Updating rows in %s where %s", context, filter_expr)
 
-    logs = unisdk.get_logs(context=context, filter=filter_expr)
+    logs = db.get_logs(context=context, filter=filter_expr)
     if not logs:
         return 0
 
@@ -193,7 +192,7 @@ def update_rows_impl(
     # update naming an immutable field even when its value is unchanged.
     # ``overwrite=True`` is what permits changing an existing column's value;
     # it does not mean row replacement.
-    unisdk.update_logs(
+    db.update_logs(
         logs=log_ids_to_update,
         context=context,
         entries=cleaned_updates,
@@ -212,7 +211,7 @@ def update_by_ids_impl(
     """In-place update of known log ids (stable ids; no delete+reinsert)."""
     if not log_ids:
         return 0
-    unisdk.update_logs(
+    db.update_logs(
         logs=log_ids,
         context=context,
         entries=updates,
@@ -229,7 +228,7 @@ def claim_impl(
     limit: int = 1,
 ) -> List[Dict[str, Any]]:
     """Atomic compare-and-set claim (Orchestra POST /logs/claim)."""
-    response = unisdk.claim_logs(
+    response = db.claim_logs(
         context=context,
         expect=expect,
         updates=updates,
@@ -302,7 +301,7 @@ def reclaim_impl(
     claim means. ``limit`` caps one sweep; repeated sweeps drain a
     backlog.
     """
-    rows = unisdk.get_logs(
+    rows = db.get_logs(
         context=context,
         filter=f"{_equality_filter(claimed)} and {timestamp_field} != None",
         limit=limit,
@@ -313,7 +312,7 @@ def reclaim_impl(
         stamp = (lg.entries or {}).get(timestamp_field)
         if not _lease_expired(stamp, older_than_seconds=older_than_seconds):
             continue
-        response = unisdk.claim_logs(
+        response = db.claim_logs(
             context=context,
             expect={**claimed, timestamp_field: stamp},
             updates=stamped_updates,
@@ -380,7 +379,7 @@ def delete_rows_impl(
     elif filter is not None:
         # Get log IDs using return_ids_only for efficiency
         filter_expr = normalize_filter_expr(filter)
-        result = unisdk.get_logs(
+        result = db.get_logs(
             context=context,
             filter=filter_expr,
             return_ids_only=True,
@@ -392,7 +391,7 @@ def delete_rows_impl(
         return 0
 
     # Delete the logs
-    unisdk.delete_logs(
+    db.delete_logs(
         context=context,
         logs=ids_to_delete,
         delete_empty_logs=delete_empty_rows,

@@ -1,17 +1,14 @@
-"""In‑process, asyncio‑friendly event stream **prefilled from Unify logs** and
-restricted to Pydantic payload types declared in *events/types/*.
+"""In‑process, asyncio‑friendly event stream **prefilled from stored events**
+and restricted to Pydantic payload types declared in *events/types/*.
 
-Orchestra persistence (``Events/*``) can be narrowed independently of Pub/Sub
-Live Actions via ``EVENTBUS_ORCHESTRA_PERSIST_MODE`` /
-``EVENTBUS_ORCHESTRA_PERSIST_TOOLS`` (see ``persist_filters``). In allowlist
-mode, ManagerMethod/ToolLoop rows under an ActiveTask (execution lineage on the
-payload) are still persisted in full for ``Tasks/Executions`` join via ``run_key``.
-Stream noise rules in ``stream_filters`` affect Pub/Sub only.
+Published events are persisted to the store's ``Events/*`` contexts (one per
+event type) when publishing is enabled, so a run's ManagerMethod and ToolLoop
+tree can be joined back to its ``Tasks/Executions`` row via ``run_key``.
 """
 
 from __future__ import annotations
 
-import unisdk
+from unify import db
 import json
 import asyncio
 import datetime as dt
@@ -53,8 +50,6 @@ from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
 from ..common.log_utils import _inject_private_fields, payload_from_log_entries
 from ..common.model_to_fields import model_to_fields
 from ..logger import LOGGER
-from .persist_filters import should_persist_to_orchestra
-from .stream_filters import is_streaming_noise
 from .task_run_lineage import enrich_payload_with_task_run_lineage
 
 # ---------------------------------------------------------------------------
@@ -325,8 +320,6 @@ class Subscription(BaseModel):
 
 
 class EventBus:
-    _LOGGER = unisdk.AsyncLoggerManager(name="EventBus", num_consumers=16)
-
     # Class-level flag to control event publishing. Initialized from SETTINGS on
     # first EventBus instantiation. Can be overridden (e.g., tests use markers).
     _publishing_enabled: bool | None = None
@@ -341,14 +334,6 @@ class EventBus:
     # node's uptime: minutes on a fresh node (which spuriously protected a pod
     # that had published nothing) and days on an old one.
     last_publish_monotonic: float = time.monotonic()
-
-    # ── Pub/Sub streaming for Live Actions ────────────────────────────────
-    _GCP_PROJECT: str | None = None
-    _ACTION_EVENT_TYPES = frozenset(
-        {"ManagerMethod", "ToolLoop", "CoordinatorActivity"},
-    )
-    _pubsub_publisher = None
-    _pubsub_streaming_enabled: bool | None = None
 
     @classmethod
     def _init_publishing_enabled(cls) -> None:
@@ -366,42 +351,6 @@ class EventBus:
                 "enabled" if cls._publishing_enabled else "disabled",
             )
 
-    @classmethod
-    def _init_pubsub_streaming(cls) -> None:
-        """Initialize _pubsub_streaming_enabled from settings if not already set."""
-        if cls._pubsub_streaming_enabled is None:
-            try:
-                from ..settings import SETTINGS
-
-                cls._pubsub_streaming_enabled = SETTINGS.EVENTBUS_PUBSUB_STREAMING
-            except Exception:
-                cls._pubsub_streaming_enabled = False
-            LOGGER.info(
-                "Pub/Sub action streaming %s",
-                "enabled" if cls._pubsub_streaming_enabled else "disabled",
-            )
-
-    @classmethod
-    def _get_pubsub_publisher(cls):
-        """Lazily initialize the GCP Pub/Sub publisher client.
-
-        Message ordering is enabled so that messages published with the same
-        ``ordering_key`` are delivered to subscribers in publish order.  Each
-        assistant's action events share a single ordering key (the assistant
-        ID), guaranteeing the console receives ManagerMethod and ToolLoop
-        events in the exact sequence they occurred.
-        """
-        if cls._pubsub_publisher is None:
-            from google.cloud import pubsub_v1
-            from google.cloud.pubsub_v1.types import PublisherOptions
-
-            cls._pubsub_publisher = pubsub_v1.PublisherClient(
-                publisher_options=PublisherOptions(
-                    enable_message_ordering=True,
-                ),
-            )
-        return cls._pubsub_publisher
-
     def __init__(self):
         # Initialize publishing flag from settings (once, on first instantiation)
         EventBus._init_publishing_enabled()
@@ -412,7 +361,7 @@ class EventBus:
         self._default_window = 50
 
         # ── Unify setup ────────────────────────────────────────────────
-        active_ctx = unisdk.get_active_context()
+        active_ctx = db.get_active_context()
         base_ctx = active_ctx["write"]
         if not base_ctx:
             # Ensure the global assistant/context is selected before we derive our sub-context
@@ -422,22 +371,22 @@ class EventBus:
                 )  # local to avoid cycles
 
                 _ensure_initialised()
-                active_ctx = unisdk.get_active_context()
+                active_ctx = db.get_active_context()
                 base_ctx = active_ctx["write"]
             except Exception:
                 # If ensure fails (e.g. offline tests), proceed; downstream will fall back safely
                 pass
         self._global_ctx = f"{base_ctx}/Events" if base_ctx else "Events"
-        unisdk.create_context(self._global_ctx)
+        db.create_context(self._global_ctx)
 
         # Persisted subscription metadata lives here
         self._callbacks_ctx = f"{self._global_ctx}/_callbacks"
-        unisdk.create_context(
+        db.create_context(
             self._callbacks_ctx,
             unique_keys={"row_id": "int"},
             auto_counting={"row_id": None},
         )
-        ctxs = unisdk.get_contexts(prefix=f"{self._global_ctx}/")
+        ctxs = db.get_contexts(prefix=f"{self._global_ctx}/")
         self._window_sizes: Dict[str, int] = {
             ctx.split("/")[-1]: self._default_window for ctx in ctxs
         }
@@ -546,13 +495,13 @@ class EventBus:
                 continue
 
             # Create context
-            unisdk.create_context(ctx_name)
+            db.create_context(ctx_name)
 
             # Create fields from Pydantic model + common event fields
             try:
                 payload_fields = model_to_fields(payload_model)
                 all_fields = {**self._COMMON_EVENT_FIELDS, **payload_fields}
-                unisdk.create_fields(all_fields, context=ctx_name)
+                db.create_fields(all_fields, context=ctx_name)
             except Exception:
                 # Fields may already exist or context may have issues; proceed
                 pass
@@ -578,10 +527,6 @@ class EventBus:
 
         return self._prefill_done.is_set()
 
-    @classmethod
-    def _get_logger(cls) -> unisdk.AsyncLoggerManager:
-        return cls._LOGGER
-
     # ------------------------------------------------------------------
     # New *non-blocking* hydration helpers
     # ------------------------------------------------------------------
@@ -599,11 +544,7 @@ class EventBus:
         except Exception as exc:  # pragma: no cover – defensive
             # Never leave waiters hanging – remember the error and continue.
             self._prefill_exc = exc
-            try:
-                self._get_logger().error("EventBus – initial hydration failed: %r", exc)
-            except Exception:
-                # Logger might not be fully ready; ignore.
-                pass
+            LOGGER.error("EventBus – initial hydration failed: %r", exc)
         finally:
             self._prefill_done.set()
 
@@ -705,7 +646,7 @@ class EventBus:
 
     @staticmethod
     def _is_missing_context_error(exc: BaseException) -> bool:
-        from unisdk.utils.http import RequestError as _UnifyRequestError
+        from unify.db import StoreError as _UnifyRequestError
 
         if isinstance(exc, _UnifyRequestError):
             status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -731,7 +672,7 @@ class EventBus:
                 await asyncio.sleep(delay)
             try:
                 return await asyncio.to_thread(
-                    unisdk.get_logs,
+                    db.get_logs,
                     context=context,
                     **kwargs,
                 )
@@ -915,7 +856,7 @@ class EventBus:
     # ------------------------------------------------------------------
     def _load_subscriptions(self) -> None:
         """Synchronously rebuild the in-memory subscription map."""
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=self._callbacks_ctx,
             sorting={"row_id": "ascending"},
         )
@@ -1043,27 +984,16 @@ class EventBus:
         # (not just implied by the context name) so ``type``-predicated search
         # filters resolve against the per-type context read path.
         #
-        # Orchestra ``Events/*`` persistence can be narrowed via
-        # EVENTBUS_ORCHESTRA_PERSIST_MODE / EVENTBUS_ORCHESTRA_PERSIST_TOOLS.
-        # Under allowlist, payloads already stamped with execution lineage
-        # (ActiveTask) persist the full ManagerMethod + ToolLoop tree; other
-        # traffic stays on the tool allowlist. Pub/Sub is unaffected.
-        if should_persist_to_orchestra(event.type, payload_dict):
-            specific_entries = _inject_private_fields(
-                {
-                    **base_entries,
-                    "type": event.type,
-                    **payload_dict,
-                },
-            )
-            self._pending_writes.append(
-                (specific_entries, self._specific_ctxs[event.type]),
-            )
-
-        # ── Stream action events to Pub/Sub for real-time frontend rendering ─
-        if event.type in self._ACTION_EVENT_TYPES:
-            if not is_streaming_noise(event.type, payload_dict):
-                self._stream_action_to_pubsub(event, base_entries, payload_dict)
+        specific_entries = _inject_private_fields(
+            {
+                **base_entries,
+                "type": event.type,
+                **payload_dict,
+            },
+        )
+        self._pending_writes.append(
+            (specific_entries, self._specific_ctxs[event.type]),
+        )
 
         # ── Evaluate subscriptions ────────────────────────────────────────
         self._process_event(event)
@@ -1071,133 +1001,10 @@ class EventBus:
         if blocking:
             self.flush()
 
-    # ------------------------------------------------------------------
-    # Pub/Sub streaming (Live Actions)
-    # ------------------------------------------------------------------
-
-    def _stream_action_to_pubsub(
-        self,
-        event: Event,
-        base_entries: dict,
-        payload_dict: dict,
-    ) -> None:
-        """Fire-and-forget publish of a ManagerMethod/ToolLoop event to Pub/Sub.
-
-        The message lands on the assistant's existing Pub/Sub topic with
-        ``thread="action_event"`` as a message attribute.  A dedicated
-        subscription filtered on that attribute delivers these events to the
-        console's SSE endpoint for real-time rendering without Orchestra polling.
-
-        Errors are logged at DEBUG level and never propagate — the Orchestra
-        dual-write is the authoritative persistence path.
-        """
-        if EventBus._pubsub_streaming_enabled is None:
-            EventBus._init_pubsub_streaming()
-        if not EventBus._pubsub_streaming_enabled:
-            return
-
-        topic_name = None
-        agent_id = None
-        try:
-            from ..session_details import SESSION_DETAILS
-            from ..settings import SETTINGS
-
-            agent_id = str(SESSION_DETAILS.assistant.agent_id)
-            env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
-            topic_name = f"unity-{agent_id}{env_suffix}"
-
-            if EventBus._GCP_PROJECT is None:
-                EventBus._GCP_PROJECT = SETTINGS.GCP_PROJECT_ID
-
-            publisher = self._get_pubsub_publisher()
-            topic_path = publisher.topic_path(self._GCP_PROJECT, topic_name)
-
-            message_data = {
-                "thread": "action_event",
-                "event": {
-                    **base_entries,
-                    "type": event.type,
-                    **payload_dict,
-                },
-            }
-
-            future = publisher.publish(
-                topic_path,
-                json.dumps(message_data, default=str).encode("utf-8"),
-                ordering_key=agent_id,
-                thread="action_event",
-            )
-            LOGGER.debug(
-                "Pub/Sub publish fired: topic=%s event_type=%s row_id=%s",
-                topic_name,
-                event.type,
-                event.row_id,
-            )
-            future.add_done_callback(
-                self._make_publish_done_callback(topic_path, agent_id),
-            )
-
-        except Exception as exc:
-            LOGGER.warning(
-                "Pub/Sub action streaming failed: topic=%s agent_id=%s "
-                "event_type=%s row_id=%s error=%s",
-                topic_name,
-                agent_id,
-                event.type,
-                event.row_id,
-                exc,
-                exc_info=True,
-            )
-
-    @classmethod
-    def _make_publish_done_callback(cls, topic_path: str, ordering_key: str):
-        """Return a callback that handles publish success/failure.
-
-        On failure, calls ``resume_publish`` so that subsequent messages with the
-        same ordering key are not permanently blocked by a single transient error.
-        """
-
-        def _on_done(future) -> None:
-            try:
-                message_id = future.result()
-                LOGGER.debug(
-                    "Pub/Sub publish confirmed: topic=%s ordering_key=%s message_id=%s",
-                    topic_path,
-                    ordering_key,
-                    message_id,
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    "Pub/Sub publish failed: topic=%s ordering_key=%s error=%s",
-                    topic_path,
-                    ordering_key,
-                    exc,
-                    exc_info=True,
-                )
-                try:
-                    if cls._pubsub_publisher and ordering_key:
-                        cls._pubsub_publisher.resume_publish(topic_path, ordering_key)
-                        LOGGER.info(
-                            "Resumed Pub/Sub publishing: topic=%s ordering_key=%s",
-                            topic_path,
-                            ordering_key,
-                        )
-                except Exception as resume_exc:
-                    LOGGER.warning(
-                        "Failed to resume Pub/Sub publishing: topic=%s "
-                        "ordering_key=%s error=%s",
-                        topic_path,
-                        ordering_key,
-                        resume_exc,
-                        exc_info=True,
-                    )
-
-        return _on_done
-
     def flush(self) -> None:
         """Batch-upload all buffered event writes, grouped by context.
 
-        Uses ``unisdk.create_logs`` (single HTTP POST per context) rather
+        Uses ``db.create_logs`` (single HTTP POST per context) rather
         than N individual ``log_create`` calls.  Aggregation mirrors are
         attached in bulk after each batch completes.
 
@@ -1211,7 +1018,7 @@ class EventBus:
         snapshot = self._pending_writes
         self._pending_writes = []
 
-        project = unisdk.active_project()
+        project = db.active_project()
 
         batches: dict[str, list[dict]] = defaultdict(list)
         for entries, context in snapshot:
@@ -1226,7 +1033,7 @@ class EventBus:
 
         for context, entries_list in batches.items():
             try:
-                unisdk.create_logs(
+                db.create_logs(
                     project=project,
                     context=context,
                     entries=entries_list,
@@ -1250,7 +1057,7 @@ class EventBus:
                 # are lost, and log exactly which ones.
                 for entries in entries_list:
                     try:
-                        unisdk.create_logs(
+                        db.create_logs(
                             project=project,
                             context=context,
                             entries=[entries],
@@ -1387,7 +1194,7 @@ class EventBus:
         # ----------------------------------------------------------------------
         async def _fetch_one(etype: str, want: int) -> tuple[str, list[Event]]:
             """
-            Run the blocking ``unisdk.get_logs`` call in a worker thread and
+            Run the blocking ``db.get_logs`` call in a worker thread and
             re-wrap the raw log rows as :class:`Event` objects.
             """
             context = self._specific_ctxs.get(etype)
@@ -1397,7 +1204,7 @@ class EventBus:
                 return etype, []
 
             logs = await asyncio.to_thread(
-                unisdk.get_logs,
+                db.get_logs,
                 context=context,
                 filter=filter,
                 sorting={"timestamp": "descending"},
@@ -1652,11 +1459,9 @@ class EventBus:
         #    …/Events/<TYPE>, …/Events/_callbacks child) instead of enumerating
         #    and deleting each individually.
         if delete_contexts:
-            unisdk.delete_context(self._global_ctx, delete_children=True)
+            db.delete_context(self._global_ctx, delete_children=True)
 
         # 4. Re-initialise this *same* instance
-        self._get_logger().clear_queue()
-        self._get_logger().join()
         type(self).__init__(self)
 
     # ------------------------------------------------------------------

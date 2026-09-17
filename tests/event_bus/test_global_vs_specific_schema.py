@@ -9,8 +9,7 @@ parent (and for `_callbacks`); it no longer receives event rows.
 import pytest
 import datetime as dt
 
-import unisdk
-
+from unify import db
 from unify.common.log_utils import payload_from_log_entries
 from unify.events.event_bus import EventBus, Event
 from unify.events.types.manager_method import ManagerMethodPayload
@@ -39,16 +38,16 @@ async def test_base_events_context_receives_no_event_rows():
     bus.join_published()
 
     # The base/global context must not receive the event row anymore.
-    global_logs = unisdk.get_logs(
-        project=unisdk.active_project(),
+    global_logs = db.get_logs(
+        project=db.active_project(),
         context=bus._global_ctx,
         filter=f"event_id == '{event.event_id}'",
     )
     assert global_logs == []
 
     # The per-type context holds exactly one spread row for the event.
-    specific_logs = unisdk.get_logs(
-        project=unisdk.active_project(),
+    specific_logs = db.get_logs(
+        project=db.active_project(),
         context=bus._specific_ctxs["ManagerMethod"],
         filter=f"event_id == '{event.event_id}'",
     )
@@ -78,8 +77,8 @@ async def test_specific_context_spreads_payload():
 
     # Query the type-specific context directly
     specific_ctx = bus._specific_ctxs["ManagerMethod"]
-    logs = unisdk.get_logs(
-        project=unisdk.active_project(),
+    logs = db.get_logs(
+        project=db.active_project(),
         context=specific_ctx,
         filter=f"event_id == '{event.event_id}'",
     )

@@ -47,7 +47,7 @@ def test_filter_functions_delegates_federated_read_to_server(monkeypatch):
             "counts": {"compositional": 2, "primitives": 3},
         }
 
-    monkeypatch.setattr("unisdk.get_logs_federated", fake_get_logs_federated)
+    monkeypatch.setattr("db.get_logs_federated", fake_get_logs_federated)
     monkeypatch.setattr(
         "unify.function_manager.function_manager.list_private_fields",
         lambda *_args, **_kwargs: ["_embedding"],
@@ -107,7 +107,7 @@ def test_filter_functions_skips_primitive_contexts_when_disabled(monkeypatch):
         calls.append(kwargs)
         return {"logs": [{"name": "comp-1"}], "count": 1, "counts": {}}
 
-    monkeypatch.setattr("unisdk.get_logs_federated", fake_get_logs_federated)
+    monkeypatch.setattr("db.get_logs_federated", fake_get_logs_federated)
     monkeypatch.setattr(
         "unify.function_manager.function_manager.list_private_fields",
         lambda *_args, **_kwargs: [],

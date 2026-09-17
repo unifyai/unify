@@ -2,27 +2,24 @@
 unify/settings.py
 ==================
 
-Centralized production environment settings using pydantic-settings.
+Centralized runtime settings using pydantic-settings.
 
-These settings are used in the deployed system and are inherited by test settings.
-All settings can be overridden via environment variables or .env file.
+All settings can be overridden via environment variables or the ``.env`` file
+in the working directory.
 """
 
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import Field, field_validator, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from unify.actor.settings import ActorSettings
-from unify.blacklist_manager.settings import BlacklistSettings
 from unify.contact_manager.settings import ContactSettings
 from unify.conversation_manager.settings import ConversationSettings
-from unify.canvas_manager.settings import CanvasSettings
 from unify.data_manager.settings import DataSettings
 from unify.file_manager.settings import FileSettings
 from unify.function_manager.settings import FunctionSettings
 from unify.guidance_manager.settings import GuidanceSettings
-from unify.workflow_manager.settings import WorkflowSettings
 from unify.image_manager.settings import ImageSettings
 from unify.ingestion_manager.settings import IngestionSettings
 from unify.knowledge_manager.settings import KnowledgeSettings
@@ -42,29 +39,15 @@ def _parse_bool(v: Any) -> bool:
     return bool(v)
 
 
-def _parse_deploy_env(v: Any) -> str:
-    """Parse the deployment environment setting."""
-    if v is None:
-        return "production"
-    env = str(v).strip().lower() or "production"
-    if env not in {"production", "staging"}:
-        raise ValueError("DEPLOY_ENV must be one of production or staging")
-    return env
-
-
 class ProductionSettings(BaseSettings):
-    """Production environment settings used in deployed system and tests.
-
-    All settings can be overridden via environment variables.
-    Test settings (TestingSettings) inherit from this class.
-    """
+    """Runtime settings; test settings (TestingSettings) inherit from this class."""
 
     # ─────────────────────────────────────────────────────────────────────────
     # Local Workspace
     # ─────────────────────────────────────────────────────────────────────────
-    # Root directory for local file operations, CodeActActor working directory,
-    # virtual environments, and .env storage.  Defaults to ~/Unity/Local when
-    # empty.  Override via UNIFY_LOCAL_ROOT env var.
+    # Root directory for local file operations, CodeActActor working directory
+    # and virtual environments. Defaults to ``<UNIFY_HOME>/workspace`` (with
+    # ``UNIFY_HOME`` defaulting to ``~/.unify``) when empty.
     UNIFY_LOCAL_ROOT: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -93,127 +76,35 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials
     # ─────────────────────────────────────────────────────────────────────────
-    # OpenAI — speech-to-text and realtime voice only. OpenAI chat models are
-    # reached as ``openai/<id>@openrouter``, so this cannot satisfy LLM access.
-    OPENAI_API_KEY: SecretStr = SecretStr("")
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
-    # OpenRouter — used for ``*@openrouter`` endpoints (platform defaults).
+    # OpenRouter — used for ``*@openrouter`` endpoints (the default model) and
+    # for embeddings when ``UNIFY_EMBED_MODEL`` names an ``@openrouter`` model.
     OPENROUTER_API_KEY: SecretStr = SecretStr("")
     UNIFY_VALIDATE_LLM_PROVIDERS: bool = True
 
     # ─────────────────────────────────────────────────────────────────────────
-    # External Service Credentials
-    # ─────────────────────────────────────────────────────────────────────────
-    ORCHESTRA_ADMIN_KEY: SecretStr = SecretStr("")
-
-    # Multi-tenant MS Teams (Bot Framework) app credentials. A single Azure
-    # bot registration serves every tenant that installs it; the id + secret
-    # mint Bot Connector tokens for outbound proactive replies and verify
-    # inbound activity JWTs. Deployment-level secrets (not per-tenant).
-    MS_TEAMS_BOT_APP_ID: str = ""
-    MS_TEAMS_BOT_APP_SECRET: SecretStr = SecretStr("")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Infrastructure URLs
-    # ─────────────────────────────────────────────────────────────────────────
-    ORCHESTRA_URL: str = "https://api.unify.ai/v0"
-    # Console origin used to build user-facing links (canvas views).
-    # Per-environment deployments override this or every shared link
-    # points at production Console regardless of where the row lives.
-    CONSOLE_URL: str = "https://console.unify.ai"
-    UNIFY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
-    # Catch-all domain for multiplayer twin alias addresses, and the Workspace
-    # mailbox that receives them. Alias addresses have no Workspace user of
-    # their own: reads and sends delegate to the mailbox while the From header
-    # keeps the alias.
-    UNIFY_TWIN_ALIAS_EMAIL_DOMAIN: str = "twins.unify.ai"
-    UNIFY_TWIN_ALIAS_MAILBOX: str = "twins@unify.ai"
-
-    # ─────────────────────────────────────────────────────────────────────────
     # Builtins Catalogue
     # ─────────────────────────────────────────────────────────────────────────
-    # Name of the public-read Unify project holding the global builtins
-    # catalogues (function primitives and guidance), one copy platform-wide.
+    # Name of the project holding the builtins catalogues (function primitives
+    # and guidance), seeded from the committed snapshots at start-up.
     UNIFY_BUILTINS_PROJECT: str = "Builtins"
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Workflow Catalogue
-    # ─────────────────────────────────────────────────────────────────────────
-    # Root directory holding the curated workflow bundles (one directory
-    # per workflow: manifest.yaml + guidance/ + tasks/ + ...). Empty means
-    # no catalogue: the WorkflowManager is not built at boot.
-    UNIFY_WORKFLOWS_DIR: str = ""
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # GCP Project
-    # ─────────────────────────────────────────────────────────────────────────
-    # GCP project ID for Pub/Sub topics and subscriptions. Override via
-    # GCP_PROJECT_ID env var for local development with the Pub/Sub emulator
-    # (e.g. "local-test-project" to match Communication's local.sh).
-    GCP_PROJECT_ID: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # Logging / Observability
     # ─────────────────────────────────────────────────────────────────────────
     PYTEST_LOG_TO_FILE: bool = True
-    # Directory for Unity LOGGER file output (async tool loop, managers, etc.)
-    # When set, logs are written to {UNIFY_LOG_DIR}/unity.log
+    # Directory for Unify LOGGER file output (async tool loop, managers, etc.)
+    # When set, logs are written to {UNIFY_LOG_DIR}/unify.log
     # Default: None (console only)
     UNIFY_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # EventBus Publishing
     # ─────────────────────────────────────────────────────────────────────────
-    # Controls whether EventBus publishes events (logging to Unify and local
-    # subscriptions/callbacks). Disabled by default for local development to
-    # reduce noise. Enable in production deployments.
+    # Controls whether EventBus persists published events to the store's
+    # ``Events/*`` contexts. Disabled by default to reduce noise.
     EVENTBUS_PUBLISHING_ENABLED: bool = False
-
-    # Orchestra ``Events/*`` persistence mode when publishing is enabled:
-    # - ``all``: write every published event to Orchestra (legacy behavior)
-    # - ``allowlist``: write ManagerMethod/ToolLoop events whose method or
-    #   tool name is listed in EVENTBUS_ORCHESTRA_PERSIST_TOOLS, **plus** the
-    #   full ManagerMethod + ToolLoop tree when the payload carries task-run
-    #   lineage (``run_key`` or ``task_id``+``run_key`` under an ActiveTask)
-    # Pub/Sub Live Actions streaming is independent (see EVENTBUS_PUBSUB_STREAMING).
-    EVENTBUS_ORCHESTRA_PERSIST_MODE: Literal["all", "allowlist"] = "all"
-
-    # Comma-separated tool/method names when EVENTBUS_ORCHESTRA_PERSIST_MODE
-    # is ``allowlist`` and the event is **not** under a execution lineage
-    # (default: CodeAct action boundary + execution boundaries + tool results).
-    EVENTBUS_ORCHESTRA_PERSIST_TOOLS: str = "act,execute_code,execute_function"
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # EventBus Pub/Sub Streaming (Live Actions)
-    # ─────────────────────────────────────────────────────────────────────────
-    # When enabled, EventBus.publish() also streams ManagerMethod and ToolLoop
-    # events to the assistant's GCP Pub/Sub topic with thread="action_event".
-    # This enables real-time frontend rendering of the agent's activity tree
-    # without polling Orchestra. Requires GCP credentials and a provisioned
-    # Pub/Sub topic. Disabled by default; enable in production deployments.
-    # Stream filters (stream_filters.py) apply here only — not to Orchestra.
-    EVENTBUS_PUBSUB_STREAMING: bool = False
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # OpenTelemetry Tracing
-    # ─────────────────────────────────────────────────────────────────────────
-    # Master switch for OTel tracing.
-    # - UNIFY_OTEL=false (default): OTel tracing disabled
-    # - UNIFY_OTEL=true: OTel tracing enabled, creates TracerProvider if needed
-    # - UNIFY_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
-    # - UNIFY_OTEL_LOG_DIR: Directory for file-based span export (optional)
-    #
-    # When enabled, manager operations and async tool loops create spans that
-    # propagate trace context to downstream libraries (unillm, unify).
-    #
-    # File-based span export:
-    # When UNIFY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
-    # by trace_id. This enables full-stack trace correlation with Orchestra
-    # (which runs in a separate process but receives the traceparent header).
-    UNIFY_OTEL: bool = False
-    UNIFY_OTEL_ENDPOINT: str = ""
-    UNIFY_OTEL_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
     # Terminal Logging
@@ -245,21 +136,6 @@ class ProductionSettings(BaseSettings):
     UNIFY_READONLY_ASK_GUARD: bool = True
     FIRST_ASK_TOOL_IS_SEARCH: bool = False
     FIRST_MUTATION_TOOL_IS_ASK: bool = False
-    DEPLOY_ENV: Literal["production", "staging"] = "production"
-    # Whether a Console web UI / onboarding front-end is present for this
-    # deployment. Hosted and self-host run with a Console (default True); the
-    # public local install runs against hosted Orchestra with no Console and
-    # sets this False to suppress Console-UI knowledge and onboarding prompts.
-    UNIFY_CONSOLE_UI: bool = True
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Manager Configuration
-    # ─────────────────────────────────────────────────────────────────────────
-    # Foundational managers (cannot be disabled, only implementation switched):
-    #   - Actor, ContactManager, TranscriptManager, TaskScheduler, ConversationManager
-    # Optional managers (can be disabled via ENABLED=False):
-    #   - KnowledgeManager, GuidanceManager, SecretManager,
-    #     WebSearcher
 
     # ─────────────────────────────────────────────────────────────────────────
     # Composed Manager Settings
@@ -267,10 +143,8 @@ class ProductionSettings(BaseSettings):
     # Each manager owns its settings in its own settings.py file.
     # Access via SETTINGS.contact.IMPL, SETTINGS.transcript.IMPL, etc.
     actor: ActorSettings = Field(default_factory=ActorSettings)
-    blacklist: BlacklistSettings = Field(default_factory=BlacklistSettings)
     contact: ContactSettings = Field(default_factory=ContactSettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
-    canvas: CanvasSettings = Field(default_factory=CanvasSettings)
     data: DataSettings = Field(default_factory=DataSettings)
     file: FileSettings = Field(default_factory=FileSettings)
     function: FunctionSettings = Field(default_factory=FunctionSettings)
@@ -283,7 +157,6 @@ class ProductionSettings(BaseSettings):
     task: TaskSettings = Field(default_factory=TaskSettings)
     transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
     web: WebSettings = Field(default_factory=WebSettings)
-    workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Validators
@@ -292,36 +165,17 @@ class ProductionSettings(BaseSettings):
         "UNIFY_TERMINAL_LOG",
         "UNIFY_ASYNCIO_DEBUG",
         "EVENTBUS_PUBLISHING_ENABLED",
-        "EVENTBUS_PUBSUB_STREAMING",
         "PYTEST_LOG_TO_FILE",
         "UNIFY_READONLY_ASK_GUARD",
         "FIRST_ASK_TOOL_IS_SEARCH",
         "FIRST_MUTATION_TOOL_IS_ASK",
         "TEST",
         "UNIFY_VALIDATE_LLM_PROVIDERS",
-        "UNIFY_OTEL",
         mode="before",
     )
     @classmethod
     def parse_bool_fields(cls, v: Any) -> bool:
         return _parse_bool(v)
-
-    @field_validator("DEPLOY_ENV", mode="before")
-    @classmethod
-    def parse_deploy_env_field(cls, v: Any) -> str:
-        return _parse_deploy_env(v)
-
-    @field_validator("EVENTBUS_ORCHESTRA_PERSIST_MODE", mode="before")
-    @classmethod
-    def parse_orchestra_persist_mode(cls, v: Any) -> str:
-        if v is None or (isinstance(v, str) and not v.strip()):
-            return "all"
-        normalized = str(v).strip().lower()
-        if normalized not in {"all", "allowlist"}:
-            raise ValueError(
-                "EVENTBUS_ORCHESTRA_PERSIST_MODE must be 'all' or 'allowlist'",
-            )
-        return normalized
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -329,26 +183,13 @@ class ProductionSettings(BaseSettings):
         extra="ignore",
     )
 
-    @property
-    def ENV_SUFFIX(self) -> str:
-        """Return the environment suffix used in shared resource names."""
-        return "" if self.DEPLOY_ENV == "production" else f"-{self.DEPLOY_ENV}"
-
     def validate_llm_providers(self) -> None:
         """Validate that the runtime has some way to reach an LLM provider.
 
-        Either a raw provider credential in the environment, or a broker
-        sidecar (hosted pods hold no provider keys at all -- every LLM call
-        routes through the sidecar, authenticated by the pod's UNIFY_KEY).
-
         Raises:
-            RuntimeError: If neither a credential nor a broker is available.
+            RuntimeError: If no provider credential is available.
         """
         if not self.UNIFY_VALIDATE_LLM_PROVIDERS:
-            return
-        from unify.common.broker import broker_origin
-
-        if broker_origin() is not None:
             return
         available = {
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
@@ -359,8 +200,7 @@ class ProductionSettings(BaseSettings):
             raise RuntimeError(
                 "At least one LLM provider credential is required. "
                 "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, "
-                "and/or DEEPSEEK_API_KEY, or configure the broker "
-                "sidecar (UNILLM_LLM_GATEWAY_URL + UNIFY_KEY).",
+                "and/or DEEPSEEK_API_KEY.",
             )
 
 

@@ -3,8 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 import asyncio
-import unisdk
-
+from unify import db
 import pytest
 
 from unify.image_manager.image_manager import ImageManager
@@ -175,7 +174,7 @@ def test_get_images_for_pending_prefers_cache_no_backend(monkeypatch):
     )
 
     calls = {"count": 0}
-    orig_get_logs = unisdk.get_logs
+    orig_get_logs = db.get_logs
 
     def _wrapped_get_logs(*args, **kwargs):
         calls["count"] += 1

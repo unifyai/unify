@@ -30,7 +30,6 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from unify.function_manager.primitives import ComputerPrimitives
 from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.common.tool_errors import ToolInputError
 
@@ -482,7 +481,6 @@ class PythonExecutionSession:
 
     def __init__(
         self,
-        computer_primitives: Optional[ComputerPrimitives] = None,
         environments: Optional[Dict[str, "BaseEnvironment"]] = None,
         venv_pool: Optional[Any] = None,
         shell_pool: Optional[Any] = None,
@@ -491,8 +489,6 @@ class PythonExecutionSession:
         Initializes the execution environment.
 
         Args:
-            computer_primitives: An instance of ComputerPrimitives to be injected into the
-                             global state, making computer tools available.
             environments: Optional mapping of environment namespaces to environments. If
                 provided, each environment instance is injected into globals.
             venv_pool: Optional VenvPool for persistent Python venv connections.
@@ -562,18 +558,6 @@ class PythonExecutionSession:
                 except Exception:
                     # Keep sandbox usable even if a non-critical environment fails to inject.
                     continue
-
-        # Backward-compat: if computer_primitives was passed directly and no
-        # "primitives" namespace is present, inject a Primitives wrapper so
-        # primitives.computer.* calls work.
-        if computer_primitives and "primitives" not in self.global_state:
-            from unify.function_manager.primitives import Primitives, PrimitiveScope
-
-            self.global_state["primitives"] = Primitives(
-                primitive_scope=PrimitiveScope(
-                    scoped_managers=frozenset({"computer"}),
-                ),
-            )
 
     async def close(self) -> None:
         """
@@ -924,14 +908,12 @@ class SessionExecutor:
         venv_pool: Any,
         shell_pool: Any,
         environments: Optional[Dict[str, "BaseEnvironment"]] = None,
-        computer_primitives: Optional[ComputerPrimitives] = None,
         function_manager: Optional["FunctionManager"] = None,
         timeout: Optional[float] = None,
     ) -> None:
         self._venv_pool = venv_pool
         self._shell_pool = shell_pool
         self._environments = environments or {}
-        self._computer_primitives = computer_primitives
         self._function_manager = function_manager
         self._timeout = timeout
 
@@ -1011,7 +993,6 @@ class SessionExecutor:
         session_id: int | None,
         venv_id: int | None,
         primitives: Any = None,
-        computer_primitives: Any = None,
     ) -> Dict[str, Any]:
         import time as _se_time
         import logging as _se_logging
@@ -1030,45 +1011,10 @@ class SessionExecutor:
         started = datetime.now(timezone.utc)
         t0 = started.timestamp()
 
-        # Ensure the localhost provider proxy is up before any code runs so its
-        # base URLs / nonce are available to both in-process and subprocess
-        # backends (connected-provider REST is reached only through it).
-        try:
-            from unify.provider_proxy.proxy import ensure_proxy_running
-
-            ensure_proxy_running()
-        except Exception:
-            _se_log.warning("provider proxy failed to start", exc_info=True)
-
-        # Default: use actor computer primitives (if any).
-        if computer_primitives is None:
-            computer_primitives = self._computer_primitives
-
-        def _runtime_oauth_env_overlay() -> dict[str, str]:
-            # The parent execute_code boundary already performs the generic
-            # debounced secret sync.  This overlay is the subprocess-specific
-            # bridge: venv and shell sessions may be long-lived, so they need
-            # current rotating OAuth env vars injected for each execution.
-            if self._function_manager is None:
-                return {}
-            getter = getattr(
-                self._function_manager,
-                "_get_runtime_oauth_env_overlay",
-                None,
-            )
-            if getter is None:
-                return {}
-            return getter()
-
         async def _execute_in_python_session(
             sb: PythonExecutionSession,
         ) -> Dict[str, Any]:
-            from unify.provider_proxy.session import (
-                scrub_platform_secrets_from_environ,
-            )
-
-            with scrub_platform_secrets_from_environ():
-                return await sb.execute(code, timeout=self._timeout)
+            return await sb.execute(code, timeout=self._timeout)
 
         # ─── Python ────────────────────────────────────────────────────────
         if language == "python":
@@ -1108,7 +1054,6 @@ class SessionExecutor:
                     f"⏱️ [SessionExecutor.execute +{_se_ms()}] creating stateless sandbox",
                 )
                 sb = PythonExecutionSession(
-                    computer_primitives=computer_primitives,
                     environments=self._environments,
                     venv_pool=self._venv_pool,
                     shell_pool=self._shell_pool,
@@ -1156,8 +1101,7 @@ class SessionExecutor:
                         call_kwargs={},
                         is_async=True,
                         primitives=primitives,
-                        computer_primitives=computer_primitives,
-                        env_overlay=_runtime_oauth_env_overlay(),
+                        env_overlay={},
                     )
                     return {
                         **out,
@@ -1191,10 +1135,9 @@ class SessionExecutor:
                         is_async=True,
                         session_id=int(session_id),
                         primitives=primitives,
-                        computer_primitives=computer_primitives,
                         function_manager=self._function_manager,
                         timeout=self._timeout,
-                        env_overlay=_runtime_oauth_env_overlay(),
+                        env_overlay={},
                     )
                     return {
                         **out,
@@ -1230,8 +1173,7 @@ class SessionExecutor:
                         is_async=True,
                         initial_state=initial_state,
                         primitives=primitives,
-                        computer_primitives=computer_primitives,
-                        env_overlay=_runtime_oauth_env_overlay(),
+                        env_overlay={},
                     )
                     return {
                         **out,
@@ -1260,7 +1202,6 @@ class SessionExecutor:
                 created = False
                 if key not in self._python_sessions:
                     self._python_sessions[key] = PythonExecutionSession(
-                        computer_primitives=computer_primitives,
                         environments=self._environments,
                         venv_pool=self._venv_pool,
                         shell_pool=self._shell_pool,
@@ -1297,7 +1238,6 @@ class SessionExecutor:
                     )
                 base = self._python_sessions[key]
                 sb = PythonExecutionSession(
-                    computer_primitives=computer_primitives,
                     environments=self._environments,
                     venv_pool=self._venv_pool,
                     shell_pool=self._shell_pool,
@@ -1364,12 +1304,12 @@ class SessionExecutor:
                 language=language,  # type: ignore[arg-type]
                 command=_with_shell_env_overlay(
                     code,
-                    _runtime_oauth_env_overlay(),
+                    {},
                     language=str(language),
                 ),
                 session_id=int(session_id),
                 timeout=self._timeout,
-                env=_runtime_oauth_env_overlay(),
+                env={},
             )
             return {
                 "stdout": res.stdout,
@@ -1483,10 +1423,7 @@ async def _execute_shell_stateless(
     else:
         raise ValueError(f"Unsupported shell language: {language}")
 
-    # Sanitize the child env: no raw provider tokens or platform superuser
-    # secrets (e.g. ORCHESTRA_ADMIN_KEY) reach the ephemeral shell. Without an
-    # explicit ``env=`` the subprocess would inherit the full pod environment.
-    from unify.provider_proxy.session import build_sandbox_env
+    from unify.function_manager.execution_env import sandbox_env as build_sandbox_env
     from unify.function_manager.function_manager import FunctionManager
 
     steering = active_session()

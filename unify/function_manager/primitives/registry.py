@@ -117,28 +117,6 @@ _COMMON_EXCLUDED_METHODS: frozenset[str] = frozenset(
 
 _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
     ManagerSpec(
-        manager_alias="comms",
-        manager_registry_key="",
-        primitive_class_path="unify.comms.primitives.CommsPrimitives",
-        excluded_methods=frozenset(),
-        priority=4,
-        domain="Assistant-Owned Communication",
-        description=(
-            "Send assistant-owned outbound messages and calls across SMS, email, "
-            "WhatsApp, Slack, Microsoft Teams, Discord, Unify, and API-response "
-            "channels"
-        ),
-        use_when=(
-            "The assistant needs to proactively contact people or post into "
-            "assistant-owned channels"
-        ),
-        examples=(
-            "'Text Alice that the meeting moved', 'Email all shortlisted leads', "
-            "'Reply in the Discord channel', 'Message Bob on Teams', "
-            "'Send a Unify update to the team lead'"
-        ),
-    ),
-    ManagerSpec(
         manager_alias="contacts",
         manager_registry_key="contacts",
         primitive_class_path="unify.contact_manager.contact_manager.ContactManager",
@@ -148,62 +126,6 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         description="People, organizations, contact records (names, emails, phones, roles, locations)",
         use_when="Questions about specific people, contact info, 'who is X?'",
         examples="'Who is our contact at Acme Corp?', 'Find Alice's email', 'Contacts in Berlin?'",
-    ),
-    ManagerSpec(
-        manager_alias="canvas",
-        manager_registry_key="canvas",
-        primitive_class_path="unify.canvas_manager.canvas_manager.CanvasManager",
-        excluded_methods=frozenset(),
-        priority=8,
-        domain="Generative User Interfaces",
-        description=(
-            "Author real React views the user can open and interact with: "
-            "trackers, to-do lists, dashboards, any custom interface, with live "
-            "data and buttons that run work"
-        ),
-        use_when=(
-            "The user asks to see something as a view, page, dashboard, tracker "
-            "or list rather than as an answer in chat, or asks for something they "
-            "can come back to and interact with"
-        ),
-        examples=(
-            "'Build me a tracker for my open tasks', 'Show last quarter's sales "
-            "as a dashboard', 'Give me a to-do list I can tick off', 'A view of "
-            "our GitHub issues next to the HubSpot pipeline'"
-        ),
-        special_note=(
-            "A canvas is ONE TSX module rendering the whole view -- no "
-            "tile/layout split, React composes. The kit reference below "
-            "carries the authoring model (protocol layer only; every "
-            "presentational piece is shadcn source you INLINE): search the "
-            "guidance for '[canvas]' to get any component's exact, pinned "
-            "source (44 entries) before writing your own. COLOUR enters only "
-            "through semantic token utilities and seriesColor(n) -- hex, "
-            "rgb() and named palettes (bg-red-500) are rejected. Nothing is "
-            "stored until it lints, typechecks, compiles, its bindings "
-            "dry-run and it renders: read ``result.build.diagnostics`` on "
-            "failure and revise -- a failed update leaves the published "
-            "canvas untouched. DATA: declare ``bindings`` for anything that "
-            "is a query (they re-run per view, so the canvas stays live); "
-            "use ``props`` only for values that needed reasoning to produce. "
-            "Connected-app data must be STORED FIRST: store rows with "
-            "``primitives.ingestion.submit``, keep them fresh with "
-            "``primitives.tasks``, bind to that table -- also the only way "
-            "to show two apps together. FRESHNESS: a canvas over "
-            "materialised ``props`` or an ingested table must render "
-            "``<Freshness synced={...}/>`` fed the time the data was "
-            "produced; query bindings need none. INTERACTIVITY: declare "
-            "``actions`` with a bounded ``input_schema`` (explicit "
-            "maxItems/maxLength); set ``destructive=True`` with ``confirm`` "
-            "text for anything irreversible. Prefer ``update_view`` over a "
-            "second canvas -- the URL is stable. VERIFY WITH YOUR EYES: "
-            "``display()`` the ``result.review.screenshots`` and judge them "
-            "against the ask before declaring done -- a compiling canvas can "
-            "still be empty, clipped or unreadable, and a ``review.verdict`` "
-            "starting 'skipped' means nothing was rendered. Share "
-            "``result.url`` in your reply -- pasting it into chat embeds the "
-            "live canvas."
-        ),
     ),
     ManagerSpec(
         manager_alias="data",
@@ -283,7 +205,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "returns a run handle immediately — poll `get_status(run_id)` "
             "and follow its `next_step`; call `wait(run_id)` only when the "
             "plan genuinely cannot continue. `status.contexts` reports the "
-            "exact paths written — bind a canvas to those rather than "
+            "exact paths written — query those rather than "
             "guessing. PER-FILE PROGRESS is `status.files`, never "
             "`status.stages`, which counts stages and so says two of fifteen "
             "parsed without saying which two; never report expected rows as "
@@ -301,7 +223,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "checkpoints, verifies, or can resume). FOR A CANVAS OVER "
             "CONNECTED APPS the shape is always: integration tool → "
             "`submit(RowsSource(rows=...), TableTarget(...))` → `wait` → "
-            "schedule freshness via `primitives.tasks` → bind the canvas to "
+            "schedule freshness via `primitives.tasks` → read from "
             "that table; also the only way to show two providers together, "
             "since providers cannot be joined directly."
         ),
@@ -381,112 +303,6 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "'Parse the attached PDF', 'What's in document X?', "
             "'Describe the schema of report.xlsx', 'Render page 3 of the report'"
         ),
-    ),
-    ManagerSpec(
-        manager_alias="workspace_email",
-        manager_registry_key="",
-        primitive_class_path=(
-            "unify.workspace_email.workspace_email_manager.WorkspaceEmailManager"
-        ),
-        excluded_methods=frozenset(),
-        priority=4,
-        domain="Connected Workspace Mailbox (Gmail / Outlook)",
-        description=(
-            "Send from and read the user's CONNECTED Google Workspace / "
-            "Microsoft 365 mailbox (the account linked via OAuth). Sends as the "
-            "connected account, not the assistant's own managed mailbox."
-        ),
-        use_when=(
-            "The task is explicitly about the user's own connected inbox: "
-            "reading/searching messages in their linked Gmail/Outlook, or "
-            "sending an email that must come FROM the user's connected account"
-        ),
-        examples=(
-            "'Check my inbox for anything from the landlord', "
-            "'Search my email for the Q3 invoice', "
-            "'Reply from my own account to the client thread'"
-        ),
-        special_note=(
-            "Distinct from `primitives.comms.send_email`, which sends AS THE "
-            "ASSISTANT from its managed mailbox. Recipients here are plain "
-            "email-address strings, not contact ids; requires a connected "
-            "workspace account (errors clearly if none)."
-        ),
-    ),
-    ManagerSpec(
-        manager_alias="integrations",
-        manager_registry_key="",
-        primitive_class_path="unify.integrations.primitives.IntegrationPrimitives",
-        excluded_methods=frozenset(
-            {
-                "list_connected",
-                "search_tools",
-                "get_tool_schema",
-                "execute_tool",
-                "manage_connection",
-                "resolve_tool_id",
-                "callable_for_tool",
-            },
-        ),
-        priority=6,
-        domain="Integration App Discovery & Connected SaaS Apps",
-        description=(
-            "`primitives.integrations.search_integrations` is the app "
-            "discovery surface for Native Unity-deploy packages and "
-            "Third-party provider-backed apps: support, deployment "
-            "activation, provider connection (including which accounts — "
-            "`connections` / `account_count`; pass `connection_id` when "
-            "usage mode is `explicit`), and sync/materialization status"
-        ),
-        use_when=(
-            "The user asks to read or act in connected external apps "
-            "(HubSpot, Salesforce, Google Drive, Gmail, Slack, Notion, …) "
-            "or asks whether an integration is supported, enabled, "
-            "connected, missing secrets/scopes, expired, or blocked"
-        ),
-        examples=(
-            "'Find recent HubSpot leads', 'Search Gmail for invoices from "
-            "Acme', 'Which CRM integrations are connected?'"
-        ),
-        special_note=(
-            "FunctionManager search remains the only actor-facing discovery "
-            "surface for executable functions/tools. Inspect each row's "
-            "docstring and argspec before calling, and require user "
-            "confirmation for write, destructive, bulk-export, or sensitive "
-            "actions."
-        ),
-    ),
-    ManagerSpec(
-        manager_alias="coordinator",
-        manager_registry_key="",  # No ManagerRegistry getter - singleton via metaclass
-        primitive_class_path="unify.coordinator_manager.coordinator_manager.CoordinatorManager",
-        excluded_methods=frozenset(),
-        priority=6,
-        domain="Coordinator Workspace Administration",
-        description=(
-            "Coordinator-only workspace lifecycle operations for assistants, teams, "
-            "membership, and Coordinator/State onboarding mode"
-        ),
-        use_when=(
-            "The session runs as a Coordinator and needs privileged setup or "
-            "lifecycle mutations"
-        ),
-        examples=(
-            "'Create the Regional Ops Manager colleague', "
-            "'Add the supervisor to Patch 4 workspace', "
-            "'Mark the first setup slice ready once validation passes'"
-        ),
-    ),
-    ManagerSpec(
-        manager_alias="computer",
-        manager_registry_key="",  # No ManagerRegistry getter - singleton via metaclass
-        primitive_class_path="unify.function_manager.primitives.runtime.ComputerPrimitives",
-        excluded_methods=frozenset(),
-        priority=10,
-        domain="Web & Desktop Control",
-        description="Browser automation, web navigation, computer use actions, reasoning",
-        use_when="Web automation, browser control, navigating websites, extracting web content",
-        examples="'Navigate to example.com', 'Click the login button', 'Extract page content'",
     ),
     ManagerSpec(
         manager_alias="actor",
@@ -603,69 +419,6 @@ _ROUTING_GUIDANCE: List[Dict[str, Any]] = [
         ],
     },
 ]
-
-
-# =============================================================================
-# Canvas kit reference (rendered inline when the canvas manager is in scope)
-# =============================================================================
-
-
-def get_canvas_kit_reference() -> str:
-    """The component vocabulary a canvas is authored against.
-
-    Inlined rather than left to be discovered. A canvas is typechecked before it
-    can be published, so a guessed component name is not a graceful degradation —
-    it is a failed build and another round trip. Six kilobytes of reference costs
-    far less than that loop, and only appears when canvas is in scope.
-
-    Generated from the kit's own type declarations by
-    ``scripts/generate_canvas_kit_api.py``; see that script for regeneration and
-    drift checking.
-    """
-    from pathlib import Path
-
-    import unify.canvas_manager as _canvas_pkg
-
-    digest = Path(_canvas_pkg.__file__).resolve().parent / "canvas_kit_api.md"
-    if not digest.is_file():
-        return ""
-    return digest.read_text(encoding="utf8")
-
-
-_CANVAS_CALL_FORMS = """\
-**Canvas call forms** (`from unify.canvas_manager.types import \
-PrimitiveBinding, CanvasAction`):
-
-- Create: `result = await primitives.canvas.create_view(tsx=..., title=..., \
-bindings=[PrimitiveBinding(alias="tasks", manager="tasks", table="Tasks", \
-args={"operation": "filter", "filter": "status != 'done'", "limit": 200})])` \
-— bindings re-run per view, so the canvas stays live.
-- Connected-app data (store first, then bind): call the \
-`primitives.integrations.<app>.<tool>`, store rows with \
-`await primitives.ingestion.submit(RowsSource(rows=...), \
-TableTarget(context=..., unique_keys={...}))`, \
-`await primitives.ingestion.wait(run.run_id, timeout_s=300)`, schedule a \
-refresh via `primitives.tasks.update(...)`, then bind the canvas to that \
-stored table.
-- Viewer actions: `actions=[CanvasAction(name=..., label=..., \
-function_name=..., input_schema={...}, destructive=True, confirm=...)]` — \
-give every array/string in `input_schema` explicit `maxItems`/`maxLength` \
-bounds.
-- Revise in place: `record = await primitives.canvas.get_view(token)` then \
-`await primitives.canvas.update_view(token, \
-tsx=record.tsx_source.replace(...))` — never create a second canvas; the \
-URL is stable.
-- Every result: check `result.build.ok` / `result.build.diagnostics`, \
-`display()` each path in `result.review.screenshots`, and share \
-`result.url` in your reply."""
-
-
-def canvas_kit_prompt_block() -> str:
-    """Kit reference + compressed call forms, rendered inline for canvas scope."""
-    kit = get_canvas_kit_reference()
-    if not kit:
-        return _CANVAS_CALL_FORMS
-    return f"{kit.strip()}\n\n{_CANVAS_CALL_FORMS}"
 
 
 # =============================================================================
@@ -1192,10 +945,6 @@ class ToolSurfaceRegistry:
             if text.use_when:
                 description = f"{description}. **Use when**: {text.use_when}"
             lines.append(f"- {description}")
-            if text.examples and spec.manager_alias == "canvas":
-                # Canvas keeps its examples: the authoring model is
-                # typecheck-critical and deliberately stays inline.
-                lines.append(f"- **Examples**: {text.examples}")
             if text.special_note:
                 lines.append(f"- **Note**: {text.special_note}")
 
@@ -1207,7 +956,7 @@ class ToolSurfaceRegistry:
             lines.append(
                 "- When in doubt between managers, prefer the most specific "
                 "domain match; for overlapping pairs (data vs files vs "
-                "ingestion, workspace_email vs comms) search guidance for "
+                "ingestion) search guidance for "
                 '"choosing between overlapping state managers"',
             )
             lines.append(
@@ -1219,71 +968,6 @@ class ToolSurfaceRegistry:
         # No per-method docs and no discovery pointer are inlined here:
         # the base prompt's "Sandbox Environment" section carries the
         # FunctionManager-search → help()/inspect introspection bridge.
-
-        # ── Canvas kit reference (canvas scope only) ──
-        # The component vocabulary stays inline: a canvas is typechecked
-        # before it can be published, so a guessed component name is a failed
-        # build and another round trip, not a graceful degradation.
-        if "canvas" in exposed_aliases:
-            lines.append("\n---\n")
-            lines.append(canvas_kit_prompt_block())
-
-        return "\n".join(lines)
-
-    def computer_prompt_context(self) -> str:
-        """
-        Generate prompt context for ComputerPrimitives methods.
-
-        Renders a compact name index — signature plus first docstring line
-        per method — instead of the full docstring dump. Full docs stay
-        readable at run time via ``help()`` / ``inspect.signature`` on the
-        session methods.
-
-        Returns:
-            Markdown-formatted name index for computer methods, or empty
-            string if ComputerBackend cannot be loaded.
-        """
-        try:
-            from unify.function_manager.computer_backends import ComputerBackend
-            from unify.function_manager.primitives.runtime import ComputerPrimitives
-        except ImportError:
-            logger.warning("Could not import ComputerBackend or ComputerPrimitives")
-            return ""
-
-        method_names = ComputerPrimitives._PRIMITIVE_METHODS
-
-        lines = ["### Computer Method Reference (name index)\n"]
-        lines.append(
-            "These methods are available on `primitives.computer.desktop.*` "
-            "(singleton desktop) and on session handles returned by "
-            "`primitives.computer.web.new_session()`.\n",
-        )
-        lines.append(
-            "One-line summaries only. Before any non-obvious call, read the "
-            "full docs from inside `execute_code` with "
-            "`help(primitives.computer.desktop.<method>)` / "
-            "`help(session.<method>)` or `inspect.signature(...)` — do not "
-            "guess parameter semantics from the summary.\n",
-        )
-
-        for method_name in method_names:
-            if hasattr(ComputerBackend, method_name):
-                source_cls = ComputerBackend
-            else:
-                source_cls = ComputerPrimitives
-
-            sig_str = self._format_method_signature(source_cls, method_name)
-            full_doc = self._extract_method_docstring(source_cls, method_name)
-            full_doc = self._filter_internal_params_from_docstring(full_doc)
-            summary = ""
-            for doc_line in (full_doc or "").splitlines():
-                if doc_line.strip():
-                    summary = doc_line.strip()
-                    break
-            entry = f"- `.{method_name}{sig_str}`"
-            if summary:
-                entry += f" — {summary}"
-            lines.append(entry)
 
         return "\n".join(lines)
 
@@ -1311,45 +995,6 @@ class ToolSurfaceRegistry:
             Primitive metadata dict, or None if method not found.
         """
         method = getattr(cls, method_name, None)
-
-        # ComputerPrimitives methods live on the backend/session, not on the
-        # class itself.  Look up docstrings from the ComputerBackend ABC.
-        if method is None and class_name == "ComputerPrimitives":
-            if method_name in cls._PRIMITIVE_METHODS:
-                from unify.function_manager.computer_backends import ComputerBackend
-
-                backend_method = getattr(ComputerBackend, method_name, None)
-                if backend_method:
-                    docstring = inspect.getdoc(backend_method) or ""
-                    try:
-                        signature = str(inspect.signature(backend_method))
-                    except (ValueError, TypeError):
-                        signature = "(...)"
-                else:
-                    docstring = ""
-                    signature = "(...)"
-
-                qualified_name = f"primitives.{manager_alias}.{method_name}"
-                return {
-                    "name": qualified_name,
-                    "function_id": _get_stable_id(class_name, method_name),
-                    "argspec": signature,
-                    "docstring": docstring,
-                    "embedding_text": (
-                        f"Function Name: {qualified_name}\n"
-                        f"Signature: {signature}\n"
-                        f"Docstring: {docstring}"
-                    ),
-                    "implementation": None,
-                    "is_primitive": True,
-                    "depends_on": [],
-                    "precondition": None,
-                    "verify": False,
-                    "guidance_ids": [],
-                    "primitive_class": cls.__module__ + "." + cls.__name__,
-                    "primitive_method": method_name,
-                }
-            return None
 
         if method is None:
             return None

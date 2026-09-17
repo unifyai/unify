@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.common.context_registry import ContextRegistry
 from unify.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
@@ -42,7 +41,7 @@ def _reset_teams(team_ids: tuple[int, int], alias: str) -> None:
             f"Teams/{team_id}/Files/{alias}",
         ):
             try:
-                unisdk.delete_context(context)
+                db.delete_context(context)
             except Exception:
                 pass
     SESSION_DETAILS.team_ids = []

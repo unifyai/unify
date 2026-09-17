@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
-    from unify.workflow_manager.workflow_manager import WorkflowManager
 
 __all__ = [
     "BaseActor",
@@ -90,7 +89,6 @@ class BaseActor(ABC):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
-        workflow_manager: Optional["WorkflowManager"] = None,
     ) -> None:
         """
         Shared initialization for concrete actor implementations.
@@ -118,28 +116,7 @@ class BaseActor(ABC):
         self.knowledge_manager = (
             knowledge_manager or ManagerRegistry.get_knowledge_manager()
         )
-        # The workflow catalogue is the feature gate: with no catalogue
-        # resolvable there is nothing to install, no WorkflowManager_* tools
-        # enter the schema, and deployments without the shelf keep their
-        # existing tool set (and LLM caches) byte-identical.
-        #
-        # Ask the one resolver, not the env var. The hosted deployment ships
-        # the catalogue inside the image and sets no UNIFY_WORKFLOWS_DIR, so
-        # gating on the raw setting handed every deployed actor an empty
-        # workflow tool set while installs (which use the resolver) worked:
-        # planted tasks told the actor to read its settings with a tool it
-        # did not have, and every run degraded to catalogue archaeology.
-        from unify.workflow_manager.catalog import resolve_catalogue_root
-
-        if workflow_manager is not None:
-            self.workflow_manager = workflow_manager
-        elif resolve_catalogue_root() is not None:
-            self.workflow_manager = ManagerRegistry.get_workflow_manager()
-        else:
-            self.workflow_manager = None
-
-        # Backward-compat: some call sites expect an actor-level computer primitives instance.
-        self._computer_primitives = self._extract_computer_primitives()
+        self._computer_primitives = None
 
     def _setup_environments(
         self,
@@ -170,28 +147,6 @@ class BaseActor(ABC):
             else:
                 env_map[ns] = _CompositeEnvironment(envs)
         return env_map
-
-    def _extract_computer_primitives(self) -> Optional[Any]:
-        """Extract computer primitives instance from environments."""
-        from unify.actor.environments.base import _CompositeEnvironment
-        from unify.actor.environments.computer import ComputerEnvironment
-
-        env = getattr(self, "environments", {}).get("primitives")
-        if env is None:
-            return None
-
-        # Composite: find the ComputerEnvironment sub-env.
-        if isinstance(env, _CompositeEnvironment):
-            for sub in env.sub_environments:
-                if isinstance(sub, ComputerEnvironment):
-                    return sub._computer_primitives
-            return None
-
-        # Direct ComputerEnvironment (standalone).
-        if isinstance(env, ComputerEnvironment):
-            return env._computer_primitives
-
-        return None
 
     # ─────────────────────────── Work management ────────────────────────── #
 
@@ -283,7 +238,6 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
-        workflow_manager: Optional["WorkflowManager"] = None,
     ) -> None:
         BaseActor.__init__(
             self,
@@ -291,7 +245,6 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
             function_manager=function_manager,
             guidance_manager=guidance_manager,
             knowledge_manager=knowledge_manager,
-            workflow_manager=workflow_manager,
         )
         BaseStateManager.__init__(self)
 

@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from tests.provider_trigger_delivery import (
     create_github_composio_connection,
@@ -60,7 +59,7 @@ def orchestra_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch):
 
     ensure_provider_trigger_test_prerequisites()
     suffix = uuid.uuid4().hex[:8]
-    assistant = unisdk.create_assistant(
+    assistant = db.create_assistant(
         first_name=f"ProviderTrigger{suffix}",
         surname="Actor",
         config={"create_infra": False},

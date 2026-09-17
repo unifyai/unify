@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, UTC
 import pytest
-import unisdk
-
+from unify import db
 from unify.transcript_manager.transcript_manager import TranscriptManager
 from unify.transcript_manager.types.exchange import Exchange
 from unify.transcript_manager.types.message import Message
@@ -27,7 +26,7 @@ def test_row_created_explicit_id():
     )
     tm.join_published()
 
-    rows = unisdk.get_logs(
+    rows = db.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {ex_id}",
         limit=1,

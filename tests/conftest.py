@@ -30,7 +30,7 @@ import hashlib
 import httpx
 import pytest
 import requests
-import unisdk
+from unify import db
 from pytest_metadata.plugin import metadata_key
 
 # Imported as a symbol (not via module attribute access at call time) so a
@@ -38,7 +38,7 @@ from pytest_metadata.plugin import metadata_key
 # rather than an AttributeError inside per-test setup's broad exception
 # handlers — which would silently skip set_context and collapse every test
 # into one shared context root.
-from unisdk.utils.http import default_timeout as unisdk_default_timeout
+from db.utils.http import default_timeout as unisdk_default_timeout
 
 from datetime import datetime, timezone
 
@@ -204,7 +204,7 @@ def _assert_test_context_active(ctx: str) -> None:
     # round-trip, so after setup they must hold the per-test root no matter
     # what the network did. If they don't, every subsequent test would share
     # one context root and cross-contaminate — fail the session here instead.
-    active = unisdk.get_active_context()
+    active = db.get_active_context()
     assert active.get("read") == ctx and active.get("write") == ctx, (
         f"Per-test Unify context activation failed: expected {ctx!r}, "
         f"active is {active!r}. Test isolation would be lost."
@@ -220,7 +220,7 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
         # Local-only: activate the per-test context without touching the
         # network, keeping context isolation for tests that never leave the
         # process. Tests that need Orchestra fail or skip on their own.
-        unisdk.set_context(ctx, relative=False, skip_create=True)
+        db.set_context(ctx, relative=False, skip_create=True)
         _reset_singleton_registries()
         _assert_test_context_active(ctx)
         return
@@ -232,10 +232,10 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
     else:
         try:
             with unisdk_default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
-                unisdk.delete_context(ctx)
+                db.delete_context(ctx)
         except _SETUP_NETWORK_ERRORS as exc:
             _trip_orchestra_setup_breaker(exc)
-            unisdk.set_context(ctx, relative=False, skip_create=True)
+            db.set_context(ctx, relative=False, skip_create=True)
             _reset_singleton_registries()
             _assert_test_context_active(ctx)
             return
@@ -244,7 +244,7 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
 
     try:
         with unisdk_default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
-            unisdk.set_context(ctx, relative=False, skip_create=skip_ctx_create)
+            db.set_context(ctx, relative=False, skip_create=skip_ctx_create)
     except _SETUP_NETWORK_ERRORS as exc:
         # set_context activates the local context vars before its remote
         # round-trip, so the test still runs in the right context.
@@ -275,14 +275,14 @@ def _unset_unify_context_for_test(item: pytest.Item) -> None:
                 with unisdk_default_timeout(
                     SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT,
                 ):
-                    unisdk.delete_context(ctx)
+                    db.delete_context(ctx)
             except _SETUP_NETWORK_ERRORS as exc:
                 _trip_orchestra_setup_breaker(exc)
             except Exception:
                 pass
     finally:
         try:
-            unisdk.unset_context()
+            db.unset_context()
         except Exception:
             pass
 
@@ -292,7 +292,7 @@ def pytest_report_header(config):
     return [
         f"orchestra_url={os.environ.get('ORCHESTRA_URL')}",
         f"unity_comms_url={os.environ.get('UNIFY_COMMS_URL')}",
-        f"unify_project={unisdk.active_project()}",
+        f"unify_project={db.active_project()}",
         f"UNILLM_CACHE={os.environ.get('UNILLM_CACHE', 'not set')}",
     ] + settings_str
 
@@ -621,7 +621,7 @@ def pytest_sessionstart(session):
         and not SETTINGS.UNIFY_SKIP_SESSION_SETUP
     ):
         try:
-            unisdk.delete_project(project_name)
+            db.delete_project(project_name)
         except Exception:
             pass  # Project may not exist yet
 
@@ -637,14 +637,14 @@ def pytest_sessionstart(session):
     if SETTINGS.UNIFY_SKIP_SESSION_SETUP:
         # Project and shared contexts already prepared externally (e.g., by
         # ._prepare_shared_project.sh). Just activate without overwrite.
-        unisdk.activate(project_name, overwrite=False)
-        unisdk.set_user_logging(False)
+        db.activate(project_name, overwrite=False)
+        db.set_user_logging(False)
     else:
-        unisdk.activate(
+        db.activate(
             project_name,
             overwrite=SETTINGS.UNIFY_OVERWRITE_PROJECT,
         )
-        unisdk.set_user_logging(False)
+        db.set_user_logging(False)
 
     # ------------------------------------------------------------------
     #  Ensure the unity runtime is fully initialised for the test suite
@@ -714,9 +714,9 @@ def pytest_sessionstart(session):
         # Combined context already prepared externally; skip creation
         pass
     else:
-        unisdk.create_context("Combined")
+        db.create_context("Combined")
         try:
-            unisdk.create_fields(
+            db.create_fields(
                 context="Combined",
                 fields={
                     "test_fpath": {"type": "str", "mutable": True},
@@ -764,7 +764,7 @@ def pytest_sessionfinish(session, exitstatus):
         SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_EXIT
         and not SETTINGS.UNIFY_SKIP_SESSION_SETUP
     ):
-        unisdk.delete_project(unisdk.active_project())
+        db.delete_project(db.active_project())
 
 
 def pytest_unconfigure(config):
@@ -980,7 +980,7 @@ def pytest_runtest_setup(item):
 def _normalize_pytest_nodeid(nodeid):
     """
     Try to normalize the pytest nodeid to an alphanumeric string that is
-    accepted for unisdk.Context path. If not possible, return None.
+    accepted for db.Context path. If not possible, return None.
     Will fallback to invocation count if empty.
     """
     bracket_match = re.search(r"\[([^\]]+)\]", nodeid)
@@ -1150,7 +1150,7 @@ def pytest_collection_finish(session):
         # But this is mostly fine now for CI purpose, as we create
         # a fresh project anyway
         try:
-            unisdk.create_contexts(list(contexts))
+            db.create_contexts(list(contexts))
         except _SETUP_NETWORK_ERRORS as exc:
             _trip_orchestra_setup_breaker(exc)
             return

@@ -246,17 +246,18 @@ def create_execution_globals() -> Dict[str, Any]:
     from unify.common.async_tool_loop import SteerableToolHandle
     from unify.common.asyncio_compat import run_coro_sync
     from unify.common.reasoning import list_llms, query_llm
-    from unify.common.runtime_oauth import get_oauth_access_token
 
     globals_dict["SteerableToolHandle"] = SteerableToolHandle
     globals_dict["query_llm"] = query_llm
     globals_dict["list_llms"] = list_llms
-    globals_dict["get_oauth_access_token"] = get_oauth_access_token
     globals_dict["run_coro_sync"] = run_coro_sync
     globals_dict["unillm"] = unillm
 
     return globals_dict
 
 
-# Backward compatibility aliases
-create_sandbox_globals = create_base_globals
+def sandbox_env() -> dict[str, str]:
+    """Environment for subprocesses that run user code: the runtime's own."""
+    import os
+
+    return dict(os.environ)

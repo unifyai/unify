@@ -537,12 +537,12 @@ class FlowHarness:
         if not self.context_path:
             return
         try:
-            import unisdk
+            from unify import db
             from unify.common.context_registry import ContextRegistry
             from unify.knowledge_manager.knowledge_manager import KNOWLEDGE_TABLE
 
             try:
-                unisdk.set_context(self.context_path, relative=False, skip_create=True)
+                db.set_context(self.context_path, relative=False, skip_create=True)
             except Exception:
                 pass
             ContextRegistry.set_base_context(self.context_path)
@@ -607,7 +607,7 @@ async def build_flow_harness(
 ) -> FlowHarness:
     """Start a real CM + CodeAct actor for flow tests."""
 
-    import unisdk
+    from unify import db
     from unify.settings import SETTINGS
 
     await _reset_operations_queue()
@@ -615,7 +615,7 @@ async def build_flow_harness(
     isolation_user = hashlib.sha256(context_path.encode()).hexdigest()[:16]
     os.environ["USER_ID"] = isolation_user
 
-    unisdk.activate(project_name, overwrite=False)
+    db.activate(project_name, overwrite=False)
     try:
         from unify.common.context_registry import ContextRegistry
         from unify.events.event_bus import EVENT_BUS
@@ -625,9 +625,9 @@ async def build_flow_harness(
     except Exception:
         pass
     try:
-        unisdk.set_context(context_path, relative=False, skip_create=False)
+        db.set_context(context_path, relative=False, skip_create=False)
     except Exception:
-        unisdk.set_context(context_path, relative=False, skip_create=True)
+        db.set_context(context_path, relative=False, skip_create=True)
 
     ActorFactory._apply_manager_impl_env("real")
     ManagerRegistry.clear()

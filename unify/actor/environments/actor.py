@@ -206,15 +206,13 @@ def _build_environments_from_db(
     """Resolve *prompt_functions* patterns against the FunctionManager DB.
 
     Returns a list of environments for the inner actor.  Supports all
-    primitive namespaces (state managers, computer, actor) as well as
+    primitive namespaces (state managers, actor) as well as
     compositional functions stored in the FunctionManager.
     """
     from unify.actor.environments.base import resolve_directly_callable
-    from unify.actor.environments.computer import ComputerEnvironment
     from unify.actor.environments.function_store import FunctionStoreEnvironment
     from unify.actor.environments.state_managers import StateManagerEnvironment
     from unify.function_manager.primitives import (
-        ComputerPrimitives,
         Primitives,
         PrimitiveScope,
     )
@@ -239,7 +237,6 @@ def _build_environments_from_db(
 
     # Bucket by environment type.
     state_manager_methods: set[str] = set()
-    computer_methods: set[str] = set()
     actor_methods: set[str] = set()
     fm_function_names: list[str] = []
 
@@ -247,9 +244,7 @@ def _build_environments_from_db(
         if name.startswith("primitives."):
             parts = name.split(".")
             alias = parts[1] if len(parts) >= 2 else ""
-            if alias == "computer":
-                computer_methods.add(name)
-            elif alias == "actor":
+            if alias == "actor":
                 actor_methods.add(name)
             else:
                 state_manager_methods.add(name)
@@ -284,14 +279,6 @@ def _build_environments_from_db(
                     allowed_methods=allowed_state_manager_methods,
                 ),
             )
-
-    if computer_methods:
-        envs.append(
-            ComputerEnvironment(
-                ComputerPrimitives(),
-                allowed_methods=computer_methods,
-            ),
-        )
 
     if actor_methods:
         envs.append(

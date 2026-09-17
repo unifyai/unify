@@ -4,8 +4,7 @@ import time
 from datetime import UTC, datetime
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.image_manager.image_manager import ImageManager
 from unify.image_manager.utils import make_solid_png_base64
@@ -25,21 +24,21 @@ def _team_id() -> int:
 
 
 def _logs(context: str, filter_expr: str):
-    return unisdk.get_logs(context=context, filter=filter_expr, return_ids_only=False)
+    return db.get_logs(context=context, filter=filter_expr, return_ids_only=False)
 
 
 def _delete_context_tree(root: str) -> None:
     try:
-        children = list(unisdk.get_contexts(prefix=f"{root}/").keys())
+        children = list(db.get_contexts(prefix=f"{root}/").keys())
     except Exception:
         children = []
     for context in sorted(children, key=len, reverse=True):
         try:
-            unisdk.delete_context(context)
+            db.delete_context(context)
         except Exception:
             pass
     try:
-        unisdk.delete_context(root)
+        db.delete_context(root)
     except Exception:
         pass
 

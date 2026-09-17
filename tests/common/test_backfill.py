@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-import unisdk
+from unify import db
 from tests.helpers import _handle_project
 from unify.common.backfill import (
     backfill_assistant_field,
@@ -24,16 +24,16 @@ def _unique_ctx(leaf: str) -> str:
 
 def _reset_context(ctx: str, fields: dict[str, str]) -> None:
     try:
-        unisdk.delete_context(ctx)
+        db.delete_context(ctx)
     except Exception:
         pass
-    unisdk.create_context(ctx)
-    unisdk.create_fields(fields, context=ctx)
+    db.create_context(ctx)
+    db.create_fields(fields, context=ctx)
 
 
 def _assert_created_logs_visible(ctx: str, created_ids: set[int]) -> None:
     """Fail fast if Orchestra create succeeded but context read misses rows."""
-    visible = {lg.id for lg in unisdk.get_logs(context=ctx, from_ids=list(created_ids))}
+    visible = {lg.id for lg in db.get_logs(context=ctx, from_ids=list(created_ids))}
     assert visible == created_ids, (
         f"create/read miss for context {ctx!r}: "
         f"created={sorted(created_ids)} visible={sorted(visible)}"
@@ -46,12 +46,10 @@ def test_backfill_assistant_field():
     ctx = _unique_ctx("TestBackfill")
     _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
-    created_ids = {
-        unisdk.log(context=ctx, name=f"item_{i}", new=True).id for i in range(5)
-    }
+    created_ids = {db.log(context=ctx, name=f"item_{i}", new=True).id for i in range(5)}
     _assert_created_logs_visible(ctx, created_ids)
 
-    logs = unisdk.get_logs(context=ctx, from_ids=list(created_ids))
+    logs = db.get_logs(context=ctx, from_ids=list(created_ids))
     assert (
         _count_logs_missing_assistant(logs) == 5
     ), f"Expected 5 logs without _assistant, got {_count_logs_missing_assistant(logs)}"
@@ -60,12 +58,12 @@ def test_backfill_assistant_field():
     assert result["total_updated"] == 5, f"Expected 5 updated, got {result}"
     assert result["context"] == ctx
 
-    logs_after = unisdk.get_logs(context=ctx, from_ids=list(created_ids))
+    logs_after = db.get_logs(context=ctx, from_ids=list(created_ids))
     assert (
         _count_logs_missing_assistant(logs_after) == 0
     ), "All logs should now have _assistant"
 
-    logs_with = unisdk.get_logs(context=ctx, filter="_assistant == 'TestAssistant'")
+    logs_with = db.get_logs(context=ctx, filter="_assistant == 'TestAssistant'")
     assert len(logs_with) == 5, f"Expected 5 logs with _assistant, got {len(logs_with)}"
 
 
@@ -92,11 +90,11 @@ def test_backfill_assistant_field_with_filter():
     created_ids: set[int] = set()
     for i in range(3):
         created_ids.add(
-            unisdk.log(context=ctx, name=f"item_a_{i}", category="A", new=True).id,
+            db.log(context=ctx, name=f"item_a_{i}", category="A", new=True).id,
         )
     for i in range(2):
         created_ids.add(
-            unisdk.log(context=ctx, name=f"item_b_{i}", category="B", new=True).id,
+            db.log(context=ctx, name=f"item_b_{i}", category="B", new=True).id,
         )
     _assert_created_logs_visible(ctx, created_ids)
 
@@ -107,13 +105,13 @@ def test_backfill_assistant_field_with_filter():
     )
     assert result["total_updated"] == 3
 
-    logs_a = unisdk.get_logs(
+    logs_a = db.get_logs(
         context=ctx,
         filter="category == 'A' and _assistant == 'TestAssistant'",
     )
     assert len(logs_a) == 3
 
-    logs_b = unisdk.get_logs(context=ctx, filter="category == 'B'")
+    logs_b = db.get_logs(context=ctx, filter="category == 'B'")
     assert (
         _count_logs_missing_assistant(logs_b) == 2
     ), "Category B logs should not have _assistant"
@@ -130,10 +128,10 @@ def test_backfill_all_contexts_for_assistant():
         _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
     created_ctx1 = {
-        unisdk.log(context=ctx1, name=f"ctx1_item_{i}", new=True).id for i in range(3)
+        db.log(context=ctx1, name=f"ctx1_item_{i}", new=True).id for i in range(3)
     }
     created_ctx2 = {
-        unisdk.log(context=ctx2, name=f"ctx2_item_{i}", new=True).id for i in range(2)
+        db.log(context=ctx2, name=f"ctx2_item_{i}", new=True).id for i in range(2)
     }
     _assert_created_logs_visible(ctx1, created_ctx1)
     _assert_created_logs_visible(ctx2, created_ctx2)
@@ -152,9 +150,7 @@ def test_backfill_idempotent():
     ctx = _unique_ctx("TestBackfillIdempotent")
     _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
-    created_ids = {
-        unisdk.log(context=ctx, name=f"item_{i}", new=True).id for i in range(3)
-    }
+    created_ids = {db.log(context=ctx, name=f"item_{i}", new=True).id for i in range(3)}
     _assert_created_logs_visible(ctx, created_ids)
 
     result1 = backfill_assistant_field(ctx, "TestAssistant")

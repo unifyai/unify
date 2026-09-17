@@ -10,8 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union, TYPE_CHECKIN
 
 logger = logging.getLogger(__name__)
 
-import unisdk
-
+from unify import db
 from unify.common.tool_spec import manager_tool, read_only, ToolSpec
 from unify.common.log_utils import create_logs as unity_create_logs
 from unify.file_manager.base import BaseFileManager
@@ -49,7 +48,6 @@ from unify.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from unify.events.manager_event_logging import log_manager_call
 from unify.common.context_store import TableStore
 from unify.common.context_registry import (
-    TEAM_CONTEXT_PREFIX,
     ContextRegistry,
     TableContext,
 )
@@ -382,13 +380,7 @@ class FileManager(BaseFileManager):
         except RuntimeError as exc:
             if "no base context available" not in str(exc):
                 raise
-            from unify.session_details import SESSION_DETAILS
-
             contexts = [self._ctx]
-            contexts.extend(
-                f"{TEAM_CONTEXT_PREFIX}{team_id}/FileRecords/{self._fs_alias}"
-                for team_id in sorted(set(SESSION_DETAILS.team_ids))
-            )
         return list(dict.fromkeys(contexts))
 
     def _read_files_roots(self) -> list[str]:
@@ -400,13 +392,7 @@ class FileManager(BaseFileManager):
         except RuntimeError as exc:
             if "no base context available" not in str(exc):
                 raise
-            from unify.session_details import SESSION_DETAILS
-
             contexts = [self._per_file_root]
-            contexts.extend(
-                f"{TEAM_CONTEXT_PREFIX}{team_id}/Files/{self._fs_alias}"
-                for team_id in sorted(set(SESSION_DETAILS.team_ids))
-            )
         return list(dict.fromkeys(contexts))
 
     @contextmanager
@@ -657,7 +643,7 @@ class FileManager(BaseFileManager):
 
     def _get_stored_custom_files_hash(self) -> str:
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -670,13 +656,13 @@ class FileManager(BaseFileManager):
 
     def _store_custom_files_hash(self, hash_value: str) -> None:
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={"custom_files_hash": hash_value},
@@ -2359,7 +2345,7 @@ class FileManager(BaseFileManager):
             from unify.common.context_store import TableStore as _TS  # local import
 
             try:
-                _TS._ENSURED.discard((unisdk.active_project(), self._ctx))
+                _TS._ENSURED.discard((db.active_project(), self._ctx))
             except Exception:
                 pass
         except Exception:

@@ -6,8 +6,7 @@ import os
 import uuid
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
@@ -48,7 +47,7 @@ def orchestra_provider_trigger_assistant(monkeypatch: pytest.MonkeyPatch):
     )
 
     suffix = uuid.uuid4().hex[:8]
-    assistant = unisdk.create_assistant(
+    assistant = db.create_assistant(
         first_name=f"CMProvider{suffix}",
         surname="Trigger",
         config={"create_infra": False},

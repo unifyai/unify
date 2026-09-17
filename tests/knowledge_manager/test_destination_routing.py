@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import unisdk
-
+from unify import db
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
 )
@@ -29,8 +28,8 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
     )
     personal_id = int(personal["details"]["knowledge_id"])
 
-    personal_rows = unisdk.get_logs(context=manager._ctx)
-    shared_rows = unisdk.get_logs(context=f"Teams/{team_id}/Knowledge")
+    personal_rows = db.get_logs(context=manager._ctx)
+    shared_rows = db.get_logs(context=f"Teams/{team_id}/Knowledge")
 
     assert [row.entries["title"] for row in personal_rows] == ["Private escalation"]
     assert [row.entries["title"] for row in shared_rows] == ["Team escalation"]

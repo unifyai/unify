@@ -44,14 +44,13 @@ def _build_prompt_in_subprocess(test_context: str) -> str:
         """
         import os, sys
         sys.path.insert(0, os.getcwd())
-        import unisdk
-        # Activate the test project before setting context
+        from unify import db
         project_name = os.environ.get("UNIFY_TEST_PROJECT_NAME", "UnityTests")
-        unisdk.activate(project_name, overwrite=False)
+        db.activate(project_name, overwrite=False)
         # Set test-specific context before creating TranscriptManager to avoid races
         test_ctx = os.environ.get("_TEST_CONTEXT")
         if test_ctx:
-            unisdk.set_context(test_ctx, relative=False)
+            db.set_context(test_ctx, relative=False)
         # Install a deterministic timestamp inside this fresh process
         import unify.common.prompt_helpers as _ph
         from datetime import datetime, timezone

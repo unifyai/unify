@@ -38,7 +38,7 @@ async def test_flush_retries_entries_individually_on_batch_failure(monkeypatch):
         return list(range(len(entries)))
 
     monkeypatch.setattr(
-        "unify.events.event_bus.unisdk.create_logs",
+        "unify.events.event_bus.db.create_logs",
         fake_create_logs,
     )
 
@@ -66,7 +66,7 @@ async def test_flush_healthy_batch_writes_once(monkeypatch):
         return list(range(len(entries)))
 
     monkeypatch.setattr(
-        "unify.events.event_bus.unisdk.create_logs",
+        "unify.events.event_bus.db.create_logs",
         fake_create_logs,
     )
 

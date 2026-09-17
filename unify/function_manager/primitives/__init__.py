@@ -6,7 +6,6 @@ This subpackage provides:
 - `ToolSurfaceRegistry` / `get_registry` - Central registry for manager configuration
 - `ManagerSpec` - Per-manager configuration dataclass
 - `Primitives` - Scoped runtime interface for accessing state manager primitives
-- `ComputerPrimitives` - Computer use (web/desktop) control and reasoning
 - `get_primitive_callable` - Resolve primitive metadata to callables
 - `collect_primitives` / `compute_primitives_hash` - Module-level convenience functions
 """
@@ -14,49 +13,34 @@ This subpackage provides:
 from unify.function_manager.primitives.scope import (
     PrimitiveScope,
     VALID_MANAGER_ALIASES,
-    COORDINATOR_MANAGER_ALIAS,
-    scoped_managers_for_role,
     default_runtime_scope,
 )
 from unify.function_manager.primitives.registry import (
     ManagerSpec,
     ToolSurfaceRegistry,
     get_registry,
-    # Module-level convenience functions (matching old API)
     collect_primitives,
     compute_primitives_hash,
     get_primitive_sources,
     _COMMON_EXCLUDED_METHODS,
-    # Reverse mapping for deriving alias from primitive_class
     _CLASS_PATH_TO_ALIAS,
 )
 from unify.function_manager.primitives.runtime import (
     Primitives,
-    ComputerPrimitives,
-    DEFAULT_AGENT_SERVER_URL,
     get_primitive_callable,
     _AsyncPrimitiveWrapper,
     _create_async_wrapper,
-)
-from unify.function_manager.primitives.humanize import (
-    HumanInput,
-    HumanizeConfig,
-    kinetic_deltas,
-    settle,
 )
 
 __all__ = [
     # Scope
     "PrimitiveScope",
     "VALID_MANAGER_ALIASES",
-    "COORDINATOR_MANAGER_ALIAS",
-    "scoped_managers_for_role",
     "default_runtime_scope",
     # Registry
     "ManagerSpec",
     "ToolSurfaceRegistry",
     "get_registry",
-    # Module-level functions (matching old API)
     "collect_primitives",
     "compute_primitives_hash",
     "get_primitive_sources",
@@ -64,14 +48,7 @@ __all__ = [
     "_CLASS_PATH_TO_ALIAS",
     # Runtime
     "Primitives",
-    "ComputerPrimitives",
-    "DEFAULT_AGENT_SERVER_URL",
     "get_primitive_callable",
     "_AsyncPrimitiveWrapper",
     "_create_async_wrapper",
-    # Humanized input (eased scroll / cursor drift / key-scroll)
-    "HumanInput",
-    "HumanizeConfig",
-    "kinetic_deltas",
-    "settle",
 ]

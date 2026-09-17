@@ -17,7 +17,7 @@ from ..common.embed_utils import ensure_vector_column
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
 
-import unisdk
+from unify import db
 from .types.contact import Contact, VOICE_ENROLLMENT_FIELDS
 from .types.meta import ContactMeta
 from .custom_contacts import compute_custom_contacts_hash
@@ -47,8 +47,6 @@ from ..settings import SETTINGS
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.llm_client import new_llm_client
 from ..events.event_bus import EVENT_BUS, Event
-from ..blacklist_manager.blacklist_manager import BlackListManager
-from ..conversation_manager.cm_types import Medium
 
 # Module delegations (split helpers)
 from .storage import (
@@ -58,14 +56,6 @@ from .storage import (
 from .system_contacts import (
     provision_assistant_contact as _sys_provision_assistant_contact,
     provision_user_contact as _sys_provision_user_contact,
-    provision_org_member_contacts as _sys_provision_org_member_contacts,
-    provision_team_assistant_contacts as _sys_provision_team_assistant_contacts,
-)
-from .voice_enrollment import (
-    get_voice_profiles as _voice_get_profiles,
-    get_voice_enrollment_info as _voice_get_info,
-    set_voice_enrollment as _voice_set_enrollment,
-    sync_manual_voice_enrollment as _voice_sync_manual,
 )
 from .ops import (
     create_contact as _op_create,
@@ -123,8 +113,7 @@ class ContactManager(BaseContactManager):
     UNKNOWN_INBOUND_RESPONSE_POLICY: str = (
         "This contact was automatically created from an unknown inbound message. "
         "Do NOT respond to this contact yet. Use your judgement to decide the best course of action: "
-        "you may inform your boss about this new contact and ask for guidance, or if this appears to be "
-        "spam or unwanted contact, you may choose to blacklist them via the Actor. If your boss confirms "
+        "you may inform your boss about this new contact and ask for guidance. If your boss confirms "
         "this is a legitimate contact, you should update their details (name, etc.) and set should_respond=True."
     )
 
@@ -186,10 +175,6 @@ class ContactManager(BaseContactManager):
                     fn=self._merge_contacts,
                     display_label="Merging duplicate contacts",
                 ),
-                ToolSpec(
-                    fn=self._move_to_blacklist,
-                    display_label="Blocking a contact",
-                ),
                 include_class_name=False,
             ),
         }
@@ -228,13 +213,7 @@ class ContactManager(BaseContactManager):
         except RuntimeError as exc:
             if "no base context available" not in str(exc):
                 raise
-            from ..session_details import SESSION_DETAILS
-
             contexts = [self._ctx]
-            contexts.extend(
-                f"Teams/{team_id}/Contacts"
-                for team_id in sorted(set(SESSION_DETAILS.team_ids))
-            )
         return list(dict.fromkeys(contexts))
 
     def _data_store_for_context(self, context: str):
@@ -243,60 +222,6 @@ class ContactManager(BaseContactManager):
         if context == self._ctx:
             return self._data_store
         return DataStore.for_context(context, key_fields=("contact_id",))
-
-    def _membership_target_for_destination(
-        self,
-        destination: str | None,
-    ) -> tuple[str, int | None]:
-        """Return the ContactMembership target fields for a public destination."""
-
-        if destination is None or destination == "personal":
-            return "personal", None
-        return "team", int(destination.removeprefix("team:"))
-
-    def _delete_contact_memberships(
-        self,
-        contact_id: int,
-        *,
-        destination: str | None,
-    ) -> None:
-        """Delete assistant relationship overlays for one contact id."""
-
-        from ..session_details import SESSION_DETAILS
-
-        if (
-            not SESSION_DETAILS.is_initialized
-            or SESSION_DETAILS.assistant.agent_id is None
-        ):
-            return
-
-        api_key = SESSION_DETAILS.unify_key
-        if not api_key:
-            _log.warning(
-                "UNIFY_KEY is not set; skipping contact membership deletion.",
-            )
-            return
-
-        from unisdk.utils import http
-
-        target_scope, target_team_id = self._membership_target_for_destination(
-            destination,
-        )
-        assistant_id = int(SESSION_DETAILS.assistant.agent_id)
-        url = (
-            f"{SETTINGS.ORCHESTRA_URL.rstrip('/')}"
-            f"/assistant/{assistant_id}/contact-memberships/{int(contact_id)}"
-        )
-        response = http.delete(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            params={
-                "target_scope": target_scope,
-                "target_team_id": target_team_id,
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
 
     def _pack_contacts(self, contacts: list[Contact]) -> Dict[str, Any]:
         """Return the standard ContactManager tool payload for contact rows."""
@@ -523,7 +448,7 @@ class ContactManager(BaseContactManager):
 
     @functools.wraps(BaseContactManager.clear, updated=())
     def clear(self) -> None:
-        unisdk.delete_context(self._ctx)
+        db.delete_context(self._ctx)
 
         # Clear local cache so subsequent reads/writes operate against a
         # clean slate
@@ -543,7 +468,7 @@ class ContactManager(BaseContactManager):
 
             for _ in range(3):
                 try:
-                    unisdk.get_fields(context=self._ctx)
+                    db.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -626,7 +551,7 @@ class ContactManager(BaseContactManager):
                     filt = f"contact_id == {misses[0]}"
                 else:
                     filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
-                rows = unisdk.get_logs(
+                rows = db.get_logs(
                     context=context,
                     filter=filt,
                     limit=len(misses),
@@ -726,7 +651,7 @@ class ContactManager(BaseContactManager):
             grouping level, or a list such as ``[\"should_respond\", \"contact_id\"]``
             to group hierarchically in that order. When provided, the result
             becomes a nested mapping keyed by group values, mirroring
-            :func:`unisdk.get_logs_metric` behaviour.
+            :func:`db.get_logs_metric` behaviour.
 
         Returns
         -------
@@ -1261,7 +1186,6 @@ class ContactManager(BaseContactManager):
             context=context,
             data_store=self._data_store_for_context(context),
         )
-        self._delete_contact_memberships(contact_id, destination=destination)
         return outcome
 
     def _merge_contacts(
@@ -1333,149 +1257,6 @@ class ContactManager(BaseContactManager):
             data_store=self._data_store_for_context(context),
         )
 
-    def _move_to_blacklist(
-        self,
-        *,
-        contact_id: int,
-        reason: str,
-        destination: Optional[str] = None,
-    ) -> ToolOutcome:
-        """
-        Add all non-empty contact details for the specified contact to the blacklist.
-
-        For each available detail:
-        - email_address → one blacklist entry with ``medium == email``.
-        - phone_number → two entries with ``medium == sms_message`` and ``phone_call``.
-
-        The blacklist reason is standardised as a concise summary of the contact followed by the cause:
-        - ``"{first_name}, {surname}, {bio}, moved to blacklist due to {reason}"`` with missing parts omitted and no stray commas.
-
-        Additionally, this tool deletes the contact from the Contacts table once the blacklist entries
-        have been created. When no details exist to blacklist, the contact is still deleted as part of
-        the move operation.
-        destination : str | None, default None
-            Which Contacts root contains the contact. Defaults to ``"personal"``.
-            Pass ``"team:<id>"`` when blacklisting a contact from a shared
-            team. See the *Accessible shared teams* block in your system prompt.
-
-        Returns
-        -------
-        ToolOutcome
-            ``{"outcome": "contact details moved to blacklist", "details": {"contact_id": <int>, "blacklist_ids": [<int>, ...]}}``.
-
-        Raises
-        ------
-        ValueError
-            If the contact cannot be found.
-        """
-        try:
-            context = self._contact_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
-        store = self._data_store_for_context(context)
-
-        # Fetch the contact row (public fields only)
-        rows = unisdk.get_logs(
-            context=context,
-            filter=f"contact_id == {int(contact_id)}",
-            limit=1,
-            from_fields=self._allowed_fields(),
-        )
-        if not rows:
-            raise ValueError(
-                f"No contact found with contact_id {contact_id} to move to blacklist.",
-            )
-        ent = rows[0].entries
-
-        first = (ent.get("first_name") or "").strip()
-        last = (ent.get("surname") or "").strip()
-        bio = (ent.get("bio") or "").strip()
-        parts = [p for p in (first, last, bio) if p]
-        head = ", ".join(parts)
-        suffix = f"moved to blacklist due to {reason}"
-        bl_reason = f"{head}, {suffix}" if head else suffix
-
-        # Build detail → media pairs
-        detail_media: list[tuple[str, Medium]] = []
-        email = (ent.get("email_address") or "").strip()
-        if email:
-            detail_media.append((email, Medium.EMAIL))
-        phone = (ent.get("phone_number") or "").strip()
-        if phone:
-            detail_media.append((phone, Medium.SMS_MESSAGE))
-            detail_media.append((phone, Medium.PHONE_CALL))
-
-        if not detail_media:
-            # Even when no details exist, delete the contact as part of the move
-            try:
-                _op_delete(
-                    self,
-                    contact_id=contact_id,
-                    _log_id=None,
-                    context=context,
-                    data_store=store,
-                )
-                self._delete_contact_memberships(
-                    contact_id,
-                    destination=destination,
-                )
-            except Exception:
-                # Best-effort delete; surface original outcome regardless
-                pass
-            return {
-                "outcome": "no contact details to blacklist",
-                "details": {"contact_id": int(contact_id), "blacklist_ids": []},
-            }
-
-        blm = BlackListManager()
-        blacklist_context = blm._blacklist_context_for_destination(destination)
-        created_ids: list[int] = []
-
-        # Best-effort de-duplication per (medium, contact_detail)
-        for detail, med in detail_media:
-            existing = unisdk.get_logs(
-                context=blacklist_context,
-                filter=f"medium == '{med.value}' and contact_detail == '{detail}'",
-                limit=1,
-            )
-            if existing:
-                # Skip creating duplicates
-                try:
-                    created_ids.append(int(existing[0].entries["blacklist_id"]))
-                except Exception:
-                    pass
-                continue
-
-            res = blm.create_blacklist_entry(
-                medium=med,
-                contact_detail=detail,
-                reason=bl_reason,
-                destination=destination,
-            )
-            try:
-                created_ids.append(int(res["details"]["blacklist_id"]))
-            except Exception:
-                pass
-
-        # Finally, delete the original contact
-        _op_delete(
-            self,
-            contact_id=contact_id,
-            _log_id=None,
-            context=context,
-            data_store=store,
-        )
-        self._delete_contact_memberships(contact_id, destination=destination)
-
-        return {
-            "outcome": "contact details moved to blacklist",
-            "details": {"contact_id": int(contact_id), "blacklist_ids": created_ids},
-        }
-
-    # ──────────────────────────────────────────────────────────────────────
-    #  Internal helpers (not exposed as tools)
-    # ──────────────────────────────────────────────────────────────────────
-    # Storage / provisioning
     def warm_embeddings(self) -> None:
         try:
             ensure_vector_column(
@@ -1489,36 +1270,6 @@ class ContactManager(BaseContactManager):
     def _provision_storage(self) -> None:
         """Ensure Contacts context, schema, and local view exist (delegated)."""
         _storage_provision(self)
-
-    # ── voice enrollment (programmatic only; never exposed as LLM tools) ──
-    def get_voice_profiles(self, contact_ids) -> Dict[int, List[float]]:
-        """Return {contact_id: voice embedding} for enrolled contacts."""
-        return _voice_get_profiles(self, contact_ids)
-
-    def get_voice_enrollment_info(self, contact_id: int) -> Dict[str, Any]:
-        """Return enrollment metadata (enrolled, enrolled_at, source)."""
-        return _voice_get_info(self, contact_id)
-
-    def set_voice_enrollment(
-        self,
-        *,
-        contact_id: int,
-        embedding: List[float],
-        wav_bytes: bytes | None = None,
-        source: str,
-    ) -> None:
-        """Persist a voice enrollment (embedding + optional sample) on a contact."""
-        _voice_set_enrollment(
-            self,
-            contact_id=contact_id,
-            embedding=embedding,
-            wav_bytes=wav_bytes,
-            source=source,
-        )
-
-    def sync_manual_voice_enrollment(self) -> None:
-        """Sync the boss user's manually recorded voice sample onto the boss contact."""
-        _voice_sync_manual(self)
 
     def _num_contacts(
         self,
@@ -1548,7 +1299,7 @@ class ContactManager(BaseContactManager):
 
         self_contact_id = int(SESSION_DETAILS.self_contact_id)
         boss_contact_id = int(SESSION_DETAILS.boss_contact_id)
-        existing_logs = unisdk.get_logs(
+        existing_logs = db.get_logs(
             context=self._ctx,
             filter=f"contact_id == {self_contact_id} or contact_id == {boss_contact_id}",
             limit=2,
@@ -1566,12 +1317,6 @@ class ContactManager(BaseContactManager):
             contact_id=self_contact_id,
         )
         _sys_provision_user_contact(self, user_log, contact_id=boss_contact_id)
-
-        # Sync org members (returns early if not org API key)
-        _sys_provision_org_member_contacts(self)
-
-        # Sync teammate assistants (returns early when not on any team)
-        _sys_provision_team_assistant_contacts(self)
 
     # Validation / sanitization
     def _allowed_fields(self) -> list[str]:
@@ -1660,7 +1405,7 @@ class ContactManager(BaseContactManager):
 
     def _get_stored_custom_contacts_hash(self) -> str:
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -1673,13 +1418,13 @@ class ContactManager(BaseContactManager):
 
     def _store_custom_contacts_hash(self, hash_value: str) -> None:
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={"custom_contacts_hash": hash_value},
@@ -1695,14 +1440,14 @@ class ContactManager(BaseContactManager):
             logger.warning("Failed to store custom contacts hash: %s", exc)
 
     def _delete_custom_contact_by_key(self, custom_key: str) -> bool:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._ctx,
             filter=f"custom_key == '{custom_key}' and custom_hash != None",
             limit=1,
         )
         if not logs:
             return False
-        unisdk.delete_logs(context=self._ctx, logs=[logs[0].id])
+        db.delete_logs(context=self._ctx, logs=[logs[0].id])
         return True
 
     def _update_custom_contact(
@@ -1710,7 +1455,7 @@ class ContactManager(BaseContactManager):
         contact_id: int,
         data: Dict[str, Any],
     ) -> None:
-        log_ids = unisdk.get_logs(
+        log_ids = db.get_logs(
             context=self._ctx,
             filter=f"contact_id == {int(contact_id)}",
             limit=1,
@@ -1723,7 +1468,7 @@ class ContactManager(BaseContactManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "contact_id"},
         )
-        unisdk.update_logs(
+        db.update_logs(
             context=self._ctx,
             logs=[log_ids[0]],
             entries=update_data,
@@ -1748,7 +1493,7 @@ class ContactManager(BaseContactManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -1838,7 +1583,7 @@ class _ContactSyncAdapter(CustomSyncAdapter):
         self._manager = manager
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._manager._ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._manager._ctx),
@@ -1871,7 +1616,7 @@ class _ContactSyncAdapter(CustomSyncAdapter):
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._ctx,
             filter=f"custom_key == '{key}'",
             limit=1,
@@ -1881,7 +1626,7 @@ class _ContactSyncAdapter(CustomSyncAdapter):
         return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
 
     def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        unisdk.delete_logs(
+        db.delete_logs(
             context=self._manager._ctx,
             logs=[live_row["_log_id"]],
         )

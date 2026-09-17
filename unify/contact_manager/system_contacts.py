@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-import unisdk
-from unisdk.utils.http import RequestError
+from unify.db import DuplicateKey, StoreError
 
 _log = logging.getLogger(__name__)
-
-_CONTACT_MEMBERSHIP_PATH = "/assistant/{assistant_id}/contact-memberships"
-_PERSONAL_SCOPE = "personal"
-_SELF_RELATIONSHIP = "self"
-_BOSS_RELATIONSHIP = "boss"
 
 from ..session_details import (
     PLACEHOLDER_ASSISTANT_BIO,
@@ -26,61 +20,8 @@ from ..session_details import (
 from .ops import partition_create_kwargs, partition_update_kwargs
 
 
-def _is_duplicate_contact_error(error: RequestError) -> bool:
-    if error.response is None or error.response.status_code not in (400, 409, 500):
-        return False
-    try:
-        detail = str(error.response.json().get("detail", ""))
-    except Exception:
-        detail = str(getattr(error.response, "text", ""))
-    normalized = detail.lower()
-    return "unique" in normalized or "duplicate composite key" in normalized
-
-
-def _upsert_personal_contact_membership(
-    *,
-    contact_id: int,
-    relationship: str,
-    response_policy: str,
-    can_edit: bool,
-) -> None:
-    """Ensure the assistant has a personal relationship overlay for a contact."""
-
-    from ..session_details import SESSION_DETAILS
-    from ..settings import SETTINGS
-
-    if not SESSION_DETAILS.is_initialized or SESSION_DETAILS.assistant.agent_id is None:
-        return
-
-    api_key = SESSION_DETAILS.unify_key
-    if not api_key:
-        _log.warning(
-            "UNIFY_KEY is not set; skipping contact membership provisioning.",
-        )
-        return
-
-    from unisdk.utils import http
-
-    assistant_id = int(SESSION_DETAILS.assistant.agent_id)
-    url = (
-        f"{SETTINGS.ORCHESTRA_URL.rstrip('/')}"
-        f"{_CONTACT_MEMBERSHIP_PATH.format(assistant_id=assistant_id)}"
-    )
-    response = http.post(
-        url,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "contact_id": int(contact_id),
-            "target_scope": _PERSONAL_SCOPE,
-            "target_team_id": None,
-            "relationship": relationship,
-            "should_respond": True,
-            "response_policy": response_policy,
-            "can_edit": can_edit,
-        },
-        timeout=15,
-    )
-    response.raise_for_status()
+def _is_duplicate_contact_error(error: StoreError) -> bool:
+    return isinstance(error, DuplicateKey)
 
 
 def _is_assistant_populated() -> bool:
@@ -114,48 +55,14 @@ def _resolve_user_details(self) -> Dict[str, Any]:
             "email": PLACEHOLDER_USER_EMAIL,
         }
 
-    # In production (SESSION_DETAILS initialized), fetch real user info
-    try:
-        data: Any = unisdk.get_user_basic_info()
-    except Exception:
-        _log.warning(
-            "Failed to fetch user details from Orchestra, using session details",
-        )
-        return {
-            "first_name": SESSION_DETAILS.user.first_name
-            or PLACEHOLDER_USER_FIRST_NAME,
-            "last_name": SESSION_DETAILS.user.surname or PLACEHOLDER_USER_SURNAME,
-            "email": SESSION_DETAILS.user.email or PLACEHOLDER_USER_EMAIL,
-        }
-
-    user_info: Dict[str, Any] = {}
-    mapped: Dict[str, Any] = {
-        "first_name": data.get("first"),
-        "last_name": data.get("last"),
-        "email": data.get("email"),
-        "bio": data.get("bio"),
-        "timezone": data.get("timezone"),
-        "phone_number": data.get("phone_number"),
-        "whatsapp_number": data.get("whatsapp_number"),
-        "discord_id": data.get("discord_id"),
-        "slack_user_id": data.get("slack_user_id"),
+    user_info: Dict[str, Any] = {
+        "first_name": SESSION_DETAILS.user.first_name or PLACEHOLDER_USER_FIRST_NAME,
+        "last_name": SESSION_DETAILS.user.surname or PLACEHOLDER_USER_SURNAME,
+        "email": SESSION_DETAILS.user.email or PLACEHOLDER_USER_EMAIL,
     }
-    user_info.update({k: v for k, v in mapped.items() if v is not None})
-
-    if "phone_number" not in user_info and SESSION_DETAILS.user.number:
+    if SESSION_DETAILS.user.number:
         user_info["phone_number"] = SESSION_DETAILS.user.number
-
-    if "whatsapp_number" not in user_info and SESSION_DETAILS.user.whatsapp_number:
-        user_info["whatsapp_number"] = SESSION_DETAILS.user.whatsapp_number
-
-    if user_info:
-        return user_info
-
-    return {
-        "first_name": PLACEHOLDER_USER_FIRST_NAME,
-        "last_name": PLACEHOLDER_USER_SURNAME,
-        "email": PLACEHOLDER_USER_EMAIL,
-    }
+    return user_info
 
 
 def provision_assistant_contact(
@@ -287,12 +194,6 @@ def provision_assistant_contact(
                 self._data_store.put(entries)
         except Exception:
             pass
-        _upsert_personal_contact_membership(
-            contact_id=resolved_contact_id,
-            relationship=_SELF_RELATIONSHIP,
-            response_policy="",
-            can_edit=True,
-        )
         return
 
     # Insert the assistant row. Race conditions are handled by Orchestra's
@@ -306,15 +207,9 @@ def provision_assistant_contact(
         if int(outcome["details"]["contact_id"]) != resolved_contact_id:
             raise RuntimeError("Assistant self contact was created with the wrong id.")
         resolved_contact_id = int(outcome["details"]["contact_id"])
-    except RequestError as e:
+    except StoreError as e:
         if not _is_duplicate_contact_error(e):
             raise
-    _upsert_personal_contact_membership(
-        contact_id=resolved_contact_id,
-        relationship=_SELF_RELATIONSHIP,
-        response_policy="",
-        can_edit=True,
-    )
 
 
 def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> None:
@@ -435,12 +330,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                 self._data_store.put(entries)
         except Exception:
             pass
-        _upsert_personal_contact_membership(
-            contact_id=resolved_contact_id,
-            relationship=_BOSS_RELATIONSHIP,
-            response_policy=self.USER_MANAGER_RESPONSE_POLICY,
-            can_edit=True,
-        )
         return
 
     # Insert the user row. Race conditions are handled by Orchestra's
@@ -457,316 +346,12 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
         if int(outcome["details"]["contact_id"]) != resolved_contact_id:
             raise RuntimeError("Boss contact was created with the wrong id.")
         resolved_contact_id = int(outcome["details"]["contact_id"])
-    except RequestError as e:
+    except StoreError as e:
         if not _is_duplicate_contact_error(e):
             raise
-    _upsert_personal_contact_membership(
-        contact_id=resolved_contact_id,
-        relationship=_BOSS_RELATIONSHIP,
-        response_policy=self.USER_MANAGER_RESPONSE_POLICY,
-        can_edit=True,
-    )
 
 
 TEAMMATE_ASSISTANT_RESPONSE_POLICY = (
     "Teammate in a shared team chat. Use normal judgement when deciding "
     "whether their messages need a reply."
 )
-
-
-def _fetch_org_assistants() -> List[Dict[str, Any]]:
-    """Return all org assistants visible to this runtime's key.
-
-    Uses ``GET /assistant?list_all_org=true``. Returns an empty list for
-    personal keys, unavailable APIs, or any error — teammate provisioning is
-    strictly best-effort.
-    """
-    from ..session_details import SESSION_DETAILS
-    from ..settings import SETTINGS
-
-    base_url = SETTINGS.ORCHESTRA_URL
-    api_key = SESSION_DETAILS.unify_key
-
-    if not base_url or not api_key:
-        return []
-
-    try:
-        from unisdk.utils import http
-
-        resp = http.get(
-            f"{base_url.rstrip('/')}/assistant",
-            headers={"Authorization": f"Bearer {api_key}"},
-            params={"list_all_org": "true"},
-            timeout=30,
-        )
-        if 200 <= resp.status_code < 300:
-            data = resp.json()
-            return data if isinstance(data, list) else []
-        return []
-    except Exception:
-        return []
-
-
-def select_team_assistant_peers(
-    assistants: List[Dict[str, Any]],
-    team_ids: List[int],
-    self_agent_id: int | None,
-) -> List[Dict[str, Any]]:
-    """Filter an org assistant list down to this assistant's team peers.
-
-    Peers are non-coordinator assistants sharing at least one team with this
-    assistant, excluding the assistant itself. Coordinators are excluded from
-    team chat entirely, so they are not provisioned as teammate contacts.
-    """
-    my_teams = {int(team_id) for team_id in team_ids}
-    if not my_teams:
-        return []
-
-    peers = []
-    for assistant in assistants:
-        agent_id = assistant.get("agent_id")
-        if agent_id is None or (
-            self_agent_id is not None and int(agent_id) == int(self_agent_id)
-        ):
-            continue
-        if assistant.get("is_coordinator"):
-            continue
-        peer_teams = {int(team_id) for team_id in assistant.get("team_ids") or []}
-        if my_teams & peer_teams:
-            peers.append(assistant)
-    return peers
-
-
-def provision_team_assistant_contacts(self) -> None:
-    """Ensure teammate-assistant contacts exist with is_system=True.
-
-    Mirrors ``provision_org_member_contacts`` for the AI side of the roster:
-    every non-coordinator assistant sharing a team with this assistant gets a
-    contact row carrying its ``agent_id``, so team-chat fan-out messages from
-    that assistant resolve to a contact even when it has no provisioned email.
-    """
-    from ..session_details import SESSION_DETAILS
-
-    if not SESSION_DETAILS.is_initialized:
-        return
-
-    peers = select_team_assistant_peers(
-        _fetch_org_assistants(),
-        SESSION_DETAILS.team_ids,
-        SESSION_DETAILS.assistant.agent_id,
-    )
-    if not peers:
-        return
-
-    for peer in peers:
-        agent_id = str(peer["agent_id"])
-        email = peer.get("email") or None
-
-        try:
-            # Prefer the stable agent_id identity; fall back to email so an
-            # existing email-provisioned row is upgraded rather than duplicated.
-            existing = unisdk.get_logs(
-                context=self._ctx,
-                filter=f"agent_id == '{agent_id}'",
-                limit=1,
-            )
-            if not existing and email:
-                existing = unisdk.get_logs(
-                    context=self._ctx,
-                    filter=f"email_address == '{email}'",
-                    limit=1,
-                )
-
-            if existing:
-                log = existing[0]
-                entries = log.entries
-                needs_is_system = not entries.get("is_system")
-                needs_agent_id = entries.get("agent_id") != agent_id
-                needs_email = email and entries.get("email_address") != email
-
-                if needs_is_system or needs_agent_id or needs_email:
-                    update_kwargs: Dict[str, Any] = {
-                        "contact_id": int(entries["contact_id"]),
-                        "_log_id": log.id,
-                    }
-                    if needs_is_system:
-                        update_kwargs["is_system"] = True
-                    if needs_agent_id:
-                        update_kwargs["agent_id"] = agent_id
-                    if needs_email:
-                        update_kwargs["email_address"] = email
-                    self.update_contact(**partition_update_kwargs(update_kwargs))
-            else:
-                self._create_contact(
-                    **partition_create_kwargs(
-                        {
-                            "first_name": peer.get("first_name"),
-                            "surname": peer.get("surname"),
-                            "email_address": email,
-                            "job_title": peer.get("job_title"),
-                            "is_system": True,
-                            "should_respond": True,
-                            "response_policy": TEAMMATE_ASSISTANT_RESPONSE_POLICY,
-                            "agent_id": agent_id,
-                        },
-                    ),
-                )
-        except Exception:
-            # Best-effort: continue with other peers
-            continue
-
-
-def _fetch_org_members() -> List[Dict[str, Any]]:
-    """
-    Return list of org members for the current organization.
-
-    Uses GET /organizations/members
-    Returns empty list if:
-    - Personal API key (not org)
-    - API unavailable
-    - Any error
-    """
-    from ..session_details import SESSION_DETAILS
-    from ..settings import SETTINGS
-
-    base_url = SETTINGS.ORCHESTRA_URL
-    api_key = SESSION_DETAILS.unify_key
-
-    if not base_url or not api_key:
-        return []
-
-    try:
-        from unisdk.utils import http
-
-        url = f"{base_url}/organizations/members"
-        headers = {"Authorization": f"Bearer {api_key}"}
-        resp = http.get(url, headers=headers, timeout=30)
-
-        if 200 <= resp.status_code < 300:
-            return resp.json() or []
-        return []
-    except Exception:
-        return []
-
-
-def provision_org_member_contacts(self) -> None:
-    """
-    Ensure org member contacts exist with is_system=True.
-
-    For each org member:
-    - If contact with email exists: ensure is_system=True
-    - If no contact exists: create with is_system=True
-
-    Skips the primary user to avoid duplicates.
-    """
-    members = _fetch_org_members()
-    if not members:
-        return
-
-    from ..session_details import SESSION_DETAILS
-
-    # Get primary user email to skip
-    primary_user_email = None
-    try:
-        primary_user_rows = unisdk.get_logs(
-            context=self._ctx,
-            filter=f"contact_id == {SESSION_DETAILS.boss_contact_id}",
-            limit=1,
-            from_fields=["email_address"],
-        )
-        if primary_user_rows:
-            primary_user_email = primary_user_rows[0].entries.get("email_address")
-    except Exception:
-        pass
-
-    for member in members:
-        email = member.get("email")
-        if not email:
-            continue
-
-        # Skip primary user because it is already synced as the boss contact.
-        if primary_user_email and email.lower() == primary_user_email.lower():
-            continue
-
-        # Parse name into first/last
-        full_name = member.get("name", "")
-        name_parts = full_name.strip().split(maxsplit=1)
-        first_name = name_parts[0] if name_parts else None
-        surname = name_parts[1] if len(name_parts) > 1 else None
-
-        try:
-            # Check if contact with this email already exists
-            existing = unisdk.get_logs(
-                context=self._ctx,
-                filter=f"email_address == '{email}'",
-                limit=1,
-            )
-
-            if existing:
-                log = existing[0]
-                entries = log.entries
-                fetched_bio = member.get("bio")
-                fetched_tz = member.get("timezone")
-                fetched_phone = member.get("phone_number")
-                fetched_whatsapp = member.get("whatsapp_number")
-                fetched_user_id = member.get("user_id")
-
-                needs_is_system = not entries.get("is_system")
-                needs_bio = fetched_bio and entries.get("bio") != fetched_bio
-                needs_timezone = fetched_tz and entries.get("timezone") != fetched_tz
-                needs_phone = (
-                    fetched_phone and entries.get("phone_number") != fetched_phone
-                )
-                needs_whatsapp = (
-                    fetched_whatsapp
-                    and entries.get("whatsapp_number") != fetched_whatsapp
-                )
-                needs_user_id = (
-                    fetched_user_id and entries.get("user_id") != fetched_user_id
-                )
-
-                if (
-                    needs_is_system
-                    or needs_bio
-                    or needs_timezone
-                    or needs_phone
-                    or needs_whatsapp
-                    or needs_user_id
-                ):
-                    update_kwargs: Dict[str, Any] = {
-                        "contact_id": int(entries["contact_id"]),
-                        "_log_id": log.id,
-                    }
-                    if needs_is_system:
-                        update_kwargs["is_system"] = True
-                    if needs_bio:
-                        update_kwargs["bio"] = fetched_bio
-                    if needs_timezone:
-                        update_kwargs["timezone"] = fetched_tz
-                    if needs_phone:
-                        update_kwargs["phone_number"] = fetched_phone
-                    if needs_whatsapp:
-                        update_kwargs["whatsapp_number"] = fetched_whatsapp
-                    if needs_user_id:
-                        update_kwargs["user_id"] = fetched_user_id
-                    self.update_contact(**partition_update_kwargs(update_kwargs))
-            else:
-                # Create new contact for org member
-                create_kwargs: Dict[str, Any] = dict(
-                    first_name=first_name,
-                    surname=surname,
-                    email_address=email,
-                    phone_number=member.get("phone_number"),
-                    whatsapp_number=member.get("whatsapp_number"),
-                    bio=member.get("bio"),
-                    timezone=member.get("timezone") or "UTC",
-                    is_system=True,
-                    should_respond=True,
-                    response_policy="",
-                )
-                if member.get("user_id"):
-                    create_kwargs["user_id"] = member["user_id"]
-                self._create_contact(**partition_create_kwargs(create_kwargs))
-        except Exception:
-            # Best-effort: continue with other members
-            continue

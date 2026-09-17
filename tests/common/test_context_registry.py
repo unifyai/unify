@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 import pytest
-from unisdk.logs import CONTEXT_READ, CONTEXT_WRITE
+from unify.db import CONTEXT_READ, CONTEXT_WRITE
 
 from unify.common.context_registry import ContextRegistry, TableContext
 from unify.common.tool_outcome import ToolErrorException

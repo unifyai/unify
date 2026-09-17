@@ -9,8 +9,7 @@ import json
 import logging
 import threading
 
-import unisdk
-
+from unify import db
 from ..common.log_utils import (
     assigned_row_id,
     create_logs as unity_create_logs,
@@ -224,7 +223,7 @@ class GuidanceManager(BaseGuidanceManager):
         """Return currently resolvable compositional functions keyed by id."""
         available: dict[int, str] = {}
         for context in self._function_contexts_for_read():
-            for log in unisdk.get_logs(
+            for log in db.get_logs(
                 context=context,
                 from_fields=["function_id", "name"],
             ):
@@ -321,7 +320,7 @@ class GuidanceManager(BaseGuidanceManager):
     def _is_builtin_guidance(self, guidance_id: int) -> bool:
         """Return whether an id refers to a row in the builtins catalogue."""
         try:
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=BUILTINS_GUIDANCE_CONTEXT,
                 project=builtins_project(),
                 filter=f"guidance_id == {int(guidance_id)}",
@@ -374,8 +373,8 @@ class GuidanceManager(BaseGuidanceManager):
 
     @functools.wraps(BaseGuidanceManager.clear, updated=())
     def clear(self) -> None:
-        unisdk.delete_context(self._ctx)
-        unisdk.delete_context(self._meta_ctx)
+        db.delete_context(self._ctx)
+        db.delete_context(self._meta_ctx)
 
         # Reset sync bookkeeping for this manager instance
         try:
@@ -396,7 +395,7 @@ class GuidanceManager(BaseGuidanceManager):
 
             for _ in range(3):
                 try:
-                    unisdk.get_fields(context=self._ctx)
+                    db.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -770,7 +769,7 @@ class GuidanceManager(BaseGuidanceManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(guidance_id, "updated")
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
@@ -794,7 +793,7 @@ class GuidanceManager(BaseGuidanceManager):
                     preserve_historical=False,
                 )
             ]
-        unisdk.update_logs(
+        db.update_logs(
             logs=[logs[0].id],
             context=context,
             entries=updates,
@@ -855,7 +854,7 @@ class GuidanceManager(BaseGuidanceManager):
         funcs = []
         for context in self._function_contexts_for_read():
             funcs.extend(
-                unisdk.get_logs(
+                db.get_logs(
                     context=context,
                     filter=filt or "False",
                     exclude_fields=list_private_fields(context),
@@ -916,7 +915,7 @@ class GuidanceManager(BaseGuidanceManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(guidance_id, "deleted")
-        ids = unisdk.get_logs(
+        ids = db.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
@@ -933,7 +932,7 @@ class GuidanceManager(BaseGuidanceManager):
         # Invalidate while the inverse links still exist; the delete cascades
         # guidance_ids off the function rows.
         self._invalidate_linked_function_trust(guidance_id)
-        unisdk.delete_logs(context=context, logs=ids[0])
+        db.delete_logs(context=context, logs=ids[0])
         return {"outcome": "guidance deleted", "details": {"guidance_id": guidance_id}}
 
     @functools.wraps(BaseGuidanceManager.reconcile_dependencies, updated=())
@@ -954,7 +953,7 @@ class GuidanceManager(BaseGuidanceManager):
             if guidance_ids
             else None
         )
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             filter=filter_expr,
             limit=1000,
@@ -976,7 +975,7 @@ class GuidanceManager(BaseGuidanceManager):
                 reason.model_dump(mode="json") for reason in guidance.stale_reasons
             ]:
                 continue
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[log.id],
                 context=context,
                 entries={"stale_reasons": serialized},
@@ -1090,7 +1089,7 @@ class GuidanceManager(BaseGuidanceManager):
     ) -> str:
         field = stored_hash_field("custom_guidance_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -1109,13 +1108,13 @@ class GuidanceManager(BaseGuidanceManager):
     ) -> None:
         field = stored_hash_field("custom_guidance_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: hash_value},
@@ -1131,7 +1130,7 @@ class GuidanceManager(BaseGuidanceManager):
             logger.warning("Failed to store custom guidance hash: %s", exc)
 
     def _get_custom_guidance_from_db(self) -> Dict[str, Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._ctx),
@@ -1148,7 +1147,7 @@ class GuidanceManager(BaseGuidanceManager):
         *,
         managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._ctx,
             filter=(
                 f"custom_key == '{custom_key}' and "
@@ -1158,7 +1157,7 @@ class GuidanceManager(BaseGuidanceManager):
         )
         if not logs:
             return False
-        unisdk.delete_logs(context=self._ctx, logs=[logs[0].id])
+        db.delete_logs(context=self._ctx, logs=[logs[0].id])
         return True
 
     def _update_custom_guidance(
@@ -1166,7 +1165,7 @@ class GuidanceManager(BaseGuidanceManager):
         guidance_id: int,
         data: Dict[str, Any],
     ) -> None:
-        log_ids = unisdk.get_logs(
+        log_ids = db.get_logs(
             context=self._ctx,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=1,
@@ -1179,7 +1178,7 @@ class GuidanceManager(BaseGuidanceManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "guidance_id"},
         )
-        unisdk.update_logs(
+        db.update_logs(
             context=self._ctx,
             logs=[log_ids[0]],
             entries=update_data,
@@ -1201,7 +1200,7 @@ class GuidanceManager(BaseGuidanceManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -1330,7 +1329,7 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
         self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._manager._ctx,
             filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._ctx),
@@ -1391,7 +1390,7 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
         if self.managed_by != MANAGED_BY_DEPLOYMENT:
             return None
         title = json.dumps(str(fields.get("title", "")))
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._ctx,
             filter=f"title == {title} and custom_hash == None",
             limit=1,
@@ -1405,7 +1404,7 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._ctx,
             filter=f"custom_key == '{key}' and custom_hash == None",
             limit=1,
@@ -1415,7 +1414,7 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
         return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
 
     def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        unisdk.delete_logs(
+        db.delete_logs(
             context=self._manager._ctx,
             logs=[live_row["_log_id"]],
         )

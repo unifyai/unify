@@ -8,7 +8,6 @@ import asyncio
 import concurrent.futures
 import threading
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse
 
 from ..common.llm_client import new_llm_client
 from ..common.authorship import (
@@ -17,9 +16,7 @@ from ..common.authorship import (
 )
 from ..common.log_utils import log as unity_log, create_logs as unity_create_logs
 from ..common.context_dump import make_messages_safe_for_context_dump
-import unisdk
-
-
+from unify import db
 from ..common.model_to_fields import model_to_fields
 from ..common.embed_utils import ensure_vector_column
 from ..common.federated_search import (
@@ -35,7 +32,6 @@ from ..common.filter_utils import normalize_filter_expr
 from ..common.data_store import DataStore
 from ..common.context_registry import (
     ContextRegistry,
-    TEAM_CONTEXT_PREFIX,
     TableContext,
 )
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
@@ -317,13 +313,7 @@ class ImageHandle:
             pass
 
     def raw(self) -> bytes:
-        """
-        Return the decoded image bytes.
-
-        If the data is a GCS URL, it downloads the content via unisdk.download_object().
-        Otherwise, it assumes the data is a base64 string and decodes it.
-        """
-        # Prefer locally cached base64 data from the DataStore to avoid re-downloading
+        """Return the decoded image bytes from the stored base64 data."""
         try:
             cached = self._manager._data_store_for_context(self._context).get(
                 self.image_id,
@@ -331,51 +321,10 @@ class ImageHandle:
             data_str = cached.get("data") if cached is not None else self._image.data
         except Exception:
             data_str = self._image.data
-
-        # Convert HTTPS GCS URLs to gs:// format for unisdk.download_object
-        gcs_uri = None
-        if data_str.startswith("gs://"):
-            gcs_uri = data_str
-        elif data_str.startswith("https://storage.googleapis.com/"):
-            parsed_url = urlparse(data_str)
-            path_parts = parsed_url.path.lstrip("/").split("/", 1)
-            if len(path_parts) == 2:
-                bucket_name, object_path = path_parts
-                gcs_uri = f"gs://{bucket_name}/{object_path}"
-
-        if gcs_uri:
-            try:
-                content = unisdk.download_object(gcs_uri)
-                # Cache the downloaded bytes as base64 in the DataStore to prevent future downloads
-                try:
-                    import base64 as _b64
-
-                    try:
-                        self._manager._data_store_for_context(self._context).update(
-                            self.image_id,
-                            {"data": _b64.b64encode(content).decode("utf-8")},
-                        )
-                    except KeyError:
-                        # If the row isn't present yet, insert a minimal row
-                        self._manager._data_store_for_context(self._context).put(
-                            {
-                                "image_id": self.image_id,
-                                "data": _b64.b64encode(content).decode("utf-8"),
-                            },
-                        )
-                except Exception:
-                    pass
-                return content
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to download image from GCS: {data_str}",
-                ) from exc
-        else:
-            # Fallback to assuming it's base64
-            try:
-                return base64.b64decode(data_str)
-            except Exception as exc:
-                raise ValueError("Invalid base64 image data") from exc
+        try:
+            return base64.b64decode(data_str)
+        except Exception as exc:
+            raise ValueError("Invalid base64 image data") from exc
 
     async def ask(
         self,
@@ -389,8 +338,6 @@ class ImageHandle:
         Sends the underlying image to the model as an image block alongside the
         `question`, and returns the model's textual answer directly (no nested
         tool-use loop).
-        If the image is stored as a GCS URL, a temporary signed URL is generated
-        to make it accessible to the LLM.
 
         Parameters
         ----------
@@ -424,26 +371,7 @@ class ImageHandle:
             to_image_content_block,
         )
 
-        # Check if the data string is a GCS URL and convert to gs:// format
-        gcs_uri = None
-        if isinstance(data_str, str):
-            if data_str.startswith("gs://"):
-                gcs_uri = data_str
-            elif data_str.startswith("https://storage.googleapis.com/"):
-                parsed_url = urlparse(data_str)
-                path_parts = parsed_url.path.lstrip("/").split("/", 1)
-                if len(path_parts) == 2:
-                    bucket_name, object_path = path_parts
-                    gcs_uri = f"gs://{bucket_name}/{object_path}"
-
-        if gcs_uri:
-            try:
-                content_block = to_image_content_block(gcs_uri)
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to generate signed URL for GCS image: {e}",
-                ) from e
-        elif isinstance(data_str, str) and (
+        if isinstance(data_str, str) and (
             data_str.startswith("http://")
             or data_str.startswith("https://")
             or data_str.startswith("data:image/")
@@ -707,18 +635,6 @@ class ImageManager(BaseImageManager):
 
         if from_root == "personal":
             return ContextRegistry.write_root(self, IMAGES_TABLE, destination=None)
-        if from_root.startswith("team:"):
-            return ContextRegistry.write_root(
-                self,
-                IMAGES_TABLE,
-                destination=from_root,
-            )
-        if from_root.startswith(TEAM_CONTEXT_PREFIX):
-            return ContextRegistry.write_root(
-                self,
-                IMAGES_TABLE,
-                destination=f"team:{from_root.split('/')[1]}",
-            )
         return from_root.rstrip("/")
 
     # ------------------------------ Reads ---------------------------------
@@ -847,7 +763,7 @@ class ImageManager(BaseImageManager):
                 if not remaining:
                     break
                 id_list = ", ".join(str(int(i)) for i in remaining)
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=context,
                     filter=f"image_id in [{id_list}]",
                     limit=len(remaining),
@@ -1270,7 +1186,7 @@ class ImageManager(BaseImageManager):
                 if not handled:
                     log_ids = resp.get("log_event_ids") or resp.get("log_ids")
                     if isinstance(log_ids, list) and log_ids:
-                        fetched = unisdk.get_logs(
+                        fetched = db.get_logs(
                             context=context,
                             from_ids=log_ids,
                             return_ids_only=False,
@@ -1415,7 +1331,7 @@ class ImageManager(BaseImageManager):
                 # No per-log explicit_types needed; field is strongly typed in schema
             if not entries:
                 continue
-            ids = unisdk.get_logs(
+            ids = db.get_logs(
                 context=context,
                 filter=f"image_id == {image_id}",
                 limit=2,
@@ -1427,7 +1343,7 @@ class ImageManager(BaseImageManager):
                 raise RuntimeError(
                     f"Multiple rows found with image_id {image_id}. Data integrity issue.",
                 )
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[ids[0]],
                 context=context,
                 entries=entries,
@@ -1435,7 +1351,7 @@ class ImageManager(BaseImageManager):
             )
             # Refresh from backend and write-through to DataStore (preserve temp id)
             try:
-                rows = unisdk.get_logs(
+                rows = db.get_logs(
                     context=context,
                     filter=f"image_id == {image_id}",
                     limit=1,
@@ -1502,7 +1418,7 @@ class ImageManager(BaseImageManager):
     # ------------------------------ Maintenance ---------------------------
     @functools.wraps(BaseImageManager.clear, updated=())
     def clear(self) -> None:
-        unisdk.delete_context(self._ctx)
+        db.delete_context(self._ctx)
 
         # Ensure the schema exists again via shared provisioning helper
         ContextRegistry.refresh(self, IMAGES_TABLE)
@@ -1519,7 +1435,7 @@ class ImageManager(BaseImageManager):
 
             for _ in range(3):
                 try:
-                    unisdk.get_fields(context=self._ctx)
+                    db.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -1547,7 +1463,7 @@ class ImageManager(BaseImageManager):
 
         source_context = self._context_for_root(source_root)
         target_context = self._context_for_root(target_root)
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=source_context,
             filter=f"image_id == {int(image_id)}",
             limit=2,
@@ -1562,7 +1478,7 @@ class ImageManager(BaseImageManager):
             )
 
         payload = Image(**rows[0].entries).to_post_json()
-        target_ids = unisdk.get_logs(
+        target_ids = db.get_logs(
             context=target_context,
             filter=f"image_id == {int(image_id)}",
             limit=2,
@@ -1573,7 +1489,7 @@ class ImageManager(BaseImageManager):
                 f"Multiple Images rows found with image_id={int(image_id)} in {target_context}.",
             )
         if target_ids:
-            unisdk.update_logs(
+            db.update_logs(
                 context=target_context,
                 logs=[target_ids[0]],
                 entries=strip_authoring_assistant_id(payload),
@@ -1587,7 +1503,7 @@ class ImageManager(BaseImageManager):
                 mutable=False,
             )
 
-        unisdk.delete_logs(context=source_context, logs=rows[0].id)
+        db.delete_logs(context=source_context, logs=rows[0].id)
         try:
             self._data_store_for_context(target_context).put(payload)
             self._data_store_for_context(source_context).delete(int(image_id))

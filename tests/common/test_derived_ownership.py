@@ -13,7 +13,6 @@ import os
 
 import pytest
 
-import unisdk
 from unify.session_details import SessionDetails
 
 

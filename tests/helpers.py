@@ -1,4 +1,4 @@
-import unisdk
+from unify import db
 import functools
 import inspect
 import sys
@@ -43,8 +43,8 @@ def restore_scenario_context(ctx: str) -> None:
     """Restore both Unify and ContextRegistry to a session scenario root."""
     from unify.common.context_registry import ContextRegistry
 
-    unisdk.create_context(ctx)
-    unisdk.set_context(ctx, relative=False)
+    db.create_context(ctx)
+    db.set_context(ctx, relative=False)
     ContextRegistry.set_base_context(ctx)
 
 
@@ -194,7 +194,7 @@ def _log_test_combined(
 ) -> None:
     """Log test duration, LLM I/O, and settings to the Combined context."""
     try:
-        unisdk.log(
+        db.log(
             context="Combined",
             test_fpath=test_fpath,
             tags=get_session_tags(),
@@ -324,7 +324,7 @@ def _upload_trace_to_context(
             return  # No spans after filtering
 
         # Detach from trace context to avoid recursive span creation.
-        # Without this, each unisdk.log() call generates ~26 Orchestra spans,
+        # Without this, each db.log() call generates ~26 Orchestra spans,
         # turning a 600-span upload into 15,000+ additional spans.
         try:
             from opentelemetry import context
@@ -337,13 +337,13 @@ def _upload_trace_to_context(
             # Create the Trace context with explicit field types
             trace_ctx = f"{test_ctx}/Trace"
             try:
-                unisdk.create_context(trace_ctx)
+                db.create_context(trace_ctx)
             except Exception:
                 pass  # Context may already exist
 
             # Create fields with explicit types (idempotent)
             try:
-                unisdk.create_fields(context=trace_ctx, fields=_TRACE_FIELDS)
+                db.create_fields(context=trace_ctx, fields=_TRACE_FIELDS)
             except Exception:
                 pass  # Fields may already exist
 
@@ -364,7 +364,7 @@ def _upload_trace_to_context(
                 for span in spans
             ]
             try:
-                unisdk.create_logs(context=trace_ctx, entries=entries)
+                db.create_logs(context=trace_ctx, entries=entries)
             except Exception:
                 pass  # Best-effort logging
         finally:
@@ -434,7 +434,7 @@ class _TestContext:
         NOTE:
         Unify context management is handled centrally in tests/conftest.py
         (pytest_runtest_setup/teardown) so it wraps fixture setup + teardown.
-        Doing unisdk.set_context()/unset_context() here (inside the test call
+        Doing db.set_context()/unset_context() here (inside the test call
         phase) can cause flaky cross-test interference when fixtures create
         or clear managers that delete contexts.
         """
@@ -759,7 +759,7 @@ def is_scenario_seeded(
 
     # Check for transcripts - scenario is only fully seeded if both exist
     try:
-        logs = unisdk.get_logs(context=transcript_context, limit=1)
+        logs = db.get_logs(context=transcript_context, limit=1)
         return bool(logs)
     except Exception:
         # If we can't check transcripts, fall back to contacts-only check

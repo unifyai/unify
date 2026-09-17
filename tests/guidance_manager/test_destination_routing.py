@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import unisdk
-
+from unify import db
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
 )
@@ -23,12 +22,11 @@ def test_guidance_writes_route_to_destination_and_reads_merge_roots(
         destination=f"team:{team_id}",
     )
 
-    assert [row.entries["title"] for row in unisdk.get_logs(context=manager._ctx)] == [
+    assert [row.entries["title"] for row in db.get_logs(context=manager._ctx)] == [
         "Private rule",
     ]
     assert [
-        row.entries["title"]
-        for row in unisdk.get_logs(context=f"Teams/{team_id}/Guidance")
+        row.entries["title"] for row in db.get_logs(context=f"Teams/{team_id}/Guidance")
     ] == ["Team rule"]
     # Reads also federate over the read-only builtins library; tenant rows
     # are isolated with the provenance flag.

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Set
 
-import unisdk
-
+from unify import db
 from ..common.federated_search import FederatedSearchContext, federated_count
 from ..common.log_utils import log as unity_log
 from ..common.context_registry import ContextRegistry
@@ -59,8 +58,8 @@ def num_messages(self) -> int:
 
 def clear(self) -> None:
     """Delete both contexts and re-provision storage."""
-    unisdk.delete_context(self._transcripts_ctx)
-    unisdk.delete_context(self._exchanges_ctx)
+    db.delete_context(self._transcripts_ctx)
+    db.delete_context(self._exchanges_ctx)
 
     # No local cache to reset
 
@@ -77,7 +76,7 @@ def clear(self) -> None:
 
         for _ in range(3):
             try:
-                unisdk.get_fields(context=self._transcripts_ctx)
+                db.get_fields(context=self._transcripts_ctx)
                 break
             except Exception:
                 _time.sleep(0.05)
@@ -89,7 +88,7 @@ def clear(self) -> None:
 
         for _ in range(3):
             try:
-                unisdk.get_fields(context=self._exchanges_ctx)
+                db.get_fields(context=self._exchanges_ctx)
                 break
             except Exception:
                 _time.sleep(0.05)
@@ -112,7 +111,7 @@ def ensure_exchanges_records(
         ids_expr = ", ".join(str(i) for i in sorted(exchange_ids))
         existing: set[int] = set()
         try:
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=exchanges_context,
                 filter=f"exchange_id in [{ids_expr}]",
                 from_fields=["exchange_id"],

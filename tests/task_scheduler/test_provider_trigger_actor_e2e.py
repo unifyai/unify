@@ -90,10 +90,10 @@ def orchestra_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COMPOSIO_WEBHOOK_SECRET", _WEBHOOK_SECRET)
     ensure_provider_trigger_test_prerequisites()
 
-    import unisdk
+    from unify import db
 
     suffix = uuid.uuid4().hex[:8]
-    assistant = unisdk.create_assistant(
+    assistant = db.create_assistant(
         first_name=f"ProviderE2E{suffix}",
         surname="Actor",
         config={"create_infra": False},

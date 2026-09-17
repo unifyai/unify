@@ -94,10 +94,10 @@ def orchestra_pipedream_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch)
     ensure_provider_trigger_test_prerequisites()
     ensure_pipedream_provider_trigger_catalog_seeded()
 
-    import unisdk
+    from unify import db
 
     suffix = uuid.uuid4().hex[:8]
-    assistant = unisdk.create_assistant(
+    assistant = db.create_assistant(
         first_name=f"PipedreamE2E{suffix}",
         surname="Actor",
         config={"create_infra": False},

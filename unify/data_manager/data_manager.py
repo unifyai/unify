@@ -17,9 +17,7 @@ from contextlib import contextmanager
 from threading import RLock
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import unisdk
-
-
+from unify import db
 from unify.data_manager.base import BaseDataManager
 from unify.data_manager.types.table import TableDescription
 from unify.data_manager.types.ingest import (
@@ -86,7 +84,6 @@ from unify.common.join_utils import rewrite_join_paths
 from unify.common.sync_lease import exclusive_sync_lease
 from unify.data_manager.ops.ingest_ops import run_ingest
 from unify.common.context_registry import (
-    TEAM_CONTEXT_PREFIX,
     ContextRegistry,
     TableContext,
 )
@@ -95,7 +92,6 @@ from unify.common.model_to_fields import model_to_fields
 from unify.common.tool_outcome import ToolErrorException
 from unify.data_manager.custom_data import compute_custom_data_hash
 from unify.data_manager.types.meta import DataMeta
-from unify.session_details import SESSION_DETAILS
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +109,6 @@ _ABSOLUTE_PREFIXES = (
     "Tasks",
     "Messages",
     "Exchanges",
-    TEAM_CONTEXT_PREFIX,
 )
 
 
@@ -243,12 +238,6 @@ class DataManager(BaseDataManager):
             if context.startswith(base + "/"):
                 return context[len(base) + 1 :]
 
-        if context.startswith(TEAM_CONTEXT_PREFIX):
-            parts = context.split("/", 3)
-            if len(parts) >= 3 and parts[2] == "Data":
-                return parts[3] if len(parts) == 4 else ""
-            return None
-
         if any(context.startswith(p) for p in _ABSOLUTE_PREFIXES):
             return None
 
@@ -268,9 +257,7 @@ class DataManager(BaseDataManager):
 
         context = context.lstrip("/")
         base = (self._base_ctx or "").strip("/")
-        return context.startswith(TEAM_CONTEXT_PREFIX) or bool(
-            base and (context == base or context.startswith(base + "/")),
-        )
+        return bool(base and (context == base or context.startswith(base + "/")))
 
     def _resolve_context_for_write(
         self,
@@ -309,12 +296,7 @@ class DataManager(BaseDataManager):
         except RuntimeError as exc:
             if "no base context available" not in str(exc):
                 raise
-            root_contexts = [
-                f"{TEAM_CONTEXT_PREFIX}{team_id}"
-                for team_id in SESSION_DETAILS.team_ids
-            ]
-            if not root_contexts:
-                return [self._resolve_context(context)]
+            return [self._resolve_context(context)]
         contexts = [
             self._context_under_data_root(root, suffix) for root in root_contexts
         ]
@@ -1485,7 +1467,7 @@ class DataManager(BaseDataManager):
         """Retrieve one source's stored custom data hash."""
         field = stored_hash_field("custom_data_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -1505,13 +1487,13 @@ class DataManager(BaseDataManager):
         """Store one source's custom data hash in the Meta context."""
         field = stored_hash_field("custom_data_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: hash_value},
@@ -1539,7 +1521,7 @@ class DataManager(BaseDataManager):
         """
         field = stored_hash_field("custom_data_contexts", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -1571,13 +1553,13 @@ class DataManager(BaseDataManager):
         field = stored_hash_field("custom_data_contexts", managed_by)
         value = json.dumps(sorted(contexts))
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: value},

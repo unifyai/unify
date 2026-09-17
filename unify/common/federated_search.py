@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from functools import cmp_to_key
 from typing import Any, Callable, Literal, Mapping, Optional, Sequence, Union
 
-import unisdk
-from unisdk.utils.http import RequestError as _UnifyRequestError
+from unify import db
+from unify.db import StoreError as _UnifyRequestError
 
 from .metrics_utils import SUPPORTED_REDUCTION_METRICS, reduce_logs
 from .semantic_search import (
@@ -230,7 +230,7 @@ def _server_federated_read(
     left to propagate unchanged.
     """
     try:
-        return unisdk.get_logs_federated(
+        return db.get_logs_federated(
             contexts=[spec.to_request_spec() for spec in contexts],
             filter=filter,
             sorting=_sorting_payload(sorting),
@@ -533,7 +533,7 @@ def default_metric_fetcher(
         return empty
 
     try:
-        unisdk.get_context(spec.context, project=spec.project)
+        db.get_context(spec.context, project=spec.project)
     except Exception as exc:
         if is_missing_context_error(exc):
             return _empty()

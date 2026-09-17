@@ -13,8 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeVar
 
-import unisdk
-
+from unify import db
 from tests.conversation_manager.cm_helpers import filter_events_by_type
 from unify.conversation_manager.events import (
     ActorHandleStarted,
@@ -673,7 +672,7 @@ def verify_transcript_logged(
         "receiver_ids",
         "exchange_id",
     ]
-    logs = unisdk.get_logs(
+    logs = db.get_logs(
         context=ctx,
         limit=limit,
         sorting={"timestamp": "descending"},

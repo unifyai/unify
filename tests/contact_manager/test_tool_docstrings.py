@@ -74,14 +74,13 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
         f"""
 		import os, sys, json
 		sys.path.insert(0, os.getcwd())
-		import unisdk
-		# Activate the test project before setting context
+		from unify import db
 		project_name = os.environ.get("UNIFY_TEST_PROJECT_NAME", "UnityTests")
-		unisdk.activate(project_name, overwrite=False)
+		db.activate(project_name, overwrite=False)
 		# Set test-specific context before creating ContactManager to avoid races
 		test_ctx = os.environ.get("_TEST_CONTEXT")
 		if test_ctx:
-			unisdk.set_context(test_ctx, relative=False)
+			db.set_context(test_ctx, relative=False)
 		from unify.common.llm_helpers import method_to_schema
 		def _unwrap_callable(tool):
 			return getattr(tool, "fn", tool)

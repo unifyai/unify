@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-import unisdk
+from unify import db
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -95,11 +95,11 @@ async def test_update_routes_team_credential_to_shared_team(
     )
     await handle.result()
 
-    personal_matches = unisdk.get_logs(
+    personal_matches = db.get_logs(
         context=manager._ctx,
         filter="name == 'patch_ops_slack_bot'",
     )
-    shared_matches = unisdk.get_logs(
+    shared_matches = db.get_logs(
         context=f"Teams/{patch_team_id}/Secrets",
         filter="name == 'patch_ops_slack_bot'",
     )

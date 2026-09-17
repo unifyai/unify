@@ -100,7 +100,9 @@ class ShellSession:
         Always sanitized via ``build_sandbox_env`` so no raw provider OAuth
         token is inherited and the localhost proxy endpoints are present.
         """
-        from unify.provider_proxy.session import build_sandbox_env
+        from unify.function_manager.execution_env import (
+            sandbox_env as build_sandbox_env,
+        )
 
         env = build_sandbox_env()
         if self.initial_env:

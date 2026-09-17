@@ -25,9 +25,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import unisdk
-from unisdk.utils.http import RequestError
-
+from unify import db
+from unify.db import StoreError
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.local_scheduler import LocalActivationScheduler
 from unify.task_scheduler.machine_state import (
@@ -49,7 +48,7 @@ def _local_orchestra_authenticated() -> bool:
     Orchestra — skip rather than fail noisily on an unrelated setup problem.
 
     Only *transport and auth* failures skip. A broken probe must not: this
-    guard originally called ``unisdk.get_projects``, which has never existed
+    guard originally called ``db.get_projects``, which has never existed
     (the SDK exposes ``list_projects``), and a bare ``except Exception``
     turned that ``AttributeError`` into ``False``. Every test in this file
     silently skipped for two months, in CI included, which is why none of them
@@ -57,9 +56,9 @@ def _local_orchestra_authenticated() -> bool:
     """
 
     try:
-        unisdk.list_projects()
+        db.list_projects()
         return True
-    except (RequestError, ConnectionError, OSError):
+    except (StoreError, ConnectionError, OSError):
         return False
 
 

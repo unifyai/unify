@@ -17,8 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
-import unisdk
-
+from unify import db
 from sandboxes.conversation_manager.commands import (
     HELP_TEXT,
     ParsedCommand,
@@ -144,7 +143,7 @@ class CommandRouter:
                     lines=["⚠️ save_project is not available in this mode."],
                 )
             try:
-                commit_hash = unisdk.commit_project(
+                commit_hash = db.commit_project(
                     self.args.project_name,
                     commit_message=f"ConversationManager sandbox save {datetime.utcnow().isoformat()}",
                 ).get("commit_hash")

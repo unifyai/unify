@@ -5,7 +5,6 @@ import functools
 import inspect
 import json
 import re
-import sys
 import traceback
 import uuid
 import weakref
@@ -61,7 +60,6 @@ from unify.common.llm_helpers import methods_to_tool_dict
 from unify.common.tool_spec import ToolSpec, llm_soft_required
 from unify.function_manager.base import BaseFunctionManager
 from unify.function_manager.function_manager import strip_ledger_internals
-from unify.function_manager.primitives import ComputerPrimitives
 from unify.actor.prompt_builders import build_code_act_prompt
 from unify.actor.verification_runtime import (
     EntrypointOutcome,
@@ -84,15 +82,12 @@ from unify.events.manager_event_logging import (
     publish_manager_method_event,
 )
 from unify.events.active_work import ACTIVE_WORK, ActiveWorkHandle
-from unify.integrations.approval import build_pending_approval_payload
-from unify.integrations.function_metadata import is_provider_backed_function
 
 if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
-    from unify.workflow_manager.workflow_manager import WorkflowManager
 
 
 # ---------------------------------------------------------------------------
@@ -2886,7 +2881,6 @@ class CodeActActor(BaseCodeActActor):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
-        workflow_manager: Optional["WorkflowManager"] = None,
         can_compose: object = _UNSET,
         can_store: object = _UNSET,
         timeout: object = _UNSET,
@@ -2913,10 +2907,6 @@ class CodeActActor(BaseCodeActActor):
             knowledge_manager: Manages durable sourced knowledge claims (the *is*).
                 Exposes JSON CRUD/lifecycle tools on the main loop and in the
                 post-completion storage check loop when present.
-            workflow_manager: Catalogue of installable workflow bundles. Exposes
-                JSON install/uninstall/list/get tools on the main loop when the
-                curated catalogue is configured; absent otherwise, so the tool
-                schema is unchanged for deployments without the shelf.
             can_compose: Whether the LLM can write and execute arbitrary code via
                 ``execute_code``. Set to False for function-execution-only mode.
             can_store: Whether a post-completion review loop should run to
@@ -2953,7 +2943,6 @@ class CodeActActor(BaseCodeActActor):
             function_manager=function_manager,
             guidance_manager=guidance_manager,
             knowledge_manager=knowledge_manager,
-            workflow_manager=workflow_manager,
         )
 
         can_compose = can_compose if can_compose is not _UNSET else True
@@ -3004,34 +2993,6 @@ class CodeActActor(BaseCodeActActor):
                 self.function_manager.exclude_compositional_ids = frozenset(
                     _excl_compositional,
                 )
-            try:
-                from unify.integration_status import build_function_filter_scope
-
-                function_scope = build_function_filter_scope()
-                if function_scope:
-                    current = getattr(self.function_manager, "filter_scope", None)
-                    self.function_manager.filter_scope = (
-                        f"({current}) and ({function_scope})"
-                        if current
-                        else function_scope
-                    )
-            except Exception:
-                pass
-
-        if self.guidance_manager is not None:
-            try:
-                from unify.integration_status import build_guidance_filter_scope
-
-                guidance_scope = build_guidance_filter_scope()
-                if guidance_scope:
-                    current = getattr(self.guidance_manager, "filter_scope", None)
-                    self.guidance_manager.filter_scope = (
-                        f"({current}) and ({guidance_scope})"
-                        if current
-                        else guidance_scope
-                    )
-            except Exception:
-                pass
 
         # Create persistent pools that survive across act() calls
         from unify.function_manager.function_manager import VenvPool
@@ -3043,7 +3004,6 @@ class CodeActActor(BaseCodeActActor):
             venv_pool=self._venv_pool,
             shell_pool=self._shell_pool,
             environments=self.environments,
-            computer_primitives=self._computer_primitives,
             function_manager=self.function_manager,
             timeout=timeout,
         )
@@ -3068,9 +3028,6 @@ class CodeActActor(BaseCodeActActor):
         self._model = model
         self._preprocess_msgs = preprocess_msgs
         self._prompt_caching = prompt_caching
-        self._computer_tools = (
-            self._get_computer_tools()
-        )  # Register stable tools once; per-call sandboxes are bound via _CURRENT_SANDBOX.
         self.add_tools("act", self._build_tools())
 
         self._main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -3405,75 +3362,6 @@ class CodeActActor(BaseCodeActActor):
             "surface": surface_name,
         }
 
-    def _get_computer_tools(self) -> Dict[str, Callable]:
-        """Extracts computer-related methods from the desktop namespace."""
-        if not self._computer_primitives:
-            return {}
-        desktop = self._computer_primitives.desktop
-        return {
-            "navigate": desktop.navigate,
-            "act": desktop.act,
-            "observe": desktop.observe,
-        }
-
-    def _get_extra_ask_tools(self) -> Dict[str, Callable] | None:
-        """Build domain-specific ask tools for handle.ask() inspection loops."""
-        if self._computer_primitives is None:
-            return None
-
-        # Only offer the computer-progress probe when the managed desktop is
-        # actually in use. Constructing ComputerPrimitives is unconditional in
-        # deployments (container_url=None, no VM), and without a live session
-        # ``desktop.query`` blocks on ``_vm_ready.wait(300)`` for five minutes
-        # before failing — an inspection loop whose only progress tool is a
-        # guaranteed 300s dead-end. ``has_live_desktop_session`` is missing on
-        # older/mocked primitives; treat absence as live to preserve behaviour.
-        _is_live = getattr(
-            self._computer_primitives,
-            "has_live_desktop_session",
-            None,
-        )
-        if callable(_is_live) and not _is_live():
-            return None
-
-        computer_query = self._computer_primitives.desktop.query
-
-        async def ask_computer_progress(
-            question: str,
-            *,
-            _parent_chat_context: list[dict] | None = None,
-        ) -> str:
-            """Inspect ONLY the magnitude browser/computer agent's trajectory.
-
-            Scope: this reads the browser-agent's own memory of in-flight
-            ``session.act(...)`` / desktop work. It knows nothing about code
-            execution, shell commands, API calls, file syncs, or LLM steps —
-            all of those run outside the computer agent, so do NOT call this
-            for them. Use it only when the inspected transcript shows an
-            ongoing browser/desktop action whose detail is missing (for
-            example, placeholders or terse summaries). This is memory/history
-            introspection, not a fresh page read and not a way to trigger new
-            actions.
-            """
-            _ = _parent_chat_context
-            # Even with the live-session gate above, the backend can become
-            # unreachable mid-flight. A read-only progress probe failing must
-            # not look like an error: degrade to a plain answer so it cannot
-            # burn the inspection loop's failure budget or be mistaken for the
-            # inspected task failing.
-            try:
-                return await computer_query(question)
-            except Exception as exc:
-                return (
-                    "No computer-agent progress is available to inspect "
-                    f"({type(exc).__name__}). There may be no active browser/"
-                    "computer session for this work (for example, a file sync "
-                    "or shell command runs outside the computer agent). This is "
-                    "not a failure of the underlying task."
-                )
-
-        return {"ask_computer_progress": ask_computer_progress}
-
     async def _run_active_work_heartbeat(
         self,
         active_work: ActiveWorkHandle,
@@ -3801,7 +3689,6 @@ class CodeActActor(BaseCodeActActor):
                 )
                 # Execute via SessionExecutor. Route primitives if available in current sandbox.
                 primitives = None
-                computer_primitives = self._computer_primitives
                 try:
                     sb = _CURRENT_SANDBOX.get()
                     primitives = sb.global_state.get("primitives")
@@ -3826,7 +3713,6 @@ class CodeActActor(BaseCodeActActor):
                                 session_id=session_id,
                                 venv_id=venv_id,
                                 primitives=primitives,
-                                computer_primitives=computer_primitives,
                             )
                         except Exception as e:
                             exec_exc = e
@@ -4149,34 +4035,6 @@ class CodeActActor(BaseCodeActActor):
                     ToolSpec(
                         fn=km.reconcile_sources,
                         display_label="Reconciling knowledge provenance",
-                    ),
-                    include_class_name=True,
-                ),
-            )
-
-        if self.workflow_manager:
-            wm = self.workflow_manager
-            tools.update(
-                methods_to_tool_dict(
-                    ToolSpec(
-                        fn=wm.list_workflows,
-                        display_label="Listing installable workflows",
-                    ),
-                    ToolSpec(
-                        fn=wm.get_workflow,
-                        display_label="Reading a workflow's record",
-                    ),
-                    ToolSpec(
-                        fn=wm.install_workflow,
-                        display_label="Installing a workflow",
-                    ),
-                    ToolSpec(
-                        fn=wm.uninstall_workflow,
-                        display_label="Uninstalling a workflow",
-                    ),
-                    ToolSpec(
-                        fn=wm.get_installation_params,
-                        display_label="Reading a workflow's settings",
                     ),
                     include_class_name=True,
                 ),
@@ -4572,7 +4430,6 @@ class CodeActActor(BaseCodeActActor):
                     )
                     # Resolve primitives from current sandbox.
                     primitives = None
-                    computer_primitives = self._computer_primitives
                     try:
                         sb = _CURRENT_SANDBOX.get()
                         primitives = sb.global_state.get("primitives")
@@ -4587,120 +4444,42 @@ class CodeActActor(BaseCodeActActor):
                         notification_q=notification_q,
                         pause_event=_pause_event,
                     ) as _ef_steering:
-                        if (
-                            isinstance(function_data, dict)
-                            and function_data.get("is_primitive")
-                            and is_provider_backed_function(function_data)
-                        ):
-                            _ef_log.debug(
-                                f"⏱️ [execute_function +{_ef_ms()}] "
-                                "provider primitive direct execute start",
-                            )
+                        _ef_log.debug(
+                            f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
+                        )
+                        _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
+                        try:
                             try:
-                                direct_result = (
-                                    await self.function_manager.execute_function(
-                                        function_name=function_name,
-                                        call_kwargs=call_kwargs,
-                                        target_venv_id=None,
-                                        state_mode=state_mode,  # type: ignore[arg-type]
-                                        session_id=session_id or 0,
-                                        extra_namespaces=(
-                                            {"primitives": primitives}
-                                            if primitives is not None
-                                            else None
-                                        ),
-                                        _parent_chat_context=_parent_chat_context,
-                                    )
+                                out = await self._session_executor.execute(
+                                    code=code,
+                                    language=str(language),  # type: ignore[arg-type]
+                                    state_mode=state_mode,  # type: ignore[arg-type]
+                                    session_id=session_id,
+                                    venv_id=resolved_venv_id,
+                                    primitives=primitives,
                                 )
-                                if (
-                                    isinstance(direct_result, dict)
-                                    and direct_result.get("status")
-                                    == "confirmation_required"
-                                ):
-                                    direct_result = build_pending_approval_payload(
-                                        function_name=function_name,
-                                        function_data=function_data,
-                                        call_kwargs=call_kwargs,
-                                        provider_envelope=direct_result,
-                                    )
-                                    if notification_q is not None:
-                                        await notification_q.put(direct_result)
-                                out = {
-                                    "stdout": [],
-                                    "stderr": [],
-                                    "result": direct_result,
-                                    "error": None,
-                                    "language": "python",
-                                    "state_mode": state_mode,
-                                    "session_id": session_id,
-                                    "session_name": session_name,
-                                    "venv_id": resolved_venv_id,
-                                    "session_created": False,
-                                    "duration_ms": int(
-                                        (_ef_time.perf_counter() - _ef_t0) * 1000,
-                                    ),
-                                }
                                 _ef_log.debug(
-                                    f"⏱️ [execute_function +{_ef_ms()}] "
-                                    "provider primitive direct execute done",
+                                    f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
                                 )
-                            except Exception:
-                                exec_exc = sys.exc_info()[1]
+                            except Exception as e:
+                                exec_exc = e
                                 tb = traceback.format_exc()
                                 tb_str = tb
                                 out = {
-                                    "stdout": [],
-                                    "stderr": [],
+                                    "stdout": "",
+                                    "stderr": "",
                                     "result": None,
                                     "error": tb,
-                                    "language": "python",
+                                    "language": language,
                                     "state_mode": state_mode,
                                     "session_id": session_id,
                                     "session_name": session_name,
                                     "venv_id": resolved_venv_id,
                                     "session_created": False,
-                                    "duration_ms": int(
-                                        (_ef_time.perf_counter() - _ef_t0) * 1000,
-                                    ),
+                                    "duration_ms": 0,
                                 }
-                        else:
-                            _ef_log.debug(
-                                f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
-                            )
-                            _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
-                            try:
-                                try:
-                                    out = await self._session_executor.execute(
-                                        code=code,
-                                        language=str(language),  # type: ignore[arg-type]
-                                        state_mode=state_mode,  # type: ignore[arg-type]
-                                        session_id=session_id,
-                                        venv_id=resolved_venv_id,
-                                        primitives=primitives,
-                                        computer_primitives=computer_primitives,
-                                    )
-                                    _ef_log.debug(
-                                        f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
-                                    )
-                                except Exception as e:
-                                    exec_exc = e
-                                    tb = traceback.format_exc()
-                                    tb_str = tb
-                                    out = {
-                                        "stdout": "",
-                                        "stderr": "",
-                                        "result": None,
-                                        "error": tb,
-                                        "language": language,
-                                        "state_mode": state_mode,
-                                        "session_id": session_id,
-                                        "session_name": session_name,
-                                        "venv_id": resolved_venv_id,
-                                        "session_created": False,
-                                        "duration_ms": 0,
-                                    }
-                            finally:
-                                _PARENT_CHAT_CONTEXT.reset(_pcc_token)
+                        finally:
+                            _PARENT_CHAT_CONTEXT.reset(_pcc_token)
 
                     # Enrich with session name.
                     if out.get("session_id") is not None:
@@ -5587,10 +5366,6 @@ class CodeActActor(BaseCodeActActor):
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] entered")
 
-        from unify.runtime.drain_gate import refuse_if_draining
-
-        refuse_if_draining()
-
         effective_can_compose = (
             self.can_compose if can_compose is None else bool(can_compose)
         )
@@ -5637,12 +5412,10 @@ class CodeActActor(BaseCodeActActor):
                 _CompositeEnvironment as _CompositeEnv,
             )
             from unify.actor.environments import (
-                ComputerEnvironment as _ComputerEnvironment,
                 StateManagerEnvironment as _StateManagerEnvironment,
             )
         except Exception:
             _CompositeEnv = None  # type: ignore
-            _ComputerEnvironment = None  # type: ignore
             _StateManagerEnvironment = None  # type: ignore
 
         for ns, env in self.environments.items():
@@ -5651,16 +5424,6 @@ class CodeActActor(BaseCodeActActor):
                 if _CompositeEnv is not None and isinstance(env, _CompositeEnv):
                     sandbox_envs[ns] = _CompositeEnv(
                         env.sub_environments,
-                        clarification_up_q=env_clarification_up_q,
-                        clarification_down_q=env_clarification_down_q,
-                    )
-                    continue
-                if _ComputerEnvironment is not None and isinstance(
-                    env,
-                    _ComputerEnvironment,
-                ):
-                    sandbox_envs[ns] = _ComputerEnvironment(
-                        env._computer_primitives,
                         clarification_up_q=env_clarification_up_q,
                         clarification_down_q=env_clarification_down_q,
                     )
@@ -5710,7 +5473,6 @@ class CodeActActor(BaseCodeActActor):
             f"⏱️ [CodeActActor.act +{_act_ms()}] actor slot ready, creating sandbox",
         )
         sandbox = PythonExecutionSession(
-            computer_primitives=self._computer_primitives,
             environments=sandbox_envs,
             venv_pool=self._venv_pool,
             shell_pool=self._shell_pool,
@@ -5736,17 +5498,7 @@ class CodeActActor(BaseCodeActActor):
         pkg_overlay = PackageOverlay(agent_id=new_ctx.agent_id)
         pkg_overlay_token = _CURRENT_PACKAGE_OVERLAY.set(pkg_overlay)
 
-        # Mutable ref populated after handle creation so _cleanup can deregister.
-        _registered_queue: list[asyncio.Queue | None] = [None]
-
         async def _cleanup() -> None:
-            if (
-                _registered_queue[0] is not None
-                and self._computer_primitives is not None
-            ):
-                self._computer_primitives.deregister_interject_queue(
-                    _registered_queue[0],
-                )
             try:
                 pkg_overlay.cleanup()
             except Exception:
@@ -6072,23 +5824,8 @@ class CodeActActor(BaseCodeActActor):
                 "    session_created, duration_ms).\n"
             )
 
-        integration_summary = ""
-        has_integration_packages = False
-        try:
-            from unify.integration_status import enabled_summary_for_prompt
-            from unify.integration_status.discovery import (
-                discover_available_packages,
-            )
-
-            has_integration_packages = bool(discover_available_packages())
-            integration_summary = enabled_summary_for_prompt()
-        except Exception:
-            integration_summary = ""
         effective_guidelines = (
-            "\n\n".join(
-                filter(None, [self._base_guidelines, guidelines, integration_summary]),
-            )
-            or None
+            "\n\n".join(filter(None, [self._base_guidelines, guidelines])) or None
         )
 
         # Workspace-OAuth gate for the OAuth helper section — independent of
@@ -6110,7 +5847,6 @@ class CodeActActor(BaseCodeActActor):
             can_store=effective_can_store,
             guidelines=effective_guidelines,
             discovery_first_policy=self.tool_policy is _USE_DEFAULT,
-            include_external_app_integration=has_integration_packages,
             include_oauth_helper=has_workspace_oauth,
             persist=bool(persist),
         )
@@ -6269,7 +6005,6 @@ class CodeActActor(BaseCodeActActor):
                 persist=persist,
                 preprocess_msgs=self._preprocess_msgs,
                 prompt_caching=self._prompt_caching,
-                extra_ask_tools=self._get_extra_ask_tools(),
                 extra_compression_tools=(
                     ["store_skills"] if effective_can_store else None
                 ),
@@ -6302,28 +6037,6 @@ class CodeActActor(BaseCodeActActor):
                 await _cleanup()
 
         handle.result = _result_with_cleanup  # type: ignore[assignment]
-
-        # Wrap pause()/resume() to propagate to the browser agent
-        if self._computer_primitives is not None:
-            _cp: ComputerPrimitives = self._computer_primitives
-            _original_pause = handle.pause
-            _original_resume = handle.resume
-
-            async def _pause_with_propagation(**kwargs: Any) -> None:
-                await _original_pause(**kwargs)
-                await _cp.pause()
-
-            async def _resume_with_propagation(**kwargs: Any) -> None:
-                await _cp.resume()
-                await _original_resume(**kwargs)
-
-            handle.pause = _pause_with_propagation  # type: ignore[assignment]
-            handle.resume = _resume_with_propagation  # type: ignore[assignment]
-
-            # Register the loop's interject queue so environmental state
-            # changes (e.g. user remote control) are broadcast to this actor.
-            _cp.register_interject_queue(handle._queue)
-            _registered_queue[0] = handle._queue
 
         # Update agent context with handle reference
         new_ctx.handle = handle
@@ -6378,7 +6091,3 @@ class CodeActActor(BaseCodeActActor):
         # Close the pools (terminates persistent subprocess/session connections)
         await self._venv_pool.close()
         await self._shell_pool.close()
-
-        # The ComputerPrimitives backend is a process-wide singleton (one VM,
-        # one screen).  Individual actors must not tear it down — the process
-        # owns the lifecycle.

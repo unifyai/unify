@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import pytest
 import requests
-import unisdk
-
-from unisdk.utils.http import RequestError
+from unify.db import StoreError
 from unify.common.context_store import TableStore, _create_context_with_retry
 
 
@@ -108,7 +106,7 @@ def test_ensure_context_treats_400_context_already_exists_as_success(monkeypatch
         unisdk,
         "create_context",
         lambda *_, **__: (_ for _ in ()).throw(
-            RequestError("https://api.unify.ai", "POST", response),
+            StoreError("https://api.unify.ai", "POST", response),
         ),
     )
 

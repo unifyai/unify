@@ -14,7 +14,6 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-import unisdk
 from unify.session_details import SESSION_DETAILS
 
 TEST_API_KEY = "test_key"  # pragma: allowlist secret

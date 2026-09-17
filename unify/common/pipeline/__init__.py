@@ -21,7 +21,6 @@ from .checkpointed_ingest import (
     incomplete_tables,
     wait_for_lease_release,
 )
-from .dispatch import DispatchTarget, PublishResult, publish_parse_request
 from .instrumentation import PipelineInstrumentation
 from .orchestration import (
     ArtifactIngestFn,
@@ -137,7 +136,6 @@ __all__ = [
     "DeploymentJobStore",
     "DeploymentObservabilityRefs",
     "DeploymentQueuePayload",
-    "DispatchTarget",
     "DmBinding",
     "DuplicateLiveAttempt",
     "FailureKind",
@@ -170,7 +168,6 @@ __all__ = [
     "PipelineInstrumentation",
     "PipelineRunManifest",
     "PipelineStageManifest",
-    "PublishResult",
     "ReceivedWorkItem",
     "ResilientRequestPolicy",
     "RetryDecision",
@@ -194,7 +191,6 @@ __all__ = [
     "is_retryable_exception",
     "iter_table_input_row_batches",
     "iter_table_input_rows",
-    "publish_parse_request",
     "run_with_retry",
     "wait_for_lease_release",
 ]

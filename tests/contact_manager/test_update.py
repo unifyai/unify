@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-import unisdk
+from unify import db
 from typing import Dict, Any
-from unisdk.utils.http import RequestError
-
+from unify.db import StoreError
 from unify.contact_manager.contact_manager import ContactManager
 from unify.contact_manager.types.contact import Contact
 from unify.blacklist_manager.blacklist_manager import BlackListManager
@@ -53,12 +52,12 @@ def _programmatic_contact_check(
 
 def _contacts_with_email(context: str, email: str) -> list:
     try:
-        return unisdk.get_logs(
+        return db.get_logs(
             context=context,
             filter=f"email_address == '{email}'",
             limit=10,
         )
-    except RequestError:
+    except StoreError:
         return []
 
 
@@ -76,7 +75,7 @@ def _configure_contact_routing_space(team_id: int) -> None:
     # Fixed team ids persist across runs on a shared backend: drop any rows a
     # crashed earlier run left behind before the test starts counting them.
     try:
-        unisdk.delete_context(f"Teams/{team_id}/Contacts")
+        db.delete_context(f"Teams/{team_id}/Contacts")
     except Exception:
         pass
     SESSION_DETAILS.team_ids = [team_id]
@@ -96,7 +95,7 @@ def _configure_contact_routing_space(team_id: int) -> None:
 
 def _reset_contact_routing_space(team_id: int) -> None:
     try:
-        unisdk.delete_context(f"Teams/{team_id}/Contacts")
+        db.delete_context(f"Teams/{team_id}/Contacts")
     except Exception:
         pass
     SESSION_DETAILS.team_ids = []

@@ -11,8 +11,7 @@ from typing import List, Dict, Any, Tuple
 import pytest
 import pytest_asyncio
 import os
-import unisdk
-
+from unify import db
 from unify.contact_manager.contact_manager import ContactManager
 from unify.transcript_manager.transcript_manager import TranscriptManager
 from unify.transcript_manager.types.message import Message
@@ -424,12 +423,12 @@ class ScenarioBuilder:
 
 def _commit_contexts_for_rollback(ctx_prefix: str) -> None:
     """Commit all contexts under prefix for rollback support."""
-    created_contexts = unisdk.get_contexts(prefix=ctx_prefix)
+    created_contexts = db.get_contexts(prefix=ctx_prefix)
     created_context_names = list(created_contexts.keys())
 
     def commit_context_and_store(ctx_name):
         try:
-            commit_info = unisdk.commit_context(
+            commit_info = db.commit_context(
                 name=ctx_name,
                 commit_message="Initial seed data for tests",
             )
@@ -438,15 +437,15 @@ def _commit_contexts_for_rollback(ctx_prefix: str) -> None:
             pass  # May already be committed
 
     if created_context_names:
-        unisdk.map(commit_context_and_store, created_context_names, mode="asyncio")
+        db.map(commit_context_and_store, created_context_names, mode="asyncio")
 
 
 def _rebuild_commit_hashes(ctx_prefix: str) -> None:
     """Rebuild commit hashes from existing contexts for rollback support."""
-    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
+    existing_contexts = db.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
         try:
-            history = unisdk.get_context_commits(ctx_name)
+            history = db.get_context_commits(ctx_name)
             if history:
                 SCENARIO_COMMIT_HASHES[ctx_name] = history[0]["commit_hash"]
         except Exception:
@@ -457,14 +456,14 @@ def _rollback_to_committed() -> None:
     """Restore every scenario context to its stored commit."""
 
     def rollback_context(ctx_name: str) -> None:
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx_name,
             commit_hash=SCENARIO_COMMIT_HASHES[ctx_name],
         )
 
     ctx_names = list(SCENARIO_COMMIT_HASHES.keys())
     if ctx_names:
-        unisdk.map(rollback_context, ctx_names, mode="asyncio")
+        db.map(rollback_context, ctx_names, mode="asyncio")
 
 
 def _setup_tm_scenario(
@@ -488,18 +487,18 @@ def _setup_tm_scenario(
 
     # If --overwrite-scenarios is set, delete existing contexts first
     if overwrite_scenarios:
-        existing_contexts = unisdk.get_contexts(prefix=ctx)
+        existing_contexts = db.get_contexts(prefix=ctx)
         existing_context_names = list(existing_contexts.keys())
         if existing_context_names:
-            unisdk.map(
-                lambda c: unisdk.delete_context(c),
+            db.map(
+                lambda c: db.delete_context(c),
                 existing_context_names,
                 mode="asyncio",
             )
 
     # Set context before any operations (create first like ContactManager does)
-    unisdk.create_context(ctx)  # exist_ok=True by default
-    unisdk.set_context(ctx, relative=False)
+    db.create_context(ctx)  # exist_ok=True by default
+    db.set_context(ctx, relative=False)
 
     # Create managers
     cm = ContactManager()
@@ -545,7 +544,7 @@ def _setup_tm_scenario(
             _commit_contexts_for_rollback(ctx)
 
     # Unset context after setup, like ContactManager does
-    unisdk.unset_context()
+    db.unset_context()
 
     return tm, dict(_ID_BY_NAME)
 
@@ -580,7 +579,7 @@ def tm_manager_scenario(tm_scenario):
     tm, _ID_BY_NAME = tm_scenario
 
     def rollback_context(ctx):
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx,
             commit_hash=SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -593,7 +592,7 @@ def tm_manager_scenario(tm_scenario):
         # from rolling back while this test is running
         scenario_names = list(SCENARIO_COMMIT_HASHES.keys())
         if scenario_names:
-            unisdk.map(rollback_context, scenario_names, mode="asyncio")
+            db.map(rollback_context, scenario_names, mode="asyncio")
 
         restore_scenario_context("tests/transcript_manager/Scenario")
         yield tm, _ID_BY_NAME

@@ -6,21 +6,12 @@ the hook during Unity initialization.
 
 The hook is installed once during unify.init() and remains active for the
 lifetime of the process.
-
-Additionally, this module logs cumulative spending to the Assistants project
-for monthly spending limit tracking. After each LLM call, its cost is
-atomically added to the cumulative_spend for the current month.
-
-Note: credit_transaction ledger rows are also written (via deduct_credits in
-UniLLM) so both systems receive cost data in parallel.  Once the ledger is
-validated in production, the cumulative-spend upserts here can be removed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import zoneinfo
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -35,87 +26,12 @@ _HOOK_INSTALLED = False
 _LISTENER = None
 
 
-async def _update_cumulative_spend(cost: float) -> None:
-    """Update cumulative monthly spend after each LLM call.
-
-    Costs are attributed to the user(s) specified by the COST_ATTRIBUTION
-    ContextVar (set by ConversationManager / act tool).  When unset, falls
-    back to the assistant's supervisor (SESSION_DETAILS.user.id).
-
-    Each attributed user gets their own spending row keyed by
-    (_user_id, _assistant_id, month).  For multi-user attribution the cost
-    is split evenly.
-
-    Parameters
-    ----------
-    cost : float
-        The cost of the LLM call to add to cumulative spend
-    """
-    from datetime import datetime
-
-    from ..common.log_utils import atomic_upsert
-    from ..session_details import SESSION_DETAILS
-    from .cost_attribution import COST_ATTRIBUTION
-
-    # Skip if the call was free
-    if not cost or cost <= 0:
-        return
-
-    # Get billing timezone from user's settings (fallback to UTC)
-    user_tz_str = SESSION_DETAILS.assistant.timezone or "UTC"
-    try:
-        tz = zoneinfo.ZoneInfo(user_tz_str)
-    except Exception:
-        tz = zoneinfo.ZoneInfo("UTC")
-
-    # Calculate current month in user's timezone
-    month = datetime.now(tz).strftime("%Y-%m")
-
-    user_ctx = SESSION_DETAILS.user_context
-    assistant_ctx = SESSION_DETAILS.assistant_context
-    assistant_id = SESSION_DETAILS.assistant.agent_id
-
-    if not user_ctx or not assistant_ctx or not assistant_id:
-        return
-
-    context = f"{user_ctx}/{assistant_ctx}/Spending/Monthly"
-
-    # Resolve attribution: per-user user_ids or fall back to supervisor
-    user_ids = COST_ATTRIBUTION.get() or [SESSION_DETAILS.user.id]
-    per_user_cost = cost / len(user_ids)
-
-    for uid in user_ids:
-        try:
-            cost_str = f"{per_user_cost:.10f}".rstrip("0").rstrip(".")
-            await atomic_upsert(
-                context=context,
-                unique_keys={
-                    "_user_id": "str",
-                    "_assistant_id": "str",
-                    "month": "str",
-                },
-                field="cumulative_spend",
-                operation=f"+{cost_str}",
-                initial_data={
-                    "_assistant_id": str(assistant_id),
-                    "month": month,
-                },
-                data_overrides={"_user_id": uid},
-                project="Assistants",
-            )
-        except Exception as e:
-            logger.debug(f"Failed to update cumulative spend for {uid}: {e}")
-
-
 def _llm_event_to_eventbus(event: "LLMEvent") -> None:
     """Convert a unillm LLMEvent to an EventBus event and publish it.
 
     This hook is called synchronously by unillm after each LLM call completes.
     We convert the event to our LLMPayload format and publish it asynchronously
     to avoid blocking the LLM call.
-
-    Additionally, this hook updates cumulative monthly spending for the assistant
-    to support spending limit tracking.
 
     The hook is designed to be resilient - any errors are silently ignored
     to ensure LLM calls are never disrupted by logging failures.
@@ -167,9 +83,6 @@ def _llm_event_to_eventbus(event: "LLMEvent") -> None:
             # Fire-and-forget: schedule the publish but don't wait for it
             loop.create_task(EVENT_BUS.publish(llm_event))
 
-            # Update cumulative spending for spending limit tracking
-            if event.provider_cost and event.provider_cost > 0:
-                loop.create_task(_update_cumulative_spend(event.provider_cost))
         except RuntimeError:
             # No event loop running - skip publishing
             # This can happen during synchronous test teardown

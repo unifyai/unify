@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Any
 
 import pytest
-import unisdk
+from unify import db
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
@@ -832,7 +832,7 @@ def test_nested_image_schema_enforcement() -> None:
 
     # Build a per-test context under the active write context (mirrors other tests)
     try:
-        ctxs = unisdk.get_active_context()
+        ctxs = db.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -849,7 +849,7 @@ def test_nested_image_schema_enforcement() -> None:
     store.ensure_context()
 
     # 1) The created field should include a nested schema – assert key substrings
-    fields = unisdk.get_fields(context=ctx)
+    fields = db.get_fields(context=ctx)
     assert "images" in fields
     dtype = str(fields["images"].get("data_type"))
     # Expect array/list with object items including raw_image_ref + annotation
@@ -860,7 +860,7 @@ def test_nested_image_schema_enforcement() -> None:
         "medium": "email",
         "sender_id": 1,
         "receiver_ids": [2],
-        # Pass ISO-8601 string – unisdk.log's JSON body must be serializable
+        # Pass ISO-8601 string – db.log's JSON body must be serializable
         "timestamp": datetime.now(UTC).isoformat(),
         "content": "hello",
     }
@@ -872,7 +872,7 @@ def test_nested_image_schema_enforcement() -> None:
             {"raw_image_ref": {"image_id": 101}, "annotation": "blue square"},
         ],
     }
-    _ = unisdk.log(context=ctx, **valid_payload, new=True, mutable=True)
+    _ = db.log(context=ctx, **valid_payload, new=True, mutable=True)
 
     # 3) Invalid nested payload – wrong key name for image id → must be rejected
     invalid_payload_bad_key = {
@@ -882,7 +882,7 @@ def test_nested_image_schema_enforcement() -> None:
         ],
     }
     with pytest.raises(Exception):
-        unisdk.log(context=ctx, **invalid_payload_bad_key, new=True, mutable=True)
+        db.log(context=ctx, **invalid_payload_bad_key, new=True, mutable=True)
 
     # 4) Invalid nested payload – wrong type for annotation → must be rejected
     invalid_payload_bad_type = {
@@ -892,7 +892,7 @@ def test_nested_image_schema_enforcement() -> None:
         ],
     }
     with pytest.raises(Exception):
-        unisdk.log(context=ctx, **invalid_payload_bad_type, new=True, mutable=True)
+        db.log(context=ctx, **invalid_payload_bad_type, new=True, mutable=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -934,7 +934,7 @@ def test_nested_pydantic_schema_enforcement() -> None:
 
     # Create a dedicated context for this test
     try:
-        ctxs = unisdk.get_active_context()
+        ctxs = db.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -951,7 +951,7 @@ def test_nested_pydantic_schema_enforcement() -> None:
     store.ensure_context()
 
     # Field typing should contain nested property names for the payload schema
-    fields = unisdk.get_fields(context=ctx)
+    fields = db.get_fields(context=ctx)
     assert "payload" in fields
     dtype = str(fields["payload"].get("data_type"))
     # Assert several nested keys appear in the serialized schema
@@ -979,7 +979,7 @@ def test_nested_pydantic_schema_enforcement() -> None:
             "primary_pet": {"name": "Rex", "kind": "dog", "age": 5},
         },
     }
-    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
+    _ = db.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid 1: wrong nested key (zip instead of zip_code) → reject
     invalid_bad_key = {
@@ -991,7 +991,7 @@ def test_nested_pydantic_schema_enforcement() -> None:
         },
     }
     with pytest.raises(Exception):
-        unisdk.log(context=ctx, **invalid_bad_key, new=True, mutable=True)
+        db.log(context=ctx, **invalid_bad_key, new=True, mutable=True)
 
     # Invalid 2: wrong type in list (pets elements must be objects) → reject
     invalid_bad_list = {
@@ -1003,7 +1003,7 @@ def test_nested_pydantic_schema_enforcement() -> None:
         },
     }
     with pytest.raises(Exception):
-        unisdk.log(context=ctx, **invalid_bad_list, new=True, mutable=True)
+        db.log(context=ctx, **invalid_bad_list, new=True, mutable=True)
 
 
 # --------------------------------------------------------------------------- #

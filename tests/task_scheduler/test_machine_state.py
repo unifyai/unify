@@ -142,7 +142,7 @@ def test_get_open_task_execution_queries_open_scheduled_row(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unify.task_scheduler.storage.db.get_logs", _fake_get_logs)
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 2069)
 
@@ -192,7 +192,7 @@ def test_get_open_task_execution_queries_assistants_machine_state_project(monkey
         captured.update(kwargs)
         return [_FakeRow()]
 
-    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unify.task_scheduler.storage.db.get_logs", _fake_get_logs)
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 42)
 
@@ -220,7 +220,7 @@ def test_find_running_execution_for_task_defaults_to_open_states(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unify.task_scheduler.storage.db.get_logs", _fake_get_logs)
 
     execution = find_running_execution_for_task(task_id=101)
 
@@ -238,7 +238,7 @@ def test_find_running_execution_for_task_scoped_to_running_state(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unify.task_scheduler.storage.db.get_logs", _fake_get_logs)
 
     execution = find_running_execution_for_task(
         task_id=101,

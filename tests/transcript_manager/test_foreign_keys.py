@@ -27,7 +27,7 @@ Coverage
 from __future__ import annotations
 
 import pytest
-import unisdk
+from unify import db
 from datetime import datetime
 from tests.helpers import _handle_project
 from unify.contact_manager.contact_manager import ContactManager
@@ -69,7 +69,7 @@ def test_fk_message_sender_id_valid_reference():
     )
 
     # Get contact IDs
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -96,7 +96,7 @@ def test_fk_message_sender_id_valid_reference():
     )
 
     # Verify message was created
-    messages = unisdk.get_logs(
+    messages = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id"],
     )
@@ -122,7 +122,7 @@ def test_fk_message_sender_id_set_null_on_delete():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -158,7 +158,7 @@ def test_fk_message_sender_id_set_null_on_delete():
     )
 
     # Verify messages exist with Alice as sender
-    messages = unisdk.get_logs(
+    messages = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id"],
     )
@@ -169,7 +169,7 @@ def test_fk_message_sender_id_set_null_on_delete():
     cm._delete_contact(contact_id=alice_id)
 
     # Verify Alice's messages still exist but sender_id is null (SET NULL behavior)
-    messages_after = unisdk.get_logs(
+    messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "content"],
     )
@@ -199,7 +199,7 @@ def test_fk_message_sender_id_null_does_not_break_manager_init():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -232,7 +232,7 @@ def test_fk_message_sender_id_null_does_not_break_manager_init():
     tm_new = TranscriptManager()
 
     # Verify the new manager can successfully read messages with null sender_id
-    messages = unisdk.get_logs(
+    messages = db.get_logs(
         context=tm_new._transcripts_ctx,
     )
     assert len(messages) == 1
@@ -272,7 +272,7 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
         phone_number="3333333333",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -304,7 +304,7 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
     )
 
     # Verify message exists with both receivers
-    messages = unisdk.get_logs(context=tm._transcripts_ctx)
+    messages = db.get_logs(context=tm._transcripts_ctx)
     assert len(messages) == 1
     assert set(messages[0].entries["receiver_ids"]) == {bob_id, charlie_id}
 
@@ -312,7 +312,7 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
     cm._delete_contact(contact_id=charlie_id)
 
     # Verify message now has [bob_id, None] in receiver_ids
-    messages = unisdk.get_logs(context=tm._transcripts_ctx)
+    messages = db.get_logs(context=tm._transcripts_ctx)
     assert len(messages) == 1
     receiver_ids = messages[0].entries["receiver_ids"]
     assert bob_id in receiver_ids
@@ -323,7 +323,7 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
     tm_new = TranscriptManager()
 
     # Verify the new manager can successfully read messages with null entries in receiver_ids
-    messages = unisdk.get_logs(context=tm_new._transcripts_ctx)
+    messages = db.get_logs(context=tm_new._transcripts_ctx)
     assert len(messages) == 1
     assert bob_id in messages[0].entries["receiver_ids"]
     assert None in messages[0].entries["receiver_ids"]
@@ -355,7 +355,7 @@ def test_fk_message_images_null_does_not_break_manager_init():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -404,7 +404,7 @@ def test_fk_message_images_null_does_not_break_manager_init():
     )
 
     # Verify message exists with both images
-    messages = unisdk.get_logs(context=tm._transcripts_ctx)
+    messages = db.get_logs(context=tm._transcripts_ctx)
     assert len(messages) == 1
     image_ids_in_msg = [
         img["raw_image_ref"]["image_id"]
@@ -414,16 +414,16 @@ def test_fk_message_images_null_does_not_break_manager_init():
     assert img2_id in image_ids_in_msg
 
     # Delete img2 (should trigger SET NULL on nested image_id)
-    img2_logs = unisdk.get_logs(
+    img2_logs = db.get_logs(
         context=im._ctx,
         filter=f"image_id == {img2_id}",
         return_ids_only=True,
     )
     assert img2_logs, "Image not found"
-    unisdk.delete_logs(context=im._ctx, logs=img2_logs[0])
+    db.delete_logs(context=im._ctx, logs=img2_logs[0])
 
     # Verify message now has one valid image_id and one None
-    messages = unisdk.get_logs(context=tm._transcripts_ctx)
+    messages = db.get_logs(context=tm._transcripts_ctx)
     assert len(messages) == 1
     images_list = messages[0].entries.get("images", [])
     assert len(images_list) == 2
@@ -436,7 +436,7 @@ def test_fk_message_images_null_does_not_break_manager_init():
     tm_new = TranscriptManager()
 
     # Verify the new manager can successfully read messages with null image_ids
-    messages = unisdk.get_logs(context=tm_new._transcripts_ctx)
+    messages = db.get_logs(context=tm_new._transcripts_ctx)
     assert len(messages) == 1
     images_list = messages[0].entries.get("images", [])
     assert len(images_list) == 2
@@ -480,7 +480,7 @@ def test_fk_message_receiver_ids_valid_reference():
         phone_number="3333333333",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -500,7 +500,7 @@ def test_fk_message_receiver_ids_valid_reference():
     )
 
     # Verify message was created with all receivers
-    messages = unisdk.get_logs(
+    messages = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "receiver_ids"],
     )
@@ -533,7 +533,7 @@ def test_fk_message_receiver_ids_set_null_on_delete():
         phone_number="3333333333",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -553,7 +553,7 @@ def test_fk_message_receiver_ids_set_null_on_delete():
     )
 
     # Verify both receivers
-    messages = unisdk.get_logs(
+    messages = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "receiver_ids"],
     )
@@ -565,7 +565,7 @@ def test_fk_message_receiver_ids_set_null_on_delete():
     cm._delete_contact(contact_id=contact_map["Bob"])
 
     # Verify Bob replaced with None in receiver_ids array (SET NULL = in-place replacement)
-    messages_after = unisdk.get_logs(
+    messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "receiver_ids"],
     )
@@ -599,7 +599,7 @@ def test_fk_message_exchange_id_cascade_delete():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -639,7 +639,7 @@ def test_fk_message_exchange_id_cascade_delete():
     )
 
     # Verify 2 messages in exchange
-    messages_in_exchange = unisdk.get_logs(
+    messages_in_exchange = db.get_logs(
         context=tm._transcripts_ctx,
         filter=f"exchange_id == {exchange_id}",
         from_fields=["message_id"],
@@ -647,16 +647,16 @@ def test_fk_message_exchange_id_cascade_delete():
     assert len(messages_in_exchange) == 2
 
     # Delete the exchange (get log ID first, then delete)
-    exchange_logs = unisdk.get_logs(
+    exchange_logs = db.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {exchange_id}",
         return_ids_only=True,
     )
     assert exchange_logs, "Exchange not found"
-    unisdk.delete_logs(context=tm._exchanges_ctx, logs=exchange_logs[0])
+    db.delete_logs(context=tm._exchanges_ctx, logs=exchange_logs[0])
 
     # Verify all messages in exchange were cascade deleted
-    messages_after = unisdk.get_logs(
+    messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "exchange_id"],
     )
@@ -687,7 +687,7 @@ def test_fk_message_images_valid_reference():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -730,7 +730,7 @@ def test_fk_message_images_valid_reference():
     )
 
     # Verify message created with nested image references
-    messages = unisdk.get_logs(
+    messages = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "images"],
     )
@@ -760,7 +760,7 @@ def test_fk_message_images_set_null_on_delete():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -806,20 +806,20 @@ def test_fk_message_images_set_null_on_delete():
     )
 
     # Verify 3 images
-    messages = unisdk.get_logs(context=tm._transcripts_ctx, from_fields=["images"])
+    messages = db.get_logs(context=tm._transcripts_ctx, from_fields=["images"])
     assert len(messages[0].entries["images"]) == 3
 
     # Delete middle image (img2) - get log ID first, then delete
-    img2_logs = unisdk.get_logs(
+    img2_logs = db.get_logs(
         context=im._ctx,
         filter=f"image_id == {img2_id}",
         return_ids_only=True,
     )
     assert img2_logs, "Image not found"
-    unisdk.delete_logs(context=im._ctx, logs=img2_logs[0])
+    db.delete_logs(context=im._ctx, logs=img2_logs[0])
 
     # Verify img2 replaced with None in nested structure (SET NULL = in-place replacement)
-    messages_after = unisdk.get_logs(
+    messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["images"],
     )
@@ -872,7 +872,7 @@ def test_contact_merge_with_transcripts():
         phone_number="3333333333",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -917,7 +917,7 @@ def test_contact_merge_with_transcripts():
     )
 
     # Verify 3 messages before merge
-    messages_before = unisdk.get_logs(
+    messages_before = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id"],
     )
@@ -927,7 +927,7 @@ def test_contact_merge_with_transcripts():
     cm._merge_contacts(contact_id_1=alice1_id, contact_id_2=alice2_id)
 
     # Verify Alice2 contact deleted (exclude system contacts: 0=assistant, 1=user)
-    contacts_after = unisdk.get_logs(
+    contacts_after = db.get_logs(
         context=cm._ctx,
         filter="contact_id > 1",
         from_fields=["contact_id", "first_name"],
@@ -938,7 +938,7 @@ def test_contact_merge_with_transcripts():
     assert alice2_id not in remaining_ids
 
     # Verify all 3 messages still exist
-    messages_after = unisdk.get_logs(
+    messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids", "content"],
     )
@@ -1004,7 +1004,7 @@ def test_contact_blacklist_anonymizes_transcripts():
         phone_number="2222222222",
     )
 
-    contacts = unisdk.get_logs(
+    contacts = db.get_logs(
         context=cm._ctx,
         from_fields=["contact_id", "first_name"],
     )
@@ -1047,7 +1047,7 @@ def test_contact_blacklist_anonymizes_transcripts():
     )
 
     # Verify 3 messages before blacklist
-    messages_before = unisdk.get_logs(
+    messages_before = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id"],
     )
@@ -1057,7 +1057,7 @@ def test_contact_blacklist_anonymizes_transcripts():
     cm._move_to_blacklist(contact_id=spammer_id, reason="sending spam")
 
     # Verify spammer contact deleted (exclude system contacts: 0=assistant, 1=user)
-    contacts_after = unisdk.get_logs(
+    contacts_after = db.get_logs(
         context=cm._ctx,
         filter="contact_id > 1",
         from_fields=["contact_id", "first_name"],
@@ -1067,7 +1067,7 @@ def test_contact_blacklist_anonymizes_transcripts():
     assert spammer_id not in remaining_ids
 
     # Verify all 3 messages still exist (SET NULL preserves messages)
-    messages_after = unisdk.get_logs(
+    messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids", "content"],
     )

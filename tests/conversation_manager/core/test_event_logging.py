@@ -446,7 +446,7 @@ async def test_inbound_email_transcript_includes_all_recipients(cm_with_eventbus
     not just [0] (the assistant).
     """
     from unify.conversation_manager.domains.event_handlers import EventHandler
-    import unisdk
+    from unify import db
 
     cm = cm_with_eventbus
     assert cm.contact_manager is not None, "ContactManager not initialized"
@@ -498,7 +498,7 @@ async def test_inbound_email_transcript_includes_all_recipients(cm_with_eventbus
     ctx = getattr(tm, "_transcripts_ctx", None)
     assert ctx, "TranscriptManager missing _transcripts_ctx"
 
-    logs = unisdk.get_logs(
+    logs = db.get_logs(
         context=ctx,
         limit=10,
         sorting={"timestamp": "descending"},
@@ -545,7 +545,7 @@ async def test_outbound_email_transcript_includes_all_recipients(cm_with_eventbu
     not just the single contact from event.contact.
     """
     from unify.conversation_manager.domains.event_handlers import EventHandler
-    import unisdk
+    from unify import db
 
     cm = cm_with_eventbus
     assert cm.contact_manager is not None, "ContactManager not initialized"
@@ -589,7 +589,7 @@ async def test_outbound_email_transcript_includes_all_recipients(cm_with_eventbu
     ctx = getattr(tm, "_transcripts_ctx", None)
     assert ctx, "TranscriptManager missing _transcripts_ctx"
 
-    logs = unisdk.get_logs(
+    logs = db.get_logs(
         context=ctx,
         limit=10,
         sorting={"timestamp": "descending"},

@@ -100,14 +100,13 @@ async def test_comms_row_lands_in_orchestra_after_flush():
     """A published Comms event reaches the backend once flushed.
 
     This is the write path hydration depends on end-to-end: publish
-    buffers the row, flush writes it through ``unisdk.create_logs``, and a
+    buffers the row, flush writes it through ``db.create_logs``, and a
     plain read of the bus's own Comms context sees it. If this holds and a
     deployment still hydrates nothing, the gap is in that deployment's
     lifecycle (a stranded flusher, a teardown that never flushed), not in
     the write path itself.
     """
-    import unisdk
-
+    from unify import db
     from unify.conversation_manager.events import SMSReceived
 
     bus = EventBus()
@@ -124,7 +123,7 @@ async def test_comms_row_lands_in_orchestra_after_flush():
     bus.flush()
     assert bus._pending_writes == []
 
-    rows = unisdk.get_logs(context=bus._specific_ctxs["Comms"], limit=100)
+    rows = db.get_logs(context=bus._specific_ctxs["Comms"], limit=100)
     assert any(
         (log.entries or {}).get("event_id") == ev.event_id for log in rows
     ), "the flushed Comms row must be readable from the backend"

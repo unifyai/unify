@@ -5,7 +5,7 @@ import pytest_asyncio
 from typing import List, Dict, Tuple, Any
 import os
 
-import unisdk
+from unify import db
 from unify.contact_manager.contact_manager import ContactManager
 from unify.manager_registry import ManagerRegistry
 from unify.common.context_registry import ContextRegistry
@@ -149,9 +149,9 @@ def _rebuild_commit_hashes(
     commit_hashes: Dict[str, Any],
 ) -> None:
     """Rebuild commit hashes from existing context commits."""
-    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
+    existing_contexts = db.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
-        history = unisdk.get_context_commits(ctx_name)
+        history = db.get_context_commits(ctx_name)
         if history:
             commit_hashes[ctx_name] = history[0]["commit_hash"]
 
@@ -161,9 +161,9 @@ def _commit_contexts_for_rollback(
     commit_hashes: Dict[str, Any],
 ) -> None:
     """Commit all contexts under prefix and store hashes for rollback."""
-    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
+    existing_contexts = db.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
-        commit_info = unisdk.commit_context(
+        commit_info = db.commit_context(
             name=ctx_name,
             commit_message="Initial seed data for contact manager tests",
         )
@@ -174,14 +174,14 @@ def _rollback_to_committed(commit_hashes: Dict[str, Any]) -> None:
     """Restore every scenario context to its stored commit."""
 
     def rollback_context(ctx_name: str) -> None:
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx_name,
             commit_hash=commit_hashes[ctx_name],
         )
 
     ctx_names = list(commit_hashes.keys())
     if ctx_names:
-        unisdk.map(rollback_context, ctx_names, mode="asyncio")
+        db.map(rollback_context, ctx_names, mode="asyncio")
 
 
 def _setup_scenario(
@@ -211,13 +211,13 @@ def _setup_scenario(
 
     # If --overwrite-scenarios is set, delete existing contexts first
     if overwrite_scenarios:
-        existing_contexts = unisdk.get_contexts(prefix=ctx)
+        existing_contexts = db.get_contexts(prefix=ctx)
         for ctx_name in existing_contexts.keys():
-            unisdk.delete_context(ctx_name)
+            db.delete_context(ctx_name)
 
     # Set context before any operations
-    unisdk.create_context(ctx)  # exist_ok=True by default
-    unisdk.set_context(ctx, relative=False)
+    db.create_context(ctx)  # exist_ok=True by default
+    db.set_context(ctx, relative=False)
 
     # Use file lock to coordinate ContactManager creation and seeding.
     # ContactManager.__init__ creates system contacts (assistant id=0, user id=1)
@@ -257,7 +257,7 @@ def _setup_scenario(
             _precompute_embeddings(cm._ctx)
             _commit_contexts_for_rollback(ctx, commit_hashes)
 
-    unisdk.unset_context()
+    db.unset_context()
     return cm, id_mapping
 
 
@@ -303,7 +303,7 @@ def contact_manager_scenario(contact_read_scenario):
     cm, id_map = contact_read_scenario
 
     def rollback_context(ctx):
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx,
             commit_hash=_READ_SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -314,7 +314,7 @@ def contact_manager_scenario(contact_read_scenario):
         # from rolling back while this test is running
         ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            unisdk.map(rollback_context, ctx_names, mode="asyncio")
+            db.map(rollback_context, ctx_names, mode="asyncio")
 
         restore_scenario_context("tests/contact/ReadScenario")
         yield cm, id_map
@@ -365,7 +365,7 @@ def contact_manager_mutation_scenario(contact_mutation_scenario):
     cm, id_map = contact_mutation_scenario
 
     def rollback_context(ctx):
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx,
             commit_hash=_MUTATION_SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -376,7 +376,7 @@ def contact_manager_mutation_scenario(contact_mutation_scenario):
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            unisdk.map(rollback_context, ctx_names, mode="asyncio")
+            db.map(rollback_context, ctx_names, mode="asyncio")
 
         restore_scenario_context("tests/contact/MutationScenario")
         yield cm, id_map

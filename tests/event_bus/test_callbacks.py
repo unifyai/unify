@@ -528,8 +528,8 @@ async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
     """register_callback must survive Orchestra 404s on freshly created contexts."""
     from unittest.mock import MagicMock
 
-    import unisdk
-    from unisdk.utils.http import RequestError
+    from unify import db
+    from unify.db import StoreError
 
     bus = EventBus()
     triggered: list[int] = []
@@ -537,7 +537,7 @@ async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
     async def cb(events):  # noqa: ANN001
         triggered.append(_get_seq(events[0].payload))
 
-    real_get_logs = unisdk.get_logs
+    real_get_logs = db.get_logs
 
     def flaky_get_logs(**kwargs):
         context = str(kwargs.get("context", ""))
@@ -545,7 +545,7 @@ async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
             resp = MagicMock()
             resp.status_code = 404
             resp.text = "Context not found"
-            raise RequestError("http://test", "GET", resp)
+            raise StoreError("http://test", "GET", resp)
         return real_get_logs(**kwargs)
 
     monkeypatch.setattr(unisdk, "get_logs", flaky_get_logs)

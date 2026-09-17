@@ -13,8 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from unisdk.utils.http import RequestError
-
+from unify.db import StoreError
 from unify.data_manager.data_manager import DataManager
 from unify.data_manager.types import TableDescription
 from unify.manager_registry import ManagerRegistry
@@ -388,7 +387,7 @@ def test_insert_with_unique_keys():
     )
 
     dm.insert_rows(path, [{"sku": "A1", "price": 10.0}])
-    with pytest.raises(RequestError, match="Duplicate composite key"):
+    with pytest.raises(StoreError, match="Duplicate composite key"):
         dm.insert_rows(path, [{"sku": "A1", "price": 15.0}])
 
     rows = dm.filter(path)

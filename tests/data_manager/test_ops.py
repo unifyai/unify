@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import pytest
 import requests
-from unisdk.utils.http import RequestError
-
+from unify.db import StoreError
 from unify.data_manager.ops import ingest_ops, mutation_ops
 
 
-def _duplicate_key_error() -> RequestError:
+def _duplicate_key_error() -> StoreError:
     response = requests.Response()
     response.status_code = 400
     response._content = b'{"detail":"Duplicate composite key already exists"}'
     response.url = "https://api.unify.ai/v0/logs"
-    return RequestError("https://api.unify.ai/v0/logs", "POST", response)
+    return StoreError("https://api.unify.ai/v0/logs", "POST", response)
 
 
 def test_insert_rows_passes_on_duplicate_to_create_logs(monkeypatch):
@@ -62,7 +61,7 @@ def test_insert_rows_duplicate_key_errors_raise_by_default(monkeypatch):
 
     monkeypatch.setattr(mutation_ops, "unify_create_logs", fake_create_logs)
 
-    with pytest.raises(RequestError, match="Duplicate composite key"):
+    with pytest.raises(StoreError, match="Duplicate composite key"):
         mutation_ops.insert_rows_impl("Data/test", [{"key": "a"}])
 
 

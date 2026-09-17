@@ -46,10 +46,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
 
 if TYPE_CHECKING:
     from .actor.base import BaseActor
-    from .blacklist_manager.base import BaseBlackListManager
     from .contact_manager.base import BaseContactManager
     from .conversation_manager.base import BaseConversationManagerHandle
-    from .canvas_manager.base import BaseCanvasManager
     from .ingestion_manager.base import BaseIngestionManager
     from .data_manager.base import BaseDataManager
     from .file_manager.managers.base import BaseFileManager
@@ -62,7 +60,6 @@ if TYPE_CHECKING:
     from .task_scheduler.base import BaseTaskScheduler
     from .transcript_manager.base import BaseTranscriptManager
     from .web_searcher.base import BaseWebSearcher
-    from .workflow_manager.base import BaseWorkflowManager
     from .function_manager.primitives.scope import PrimitiveScope
 
 __all__ = [
@@ -389,24 +386,6 @@ class ManagerRegistry:
         )
 
     @classmethod
-    def get_blacklist_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseBlackListManager":
-        """Get the BlackListManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "blacklist",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
     def get_contact_manager(
         cls,
         *,
@@ -438,24 +417,6 @@ class ManagerRegistry:
             "conversation",
             description=description,
             simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_canvas_manager(
-        cls,
-        *,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseCanvasManager":
-        """Get the CanvasManager singleton (respects IMPL settings).
-
-        CanvasManager authors generative React views. It owns the Canvas/*
-        namespace.
-        """
-        return cls.get(
-            "canvas",
             _force_new=_force_new,
             **kwargs,
         )
@@ -563,24 +524,6 @@ class ManagerRegistry:
         """Get the GuidanceManager singleton (respects IMPL settings)."""
         return cls.get(
             "guidance",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_workflow_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseWorkflowManager":
-        """Get the WorkflowManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "workflows",
             description=description,
             simulation_guidance=simulation_guidance,
             _force_new=_force_new,
@@ -754,7 +697,6 @@ def _populate_registry() -> None:
     from .settings import SETTINGS
 
     ManagerRegistry.register_settings("actor", lambda: SETTINGS.actor)
-    ManagerRegistry.register_settings("blacklist", lambda: SETTINGS.blacklist)
     ManagerRegistry.register_settings("contacts", lambda: SETTINGS.contact)
     ManagerRegistry.register_settings("transcripts", lambda: SETTINGS.transcript)
     ManagerRegistry.register_settings("tasks", lambda: SETTINGS.task)
@@ -763,14 +705,12 @@ def _populate_registry() -> None:
     ManagerRegistry.register_settings("guidance", lambda: SETTINGS.guidance)
     ManagerRegistry.register_settings("secrets", lambda: SETTINGS.secret)
     ManagerRegistry.register_settings("web_search", lambda: SETTINGS.web)
-    ManagerRegistry.register_settings("canvas", lambda: SETTINGS.canvas)
     ManagerRegistry.register_settings("data", lambda: SETTINGS.data)
     ManagerRegistry.register_settings("files", lambda: SETTINGS.file)
     ManagerRegistry.register_settings("functions", lambda: SETTINGS.function)
     ManagerRegistry.register_settings("images", lambda: SETTINGS.image)
     ManagerRegistry.register_settings("ingestion", lambda: SETTINGS.ingestion)
     ManagerRegistry.register_settings("memory", lambda: SETTINGS.memory)
-    ManagerRegistry.register_settings("workflows", lambda: SETTINGS.workflow)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Actor implementations
@@ -780,13 +720,6 @@ def _populate_registry() -> None:
 
     ManagerRegistry.register_class("actor", "code_act", CodeActActor)
     ManagerRegistry.register_class("actor", "simulated", SimulatedActor)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # BlackListManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .blacklist_manager.blacklist_manager import BlackListManager
-
-    ManagerRegistry.register_class("blacklist", "real", BlackListManager)
 
     # ─────────────────────────────────────────────────────────────────────────
     # ContactManager implementations
@@ -851,13 +784,6 @@ def _populate_registry() -> None:
     ManagerRegistry.register_class("guidance", "simulated", SimulatedGuidanceManager)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # WorkflowManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .workflow_manager.workflow_manager import WorkflowManager
-
-    ManagerRegistry.register_class("workflows", "real", WorkflowManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
     # SecretManager implementations
     # ─────────────────────────────────────────────────────────────────────────
     from .secret_manager.secret_manager import SecretManager
@@ -874,14 +800,6 @@ def _populate_registry() -> None:
 
     ManagerRegistry.register_class("web_search", "real", WebSearcher)
     ManagerRegistry.register_class("web_search", "simulated", SimulatedWebSearcher)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # CanvasManager implementations
-    from .canvas_manager.canvas_manager import CanvasManager
-    from .canvas_manager.simulated import SimulatedCanvasManager
-
-    ManagerRegistry.register_class("canvas", "real", CanvasManager)
-    ManagerRegistry.register_class("canvas", "simulated", SimulatedCanvasManager)
 
     # ─────────────────────────────────────────────────────────────────────────
     # IngestionManager implementations

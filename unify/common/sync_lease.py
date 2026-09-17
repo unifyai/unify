@@ -112,7 +112,7 @@ def exclusive_sync_lease(
     while True:
         if use_remote:
             try:
-                from unisdk import SyncLeaseHeldError, acquire_sync_lease
+                from unify.db import SyncLeaseHeldError, acquire_sync_lease
 
                 acquire_sync_lease(
                     lease_key,
@@ -154,7 +154,7 @@ def exclusive_sync_lease(
         _ACTIVE_KEYS.reset(token)
         if use_remote:
             try:
-                from unisdk import release_sync_lease
+                from unify.db import release_sync_lease
 
                 release_sync_lease(lease_key, holder)
             except Exception:

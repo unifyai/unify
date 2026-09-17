@@ -15,7 +15,7 @@ Coverage
 
 from __future__ import annotations
 
-import unisdk
+from unify import db
 from tests.helpers import _handle_project
 from unify.function_manager.function_manager import FunctionManager
 from unify.task_scheduler.task_scheduler import TaskScheduler
@@ -36,7 +36,7 @@ def test_entrypoint_valid_reference():
     fm.add_functions(implementations=src)
 
     # Get function ID
-    funcs = unisdk.get_logs(
+    funcs = db.get_logs(
         context=fm._compositional_ctx,
         from_fields=["function_id", "name"],
     )
@@ -52,7 +52,7 @@ def test_entrypoint_valid_reference():
 
     # Verify task was created with entrypoint. Avoid projecting only the FK
     # column in from_fields — nullable/FK projections can omit rows.
-    tasks = unisdk.get_logs(
+    tasks = db.get_logs(
         context=ts._ctx,
         filter="name == 'Process Task'",
     )
@@ -71,7 +71,7 @@ def test_entrypoint_set_null_on_delete():
     fm.add_functions(implementations=src)
 
     # Get function ID
-    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = db.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Create task with this function as entrypoint
@@ -82,7 +82,7 @@ def test_entrypoint_set_null_on_delete():
     )
 
     # Verify task has entrypoint
-    tasks = unisdk.get_logs(context=ts._ctx, from_fields=["task_id", "entrypoint"])
+    tasks = db.get_logs(context=ts._ctx, from_fields=["task_id", "entrypoint"])
     assert len(tasks) == 1
     assert tasks[0].entries["entrypoint"] == func_id
 
@@ -90,7 +90,7 @@ def test_entrypoint_set_null_on_delete():
     fm.delete_function(function_id=func_id)
 
     # Verify task still exists but entrypoint is null (SET NULL behavior)
-    tasks_after = unisdk.get_logs(
+    tasks_after = db.get_logs(
         context=ts._ctx,
         from_fields=["task_id", "name", "entrypoint"],
     )
@@ -110,7 +110,7 @@ def test_entrypoint_null_does_not_break_scheduler_init():
     fm.add_functions(implementations=src)
 
     # Get function ID
-    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = db.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Create task with entrypoint
@@ -122,7 +122,7 @@ def test_entrypoint_null_does_not_break_scheduler_init():
     tid = result["details"]["task_id"]
 
     # Verify task has entrypoint
-    tasks = unisdk.get_logs(context=ts._ctx, from_fields=["task_id", "entrypoint"])
+    tasks = db.get_logs(context=ts._ctx, from_fields=["task_id", "entrypoint"])
     assert len(tasks) == 1
     assert tasks[0].entries["entrypoint"] == func_id
 
@@ -130,7 +130,7 @@ def test_entrypoint_null_does_not_break_scheduler_init():
     fm.delete_function(function_id=func_id)
 
     # Verify entrypoint is now null
-    tasks_after = unisdk.get_logs(
+    tasks_after = db.get_logs(
         context=ts._ctx,
         from_fields=["task_id", "entrypoint"],
     )
@@ -141,7 +141,7 @@ def test_entrypoint_null_does_not_break_scheduler_init():
     ts_new = TaskScheduler()
 
     # Verify the new scheduler can read tasks with null entrypoint without errors
-    tasks_from_new = unisdk.get_logs(
+    tasks_from_new = db.get_logs(
         context=ts_new._ctx,
     )
     assert len(tasks_from_new) == 1
@@ -171,7 +171,7 @@ def test_entrypoint_explicit_none_on_create():
     tid = result["details"]["task_id"]
 
     # Verify task was created with null entrypoint
-    tasks = unisdk.get_logs(
+    tasks = db.get_logs(
         context=ts._ctx,
     )
     assert len(tasks) == 1
@@ -195,7 +195,7 @@ def test_entrypoint_clone_after_set_null():
     # Create function
     src = "def cloneable():\n    return 'clone me'\n"
     fm.add_functions(implementations=src)
-    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = db.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Create recurring task with entrypoint
@@ -211,7 +211,7 @@ def test_entrypoint_clone_after_set_null():
     tid = result["details"]["task_id"]
 
     # Verify task has entrypoint
-    tasks = unisdk.get_logs(
+    tasks = db.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
         from_fields=["task_id", "entrypoint"],
@@ -223,7 +223,7 @@ def test_entrypoint_clone_after_set_null():
     fm.delete_function(function_id=func_id)
 
     # Verify entrypoint is now null (include task_id to avoid NULL-only field issue)
-    tasks_after_delete = unisdk.get_logs(
+    tasks_after_delete = db.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
         from_fields=["task_id", "entrypoint"],
@@ -235,7 +235,7 @@ def test_entrypoint_clone_after_set_null():
     # stays null.
     # Projection is Orchestra's: a definition is never cloned or mutated by
     # advancing a series, which is what the row count below pins.
-    all_instances = unisdk.get_logs(
+    all_instances = db.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
     )

@@ -10,8 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Union
 
-import unisdk
-
+from unify import db
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.search_utils import table_search_top_k
 from unify.common.metrics_utils import reduce_logs
@@ -115,7 +114,7 @@ def filter_impl(
     if order_by:
         sorting = {order_by: "descending" if descending else "ascending"}
 
-    logs = unisdk.get_logs(
+    logs = db.get_logs(
         context=context,
         filter=filter_expr,
         from_fields=from_fields,

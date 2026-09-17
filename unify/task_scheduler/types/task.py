@@ -156,20 +156,6 @@ class TaskBase(AuthoredRow):
             "None for runtime-created entries."
         ),
     )
-    task_revision: Optional[int] = Field(
-        default=None,
-        description=(
-            "Monotonic authored revision stamped by Orchestra for revision-safe "
-            "provider-event mutations."
-        ),
-    )
-    provider_event_binding_id: Optional[str] = Field(
-        default=None,
-        description=(
-            "Stable Orchestra binding id linking this provider-event task to its "
-            "subscription lifecycle. Required on triggerable provider-event rows."
-        ),
-    )
 
     @model_validator(mode="after")
     def _mutually_exclusive_schedule_trigger(self):

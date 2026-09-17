@@ -100,9 +100,9 @@ class RunJournal:
             entry["total"] = int(total)
 
         try:
-            import unisdk
+            from unify import db
 
-            unisdk.create_logs(context=self._events_context, entries=[entry])
+            db.create_logs(context=self._events_context, entries=[entry])
         except Exception as error:  # noqa: BLE001 -- observability must not kill work
             logger.warning(
                 "Run %s could not journal an event to %s: %s",
@@ -150,9 +150,9 @@ class RunJournal:
         without needing the row store to arbitrate.
         """
         try:
-            import unisdk
+            from unify import db
 
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=self._runs_context,
                 filter=f"run_key == '{self.run_key}'",
                 limit=1,
@@ -164,7 +164,7 @@ class RunJournal:
                     self._runs_context,
                 )
                 return
-            unisdk.update_logs(logs=rows[0], entries=updates)
+            db.update_logs(logs=rows[0], entries=updates)
         except Exception as error:  # noqa: BLE001 -- observability must not kill work
             logger.warning(
                 "Run %s could not update its row in %s: %s",

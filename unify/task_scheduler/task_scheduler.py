@@ -22,7 +22,7 @@ from typing import (
     overload,
 )
 
-import unisdk
+from unify import db
 import unillm
 from pydantic import BaseModel
 
@@ -35,8 +35,6 @@ from ..common.async_tool_loop import (
 from ..common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
-    TEAM_CONTEXT_PREFIX,
-    TEAM_DESTINATION_PREFIX,
     TableContext,
 )
 from ..common.custom_sync import (
@@ -84,33 +82,15 @@ from .machine_state import (
     find_terminal_execution_for_task,
     list_task_run_history,
     peek_live_task_run_provenance,
-    remember_live_task_run_provenance,
     update_task_run_record,
 )
 from .prompt_builders import (
     build_ask_prompt,
-    build_provider_event_run_guidelines,
-    build_provider_event_task_request,
     build_task_execution_request,
     build_task_run_guidelines,
     build_update_prompt,
 )
-from .provider_trigger_actor import (
-    annotate_provider_trigger_catalog,
-    annotate_provider_trigger_connections,
-    describe_provider_trigger,
-    list_eligible_provider_trigger_connections,
-    task_revision_conflict_outcome,
-)
-from .provider_trigger_resources import list_provider_trigger_resources
-from .provider_trigger_health import (
-    compose_provider_trigger_state,
-    sanitize_event_context_for_actor,
-)
-from .resource_requirements import resolve_task_resource_requirements
 from .storage import TasksStore
-from . import typed_tasks_client
-from .typed_tasks_client import TaskRevisionConflictError
 from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
@@ -122,10 +102,9 @@ from .types.repetition import (
 )
 from .types.schedule import Schedule
 from .types.task import Task, TaskBase
-from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
 from .types.execution import Delivery, ExecutionState, Wake
-from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
+from .types.trigger import TaskTrigger, parse_task_trigger
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
@@ -238,30 +217,6 @@ class TaskScheduler(BaseTaskScheduler):
                     display_label="Listing task runs",
                 ),
                 ToolSpec(
-                    fn=self._list_provider_trigger_catalog,
-                    display_label="Listing provider trigger catalog",
-                ),
-                ToolSpec(
-                    fn=self._list_provider_trigger_connections,
-                    display_label="Listing provider trigger connections",
-                ),
-                ToolSpec(
-                    fn=self._describe_provider_trigger,
-                    display_label="Describing provider trigger config",
-                ),
-                ToolSpec(
-                    fn=self._list_provider_trigger_resources,
-                    display_label="Listing provider trigger resources",
-                ),
-                ToolSpec(
-                    fn=self._get_provider_trigger_health,
-                    display_label="Inspecting provider trigger health",
-                ),
-                ToolSpec(
-                    fn=self._get_provider_event_context,
-                    display_label="Inspecting provider event context",
-                ),
-                ToolSpec(
                     fn=self.get_run_event_children,
                     display_label="Listing task-run event children",
                 ),
@@ -295,47 +250,6 @@ class TaskScheduler(BaseTaskScheduler):
                 ToolSpec(fn=self._delete_task, display_label="Deleting a task"),
                 ToolSpec(fn=self._cancel_tasks, display_label="Cancelling tasks"),
                 ToolSpec(fn=self._update_task, display_label="Updating a task"),
-                ToolSpec(
-                    fn=self._pause_provider_trigger,
-                    display_label="Pausing provider trigger automation",
-                ),
-                ToolSpec(
-                    fn=self._resume_provider_trigger,
-                    display_label="Resuming provider trigger automation",
-                ),
-                ToolSpec(
-                    fn=self._retry_provider_trigger,
-                    display_label="Retrying provider trigger provisioning",
-                ),
-                # Read-only catalog inspection: the update prompt's authoring
-                # order (list catalog -> list connections -> describe schema ->
-                # resolve resources) must be executable from this loop, not
-                # only from ``ask`` -- otherwise trigger feasibility gets
-                # decided blind and reported as "no supported trigger".
-                ToolSpec(
-                    fn=self._list_provider_trigger_catalog,
-                    display_label="Listing provider trigger catalog",
-                ),
-                ToolSpec(
-                    fn=self._list_provider_trigger_connections,
-                    display_label="Listing provider trigger connections",
-                ),
-                ToolSpec(
-                    fn=self._describe_provider_trigger,
-                    display_label="Describing provider trigger config",
-                ),
-                ToolSpec(
-                    fn=self._list_provider_trigger_resources,
-                    display_label="Listing provider trigger resources",
-                ),
-                ToolSpec(
-                    fn=self._export_provider_event_context,
-                    display_label="Exporting provider event context",
-                ),
-                ToolSpec(
-                    fn=self._delete_provider_event_context,
-                    display_label="Deleting provider event context",
-                ),
                 include_class_name=False,
             ),
             **methods_to_tool_dict(
@@ -697,9 +611,6 @@ class TaskScheduler(BaseTaskScheduler):
     def _destination_from_task_context(self, context_name: str) -> str | None:
         """Return the public destination represented by a concrete Tasks context."""
 
-        if context_name.startswith(TEAM_CONTEXT_PREFIX):
-            raw_team_id = context_name[len(TEAM_CONTEXT_PREFIX) :].split("/", 1)[0]
-            return f"{TEAM_DESTINATION_PREFIX}{raw_team_id}"
         return None
 
     def _store_for_task_context(self, context_name: str) -> TasksStore:
@@ -760,7 +671,7 @@ class TaskScheduler(BaseTaskScheduler):
     def clear(self) -> None:
         """Delete the current Tasks context and recreate local state."""
 
-        unisdk.delete_context(self._ctx)
+        db.delete_context(self._ctx)
         self._num_tasks_cached = None
         self._active_task_root_context = None
 
@@ -791,7 +702,7 @@ class TaskScheduler(BaseTaskScheduler):
                 id_map[int(task_id)] = int(lg.id)
         return id_map
 
-    def _get_task_log(self, *, task_id: int) -> unisdk.Log:
+    def _get_task_log(self, *, task_id: int) -> db.Log:
         """Return the physical Tasks definition row for one task_id."""
 
         task = self._get_task_or_raise(task_id)
@@ -1198,9 +1109,7 @@ class TaskScheduler(BaseTaskScheduler):
                 wake=task_run_wake,
                 delivery=Delivery.offline if task.offline else Delivery.live,
                 source_task_log_id=self._source_task_log_id(task_id),
-                revision=(
-                    str(task.task_revision) if task.task_revision is not None else None
-                ),
+                revision=None,
                 destination=task.destination,
                 task_name=task.name,
                 attempt_token=trigger_attempt_token,
@@ -1306,167 +1215,6 @@ class TaskScheduler(BaseTaskScheduler):
             current_task_execution_ancestors.reset(ancestor_token)
 
         return handle
-
-    async def start_provider_event_instance(
-        self,
-        *,
-        request: "ProviderEventDispatchRequest",
-        captured_task_revision: int,
-        provider_event_context: dict[str, Any],
-    ) -> SteerableToolHandle:
-        """Start one provider-event execution against the authored definition.
-
-        Materializes/adopts the Orchestra-precreated ``Tasks/Executions`` row by
-        ``run_key`` and leaves the definition row untouched (no Task-row clone).
-        Validates the accepted receipt authorization on ``request`` rather than
-        current trigger state. Event content must arrive as structured untrusted
-        data.
-        """
-
-        from unify.task_scheduler.provider_event_dispatch import (
-            ProviderEventDispatchRequest,
-            ProviderEventDispatchValidationError,
-        )
-
-        if not isinstance(request, ProviderEventDispatchRequest):
-            raise TypeError("request must be a ProviderEventDispatchRequest")
-        if request.delivery not in {"live", "offline"}:
-            raise ProviderEventDispatchValidationError("invalid_delivery")
-        if str(request.wake) != Wake.provider_event.value:
-            raise ProviderEventDispatchValidationError("run_wake_mismatch")
-
-        definition = self._get_provider_event_definition(task_id=request.task_id)
-        if not definition.enabled:
-            raise ProviderEventDispatchValidationError("task_disabled")
-        if not self._task_has_provider_event_trigger(definition):
-            raise ProviderEventDispatchValidationError("task_trigger_mismatch")
-
-        source_task_log_id = self._get_task_log(task_id=definition.task_id).id
-
-        provenance = TaskRunProvenance(
-            assistant_id=str(request.assistant_id),
-            task_id=request.task_id,
-            wake=Wake.provider_event,
-            delivery=(
-                Delivery.offline if request.delivery == "offline" else Delivery.live
-            ),
-            source_task_log_id=int(source_task_log_id),
-            revision=request.accepted_revision,
-            destination=definition.destination,
-            source_ref=request.receipt_id,
-            attempt_token=request.operation_id,
-            task_name=definition.name,
-        )
-        remember_live_task_run_provenance(provenance)
-
-        # Adopt the Orchestra-precreated run by its exact run_key. Do not let
-        # ActiveTask rebuild a different key from provenance and create a second
-        # run — provider-event dispatch is adopt-only.
-        task_run_reference = TaskRunReference(
-            assistant_id=str(request.assistant_id),
-            run_key=request.run_key,
-            source_task_log_id=int(source_task_log_id),
-        )
-        update_task_run_record(
-            task_run_reference,
-            {
-                "state": "running",
-                "source_task_log_id": int(source_task_log_id),
-                "revision": request.accepted_revision,
-                "captured_task_revision": captured_task_revision,
-                "started_at": _now_iso(),
-            },
-        )
-
-        fallback_actor = self._actor_for_task_run()
-        if fallback_actor is None and current_task_execution_delegate.get() is None:
-            raise RuntimeError(
-                "Provider-event dispatch requires a run-scoped actor "
-                "delegate or an explicit actor.",
-            )
-
-        entrypoint_kwargs = self._build_entrypoint_kwargs(
-            task=definition,
-            wake=Wake.provider_event,
-            task_run_provenance=provenance,
-            state=ExecutionState.running.value,
-        )
-        entrypoint_kwargs["provider_event_context"] = provider_event_context
-        entrypoint_kwargs["operation_id"] = request.operation_id
-        entrypoint_kwargs["receipt_id"] = request.receipt_id
-        entrypoint_kwargs["binding_id"] = request.binding_id
-        entrypoint_kwargs["run_id"] = request.run_id
-        entrypoint_kwargs["run_key"] = request.run_key
-        entrypoint_kwargs["accepted_revision"] = request.accepted_revision
-        entrypoint_kwargs["captured_task_revision"] = captured_task_revision
-        if isinstance(entrypoint_kwargs.get("task_execution_context"), dict):
-            entrypoint_kwargs["task_execution_context"]["run_key"] = request.run_key
-            entrypoint_kwargs["task_execution_context"][
-                "captured_task_revision"
-            ] = captured_task_revision
-
-        if definition.entrypoint is None:
-            task_request = build_provider_event_task_request(
-                definition,
-                provider_event_context,
-            )
-        else:
-            slug, settings = self._workflow_run_settings(definition)
-            task_request = build_task_execution_request(
-                definition,
-                installation_settings=settings,
-                workflow_slug=slug,
-            )
-        return await ActiveTask.create(
-            fallback_actor,
-            task_description=task_request,
-            task_id=definition.task_id,
-            scheduler=self,
-            entrypoint=definition.entrypoint,
-            entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_context=(
-                {
-                    "task_name": definition.name,
-                    "task_run_context": entrypoint_kwargs.get(
-                        "task_execution_context",
-                        {},
-                    ),
-                    "task_request": task_request,
-                }
-                if definition.entrypoint is not None
-                else None
-            ),
-            destination=definition.destination,
-            task_run_reference=task_run_reference,
-            task_run_provenance=provenance,
-            task_guidelines=build_provider_event_run_guidelines(definition),
-            preserve_definition_status=True,
-        )
-
-    def _get_provider_event_definition(self, *, task_id: int) -> Task:
-        """Return the authored definition row for one provider-event task.
-
-        Prefer a non-captured Tasks-store definition when present. Fall back to
-        the typed Tasks API for definitions authored only through that path.
-        Captured execution instances are never returned here.
-        """
-
-        from unify.task_scheduler.provider_event_dispatch import (
-            ProviderEventDispatchValidationError,
-        )
-
-        rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
-        definitions = [
-            row for row in rows if self._task_has_provider_event_trigger(row)
-        ]
-        if definitions:
-            return definitions[0]
-        try:
-            return self._get_provider_event_task_or_raise(task_id)
-        except ValueError as exc:
-            if not rows:
-                raise ValueError(f"No task found with id={task_id}") from exc
-            raise ProviderEventDispatchValidationError("task_trigger_mismatch") from exc
 
     def create_task(
         self,
@@ -1645,7 +1393,7 @@ class TaskScheduler(BaseTaskScheduler):
         *,
         task_ids: Union[int, List[int]],
         return_ids_only: Literal[False],
-    ) -> List[unisdk.Log]: ...
+    ) -> List[db.Log]: ...
 
     def _get_logs_by_task_ids(
         self,
@@ -1656,7 +1404,7 @@ class TaskScheduler(BaseTaskScheduler):
         """Fetch log objects or ids for one or many logical task ids."""
 
         task_id_list = task_ids if isinstance(task_ids, list) else [task_ids]
-        matches: list[unisdk.Log] = []
+        matches: list[db.Log] = []
         for context_name in self._read_task_contexts():
             store = self._store_for_task_context(context_name)
             rows = store.get_logs_by_task_ids(
@@ -1815,26 +1563,11 @@ class TaskScheduler(BaseTaskScheduler):
             enabled=enabled,
         ).to_post_json()
 
-        if trigger is not None and isinstance(trigger, ProviderEventTrigger):
-            created = typed_tasks_client.create_task(payload=task_details)
-            task_id = int(created["task_id"])
-            if _sync_identity:
-                # The sealed provider-event façade owns the create payload
-                # shape, so identity is stamped immediately after creation
-                # rather than in-band.
-                log_ids = self._store.get_rows(
-                    filter=f"task_id == {task_id}",
-                    return_ids_only=True,
-                )
-                self._write_log_entries(logs=log_ids, entries=dict(_sync_identity))
-        else:
-            entries = (
-                {**task_details, **_sync_identity} if _sync_identity else task_details
-            )
-            log = self._store.log(entries=entries, new=True)
-            task_id = assigned_row_id(log, "task_id", context=self._store.context)
-            if self._num_tasks_cached is not None:
-                self._num_tasks_cached += 1
+        entries = {**task_details, **_sync_identity} if _sync_identity else task_details
+        log = self._store.log(entries=entries, new=True)
+        task_id = assigned_row_id(log, "task_id", context=self._store.context)
+        if self._num_tasks_cached is not None:
+            self._num_tasks_cached += 1
 
         return {
             "outcome": "task created successfully",
@@ -1959,20 +1692,7 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
-        if self._task_has_provider_event_trigger(task):
-            if task.task_revision is None:
-                raise ValueError(
-                    f"Task {task_id} is missing task_revision; re-read before deleting.",
-                )
-            try:
-                typed_tasks_client.delete_task(
-                    task_id=task_id,
-                    expected_task_revision=int(task.task_revision),
-                )
-            except TaskRevisionConflictError as exc:
-                return task_revision_conflict_outcome(exc)
-        else:
-            self._store.delete(logs=log_ids)
+        self._store.delete(logs=log_ids)
         removed_count = len(log_ids)
         if self._num_tasks_cached is not None and removed_count:
             self._num_tasks_cached = max(
@@ -2589,58 +2309,10 @@ class TaskScheduler(BaseTaskScheduler):
                 entries={"managed_by": None, CUSTOM_RELEASED_FIELD: True},
             )
 
-        if self._task_has_provider_event_trigger(task):
-            return self._write_provider_event_task_update(
-                task_id=task_id,
-                task=task,
-                entries=entries,
-            )
-
         return self._write_log_entries(
             logs=log_ids,
             entries=entries,
         )
-
-    def _write_provider_event_task_update(
-        self,
-        *,
-        task_id: int,
-        task: Task,
-        entries: Dict[str, Any],
-    ) -> Dict[str, str]:
-        """Route one provider-event patch across typed API and runtime logs."""
-
-        log_ids = self._store.get_rows(
-            filter=f"task_id == {task_id}",
-            return_ids_only=True,
-        )
-        authored_entries, runtime_entries = split_provider_event_task_update(
-            entries,
-        )
-        if authored_entries and runtime_entries:
-            raise ValueError(
-                "Cannot update authored and runtime provider-event fields in one call.",
-            )
-        if authored_entries:
-            if task.task_revision is None:
-                raise ValueError(
-                    f"Task {task_id} is missing task_revision; re-read before updating.",
-                )
-            try:
-                typed_tasks_client.patch_task(
-                    task_id=task_id,
-                    expected_task_revision=int(task.task_revision),
-                    updates=authored_entries,
-                )
-            except TaskRevisionConflictError as exc:
-                return task_revision_conflict_outcome(exc)
-            return {"detail": "Provider-event authored update applied."}
-        if runtime_entries:
-            return self._write_log_entries(
-                logs=log_ids,
-                entries=runtime_entries,
-            )
-        return {"detail": "No-op provider-event task update."}
 
     @staticmethod
     def _default_ask_tool_policy(
@@ -2675,7 +2347,7 @@ class TaskScheduler(BaseTaskScheduler):
     def _write_log_entries(
         self,
         *,
-        logs: Union[int, unisdk.Log, List[Union[int, unisdk.Log]]],
+        logs: Union[int, db.Log, List[Union[int, db.Log]]],
         entries: Union[Dict[str, Any], List[Dict[str, Any]]],
     ) -> Dict[str, str]:
         """Centralize task-row writes through the current store."""
@@ -2684,151 +2356,6 @@ class TaskScheduler(BaseTaskScheduler):
             logs=logs,
             entries=entries,
         )
-
-    def _list_provider_trigger_catalog(
-        self,
-        *,
-        canonical_app_slug: str | None = None,
-        limit: int | None = None,
-        offset: int | None = None,
-    ) -> ToolOutcome:
-        """List staged provider triggers visible for this assistant's connected apps.
-
-        Returns catalog metadata plus trigger slugs/config schemas for apps the
-        assistant already has an active integration connection for. An empty
-        trigger list usually means no matching connection yet, not that the
-        provider lacks the trigger globally. Prefer connecting the app first,
-        then re-list the catalog before enabling a provider-event task.
-
-        The unfiltered catalog can be large. Once
-        ``list_provider_trigger_connections`` shows which app/backend is
-        connected, pass that app's ``canonical_app_slug`` here to narrow the
-        response, and use ``limit``/``offset`` to page through the rest.
-        """
-
-        catalog = typed_tasks_client.get_trigger_catalog(
-            canonical_app_slug=canonical_app_slug,
-            limit=limit,
-            offset=offset,
-        )
-        return {
-            "outcome": "provider trigger catalog listed",
-            "details": annotate_provider_trigger_catalog(
-                catalog if isinstance(catalog, dict) else {},
-            ),
-        }
-
-    def _list_provider_trigger_connections(
-        self,
-        *,
-        canonical_app_slug: str | None = None,
-        backend_id: str | None = None,
-    ) -> ToolOutcome:
-        """List assistant-owned connections usable for provider triggers.
-
-        Returns only active assistant-scoped integration connections that can
-        back provider-event task triggers. Filter by ``canonical_app_slug`` and
-        ``backend_id`` when the actor already knows which app/backend it needs.
-        """
-
-        connections = list_eligible_provider_trigger_connections(
-            canonical_app_slug=canonical_app_slug,
-            backend_id=backend_id,
-        )
-        return {
-            "outcome": "provider trigger connections listed",
-            "details": annotate_provider_trigger_connections(connections),
-        }
-
-    def _describe_provider_trigger(
-        self,
-        *,
-        provider_trigger_slug: str,
-        backend_id: str,
-    ) -> ToolOutcome:
-        """Return config schema for one staged provider trigger.
-
-        Use the catalog listing first to discover valid
-        ``provider_trigger_slug`` / ``backend_id`` pairs, then call this tool
-        to inspect the trigger's config schema before authoring a task trigger.
-        """
-
-        catalog = typed_tasks_client.get_trigger_catalog()
-        trigger = describe_provider_trigger(
-            provider_trigger_slug=provider_trigger_slug,
-            backend_id=backend_id,
-            catalog_triggers=catalog.get("triggers"),
-        )
-        return {
-            "outcome": "provider trigger described",
-            "details": trigger,
-        }
-
-    def _list_provider_trigger_resources(
-        self,
-        *,
-        target_resource_family: str,
-        query: str | None = None,
-        drive_id: str | None = None,
-        parent_item_id: str | None = None,
-    ) -> ToolOutcome:
-        """List workspace resources for native provider-event trigger_config.
-
-        Pass ``target_resource_family`` from ``describe_provider_trigger``. For
-        Drive, omit parents to list roots, pass ``drive_id`` + ``parent_item_id``
-        to browse children, or pass ``query`` to search by name.
-        """
-
-        details = list_provider_trigger_resources(
-            target_resource_family=target_resource_family,
-            query=query,
-            drive_id=drive_id,
-            parent_item_id=parent_item_id,
-        )
-        return {
-            "outcome": "provider trigger resources listed",
-            "details": details,
-        }
-
-    def _get_provider_trigger_health(self, *, task_id: int) -> ToolOutcome:
-        """Inspect composed provider-trigger health, coverage, and remediation.
-
-        Returns a provider-neutral composed lifecycle state plus runtime
-        health, coverage windows, and remediation guidance for actor responses.
-        """
-
-        self._get_provider_event_task_or_raise(task_id)
-        health = typed_tasks_client.get_trigger_health(task_id=task_id)
-        return {
-            "outcome": "provider trigger health inspected",
-            "details": compose_provider_trigger_state(health),
-        }
-
-    def _get_provider_event_context(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        include_source_body: bool = False,
-    ) -> ToolOutcome:
-        """Inspect authorized provider-event context for one run.
-
-        Returns the curated projection and envelope by default. Include raw
-        source_body only when the user explicitly requests advanced inspection.
-        """
-
-        self._get_provider_event_task_or_raise(task_id)
-        context = typed_tasks_client.get_event_context(
-            task_id=task_id,
-            run_id=run_id,
-        )
-        return {
-            "outcome": "provider event context inspected",
-            "details": sanitize_event_context_for_actor(
-                context,
-                include_source_body=include_source_body,
-            ),
-        }
 
     def get_run_event_children(
         self,
@@ -2944,136 +2471,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         return f"{user_id}/{assistant_id}/Events"
 
-    def _pause_provider_trigger(
-        self,
-        *,
-        task_id: int,
-        task_revision: int,
-    ) -> ToolOutcome:
-        """Pause provider-event automation while keeping manual run available.
-
-        Closes the acceptance fence for new provider deliveries without
-        disabling the global task.enabled gate or blocking manual execution.
-        """
-
-        self._get_provider_event_task_or_raise(task_id)
-        try:
-            updated = typed_tasks_client.pause_trigger(
-                task_id=task_id,
-                expected_task_revision=int(task_revision),
-            )
-        except TaskRevisionConflictError as exc:
-            return task_revision_conflict_outcome(exc)
-        return {
-            "outcome": "provider trigger paused",
-            "details": {
-                "task_id": task_id,
-                "task_revision": updated.get("task_revision"),
-            },
-        }
-
-    def _resume_provider_trigger(
-        self,
-        *,
-        task_id: int,
-        task_revision: int,
-    ) -> ToolOutcome:
-        """Resume provider-event automation for one task.
-
-        Reopens provider automation under the current authored revision and
-        schedules reconciliation for the active subscription generation.
-        """
-
-        self._get_provider_event_task_or_raise(task_id)
-        try:
-            updated = typed_tasks_client.resume_trigger(
-                task_id=task_id,
-                expected_task_revision=int(task_revision),
-            )
-        except TaskRevisionConflictError as exc:
-            return task_revision_conflict_outcome(exc)
-        return {
-            "outcome": "provider trigger resumed",
-            "details": {
-                "task_id": task_id,
-                "task_revision": updated.get("task_revision"),
-            },
-        }
-
-    def _retry_provider_trigger(self, *, task_id: int) -> ToolOutcome:
-        """Request immediate provider-trigger reconciliation.
-
-        Schedules binding and subscription reconciliation without changing the
-        authored task revision or mutating trigger intent directly.
-        """
-
-        self._get_provider_event_task_or_raise(task_id)
-        result = typed_tasks_client.retry_trigger(task_id=task_id)
-        return {
-            "outcome": "provider trigger reconciliation requested",
-            "details": result,
-        }
-
-    def _export_provider_event_context(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-    ) -> ToolOutcome:
-        """Export authorized provider-event context with audit logging.
-
-        Returns the full authorized context for user-requested export while
-        keeping credentials and backend details out of the actor response.
-        """
-
-        self._get_provider_event_task_or_raise(task_id)
-        context = typed_tasks_client.export_event_context(
-            task_id=task_id,
-            run_id=run_id,
-        )
-        return {
-            "outcome": "provider event context exported",
-            "details": sanitize_event_context_for_actor(
-                context,
-                include_source_body=True,
-            ),
-        }
-
-    def _delete_provider_event_context(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        task_revision: int,
-    ) -> ToolOutcome:
-        """Delete provider-event context for one run.
-
-        Makes the event context unavailable immediately and records the
-        deletion under the current authored task revision when supplied.
-        """
-
-        task = self._get_provider_event_task_or_raise(task_id)
-        if task.task_revision is None:
-            raise ValueError(
-                f"Task {task_id} is missing task_revision; re-read before deleting context.",
-            )
-        if int(task.task_revision) != int(task_revision):
-            return task_revision_conflict_outcome(
-                TaskRevisionConflictError(
-                    latest_task_revision=int(task.task_revision),
-                ),
-            )
-        typed_tasks_client.delete_event_context(task_id=task_id, run_id=run_id)
-        return {
-            "outcome": "provider event context deleted",
-            "details": {"task_id": task_id, "run_id": run_id},
-        }
-
-    @staticmethod
-    def _task_has_provider_event_trigger(task: Task) -> bool:
-        trigger = parse_task_trigger(task.trigger)
-        return isinstance(trigger, ProviderEventTrigger)
-
     def _start_loop(
         self,
         client: unillm.AsyncUnify,
@@ -3125,62 +2522,10 @@ class TaskScheduler(BaseTaskScheduler):
         handle.result = wrapped_result  # type: ignore[assignment]
         return handle
 
-    def _task_from_typed_response(self, typed_response: dict[str, Any]) -> Task:
-        """Build one Task from a typed Tasks API row."""
-
-        entries = {"task_id": int(typed_response["task_id"])}
-        for key in (
-            "task_revision",
-            "provider_event_binding_id",
-            "name",
-            "description",
-            "trigger",
-            "schedule",
-            "enabled",
-            "offline",
-            "priority",
-            "entrypoint",
-            "requires_filesystem",
-            "requires_computer",
-        ):
-            if key in typed_response and typed_response[key] is not None:
-                entries[key] = typed_response[key]
-        entries.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
-        return Task(**self._sanitize_activation(entries))
-
-    def _get_provider_event_task_or_raise(self, task_id: int) -> Task:
-        """Return one provider-event task from the typed Tasks API.
-
-        Authored provider-event rows are owned by the typed Tasks API. Tool
-        paths that mutate or inspect that contract must not depend on a Tasks
-        log mirror in the current session root.
-        """
-
-        try:
-            typed_response = typed_tasks_client.get_task(task_id=task_id)
-        except ValueError as exc:
-            if str(exc) == "Task not found.":
-                raise ValueError(f"No task found with id={task_id}") from exc
-            raise
-        task = self._task_from_typed_response(typed_response)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
-        return task
-
     def _resolve_task_for_mutation(self, task_id: int) -> Task:
-        """Resolve one task for authored update/delete, preferring typed CAS."""
+        """Resolve one task for authored update/delete."""
 
-        try:
-            task = self._get_task_or_raise(task_id)
-        except ValueError as exc:
-            if "multiple task roots" in str(exc):
-                raise
-            return self._get_provider_event_task_or_raise(task_id)
-        if self._task_has_provider_event_trigger(task):
-            return self._get_provider_event_task_or_raise(task_id)
-        return task
+        return self._get_task_or_raise(task_id)
 
     def _get_task_or_raise(self, task_id: int) -> Task:
         """Fetch exactly one task id or raise when it is missing or ambiguous."""
@@ -3496,7 +2841,7 @@ class TaskScheduler(BaseTaskScheduler):
     ) -> str:
         field = stored_hash_field("custom_tasks_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -3515,13 +2860,13 @@ class TaskScheduler(BaseTaskScheduler):
     ) -> None:
         field = stored_hash_field("custom_tasks_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: hash_value},
@@ -3542,7 +2887,7 @@ class TaskScheduler(BaseTaskScheduler):
         *,
         managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._ctx,
             filter=(
                 f"custom_key == '{custom_key}' and "
@@ -3761,13 +3106,7 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
-        if self._task_has_provider_event_trigger(task) and provider_entries:
-            self._write_provider_event_task_update(
-                task_id=task_id,
-                task=task,
-                entries=provider_entries,
-            )
-        elif provider_entries:
+        if provider_entries:
             self._write_log_entries(logs=log_ids, entries=provider_entries)
         if sync_meta:
             self._write_log_entries(logs=log_ids, entries=sync_meta)
@@ -3804,23 +3143,6 @@ class TaskScheduler(BaseTaskScheduler):
                 exc.payload,
             )
             return False
-
-        env_owner = (os.environ.get("OWNER_TEAM_ID") or "").strip()
-        if SESSION_DETAILS.team_owned:
-            owner_team_id = SESSION_DETAILS.owner_team_id
-            expected_prefix = f"Teams/{owner_team_id}/"
-            if not str(tasks_context).startswith(expected_prefix):
-                raise RuntimeError(
-                    "Refusing custom-tasks sync onto "
-                    f"{tasks_context!r} for team-owned assistant; expected under "
-                    f"Teams/{owner_team_id}/Tasks "
-                    "(destination 'personal' means the owning-team home).",
-                )
-        elif env_owner:
-            raise RuntimeError(
-                "OWNER_TEAM_ID is set but SESSION_DETAILS.owner_team_id is missing; "
-                "refusing custom-tasks sync until team ownership is bound.",
-            )
 
         previous_context = self._ctx
         previous_store = self._store
@@ -4003,7 +3325,7 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         return False
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._scheduler._ctx,
             filter=managed_rows_filter(self.managed_by),
             limit=1000,
@@ -4087,7 +3409,7 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         ``live_rows`` filters on ``managed_by``, and the pass plants a
         second copy beside the edited one.
         """
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._scheduler._ctx,
             filter=released_rows_filter(key),
             limit=1,
@@ -4101,7 +3423,7 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._scheduler._ctx,
             filter=f"custom_key == '{key}'",
             limit=1,

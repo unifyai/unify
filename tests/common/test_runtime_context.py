@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import unisdk
-
+from unify import db
 import unify.common.runtime_context as runtime_context
 from unify.common.context_registry import ContextRegistry
 from unify.common.runtime_context import (
@@ -14,7 +13,7 @@ from unify.session_details import SESSION_DETAILS
 
 
 def test_resolve_runtime_context_root_uses_session_details_in_production() -> None:
-    unisdk.unset_context()
+    db.unset_context()
     root = resolve_runtime_context_root(test=False)
     expected = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
     assert root == expected
@@ -22,21 +21,21 @@ def test_resolve_runtime_context_root_uses_session_details_in_production() -> No
 
 def test_resolve_runtime_context_root_uses_active_context_in_tests() -> None:
     pytest_root = "tests/example/test_foo/default/0"
-    unisdk.set_context(pytest_root, relative=False, skip_create=True)
+    db.set_context(pytest_root, relative=False, skip_create=True)
     try:
         assert resolve_runtime_context_root(test=True) == pytest_root
     finally:
-        unisdk.unset_context()
+        db.unset_context()
 
 
 def test_resolve_runtime_context_root_falls_back_when_test_context_missing() -> None:
-    unisdk.unset_context()
+    db.unset_context()
     expected = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
     assert resolve_runtime_context_root(test=True) == expected
 
 
 def test_resolve_runtime_context_root_for_team_owned_assistants() -> None:
-    unisdk.unset_context()
+    db.unset_context()
     original_owner = SESSION_DETAILS.owner_team_id
     original_agent = SESSION_DETAILS.assistant.agent_id
     SESSION_DETAILS.owner_team_id = 5
@@ -62,21 +61,21 @@ def test_bind_replaces_a_prebound_root_instead_of_joining(monkeypatch) -> None:
         lambda **_: "default/0",
     )
     original_base = ContextRegistry._base_context
-    unisdk.set_context(
+    db.set_context(
         "colleague/track/run/default/0",
         relative=False,
         skip_create=True,
     )
     try:
         bind_runtime_context_root(skip_create=True, strict=True)
-        active = unisdk.get_active_context()
+        active = db.get_active_context()
         assert active["read"] == "default/0"
         assert active["write"] == "default/0"
         # Repeated binds are idempotent — no path growth.
         bind_runtime_context_root(skip_create=True, strict=True)
-        assert unisdk.get_active_context()["read"] == "default/0"
+        assert db.get_active_context()["read"] == "default/0"
     finally:
-        unisdk.unset_context()
+        db.unset_context()
         ContextRegistry.set_base_context(original_base or "")
         if original_base is None:
             ContextRegistry._base_context = None
@@ -90,16 +89,16 @@ def test_bind_keeps_registry_base_and_active_context_coherent(monkeypatch) -> No
         lambda **_: "default/0",
     )
     original_base = ContextRegistry._base_context
-    unisdk.set_context(
+    db.set_context(
         "colleague/track/run/default/0",
         relative=False,
         skip_create=True,
     )
     try:
         bind_runtime_context_root(skip_create=True, strict=True)
-        assert ContextRegistry._base_context == unisdk.get_active_context()["read"]
+        assert ContextRegistry._base_context == db.get_active_context()["read"]
     finally:
-        unisdk.unset_context()
+        db.unset_context()
         ContextRegistry.set_base_context(original_base or "")
         if original_base is None:
             ContextRegistry._base_context = None
@@ -114,13 +113,13 @@ def test_bind_honors_prebound_root_when_resolve_does(monkeypatch) -> None:
         lambda **_: prebound,
     )
     original_base = ContextRegistry._base_context
-    unisdk.set_context(prebound, relative=False, skip_create=True)
+    db.set_context(prebound, relative=False, skip_create=True)
     try:
         bind_runtime_context_root(skip_create=True, strict=True)
-        assert unisdk.get_active_context()["read"] == prebound
+        assert db.get_active_context()["read"] == prebound
         assert ContextRegistry._base_context == prebound
     finally:
-        unisdk.unset_context()
+        db.unset_context()
         ContextRegistry.set_base_context(original_base or "")
         if original_base is None:
             ContextRegistry._base_context = None

@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import threading
 from typing import List, Dict, Optional, Type, Union, Any, Callable, Literal
 
-import unisdk
+from unify import db
 from pydantic import BaseModel
 from ..common.authorship import (
-    stamp_authoring_assistant_id,
     strip_authoring_assistant_id,
 )
-from ..common.colleague_cache import ColleagueNameCache
 from ..common.embed_utils import ensure_vector_column
-from ..common.log_utils import log as unity_log, _inject_private_fields
+from ..common.log_utils import log as unity_log
 from ..contact_manager.base import BaseContactManager
 from ..manager_registry import ManagerRegistry
 from .types.message import Message, UNASSIGNED
@@ -64,7 +61,6 @@ from .images import (
 )
 from ..common.context_registry import (
     ContextRegistry,
-    TEAM_CONTEXT_PREFIX,
     TableContext,
 )
 from ..common.federated_search import (
@@ -82,8 +78,6 @@ class TranscriptManager(BaseTranscriptManager):
     # ──────────────────────────────────────────────────────────────────────
     #  Class-level constants / configuration
     # ──────────────────────────────────────────────────────────────────────
-    _LOGGER = unisdk.AsyncLoggerManager(name="TranscriptManager", num_consumers=16)
-
     # Vector embedding column names
     _MSG_EMB = "_content_emb"
 
@@ -174,7 +168,6 @@ class TranscriptManager(BaseTranscriptManager):
 
         self._transcripts_ctx = ContextRegistry.get_context(self, TRANSCRIPTS_TABLE)
         self._exchanges_ctx = ContextRegistry.get_context(self, EXCHANGES_TABLE)
-        self._colleague_name_cache = ColleagueNameCache()
         self._image_destinations_by_id: dict[int, str] = {}
 
         # Image support: lazy-safe image manager and image-aware tools
@@ -203,7 +196,6 @@ class TranscriptManager(BaseTranscriptManager):
         # Using a dedicated logger means log_create() returns immediately,
         # leaving the actual network I/O to an internal worker thread.
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
-        self._pending_async_log_fallbacks: list[dict[str, Any]] = []
 
         # Provision storage (contexts, fields, columns)
         self._provision_storage()
@@ -255,7 +247,7 @@ class TranscriptManager(BaseTranscriptManager):
             dict.fromkeys(
                 (
                     self._context_for_root(root, EXCHANGES_TABLE),
-                    ContextRegistry.destination_for_root(root),
+                    None,
                 )
                 for root in ContextRegistry.read_roots(self, EXCHANGES_TABLE)
             ),
@@ -271,11 +263,6 @@ class TranscriptManager(BaseTranscriptManager):
 
         if from_root == "personal":
             return ContextRegistry.write_root(self, table_name, destination=None)
-        if from_root.startswith("team:"):
-            return ContextRegistry.write_root(self, table_name, destination=from_root)
-        if from_root.startswith(TEAM_CONTEXT_PREFIX):
-            destination = f"team:{from_root.split('/')[1]}"
-            return ContextRegistry.write_root(self, table_name, destination=destination)
         return from_root.rstrip("/")
 
     # ──────────────────────────────────────────────────────────────────────
@@ -408,7 +395,6 @@ class TranscriptManager(BaseTranscriptManager):
     def clear(self) -> None:
 
         _storage_clear(self)
-        self._colleague_name_cache.clear()
 
     # (Optional) Public programmatic helpers (non-LLM)
     def log_messages(
@@ -622,72 +608,25 @@ class TranscriptManager(BaseTranscriptManager):
         for entries, _orig_msg in zip(msg_entries, normalised_messages):
             # Ensure correct creation order by performing contact creation *before*
             # the logger call (already satisfied above).  Now we can log safely.
-            if synchronous:
-                # Sync path: block until backend responds, get assigned IDs
-                log = unity_log(
-                    context=transcripts_context,
-                    **entries,
-                    new=True,
-                    mutable=True,
-                    stamp_authoring=True,
-                )
+            log = unity_log(
+                context=transcripts_context,
+                **entries,
+                new=True,
+                mutable=True,
+                stamp_authoring=True,
+            )
 
-                # Build a Message directly from the POST response
-                persisted_payload = {
-                    k: log.entries.get(k) for k in Message.model_fields.keys()
-                }
-                # Remove any None values for id fields so the validator can apply sentinel if needed
-                if persisted_payload.get("message_id") is None:
-                    persisted_payload.pop("message_id", None)
-                if persisted_payload.get("exchange_id") is None:
-                    persisted_payload.pop("exchange_id", None)
+            # Build a Message directly from the stored row
+            persisted_payload = {
+                k: log.entries.get(k) for k in Message.model_fields.keys()
+            }
+            # Remove any None values for id fields so the validator can apply sentinel if needed
+            if persisted_payload.get("message_id") is None:
+                persisted_payload.pop("message_id", None)
+            if persisted_payload.get("exchange_id") is None:
+                persisted_payload.pop("exchange_id", None)
 
-                created_msg = Message(**persisted_payload)
-            else:
-                # Async path: fire-and-forget, don't block on network I/O
-                # Inject private fields (same as sync path via unity_log)
-                entries_with_private = _inject_private_fields(
-                    stamp_authoring_assistant_id(entries),
-                )
-                entries_with_private["explicit_types"] = {
-                    key: {"mutable": True}
-                    for key in entries_with_private
-                    if key not in {"explicit_types", "infer_untyped_fields"}
-                }
-                future = self._get_logger().log_create(
-                    project=unisdk.active_project(),
-                    context={"name": transcripts_context},
-                    entries=entries_with_private,
-                )
-                # Add callback to preserve the write if the async worker fails
-                # after enqueue.
-                if future is not None:
-                    ctx = transcripts_context
-                    fallback_entries = dict(entries)
-                    fallback_state: dict[str, Any] = {
-                        "future": future,
-                        "context": ctx,
-                        "entries": fallback_entries,
-                        "handled": False,
-                        "fallback_lock": threading.Lock(),
-                    }
-                    self._pending_async_log_fallbacks.append(fallback_state)
-
-                    def _on_log_created(
-                        fut,
-                        state=fallback_state,
-                    ):
-                        try:
-                            log_id = fut.result()
-                            if log_id:
-                                state["handled"] = True
-                        except Exception:
-                            self._fallback_async_log_create(state)
-
-                    future.add_done_callback(_on_log_created)
-                # In async mode, we don't wait for the response, so use the
-                # original message (IDs may not be assigned yet)
-                created_msg = _orig_msg
+            created_msg = Message(**persisted_payload)
 
             created_messages.append(created_msg)
 
@@ -700,156 +639,7 @@ class TranscriptManager(BaseTranscriptManager):
                     # … otherwise create a *temporary* loop so the event isn't lost.
                     asyncio.run(_publish_message(created_msg))
 
-        # ── 5. Inactivity-followup activity sync (best-effort, async) ──────
-        # Tell orchestra that the assistant just exchanged a message so its
-        # inactivity-followup routine sees fresh ``last_correspondence_at``.
-        # Pass email ``thread_id`` when present so check-in replies do not
-        # re-arm cadence. Skipped for internal/system-bus-only writes.
-        if not _skip_event_bus and created_messages:
-            try:
-                from .activity_sync import (
-                    publish_comms_activity,
-                    touch_assistant_activity,
-                )
-                from unify.session_details import SESSION_DETAILS
-
-                agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
-                if agent_id is not None:
-                    touch_thread_id = None
-                    for _msg in created_messages:
-                        meta = getattr(_msg, "metadata", None) or {}
-                        if isinstance(meta, dict) and meta.get("thread_id"):
-                            touch_thread_id = meta.get("thread_id")
-                            break
-                    threading.Thread(
-                        target=touch_assistant_activity,
-                        kwargs={
-                            "assistant_id": agent_id,
-                            "thread_id": touch_thread_id,
-                        },
-                        daemon=True,
-                        name="touch_assistant_activity",
-                    ).start()
-                    # Surface non-unify comms (email/SMS/WhatsApp/…) to Console so
-                    # the call-window avatar can adopt its "working" pose.
-                    for _msg in created_messages:
-                        publish_comms_activity(_msg, agent_id)
-            except Exception:
-                pass
-
         return created_messages
-
-    def join_published(self):
-        self._get_logger().join()
-        for state in list(self._pending_async_log_fallbacks):
-            future = state["future"]
-            if state.get("handled") or not future.done():
-                continue
-            try:
-                future.result()
-            except Exception:
-                self._fallback_async_log_create(state)
-        self._pending_async_log_fallbacks = [
-            state
-            for state in self._pending_async_log_fallbacks
-            if not state.get("handled")
-        ]
-
-    @staticmethod
-    def _async_entry_values_match(expected: Any, actual: Any) -> bool:
-        """Return whether an async fallback candidate already exists."""
-
-        if expected is None:
-            return actual is None
-        if isinstance(expected, list):
-            return list(actual or []) == expected
-        if str(expected) == str(actual):
-            return True
-        expected_text = str(expected).replace("+00:00", "Z")
-        actual_text = str(actual).replace("+00:00", "Z")
-        return expected_text == actual_text
-
-    def _find_existing_async_log_id(self, state: dict[str, Any]) -> Optional[int]:
-        """Find a row written by the async logger before fallback persistence runs."""
-
-        entries = state["entries"]
-        exchange_id = entries.get("exchange_id")
-        if exchange_id is None:
-            return None
-        try:
-            rows = unisdk.get_logs(
-                context=state["context"],
-                filter=f"exchange_id == {int(exchange_id)}",
-                limit=20,
-            )
-        except Exception:
-            return None
-
-        match_fields = (
-            "medium",
-            "sender_id",
-            "receiver_ids",
-            "timestamp",
-            "content",
-            "exchange_id",
-        )
-        for row in rows:
-            row_entries = getattr(row, "entries", {}) or {}
-            if all(
-                self._async_entry_values_match(
-                    entries.get(field),
-                    row_entries.get(field),
-                )
-                for field in match_fields
-                if field in entries
-            ):
-                try:
-                    return int(row.id)
-                except Exception:
-                    return None
-        return None
-
-    def _fallback_async_log_create(self, state: dict[str, Any]) -> None:
-        """Synchronously persist a row if the async logger dropped it."""
-
-        fallback_lock = state.get("fallback_lock")
-        if fallback_lock is not None:
-            with fallback_lock:
-                self._fallback_async_log_create_unlocked(state)
-            return
-        self._fallback_async_log_create_unlocked(state)
-
-    def _fallback_async_log_create_unlocked(self, state: dict[str, Any]) -> None:
-        """Persist one async fallback while the caller holds the state lock."""
-
-        if state.get("handled"):
-            return
-        existing_log_id = None
-        for delay_seconds in (0.0, 0.25, 0.75, 1.5):
-            if delay_seconds:
-                try:
-                    import time
-
-                    time.sleep(delay_seconds)
-                except Exception:
-                    pass
-            existing_log_id = self._find_existing_async_log_id(state)
-            if existing_log_id is not None:
-                break
-        if existing_log_id is not None:
-            state["handled"] = True
-            return
-        try:
-            unity_log(
-                context=state["context"],
-                **state["entries"],
-                new=True,
-                mutable=True,
-                stamp_authoring=True,
-            )
-            state["handled"] = True
-        except Exception:
-            pass
 
     @staticmethod
     def build_plain_transcript(
@@ -998,7 +788,7 @@ class TranscriptManager(BaseTranscriptManager):
             or a list such as ``[\"medium\", \"sender_id\"]`` to group
             hierarchically in that order. When provided, the result becomes a
             nested mapping keyed by group values, mirroring
-            :func:`unisdk.get_logs_metric`.
+            :func:`db.get_logs_metric`.
 
         Returns
         -------
@@ -1097,13 +887,13 @@ class TranscriptManager(BaseTranscriptManager):
 
         # ── 1.  Bulk update all *sender_id* occurrences ────────────────────
         for context in self._read_transcript_contexts():
-            sender_log_ids = unisdk.get_logs(
+            sender_log_ids = db.get_logs(
                 context=context,
                 filter=f"sender_id is not None and sender_id == {original_contact_id}",
                 return_ids_only=True,
             )
             if sender_log_ids:
-                unisdk.update_logs(
+                db.update_logs(
                     logs=sender_log_ids,
                     context=context,
                     entries={"sender_id": new_contact_id},
@@ -1112,7 +902,7 @@ class TranscriptManager(BaseTranscriptManager):
                 total_updates += len(sender_log_ids)
 
             # ── 2.  Update all *receiver_ids* lists containing the old id ──────
-            receiver_logs = unisdk.get_logs(
+            receiver_logs = db.get_logs(
                 context=context,
                 filter=f"{original_contact_id} in receiver_ids",
                 return_ids_only=False,
@@ -1136,7 +926,7 @@ class TranscriptManager(BaseTranscriptManager):
 
                 # Only write when the list actually changed
                 if deduped_rids != rids:
-                    unisdk.update_logs(
+                    db.update_logs(
                         logs=lg.id if hasattr(lg, "id") else lg,
                         context=context,
                         entries={"receiver_ids": deduped_rids},
@@ -1165,13 +955,13 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._transcripts_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
-        log_ids = unisdk.get_logs(
+        log_ids = db.get_logs(
             context=context,
             filter=f"message_id == {message_id}",
             return_ids_only=True,
         )
         if log_ids:
-            unisdk.update_logs(
+            db.update_logs(
                 logs=log_ids,
                 context=context,
                 entries={"images": images},
@@ -1190,14 +980,14 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._transcripts_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
-        log_ids = unisdk.get_logs(
+        log_ids = db.get_logs(
             context=context,
             filter=f"message_id == {int(message_id)}",
             return_ids_only=True,
         )
         if not log_ids:
             return
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=f"message_id == {int(message_id)}",
             limit=1,
@@ -1208,7 +998,7 @@ class TranscriptManager(BaseTranscriptManager):
                 (getattr(rows[0], "entries", {}) or {}).get("metadata") or {},
             )
         metadata["reactions"] = reactions
-        unisdk.update_logs(
+        db.update_logs(
             logs=log_ids,
             context=context,
             entries={"metadata": metadata},
@@ -1226,7 +1016,7 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._transcripts_context_for_destination(destination)
         except ToolErrorException:
             return None
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=f"message_id == {int(message_id)}",
             limit=1,
@@ -1250,7 +1040,7 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._transcripts_context_for_destination(destination)
         except ToolErrorException:
             return None
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=f'metadata.provider_message_sid == "{escaped}"',
             limit=1,
@@ -1285,7 +1075,7 @@ class TranscriptManager(BaseTranscriptManager):
             return {}
         escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
         for context in self._read_transcript_contexts():
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=context,
                 filter=f'metadata.conversation_key == "{escaped}"',
                 sorting={"timestamp": "descending"},
@@ -1316,7 +1106,7 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._transcripts_context_for_destination(destination)
         except ToolErrorException:
             return None
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=f"metadata.chat_message_id == {int(chat_message_id)}",
             limit=1,
@@ -1555,7 +1345,7 @@ class TranscriptManager(BaseTranscriptManager):
             contexts = [self._exchanges_context_for_destination(destination)]
         rows = []
         for context in contexts:
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=context,
                 filter=f"exchange_id == {int(exchange_id)}",
                 limit=1,
@@ -1599,7 +1389,7 @@ class TranscriptManager(BaseTranscriptManager):
             return None
         escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
         for context, destination in self._read_exchange_roots():
-            rows = unisdk.get_logs(
+            rows = db.get_logs(
                 context=context,
                 filter=f'metadata.{key} == "{escaped}"',
                 limit=1,
@@ -1639,7 +1429,7 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._exchanges_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=f"exchange_id == {int(exchange_id)}",
             limit=1,
@@ -1650,7 +1440,7 @@ class TranscriptManager(BaseTranscriptManager):
             )
         merged = dict(rows[0].entries.get("metadata") or {})
         merged.update(dict(metadata or {}))
-        unisdk.update_logs(
+        db.update_logs(
             logs=rows[0].id,
             context=context,
             entries={"metadata": merged},
@@ -1673,7 +1463,7 @@ class TranscriptManager(BaseTranscriptManager):
         fetch_limit = (offset + limit) if limit is not None else 1000
         for context in self._read_exchange_contexts():
             logs.extend(
-                unisdk.get_logs(
+                db.get_logs(
                     context=context,
                     filter=normalized,
                     offset=0,
@@ -1799,42 +1589,6 @@ class TranscriptManager(BaseTranscriptManager):
 
         tm_message_id = int(log.entries.get("message_id", -1))
 
-        # ── Inactivity-followup activity sync (best-effort, async) ─────────
-        # Mirrors the hook at the end of log_messages so first-message writes
-        # — which use unity_log directly and bypass log_messages — also bump
-        # last_correspondence_at on the assistant row. Dispatched to a daemon
-        # thread so the network round-trip never blocks the caller; failures
-        # are swallowed inside ``touch_assistant_activity``.
-        try:
-            import threading
-
-            from .activity_sync import (
-                publish_comms_activity,
-                touch_assistant_activity,
-            )
-            from unify.session_details import SESSION_DETAILS
-
-            agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
-            if agent_id is not None:
-                meta = getattr(created_model, "metadata", None) or {}
-                touch_thread_id = (
-                    meta.get("thread_id") if isinstance(meta, dict) else None
-                )
-                threading.Thread(
-                    target=touch_assistant_activity,
-                    kwargs={
-                        "assistant_id": agent_id,
-                        "thread_id": touch_thread_id,
-                    },
-                    daemon=True,
-                    name="touch_assistant_activity",
-                ).start()
-                # First-in-exchange comms (e.g. a new email/SMS thread) also
-                # surface to Console for the call-window "working" pose.
-                publish_comms_activity(created_model, agent_id)
-        except Exception:
-            pass
-
         return exid, tm_message_id
 
     def _move_row(
@@ -1856,7 +1610,7 @@ class TranscriptManager(BaseTranscriptManager):
         source_context = self._context_for_root(source_root, table_name)
         target_context = self._context_for_root(target_root, table_name)
 
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=source_context,
             filter=f"{id_field} == {int(row_id)}",
             limit=2,
@@ -1875,7 +1629,7 @@ class TranscriptManager(BaseTranscriptManager):
             payload = record.to_post_json()
         else:
             payload = record.model_dump(mode="json")
-        target_ids = unisdk.get_logs(
+        target_ids = db.get_logs(
             context=target_context,
             filter=f"{id_field} == {int(row_id)}",
             return_ids_only=True,
@@ -1886,7 +1640,7 @@ class TranscriptManager(BaseTranscriptManager):
                 f"Multiple {table_name} rows found with {id_field}={int(row_id)} in {target_context}.",
             )
         if target_ids:
-            unisdk.update_logs(
+            db.update_logs(
                 context=target_context,
                 logs=[target_ids[0]],
                 entries=strip_authoring_assistant_id(payload),
@@ -1900,7 +1654,7 @@ class TranscriptManager(BaseTranscriptManager):
                 mutable=True,
             )
 
-        unisdk.delete_logs(context=source_context, logs=rows[0].id)
+        db.delete_logs(context=source_context, logs=rows[0].id)
         return {
             "outcome": f"{table_name} row moved",
             "details": {
@@ -1956,19 +1710,7 @@ class TranscriptManager(BaseTranscriptManager):
     def _format_contacts_and_messages(self, messages: List[Message]) -> Dict[str, Any]:
         return _format_contacts_and_messages_impl(self, messages)
 
-    def _resolve_authoring_assistant_name(
-        self,
-        authoring_assistant_id: int | None,
-    ) -> str | None:
-        """Resolve authoring assistant ids into stable human-readable labels."""
-
-        return self._colleague_name_cache.resolve(authoring_assistant_id)
-
     # Misc small utilities (kept last)
-    @classmethod
-    def _get_logger(cls) -> unisdk.AsyncLoggerManager:
-        return cls._LOGGER
-
     @staticmethod
     def _default_ask_tool_policy(
         step_index: int,

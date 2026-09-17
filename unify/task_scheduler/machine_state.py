@@ -9,27 +9,18 @@ candidates without polling the full user task table.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-import requests
-
 from unify.common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
-    TEAM_DESTINATION_PREFIX,
 )
 from unify.session_details import SESSION_DETAILS
-from unify.settings import SETTINGS
 
-from unify.task_scheduler.resource_requirements import (
-    resolve_requires_computer,
-    resolve_requires_filesystem,
-)
+from unify import db
 from unify.task_scheduler.storage import TasksStore
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.execution import Delivery, ExecutionState, Wake
@@ -37,21 +28,10 @@ from unify.task_scheduler.types.run_source import RunSource
 
 TASKS_CONTEXT_NAME = "Tasks"
 TASK_EXECUTIONS_CONTEXT_NAME = "Tasks/Executions"
-TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME = "Tasks/OutboundOperations"
 _TASK_EXECUTIONS_CONTEXT_LEAF = "Executions"
-_TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 TASK_MACHINE_STATE_PROJECT = "Assistants"
 # Assistant-scoped task-machine routes (authenticated with the assistant's own
 # UNIFY_KEY; Orchestra enforces ownership). Not the /admin/* variants.
-_TASK_EXECUTION_CREATE_OR_ADOPT_PATH = "/task-execution/create-or-adopt"
-_TASK_EXECUTION_LATEST_PATH = "/task-execution/latest"
-_TASK_EXECUTION_UPDATE_PATH = "/task-execution/update"
-_TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
-    "/task-outbound-operation/create-or-adopt"
-)
-_TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/task-outbound-operation/update"
-_TASK_RUN_HTTP_TIMEOUT_SECONDS = 15
-_TASK_RUN_HTTP_ATTEMPTS = 4
 _EXECUTION_QUERY_FIELDS = [
     "assistant_id",
     "destination",
@@ -171,40 +151,6 @@ class TaskRunReference:
     source_task_log_id: int | None = field(default=None, compare=False)
 
 
-@dataclass(frozen=True)
-class TaskOutboundOperationProvenance:
-    """Durable provenance facts for one assistant-owned outbound operation."""
-
-    assistant_id: str
-    task_run_key: str
-    operation_index: int
-    method_name: str
-    medium: str
-    target_kind: str
-    target_metadata: Mapping[str, Any] = field(default_factory=dict)
-    task_id: int | None = None
-    source_task_log_id: int | None = None
-    contact_id: int | None = None
-
-
-@dataclass(frozen=True)
-class TaskOutboundOperationReference:
-    """Stable identifiers needed to patch one outbound ledger row later."""
-
-    assistant_id: str
-    operation_key: str
-    source_task_log_id: int | None = field(default=None, compare=False)
-
-
-@dataclass(frozen=True)
-class TaskOutboundOperationRecord:
-    """Materialized outbound operation row returned by Orchestra admin APIs."""
-
-    reference: TaskOutboundOperationReference
-    payload: dict[str, Any]
-    created: bool
-
-
 def build_task_executions_context_name(
     *,
     user_context: str | None = None,
@@ -219,20 +165,6 @@ def build_task_executions_context_name(
     )
 
 
-def build_task_outbound_operations_context_name(
-    *,
-    user_context: str | None = None,
-    assistant_context: str | None = None,
-) -> str:
-    """Return the assistant-scoped Orchestra context for outbound operation rows."""
-
-    return _build_task_machine_context_name(
-        leaf_name=_TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF,
-        user_context=user_context,
-        assistant_context=assistant_context,
-    )
-
-
 def _build_task_machine_context_name(
     *,
     leaf_name: str,
@@ -241,14 +173,6 @@ def _build_task_machine_context_name(
 ) -> str:
     """Return one assistant-scoped task-machine context path."""
 
-    if user_context is None and SESSION_DETAILS.team_owned:
-        owner_team_id = SESSION_DETAILS.owner_team_id
-        if owner_team_id is None:
-            raise RuntimeError(
-                "Team-owned assistant is missing SESSION_DETAILS.owner_team_id; "
-                "refusing to resolve task-machine contexts onto a personal root.",
-            )
-        return f"Teams/{owner_team_id}/{TASKS_CONTEXT_NAME}/{leaf_name}"
     resolved_user_context = _coerce_str(user_context) or SESSION_DETAILS.user_context
     resolved_assistant_context = (
         _coerce_str(assistant_context) or SESSION_DETAILS.assistant_context
@@ -462,6 +386,29 @@ def create_or_adopt_live_task_run(
     )
 
 
+def _executions_context() -> str:
+    """Return the executions context, creating it on first use."""
+
+    context = build_task_executions_context_name()
+    db.create_context(
+        context,
+        unique_keys={"run_key": "str"},
+        project=TASK_MACHINE_STATE_PROJECT,
+    )
+    return context
+
+
+def _find_run_log_id(context: str, run_key: str) -> int | None:
+    ids = db.get_logs(
+        project=TASK_MACHINE_STATE_PROJECT,
+        context=context,
+        filter=f"run_key == {run_key!r}",
+        limit=1,
+        return_ids_only=True,
+    )
+    return int(ids[0]) if ids else None
+
+
 def _create_or_adopt_task_run(
     provenance: TaskRunProvenance,
     *,
@@ -469,11 +416,10 @@ def _create_or_adopt_task_run(
     started_at: str | None = None,
 ) -> TaskRunReference | None:
     run_key = build_task_run_key(provenance)
-    response_body = _orchestra_admin_post(
-        _TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
-        _drop_none_values(
+    context = _executions_context()
+    if _find_run_log_id(context, run_key) is None:
+        row = _drop_none_values(
             {
-                "project_name": TASK_MACHINE_STATE_PROJECT,
                 "run_key": run_key,
                 "assistant_id": provenance.assistant_id,
                 "task_id": provenance.task_id,
@@ -482,8 +428,7 @@ def _create_or_adopt_task_run(
                 "delivery": provenance.delivery.value,
                 # The digest inside run_key hashed str(revision or ""), so the
                 # row must carry the same value the dispatcher will rebuild the
-                # key from at fire time. Dropping a None here would leave the
-                # dispatcher hashing a value the row never stored.
+                # key from at fire time.
                 "revision": str(provenance.revision or ""),
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
@@ -497,17 +442,15 @@ def _create_or_adopt_task_run(
                 "started_at": started_at,
                 "state": state.value,
             },
-        ),
-    )
-    if not isinstance(response_body, Mapping):
-        return None
-    run_payload = response_body.get("run")
-    if not isinstance(run_payload, Mapping):
-        return None
-    persisted_run_key = _coerce_str(run_payload.get("run_key")) or run_key
+        )
+        db.create_logs(
+            project=TASK_MACHINE_STATE_PROJECT,
+            context=context,
+            entries=[row],
+        )
     return TaskRunReference(
         assistant_id=provenance.assistant_id,
-        run_key=persisted_run_key,
+        run_key=run_key,
         source_task_log_id=provenance.source_task_log_id,
     )
 
@@ -516,28 +459,25 @@ def update_task_run_record(
     run_reference: TaskRunReference | None,
     updates: Mapping[str, Any],
 ) -> None:
-    """Patch one previously materialized execution row back in Orchestra.
+    """Patch one previously materialized execution row.
 
-    The envelope drops its own empty fields, but ``updates`` is passed
-    through as given: a None in there is the caller saying "clear this".
-    Stripping it too meant a run that succeeded after a failed attempt on the
-    same run_key could never clear the earlier ``error``, and the row read as
-    a completed run that had also failed.
+    ``updates`` is applied as given: a None in there is the caller saying
+    "clear this", so a run that succeeded after a failed attempt on the same
+    run_key can clear the earlier ``error``.
     """
 
     if run_reference is None:
         return
-    _orchestra_admin_post(
-        _TASK_EXECUTION_UPDATE_PATH,
-        _drop_none_values(
-            {
-                "project_name": TASK_MACHINE_STATE_PROJECT,
-                "assistant_id": run_reference.assistant_id,
-                "run_key": run_reference.run_key,
-                "source_task_log_id": run_reference.source_task_log_id,
-            },
-        )
-        | {"updates": dict(updates)},
+    context = _executions_context()
+    log_id = _find_run_log_id(context, run_reference.run_key)
+    if log_id is None:
+        return
+    db.update_logs(
+        logs=log_id,
+        context=context,
+        entries=dict(updates),
+        overwrite=True,
+        project=TASK_MACHINE_STATE_PROJECT,
     )
 
 
@@ -552,97 +492,27 @@ def latest_task_run_reference_for_source(
     normalized_assistant_id = _coerce_str(assistant_id)
     if not normalized_assistant_id:
         return None
-    response_body = _orchestra_admin_post(
-        _TASK_EXECUTION_LATEST_PATH,
-        {
-            "project_name": TASK_MACHINE_STATE_PROJECT,
-            "assistant_id": normalized_assistant_id,
-            "task_id": int(task_id),
-            "source_task_log_id": int(source_task_log_id),
-        },
+    rows = db.get_logs(
+        project=TASK_MACHINE_STATE_PROJECT,
+        context=_executions_context(),
+        filter=(
+            f"assistant_id == {normalized_assistant_id!r} and "
+            f"task_id == {int(task_id)} and "
+            f"source_task_log_id == {int(source_task_log_id)}"
+        ),
+        sorting={"row_id": "descending"},
+        limit=1,
+        from_fields=["run_key"],
     )
-    if not isinstance(response_body, Mapping):
+    if not rows:
         return None
-    run_payload = response_body.get("run")
-    if not isinstance(run_payload, Mapping):
-        return None
-    run_key = _coerce_str(run_payload.get("run_key"))
+    run_key = _coerce_str(rows[0].entries.get("run_key"))
     if not run_key:
         return None
     return TaskRunReference(
         assistant_id=normalized_assistant_id,
         run_key=run_key,
         source_task_log_id=int(source_task_log_id),
-    )
-
-
-def create_or_adopt_task_outbound_operation(
-    provenance: TaskOutboundOperationProvenance,
-    *,
-    created_at: str | None = None,
-) -> TaskOutboundOperationRecord | None:
-    """Create or adopt one outbound operation row for offline send idempotency."""
-
-    operation_key = build_task_outbound_operation_key(provenance)
-    response_body = _orchestra_admin_post(
-        _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH,
-        _drop_none_values(
-            {
-                "project_name": TASK_MACHINE_STATE_PROJECT,
-                "operation_key": operation_key,
-                "assistant_id": provenance.assistant_id,
-                "task_run_key": provenance.task_run_key,
-                "task_id": provenance.task_id,
-                "source_task_log_id": provenance.source_task_log_id,
-                "operation_index": provenance.operation_index,
-                "method_name": provenance.method_name,
-                "medium": provenance.medium,
-                "target_kind": provenance.target_kind,
-                "contact_id": provenance.contact_id,
-                "target_metadata": dict(provenance.target_metadata),
-                "created_at": created_at or _now_iso(),
-                "status": "pending",
-            },
-        ),
-    )
-    if not isinstance(response_body, Mapping):
-        return None
-    operation_payload = response_body.get("operation")
-    if not isinstance(operation_payload, Mapping):
-        return None
-    persisted_operation_key = (
-        _coerce_str(operation_payload.get("operation_key")) or operation_key
-    )
-    return TaskOutboundOperationRecord(
-        reference=TaskOutboundOperationReference(
-            assistant_id=provenance.assistant_id,
-            operation_key=persisted_operation_key,
-            source_task_log_id=provenance.source_task_log_id,
-        ),
-        payload=dict(operation_payload),
-        created=bool(response_body.get("created")),
-    )
-
-
-def update_task_outbound_operation_record(
-    operation_reference: TaskOutboundOperationReference | None,
-    updates: Mapping[str, Any],
-) -> None:
-    """Patch one previously materialized outbound operation row in Orchestra."""
-
-    if operation_reference is None:
-        return
-    _orchestra_admin_post(
-        _TASK_OUTBOUND_OPERATION_UPDATE_PATH,
-        _drop_none_values(
-            {
-                "project_name": TASK_MACHINE_STATE_PROJECT,
-                "assistant_id": operation_reference.assistant_id,
-                "operation_key": operation_reference.operation_key,
-                "source_task_log_id": operation_reference.source_task_log_id,
-                "updates": _drop_none_values(dict(updates)),
-            },
-        ),
     )
 
 
@@ -679,30 +549,6 @@ def build_task_run_key(provenance: TaskRunProvenance) -> str:
         f"{delivery.value}:{wake.value}:"
         f"{provenance.assistant_id}:{destination_part}{provenance.task_id}:"
         f"{revision_digest}:{tail}"
-    )
-
-
-def build_task_outbound_operation_key(
-    provenance: TaskOutboundOperationProvenance,
-) -> str:
-    """Build the canonical outbound-operation key shared across retry attempts."""
-
-    target_identity = _drop_none_values(
-        {
-            "contact_id": provenance.contact_id,
-            "target_kind": provenance.target_kind,
-            "target_metadata": dict(provenance.target_metadata),
-        },
-    )
-    target_digest = hashlib.sha256(
-        json.dumps(target_identity, sort_keys=True, default=str).encode("utf-8"),
-    ).hexdigest()[:12]
-    method_fragment = (
-        _normalize_run_key_component(provenance.method_name) or "operation"
-    )
-    return (
-        f"{provenance.task_run_key}:op-{provenance.operation_index}:"
-        f"{method_fragment[:24]}:{target_digest}"
     )
 
 
@@ -937,15 +783,7 @@ def list_trigger_executions(
     executions: list[TaskExecutionSnapshot] = []
     for row in rows:
         execution = _row_to_execution(row)
-        destination_team_id = (
-            _destination_team_id(execution.destination)
-            if execution is not None
-            else None
-        )
-        if execution is not None and (
-            destination_team_id is None
-            or destination_team_id in set(SESSION_DETAILS.team_ids)
-        ):
+        if execution is not None:
             executions.append(execution)
     return executions
 
@@ -981,11 +819,6 @@ def validate_task_due_execution(
         return None, "revision_mismatch"
     if execution.destination != normalized_destination:
         return None, "destination_mismatch"
-    destination_team_id = _destination_team_id(execution.destination)
-    if destination_team_id is not None and destination_team_id not in set(
-        SESSION_DETAILS.team_ids,
-    ):
-        return None, "destination_membership_revoked"
     if execution.source_task_log_id != source_task_log_id:
         return None, "source_task_log_id_mismatch"
     if _normalize_datetime_string(
@@ -1011,15 +844,6 @@ def _open_execution_state_filter(
 
     quoted = " or ".join(f"state == '{state.value}'" for state in states)
     return f"({quoted})"
-
-
-def _destination_team_id(destination: str | None) -> int | None:
-    """Return the team id encoded in a task destination label."""
-
-    normalized_destination = _canonical_destination_or_none(destination)
-    if normalized_destination is None:
-        return None
-    return int(normalized_destination[len(TEAM_DESTINATION_PREFIX) :])
 
 
 def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
@@ -1064,8 +888,8 @@ def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
         max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
         recurring=bool(entries.get("recurring", False)),
         revision=_coerce_str(entries.get("revision")),
-        requires_filesystem=resolve_requires_filesystem(entries),
-        requires_computer=resolve_requires_computer(entries),
+        requires_filesystem=bool(entries.get("requires_filesystem", False)),
+        requires_computer=bool(entries.get("requires_computer", False)),
     )
 
 
@@ -1077,51 +901,6 @@ def _normalize_wake(value: Wake | RunSource | str) -> Wake:
     if isinstance(value, RunSource):
         return Wake.normalize(value.value)
     return Wake.normalize(value)
-
-
-def _orchestra_admin_post(
-    path: str,
-    payload: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    """POST one task-machine payload back to Orchestra as this assistant."""
-
-    orchestra_url = (SETTINGS.ORCHESTRA_URL or "").rstrip("/")
-    unify_key = SESSION_DETAILS.unify_key
-    if not orchestra_url or not unify_key:
-        logger.warning(
-            "Skipping task-execution persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
-        )
-        return None
-    # Every payload on this path is idempotent — create-or-adopt converges on
-    # run_key / operation_key, and updates are keyed patches — so a transient
-    # failure is retried rather than surfaced. A single 500 here once ended a
-    # recurring series for good: the occurrence that failed to project was the
-    # only thing that would ever project its successor.
-    last_error: Exception | None = None
-    for attempt in range(_TASK_RUN_HTTP_ATTEMPTS):
-        if attempt:
-            time.sleep(2 ** (attempt - 1))
-        try:
-            response = requests.post(
-                f"{orchestra_url}{path}",
-                json=dict(payload),
-                headers={"Authorization": f"Bearer {unify_key}"},
-                timeout=_TASK_RUN_HTTP_TIMEOUT_SECONDS,
-            )
-        except requests.RequestException as exc:
-            last_error = exc
-            continue
-        if response.status_code >= 500 or response.status_code == 429:
-            last_error = requests.HTTPError(
-                f"{response.status_code} from {path}",
-                response=response,
-            )
-            continue
-        response.raise_for_status()
-        body = response.json()
-        return body if isinstance(body, dict) else None
-    assert last_error is not None
-    raise last_error
 
 
 def _drop_none_values(payload: Mapping[str, Any]) -> dict[str, Any]:

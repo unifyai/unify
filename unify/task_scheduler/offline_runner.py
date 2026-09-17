@@ -1,7 +1,7 @@
-"""Entry point for Unity's headless offline task lane.
+"""Entry point for the headless offline task lane.
 
-This module runs inside the short-lived Unity job created by Communication when
-a scheduled, triggered, or explicitly REST-triggered task should execute without
+This module runs in the short-lived subprocess the local scheduler starts when
+a scheduled, triggered, or explicitly triggered task should execute without
 waking the full live assistant runtime. It exists to answer one simple question:
 
 "How do we run one task in the background, with the assistant's identity and
@@ -10,20 +10,16 @@ ConversationManager?"
 
 The runner is intentionally small and procedural:
 
-1. Read the activation/run payload that Communication injected into env vars.
+1. Read the activation/run payload the dispatcher injected into env vars.
 2. Populate `SESSION_DETAILS` so shared primitives know which assistant is
    acting.
-3. Boot the same non-ConversationManager assistant substrate as live wake
-   (workspace, unify.init, EventBus, eager managers, blocking deployment
-   reconcile, Secrets→env hydrate). Filesystem/VM stay opt-in via
-   ``requires_filesystem`` / ``requires_computer``.
+3. Initialise the runtime (project, context root, EventBus).
 4. Enter `TaskScheduler.execute(...)` with a CodeActActor-backed execution
    delegate so scheduler lifecycle and recurring rearm semantics stay central.
 5. Persist the terminal run state through the scheduler-owned task run lifecycle.
 
 There is no ConversationManager and no CM↔offline steering path if a live
-session later wakes. Communication owns orchestration and job creation. The
-task row owns whether execution is agentic or symbolic.
+session later wakes. The task row owns whether execution is agentic or symbolic.
 
 Event-loop note: ``main()`` drives the whole run with ``asyncio.run``. Sync
 symbolic entrypoints therefore execute under an already-running loop (Unify
@@ -43,42 +39,30 @@ import signal
 import traceback
 from typing import Any
 
-import requests
-
 import unify
 from unify.actor.code_act_actor import CodeActActor
 from unify.actor.environments import (
     ActorEnvironment,
-    ComputerEnvironment,
     StateManagerEnvironment,
 )
 from unify.common.context_registry import ContextRegistry
 from unify.common.task_execution_context import current_task_execution_delegate
-from unify.comms.capabilities import offline_comms_guidance
-from unify.function_manager.primitives import ComputerPrimitives
 from unify.logger import LOGGER
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
     TaskRunProvenance,
+    TaskRunReference,
     remember_live_task_run_provenance,
+    update_task_run_record,
 )
 from unify.task_scheduler.task_scheduler import (
     StaleActivationSuperseded,
     TaskScheduler,
 )
-from unify.task_scheduler.provider_event_context import (
-    fetch_provider_event_context,
-    provider_event_context_as_untrusted_data,
-    verify_precreated_provider_event_run,
-)
-from unify.task_scheduler.provider_event_dispatch import ProviderEventDispatchRequest
-from unify.task_scheduler.provider_event_execution import resolve_captured_task_revision
 from unify.task_scheduler.types.execution import Delivery, Wake
 from unify.task_scheduler.types.run_source import RunSource
 
-TASK_EXECUTION_UPDATE_PATH = "/task-execution/update"
-HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
 SCHEDULER_MANAGED_WAKES = frozenset(Wake)
 _SIGTERM_EXIT_CODE = 143
@@ -86,12 +70,12 @@ _SIGTERM_EXIT_CODE = 143
 
 @dataclass(frozen=True)
 class OfflineTaskConfig:
-    """One fully-materialized offline run request from job environment variables.
+    """One fully-materialized offline run request from process environment variables.
 
-    Communication injects these values when it creates the short-lived Unity
-    job. Together they identify which assistant is acting, which stored
-    function should run, why it was activated, and which durable `Tasks/Executions`
-    row should be updated as execution progresses.
+    The dispatcher injects these values when it starts the runner. Together
+    they identify which assistant is acting, which stored function should
+    run, why it was activated, and which durable `Tasks/Executions` row
+    should be updated as execution progresses.
     """
 
     assistant_id: str
@@ -146,56 +130,6 @@ def _bool_env(name: str, *, default: bool = False) -> bool:
     return value in {"1", "true", "yes"}
 
 
-def _ensure_desktop_env_for_resources(config: OfflineTaskConfig) -> None:
-    """Fail loudly when desktop resources are required but Comms did not inject them.
-
-    Comms should 503-retry until the desktop is ready before launching this
-    runner. Missing ``ASSISTANT_DESKTOP_URL`` / ``ASSISTANT_BROWSER_TARGET``
-    here means that guard was skipped.
-    """
-
-    if not (config.requires_computer or config.requires_filesystem):
-        return
-    desktop_url = os.environ.get("ASSISTANT_DESKTOP_URL", "").strip()
-    browser_target = os.environ.get("ASSISTANT_BROWSER_TARGET", "").strip()
-    if not desktop_url or not browser_target:
-        raise RuntimeError(
-            "Offline task requires desktop resources "
-            f"(requires_filesystem={config.requires_filesystem}, "
-            f"requires_computer={config.requires_computer}) but "
-            "ASSISTANT_DESKTOP_URL / ASSISTANT_BROWSER_TARGET are missing. "
-            "Comms should 503-retry until the desktop is ready before launch.",
-        )
-
-
-def _load_provider_event_dispatch_from_env() -> ProviderEventDispatchRequest:
-    """Construct one offline provider-event dispatch authorization from env."""
-
-    issued_at_raw = _require_env("UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT")
-    try:
-        issued_at = datetime.fromisoformat(issued_at_raw.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise RuntimeError(
-            "Invalid UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
-        ) from exc
-    if issued_at.tzinfo is None:
-        issued_at = issued_at.replace(tzinfo=timezone.utc)
-    return ProviderEventDispatchRequest(
-        operation_id=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"),
-        run_id=int(_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID")),
-        run_key=_require_env("UNIFY_OFFLINE_RUN_KEY"),
-        assistant_id=_require_env("ASSISTANT_ID"),
-        task_id=int(_require_env("UNIFY_OFFLINE_TASK_ID")),
-        binding_id=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID"),
-        receipt_id=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"),
-        accepted_revision=_require_env("UNIFY_OFFLINE_TASK_REVISION"),
-        wake="provider_event",
-        delivery="offline",
-        event_context_ref=_require_env("UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"),
-        issued_at=issued_at,
-    )
-
-
 def _load_config_from_env() -> OfflineTaskConfig:
     """Construct one validated offline task config from process environment."""
 
@@ -233,62 +167,22 @@ def _load_config_from_env() -> OfflineTaskConfig:
     )
 
 
-def _orchestra_admin_headers() -> dict[str, str]:
-    """Return auth headers for Orchestra task-execution APIs.
-
-    Offline runner Jobs carry the assistant's own ``UNIFY_KEY`` (injected by
-    task activation); Orchestra scopes the run update to that assistant.
-    """
-
-    unify_key = _require_env("UNIFY_KEY")
-    return {"Authorization": f"Bearer {unify_key}"}
-
-
-def _task_run_update_payload(
-    assistant_id: str,
-    run_key: str,
-    updates: dict[str, Any],
-    source_task_log_id: int | None = None,
-) -> dict[str, Any]:
-    """Return the admin payload for one partial run update.
-
-    ``source_task_log_id`` pins the task's own surface so team-task runs
-    (living under ``Teams/{id}/Tasks/Executions``) resolve on update exactly as
-    they did on creation.
-    """
-
-    payload = {
-        "project_name": TASK_MACHINE_STATE_PROJECT,
-        "assistant_id": assistant_id,
-        "run_key": run_key,
-        "updates": updates,
-    }
-    if source_task_log_id is not None:
-        payload["source_task_log_id"] = int(source_task_log_id)
-    return payload
-
-
 def _update_task_run(
     assistant_id: str,
     run_key: str,
     updates: dict[str, Any],
     source_task_log_id: int | None = None,
 ) -> None:
-    """Persist one partial run update back to Orchestra."""
+    """Persist one partial run update to the ``Tasks/Executions`` row."""
 
-    orchestra_url = _require_env("ORCHESTRA_URL")
-    response = requests.post(
-        f"{orchestra_url}{TASK_EXECUTION_UPDATE_PATH}",
-        json=_task_run_update_payload(
-            assistant_id,
-            run_key,
-            updates,
+    update_task_run_record(
+        TaskRunReference(
+            assistant_id=assistant_id,
+            run_key=run_key,
             source_task_log_id=source_task_log_id,
         ),
-        headers=_orchestra_admin_headers(),
-        timeout=HTTP_TIMEOUT_SECONDS,
+        updates,
     )
-    response.raise_for_status()
 
 
 def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
@@ -304,7 +198,6 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
         return
     try:
         SESSION_DETAILS.populate_from_env()
-        SESSION_DETAILS.bind_derived_ownership()
         unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
         scheduler = TaskScheduler()
         rows = scheduler._store.get_rows_by_log_ids(  # type: ignore[attr-defined]
@@ -331,7 +224,7 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
 
 
 def _install_sigterm_handler(config: OfflineTaskConfig) -> None:
-    """Terminalize an active Tasks source when Kubernetes sends SIGTERM."""
+    """Terminalize an active Tasks source when the process receives SIGTERM."""
 
     def _handle_sigterm(signum: int, frame: Any) -> None:
         del signum, frame
@@ -445,18 +338,10 @@ def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
 
 
 def _build_offline_actor(config: OfflineTaskConfig) -> CodeActActor:
-    """Construct the actor substrate for a headless task run.
+    """Construct the actor substrate for a headless task run."""
 
-    ``ComputerEnvironment`` is included only when the task explicitly requires
-    computer use; filesystem-only tasks still need desktop readiness (checked
-    separately) but do not mount computer-use primitives.
-    """
-
-    environments: list[Any] = [StateManagerEnvironment()]
-    if config.requires_computer:
-        environments.append(ComputerEnvironment(ComputerPrimitives()))
-    environments.append(ActorEnvironment())
-    return CodeActActor(environments=environments)
+    del config
+    return CodeActActor(environments=[StateManagerEnvironment(), ActorEnvironment()])
 
 
 def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
@@ -586,7 +471,6 @@ class _OfflineTaskExecutionDelegate:
                     [
                         task_guidelines,
                         "This is a headless offline task run. Do not ask the user for live clarification.",
-                        offline_comms_guidance(),
                     ],
                 ),
             ),
@@ -623,34 +507,6 @@ async def _await_post_run_review(handle: Any) -> None:
         LOGGER.exception("Post-run storage review ended abnormally")
 
 
-async def _execute_provider_event_offline_task(
-    config: OfflineTaskConfig,
-    dispatch: ProviderEventDispatchRequest,
-) -> Any:
-    """Execute one offline provider-event run against the authored definition."""
-
-    event_context = fetch_provider_event_context(dispatch)
-    verify_precreated_provider_event_run(dispatch)
-    untrusted = provider_event_context_as_untrusted_data(event_context)
-    captured_task_revision = resolve_captured_task_revision(task_id=dispatch.task_id)
-
-    delegate = _OfflineTaskExecutionDelegate(config)
-    token = current_task_execution_delegate.set(delegate)
-    try:
-        scheduler = TaskScheduler()
-        handle = await scheduler.start_provider_event_instance(
-            request=dispatch,
-            captured_task_revision=captured_task_revision,
-            provider_event_context=untrusted,
-        )
-        result = await handle.result()
-        await _await_post_run_review(handle)
-        return result
-    finally:
-        current_task_execution_delegate.reset(token)
-        await delegate.close()
-
-
 async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
     """Execute one offline task through the scheduler-owned lifecycle."""
 
@@ -679,29 +535,20 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
 
 
 def _bootstrap_offline_runtime() -> None:
-    """Boot live-parity assistant substrate without ConversationManager."""
+    """Initialise the runtime without a ConversationManager."""
 
-    from unify.runtime.assistant_substrate import bootstrap_assistant_substrate
-
-    bootstrap_assistant_substrate(
-        project_name=TASK_MACHINE_STATE_PROJECT,
-        reconcile_mode="blocking",
-    )
+    unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
 
 
 async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     """Execute one offline task with assistant session context."""
 
-    _ensure_desktop_env_for_resources(config)
     SESSION_DETAILS.populate_from_env()
     _bootstrap_offline_runtime()
-    if config.wake is Wake.provider_event:
-        dispatch = _load_provider_event_dispatch_from_env()
-        return await _execute_provider_event_offline_task(config, dispatch)
     if not _is_scheduler_managed(config):
         raise RuntimeError(
             "Offline task runner only supports scheduler-managed scheduled, "
-            "triggered, explicit, and provider_event task runs.",
+            "triggered, and explicit task runs.",
         )
     return await _execute_scheduler_managed_task(config)
 

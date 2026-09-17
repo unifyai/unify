@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.conversation_manager.cm_types import Medium
 from unify.transcript_manager.transcript_manager import TranscriptManager
@@ -61,7 +60,7 @@ def test_api_message_exchange_medium():
         },
     )
 
-    rows = unisdk.get_logs(
+    rows = db.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {exchange_id}",
         limit=1,

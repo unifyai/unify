@@ -2654,7 +2654,7 @@ class TranscriptGenerator:
                     )
                     from pydantic import BaseModel
                     from unify.events.event_bus import Event
-                    import unisdk
+                    from unify import db
 
                     event_obj = None
                     if medium == "sms_message":
@@ -2683,8 +2683,8 @@ class TranscriptGenerator:
                             if isinstance(ev_dict.payload, BaseModel)
                             else Event._to_python(ev_dict.payload)
                         )
-                        unisdk.create_logs(
-                            project=unisdk.active_project(),
+                        db.create_logs(
+                            project=db.active_project(),
                             context="Assistant/Events/Comms",
                             params={},
                             entries={
@@ -2807,7 +2807,7 @@ def _seed_session_details_for_sandbox() -> None:
     # User UUID from Orchestra — sets user_context component so contexts land
     # under ``{user_uuid}/{agent_id}/...`` matching what the Console expects.
     try:
-        import unisdk as _unify
+        from unify import db as _unify
 
         info = _unify.get_user_basic_info()
         user_id = info.get("user_id") or ""
@@ -2833,7 +2833,7 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
     def _maybe_autostart_local_orchestra() -> None:
         """Best-effort local Orchestra autostart for sandbox runs.
 
-        Sandboxes call `unisdk.activate()` during startup, which requires a reachable
+        Sandboxes call `db.activate()` during startup, which requires a reachable
         Unify API backend. In tests, `tests/parallel_run.sh` auto-starts local
         Orchestra when `ORCHESTRA_URL` targets localhost. Sandbox entrypoints are
         typically run directly, so we replicate that behavior here (sandbox-only).

@@ -1,8 +1,7 @@
 import json
 
 import pytest
-import unisdk
-
+from unify import db
 from unify.function_manager.function_manager import FunctionManager
 from tests.helpers import _handle_project
 
@@ -56,7 +55,7 @@ def send_plain_text_email(recipient: str, subject: str, body: str):
 
 def _get_embedding(fm: FunctionManager, name: str):
     """Fetch the raw _embedding_text_emb for a function by name."""
-    logs = unisdk.get_logs(
+    logs = db.get_logs(
         context=fm._compositional_ctx,
         filter=f"name == {json.dumps(name)}",
         limit=1,
@@ -102,7 +101,7 @@ def _drive_embedding_pipeline():
     import requests
 
     headers = {"Authorization": f"Bearer {os.environ['ORCHESTRA_ADMIN_KEY']}"}
-    base = unisdk.BASE_URL.rstrip("/")
+    base = db.BASE_URL.rstrip("/")
     for endpoint in ("generate_pending_embeddings", "index_ready_embeddings"):
         resp = requests.post(
             f"{base}/admin/{endpoint}",

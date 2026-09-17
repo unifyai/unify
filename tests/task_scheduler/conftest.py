@@ -8,8 +8,7 @@ from typing import Dict, Any, List, Tuple
 
 import pytest
 import pytest_asyncio
-import unisdk
-
+from unify import db
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.task import Task
 from unify.manager_registry import ManagerRegistry
@@ -90,9 +89,9 @@ def _rebuild_commit_hashes(
     commit_hashes: Dict[str, Any],
 ) -> None:
     """Rebuild commit hashes from existing context commits."""
-    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
+    existing_contexts = db.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
-        history = unisdk.get_context_commits(ctx_name)
+        history = db.get_context_commits(ctx_name)
         if history:
             commit_hashes[ctx_name] = history[0]["commit_hash"]
 
@@ -102,9 +101,9 @@ def _commit_contexts_for_rollback(
     commit_hashes: Dict[str, Any],
 ) -> None:
     """Commit all contexts under prefix and store hashes for rollback."""
-    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
+    existing_contexts = db.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
-        commit_info = unisdk.commit_context(
+        commit_info = db.commit_context(
             name=ctx_name,
             commit_message="Initial seed data for task scheduler tests",
         )
@@ -131,13 +130,13 @@ def _setup_scenario(
 
     # If --overwrite-scenarios is set, delete existing contexts first
     if overwrite_scenarios:
-        existing_contexts = unisdk.get_contexts(prefix=ctx)
+        existing_contexts = db.get_contexts(prefix=ctx)
         for ctx_name in existing_contexts.keys():
-            unisdk.delete_context(ctx_name)
+            db.delete_context(ctx_name)
 
     # Set context before any operations
-    unisdk.create_context(ctx)  # exist_ok=True by default
-    unisdk.set_context(ctx, relative=False)
+    db.create_context(ctx)  # exist_ok=True by default
+    db.set_context(ctx, relative=False)
 
     # Create scheduler
     ts = TaskScheduler()
@@ -154,7 +153,7 @@ def _setup_scenario(
             print(f"Scenario already seeded ({ctx}), rebuilding local state...")
             _rebuild_commit_hashes(ctx, commit_hashes)
 
-    unisdk.unset_context()
+    db.unset_context()
     return ts, task_ids
 
 
@@ -194,7 +193,7 @@ def task_scheduler_read_scenario(task_read_scenario):
     ts, task_ids = task_read_scenario
 
     def rollback_context(ctx):
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx,
             commit_hash=_READ_SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -203,7 +202,7 @@ def task_scheduler_read_scenario(task_read_scenario):
     restore_scenario_context("tests/task_scheduler/ReadScenario")
     ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
     if ctx_names:
-        unisdk.map(rollback_context, ctx_names, mode="asyncio")
+        db.map(rollback_context, ctx_names, mode="asyncio")
 
     restore_scenario_context("tests/task_scheduler/ReadScenario")
     yield ts, task_ids
@@ -249,7 +248,7 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
     ts, task_ids = task_mutation_scenario
 
     def rollback_context(ctx):
-        unisdk.rollback_context(
+        db.rollback_context(
             name=ctx,
             commit_hash=_MUTATION_SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -260,7 +259,7 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            unisdk.map(rollback_context, ctx_names, mode="asyncio")
+            db.map(rollback_context, ctx_names, mode="asyncio")
 
         restore_scenario_context("tests/task_scheduler/MutationScenario")
         yield ts, task_ids
@@ -290,9 +289,9 @@ def task_surface():
     """
 
     from unify.session_details import SESSION_DETAILS
-    from unisdk.utils.http import RequestError
+    from unify.db import StoreError
 
-    base_url = str(unisdk.BASE_URL or "")
+    base_url = str(db.BASE_URL or "")
     if "localhost" not in base_url and "127.0.0.1" not in base_url:
         pytest.skip(
             "task_surface provisions assistants and refuses to run against a "
@@ -300,8 +299,8 @@ def task_surface():
         )
 
     try:
-        user_info = unisdk.get_user_basic_info()
-    except (RequestError, ConnectionError, OSError) as exc:
+        user_info = db.get_user_basic_info()
+    except (StoreError, ConnectionError, OSError) as exc:
         pytest.skip(f"local Orchestra unreachable or unauthenticated: {exc!r}")
     user_id = str(user_info.get("user_id") or "")
     if not user_id:
@@ -315,18 +314,18 @@ def task_surface():
     # Provisioning infra reaches for real Pub/Sub topics, which a local
     # Orchestra has no credentials for, so requesting it would make these
     # tests unrunnable anywhere but a cloud-backed environment.
-    created = unisdk.create_assistant(
+    created = db.create_assistant(
         first_name=f"Task Surface Probe {uuid.uuid4().hex[:8]}",
         config={"create_infra": False},
     )
     agent_id = int(created["agent_id"])
 
-    previous_project = unisdk.active_project()
+    previous_project = db.active_project()
     previous_user_id = SESSION_DETAILS.user.id
     previous_agent_id = SESSION_DETAILS.assistant.agent_id
 
-    unisdk.activate(TASK_SURFACE_PROJECT)
-    unisdk.set_context(f"{user_id}/{agent_id}", relative=False)
+    db.activate(TASK_SURFACE_PROJECT)
+    db.set_context(f"{user_id}/{agent_id}", relative=False)
     SESSION_DETAILS.user.id = user_id
     SESSION_DETAILS.assistant.agent_id = agent_id
     for context_name in ("Tasks", "Tasks/Meta"):
@@ -344,8 +343,8 @@ def task_surface():
         for context_name in ("Tasks", "Tasks/Meta"):
             ContextRegistry.forget(TaskScheduler, context_name)
         if previous_project:
-            unisdk.activate(previous_project)
+            db.activate(previous_project)
         try:
-            unisdk.delete_assistant(agent_id)
-        except (RequestError, ConnectionError, OSError):
+            db.delete_assistant(agent_id)
+        except (StoreError, ConnectionError, OSError):
             pass

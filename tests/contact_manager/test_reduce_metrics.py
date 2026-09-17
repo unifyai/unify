@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import pytest
 import time
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.common.context_registry import ContextRegistry
 from unify.contact_manager.contact_manager import ContactManager
@@ -124,7 +123,7 @@ def test_contact_reduce_reads_personal_and_accessible_space_roots():
         )
     finally:
         try:
-            unisdk.delete_context(f"Teams/{team_id}/Contacts")
+            db.delete_context(f"Teams/{team_id}/Contacts")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []

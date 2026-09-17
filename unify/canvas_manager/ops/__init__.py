@@ -1,1 +1,0 @@
-"""Operational helpers for CanvasManager."""

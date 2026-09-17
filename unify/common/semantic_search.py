@@ -4,8 +4,7 @@ from typing import List, Tuple, Dict, Optional
 import json
 import hashlib
 
-import unisdk
-
+from unify import db
 from .embed_utils import (
     EMBED_MODEL,
     ensure_vector_column,
@@ -138,7 +137,7 @@ def resolve_existing_vector_for_source(
     has no embeddings in this context.
     """
     embed_column_name = embed_column_for_source(source_expr)
-    fields = unisdk.get_fields(context=context, project=project)
+    fields = db.get_fields(context=context, project=project)
     return embed_column_name if embed_column_name in fields else None
 
 
@@ -167,7 +166,7 @@ def ensure_join_context(
     This small wrapper standardizes aliasing/copy semantics so downstream code can
     reference bare column names in the joined context without fully qualified paths.
     """
-    unisdk.join_logs(
+    db.join_logs(
         pair_of_args=(
             {"context": left_ctx},
             {"context": right_ctx},
@@ -283,7 +282,7 @@ def _fetch_single_term_scored(
     }
     if allowed_fields is not None:
         from_fields = list(dict.fromkeys([*allowed_fields, SORT_DISTANCE_KEY]))
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             project=project,
             filter=row_filter,
@@ -298,7 +297,7 @@ def _fetch_single_term_scored(
             for f in list_private_fields(context, project=project)
             if f != SORT_DISTANCE_KEY
         ]
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             project=project,
             filter=row_filter,
@@ -312,7 +311,7 @@ def _fetch_single_term_scored(
 
 def _context_unique_id_field(context: str, *, project: Optional[str] = None) -> str:
     """Return the unique-key column for a context (required for combining)."""
-    ctx_info = unisdk.get_context(context, project=project)
+    ctx_info = db.get_context(context, project=project)
     unique_keys = ctx_info.get("unique_keys")
     if isinstance(unique_keys, dict):
         unique_keys = list(unique_keys)
@@ -476,7 +475,7 @@ def fetch_top_k_by_terms_with_score(
     if allowed_fields is not None:
         # Ensure the private score column is included in the payload
         from_fields = list(dict.fromkeys([*allowed_fields, sum_key]))
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             project=project,
             filter=row_filter,
@@ -489,7 +488,7 @@ def fetch_top_k_by_terms_with_score(
         exclude_fields = [
             f for f in list_private_fields(context, project=project) if f != sum_key
         ]
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             project=project,
             filter=row_filter,
@@ -526,7 +525,7 @@ def fetch_scores_for_ids(
     # Exclude all private fields except the score key we need to read
     exclude_fields = [f for f in list_private_fields(context) if f != sum_key]
 
-    rows = unisdk.get_logs(
+    rows = db.get_logs(
         context=context,
         filter=id_filter,
         limit=len(ids),
@@ -564,7 +563,7 @@ def fetch_top_k_by_terms(
         embed_col, ref_text = terms[0]
         escaped_ref = ref_text.replace("'", "\\'")
         if allowed_fields is not None:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=context,
                 project=project,
                 filter=row_filter,
@@ -575,7 +574,7 @@ def fetch_top_k_by_terms(
                 from_fields=allowed_fields,
             )
         else:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=context,
                 project=project,
                 filter=row_filter,
@@ -591,7 +590,7 @@ def fetch_top_k_by_terms(
     # creating a summed-cosine derived column which can fail on empty contexts.
     try:
         if row_filter is not None:
-            any_rows = unisdk.get_logs(
+            any_rows = db.get_logs(
                 context=context,
                 project=project,
                 filter=row_filter,
@@ -616,7 +615,7 @@ def fetch_top_k_by_terms(
     )
 
     if allowed_fields is not None:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             project=project,
             filter=row_filter,
@@ -625,7 +624,7 @@ def fetch_top_k_by_terms(
             from_fields=allowed_fields,
         )
     else:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=context,
             project=project,
             filter=row_filter,
@@ -745,7 +744,7 @@ def backfill_rows(
     # Determine unique id column if not supplied
     if unique_id_field is None:
         try:
-            ctx_info = unisdk.get_context(context, project=project)
+            ctx_info = db.get_context(context, project=project)
             unique_id_field = ctx_info.get("unique_keys")
             if isinstance(unique_id_field, list):
                 unique_id_field = unique_id_field[0] if unique_id_field else None
@@ -783,7 +782,7 @@ def backfill_rows(
                     ),
                 ),
             )
-            fallback_logs = unisdk.get_logs(
+            fallback_logs = db.get_logs(
                 context=context,
                 project=project,
                 filter=row_filter,
@@ -794,7 +793,7 @@ def backfill_rows(
             )
         else:
             try:
-                fallback_logs = unisdk.get_logs(
+                fallback_logs = db.get_logs(
                     context=context,
                     project=project,
                     filter=row_filter,
@@ -808,7 +807,7 @@ def backfill_rows(
                 # created lazily), treat as "no rows to backfill" rather than failing
                 # the caller's semantic search.
                 try:
-                    from unisdk.utils.http import RequestError as _UnifyRequestError
+                    from unify.db import StoreError as _UnifyRequestError
 
                     if isinstance(e, _UnifyRequestError):
                         status = getattr(

@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import tempfile
-import unisdk
+from unify import db
 import threading
 from contextlib import contextmanager
 
@@ -121,7 +121,7 @@ def list_private_fields(context: str, *, project: str | None = None) -> list[str
     very large, so they should be excluded from payloads returned to clients.
     """
     try:
-        fields = unisdk.get_fields(context=context, project=project)
+        fields = db.get_fields(context=context, project=project)
         return [name for name in fields.keys() if name.startswith("_")]
     except Exception:
         # If field introspection fails (e.g. offline tests), fall back to none
@@ -148,7 +148,7 @@ def _iter_log_ids(
     ids: list[int] = []
     offset = 0
     while True:
-        batch = unisdk.get_logs(
+        batch = db.get_logs(
             context=context,
             filter=filter,
             return_ids_only=True,
@@ -211,7 +211,7 @@ def ensure_derived_column(
     # Fast path: if field already exists and we are not doing targeted
     # derived logs creation using from_ids, return without locking or logging
     try:
-        fields = unisdk.get_fields(context=context, project=project)
+        fields = db.get_fields(context=context, project=project)
         if key in fields and not from_ids:
             return
     except Exception:
@@ -230,7 +230,7 @@ def ensure_derived_column(
             # We intentionally do this to avoid redundant calls to create
             # duplicate embeddings that will get rejected by the backend
             # due to duplication constraint
-            existing = unisdk.get_fields(context=context, project=project)
+            existing = db.get_fields(context=context, project=project)
             if key in existing and not from_ids:
                 return
 
@@ -246,7 +246,7 @@ def ensure_derived_column(
                         "lg": {"context": referenced_logs_context or context},
                     }
 
-                response = unisdk.create_derived_logs(
+                response = db.create_derived_logs(
                     context=context,
                     key=key,
                     equation=equation,
@@ -264,7 +264,7 @@ def ensure_derived_column(
                     referenced_logs,
                     response,
                 )
-            except unisdk.RequestError as e:
+            except db.StoreError as e:
                 body = getattr(e.response, "text", "") or ""
                 logger.debug(
                     "create_derived_logs FAILED context=%s key=%s "
@@ -330,7 +330,7 @@ def ensure_vector_column(
         # Schema can survive rollback while derived source values do not.
         # When not doing a targeted from_ids write, refill orphaned sources.
         if from_ids is None:
-            existing_src = unisdk.get_fields(context=context, project=project)
+            existing_src = db.get_fields(context=context, project=project)
             if source_column in existing_src:
                 missing_src = _iter_log_ids(
                     context,
@@ -371,7 +371,7 @@ def ensure_vector_column(
         )
         return True
 
-    existing = unisdk.get_fields(context=context, project=project)
+    existing = db.get_fields(context=context, project=project)
     if embed_column not in existing:
         ensure_derived_column(
             context=context,

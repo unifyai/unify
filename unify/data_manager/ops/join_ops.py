@@ -14,8 +14,7 @@ import logging
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import unisdk
-
+from unify import db
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.search_utils import table_search_top_k
 from unify.common.embed_utils import list_private_fields
@@ -80,7 +79,7 @@ def join_tables_impl(
         dest_table,
     )
 
-    unisdk.join_logs(
+    db.join_logs(
         pair_of_args=(
             {
                 "context": left_table,
@@ -213,7 +212,7 @@ def filter_join_impl(
         tables[1],
     )
 
-    result = unisdk.join_query(
+    result = db.join_query(
         pair_of_args=(
             {
                 "context": tables[0],
@@ -304,7 +303,7 @@ def reduce_join_impl(
                 f"Missing: {', '.join(sorted(missing))}",
             )
 
-    return unisdk.join_query(
+    return db.join_query(
         pair_of_args=(
             {
                 "context": tables[0],
@@ -407,7 +406,7 @@ def search_join_impl(
         return rows
     finally:
         try:
-            unisdk.delete_context(dest_context)
+            db.delete_context(dest_context)
         except Exception:
             pass
 
@@ -556,7 +555,7 @@ def filter_multi_join_impl(
     try:
         rows: List[Dict[str, Any]] = [
             lg.entries
-            for lg in unisdk.get_logs(
+            for lg in db.get_logs(
                 context=previous_ctx,
                 filter=result_where,
                 offset=result_offset,
@@ -569,7 +568,7 @@ def filter_multi_join_impl(
         # Clean up temporary contexts
         for ctx in tmp_contexts:
             try:
-                unisdk.delete_context(ctx)
+                db.delete_context(ctx)
             except Exception:
                 pass
 
@@ -699,6 +698,6 @@ def search_multi_join_impl(
         # Clean up temporary contexts
         for ctx in tmp_contexts:
             try:
-                unisdk.delete_context(ctx)
+                db.delete_context(ctx)
             except Exception:
                 pass

@@ -461,7 +461,7 @@ class TestSendUnifyMessage:
 
         with (
             patch(
-                "unisdk.utils.http.post",
+                "db.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
             patch(
@@ -506,7 +506,7 @@ class TestSendUnifyMessage:
 
         with (
             patch(
-                "unisdk.utils.http.post",
+                "db.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
             patch(
@@ -561,7 +561,7 @@ class TestSendUnifyMessage:
 
         with (
             patch(
-                "unisdk.utils.http.post",
+                "db.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
             patch(
@@ -604,7 +604,7 @@ class TestSendUnifyMessage:
 
         with (
             patch(
-                "unisdk.utils.http.post",
+                "db.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
             patch(
@@ -775,7 +775,7 @@ class TestRoomMemberResolutionIsBestEffort:
         response.status_code = 403
 
         with (
-            patch("unisdk.utils.http.get", return_value=response),
+            patch("db.utils.http.get", return_value=response),
             patch.object(comms_utils, "SESSION_DETAILS") as mock_session,
             patch.object(comms_utils, "SETTINGS") as mock_settings,
             patch.object(comms_utils, "LOGGER") as mock_logger,
@@ -1137,7 +1137,7 @@ class TestLocalCommsBackends:
 
         with (
             patch(
-                "unisdk.utils.http.post",
+                "db.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
             patch(
@@ -1174,7 +1174,7 @@ class TestLocalCommsBackends:
 
         with (
             patch(
-                "unisdk.utils.http.post",
+                "db.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
             patch(

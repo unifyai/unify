@@ -665,10 +665,10 @@ delete_shared_project() {
 import os
 import sys
 try:
-    import unisdk
+    from unify import db
     project_name = os.environ.get("UNISDK_PROJECT", "UnityTests")
     try:
-        unisdk.delete_project(project_name, missing_ok=False)
+        db.delete_project(project_name, missing_ok=False)
         print(f"Deleted project '{project_name}'")
     except Exception:
         print(f"Project '{project_name}' did not exist, skipping deletion")

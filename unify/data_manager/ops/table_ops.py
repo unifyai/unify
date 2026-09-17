@@ -10,8 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-import unisdk
-
+from unify import db
 from unify.common.authorship import fields_with_authoring, is_shared_authored_context
 
 if TYPE_CHECKING:
@@ -60,7 +59,7 @@ def create_table_impl(
     logger.debug("Creating table context: %s", context)
 
     try:
-        unisdk.create_context(
+        db.create_context(
             context,
             description=description,
             unique_keys=unique_keys,
@@ -81,7 +80,7 @@ def create_table_impl(
     if is_shared_authored_context(context):
         fields = fields_with_authoring(fields)
     if fields:
-        unisdk.create_fields(fields, context=context)
+        db.create_fields(fields, context=context)
 
     return context
 
@@ -116,10 +115,10 @@ def describe_table_impl(context: str) -> "TableDescription":
     logger.debug("Describing table: %s", context)
 
     # Get context info
-    ctx_info = unisdk.get_context(context)
+    ctx_info = db.get_context(context)
 
     # Get fields/columns
-    columns_raw = unisdk.get_fields(context=context) or {}
+    columns_raw = db.get_fields(context=context) or {}
 
     # Detect embedding columns (pattern: _<name>_emb)
     embedding_cols = [
@@ -210,14 +209,12 @@ def list_tables_impl(
         include_column_info,
     )
 
-    raw_contexts = (
-        unisdk.get_contexts(prefix=prefix) if prefix else unisdk.get_contexts()
-    )
+    raw_contexts = db.get_contexts(prefix=prefix) if prefix else db.get_contexts()
 
     if not raw_contexts:
         return {} if include_column_info else []
 
-    # unisdk.get_contexts returns either:
+    # db.get_contexts returns either:
     # - A list of dicts with 'name' and other fields (newer SDK)
     # - A dict mapping context_path -> context_info (older SDK)
     if isinstance(raw_contexts, list):
@@ -233,7 +230,7 @@ def list_tables_impl(
     else:
         all_contexts = {}
 
-    # Filter by prefix if needed (unisdk.get_contexts may not filter perfectly)
+    # Filter by prefix if needed (db.get_contexts may not filter perfectly)
     if prefix:
         all_contexts = {k: v for k, v in all_contexts.items() if k.startswith(prefix)}
 
@@ -288,7 +285,7 @@ def delete_table_impl(context: str, *, dangerous_ok: bool = False) -> None:
     except Exception:
         pass
     logger.info("Deleting table context: %s", context)
-    unisdk.delete_context(context)
+    db.delete_context(context)
 
 
 def get_columns_impl(table: str) -> Dict[str, Any]:
@@ -315,7 +312,7 @@ def get_columns_impl(table: str) -> Dict[str, Any]:
     """
     logger.debug("Getting columns for table: %s", table)
     try:
-        columns = unisdk.get_fields(context=table)
+        columns = db.get_fields(context=table)
         return dict(columns) if columns else {}
     except Exception as e:
         logger.warning("Failed to get columns for %s: %s", table, e)
@@ -345,7 +342,7 @@ def get_table_impl(context: str) -> Dict[str, Any]:
     """
     logger.debug("Getting table metadata for: %s", context)
     try:
-        ctx_info = unisdk.get_context(context)
+        ctx_info = db.get_context(context)
         return dict(ctx_info) if isinstance(ctx_info, dict) else {}
     except Exception as e:
         logger.warning("Failed to get table %s: %s", context, e)
@@ -376,7 +373,7 @@ def rename_table_impl(old_context: str, new_context: str) -> Dict[str, str]:
         If rename operation fails.
     """
     logger.info("Renaming table context: %s -> %s", old_context, new_context)
-    return unisdk.rename_context(old_context, new_context)
+    return db.rename_context(old_context, new_context)
 
 
 def create_column_impl(
@@ -426,7 +423,7 @@ def create_column_impl(
         column_type,
         context,
     )
-    return unisdk.create_fields(
+    return db.create_fields(
         context=context,
         fields={column_name: {"type": column_type, "mutable": mutable}},
         backfill_logs=backfill_logs,
@@ -461,7 +458,7 @@ def delete_column_impl(
         If column deletion fails.
     """
     logger.info("Deleting column %s from %s", column_name, context)
-    return unisdk.delete_fields(fields=[column_name], context=context)
+    return db.delete_fields(fields=[column_name], context=context)
 
 
 def rename_column_impl(
@@ -506,7 +503,7 @@ def rename_column_impl(
         raise ValueError("Cannot rename a column to reserved name 'id'.")
 
     logger.debug("Renaming column %s -> %s in %s", old_name, new_name, context)
-    return unisdk.rename_field(name=old_name, new_name=new_name, context=context)
+    return db.rename_field(name=old_name, new_name=new_name, context=context)
 
 
 def create_derived_column_impl(
@@ -553,7 +550,7 @@ def create_derived_column_impl(
     )
     # Transform equation to Unify's internal format
     transformed_equation = equation.replace("{", "{lg:")
-    return unisdk.create_derived_logs(
+    return db.create_derived_logs(
         context=context,
         key=column_name,
         equation=transformed_equation,
@@ -578,7 +575,7 @@ def create_external_column_impl(
         context,
         connector_id,
     )
-    return unisdk.create_fields(
+    return db.create_fields(
         {
             column_name: {
                 "type": column_type,
@@ -603,7 +600,7 @@ def request_external_write_impl(
     deliver: str = "async",
 ) -> Dict[str, Any]:
     """Enqueue an external through-write intent via UniSDK."""
-    return unisdk.request_external_write(
+    return db.request_external_write(
         payload=payload,
         idempotency_key=idempotency_key,
         field_name=field_name,

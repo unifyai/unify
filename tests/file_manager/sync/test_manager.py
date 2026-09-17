@@ -218,7 +218,7 @@ class TestSyncManagerSSHKeyRetrieval:
                 "unify.settings.SETTINGS",
             ) as mock_settings,
             patch(
-                "unisdk.utils.http.get",
+                "db.utils.http.get",
                 return_value=mock_response,
             ) as mock_get,
         ):
@@ -258,7 +258,7 @@ class TestSyncManagerSSHKeyRetrieval:
                 "unify.settings.SETTINGS",
             ) as mock_settings,
             patch(
-                "unisdk.utils.http.get",
+                "db.utils.http.get",
                 return_value=mock_response,
             ),
         ):

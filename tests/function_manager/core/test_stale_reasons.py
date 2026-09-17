@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import unisdk
-
+from unify import db
 import unify.function_manager.function_manager as function_manager_module
 from tests.helpers import _handle_project
 from unify.function_manager.function_manager import FunctionManager
@@ -191,12 +190,12 @@ def test_guidance_reconcile_clears_resolved_function_reason():
         function_ids=[function_id],
     )
     guidance_id = outcome["details"]["guidance_id"]
-    log = unisdk.get_logs(
+    log = db.get_logs(
         context=gm._ctx,
         filter=f"guidance_id == {guidance_id}",
         limit=1,
     )[0]
-    unisdk.update_logs(
+    db.update_logs(
         context=gm._ctx,
         logs=[log.id],
         entries={

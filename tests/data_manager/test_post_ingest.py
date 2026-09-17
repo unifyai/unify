@@ -5,7 +5,7 @@ Covers:
 - ``_derive_target_name``: separator-aware target name construction
 - ``_run_post_ingest_rules``: config-driven rule execution with mocks
 - ``run_ingest`` post_ingest integration
-- Field description passthrough: widened ``fields`` type flows through to ``unisdk.create_fields``
+- Field description passthrough: widened ``fields`` type flows through to ``db.create_fields``
 """
 
 from __future__ import annotations
@@ -357,7 +357,7 @@ class TestFieldsDescriptionPassthrough:
 
     @patch("unify.data_manager.ops.table_ops.unisdk")
     def test_rich_fields_payload_reaches_create_fields(self, mock_unify):
-        """Verify that fields with descriptions pass through to unisdk.create_fields."""
+        """Verify that fields with descriptions pass through to db.create_fields."""
         from unify.data_manager.ops.table_ops import create_table_impl
 
         rich_fields = {

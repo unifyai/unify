@@ -14,12 +14,6 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from .comms import CommsPayload
-from .coordinator_activity import CoordinatorActivityEntity, CoordinatorActivityPayload
-from .desktop_primitive import (
-    ComputerActCompletedPayload,
-    DesktopPrimitivePayload,
-    UserDesktopFileAccessPayload,
-)
 from .llm import LLMPayload
 from .manager_method import ManagerMethodPayload
 from .message import MessagePayload
@@ -30,12 +24,7 @@ __all__ = [
     "ToolLoopPayload",
     "MessagePayload",
     "CommsPayload",
-    "CoordinatorActivityEntity",
-    "CoordinatorActivityPayload",
     "LLMPayload",
-    "ComputerActCompletedPayload",
-    "DesktopPrimitivePayload",
-    "UserDesktopFileAccessPayload",
     "PAYLOAD_REGISTRY",
 ]
 
@@ -45,9 +34,5 @@ PAYLOAD_REGISTRY: dict[str, type[BaseModel]] = {
     "ToolLoop": ToolLoopPayload,
     "Message": MessagePayload,
     "Comms": CommsPayload,
-    "CoordinatorActivity": CoordinatorActivityPayload,
     "LLM": LLMPayload,
-    "DesktopPrimitiveInvoked": DesktopPrimitivePayload,
-    "ComputerActCompleted": ComputerActCompletedPayload,
-    "UserDesktopFileAccess": UserDesktopFileAccessPayload,
 }

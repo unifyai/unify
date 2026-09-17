@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-import unisdk
-
 from unify.common.data_store import DataStore
 
 

@@ -11,8 +11,7 @@ context as provisioned.
 from __future__ import annotations
 
 import pytest
-import unisdk
-
+from unify import db
 from tests.helpers import _handle_project
 from unify.common.context_store import (
     ContextIdentityError,
@@ -23,17 +22,17 @@ from unify.common.log_utils import log as unity_log
 
 @_handle_project
 def test_bare_context_write_assigns_no_identity():
-    base = unisdk.get_active_context()["write"]
+    base = db.get_active_context()["write"]
     name = f"{base}/BareTable"
 
     # The write itself creates the context, bare.
-    unisdk.log(context=name, new=True, payload="row")
+    db.log(context=name, new=True, payload="row")
 
-    live = unisdk.get_context(name)
+    live = db.get_context(name)
     assert live.get("unique_keys") in (None, [])
     assert live.get("auto_counting") in (None, {})
 
-    rows = unisdk.get_logs(context=name)
+    rows = db.get_logs(context=name)
     assert rows and "row_id" not in rows[0].entries
 
     with pytest.raises(ContextIdentityError):
@@ -46,7 +45,7 @@ def test_bare_context_write_assigns_no_identity():
 
 @_handle_project
 def test_configured_context_passes_verification_and_assigns_ids():
-    base = unisdk.get_active_context()["write"]
+    base = db.get_active_context()["write"]
     name = f"{base}/ConfiguredTable"
 
     _create_context_with_retry(

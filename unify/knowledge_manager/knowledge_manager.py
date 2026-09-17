@@ -9,8 +9,7 @@ import json
 import logging
 import threading
 
-import unisdk
-
+from unify import db
 from ..common.log_utils import (
     assigned_row_id,
     create_logs as unity_create_logs,
@@ -290,8 +289,8 @@ class KnowledgeManager(BaseKnowledgeManager):
 
     @functools.wraps(BaseKnowledgeManager.clear, updated=())
     def clear(self) -> None:
-        unisdk.delete_context(self._ctx)
-        unisdk.delete_context(self._meta_ctx)
+        db.delete_context(self._ctx)
+        db.delete_context(self._meta_ctx)
 
         try:
             self._custom_knowledge_synced_sources.clear()
@@ -309,7 +308,7 @@ class KnowledgeManager(BaseKnowledgeManager):
 
             for _ in range(3):
                 try:
-                    unisdk.get_fields(context=self._ctx)
+                    db.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -380,7 +379,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         knowledge_id: int,
         context: str,
     ) -> int:
-        ids = unisdk.get_logs(
+        ids = db.get_logs(
             context=context,
             filter=f"knowledge_id == {int(knowledge_id)}",
             limit=2,
@@ -506,7 +505,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(knowledge_id, "updated")
         log_id = self._resolve_log_id(knowledge_id=knowledge_id, context=context)
-        unisdk.update_logs(
+        db.update_logs(
             logs=[log_id],
             context=context,
             entries=updates,
@@ -543,7 +542,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             ],
         )
         log_id = self._resolve_log_id(knowledge_id=knowledge_id, context=context)
-        unisdk.delete_logs(context=context, logs=log_id)
+        db.delete_logs(context=context, logs=log_id)
         return {
             "outcome": "knowledge deleted",
             "details": {"knowledge_id": knowledge_id},
@@ -562,7 +561,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(knowledge_id, "invalidated")
         log_id = self._resolve_log_id(knowledge_id=knowledge_id, context=context)
-        unisdk.update_logs(
+        db.update_logs(
             logs=[log_id],
             context=context,
             entries={"status": KnowledgeStatus.invalidated.value},
@@ -633,7 +632,7 @@ class KnowledgeManager(BaseKnowledgeManager):
                 knowledge_id=new_knowledge_id,
                 context=context,
             )
-            existing = unisdk.get_logs(
+            existing = db.get_logs(
                 context=context,
                 filter=f"knowledge_id == {int(new_knowledge_id)}",
                 limit=1,
@@ -642,14 +641,14 @@ class KnowledgeManager(BaseKnowledgeManager):
             supersedes = list(existing[0].entries.get("supersedes_ids") or [])
             if int(old_knowledge_id) not in supersedes:
                 supersedes.append(int(old_knowledge_id))
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[new_log_id],
                 context=context,
                 entries={"supersedes_ids": supersedes},
                 overwrite=True,
             )
 
-        unisdk.update_logs(
+        db.update_logs(
             logs=[old_log_id],
             context=context,
             entries={
@@ -681,7 +680,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         for root in roots:
             prefix = f"{root.strip('/')}/{FILE_RECORDS_TABLE}"
             try:
-                children = unisdk.get_contexts(prefix=prefix)
+                children = db.get_contexts(prefix=prefix)
                 contexts = (
                     list(children.keys())
                     if isinstance(children, dict)
@@ -693,7 +692,7 @@ class KnowledgeManager(BaseKnowledgeManager):
                 contexts = [prefix]
             for child_ctx in contexts:
                 try:
-                    rows = unisdk.get_logs(
+                    rows = db.get_logs(
                         context=child_ctx,
                         filter=f"file_id == {int(file_id)}",
                         limit=1,
@@ -716,7 +715,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         for root in roots:
             context = f"{root.strip('/')}/{CONTACTS_TABLE}"
             try:
-                rows = unisdk.get_logs(
+                rows = db.get_logs(
                     context=context,
                     filter=f"contact_id == {int(contact_id)}",
                     limit=1,
@@ -733,7 +732,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         """Best-effort check that an exact Unify context path exists."""
         normalized = context.strip("/")
         try:
-            raw_contexts = unisdk.get_contexts(prefix=normalized)
+            raw_contexts = db.get_contexts(prefix=normalized)
         except Exception:
             return True
         if isinstance(raw_contexts, dict):
@@ -839,7 +838,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             filt = " or ".join(f"knowledge_id == {int(kid)}" for kid in knowledge_ids)
         else:
             filt = _ACTIVE_STATUS_FILTER
-        rows = unisdk.get_logs(
+        rows = db.get_logs(
             context=context,
             filter=filt,
             limit=1000,
@@ -869,7 +868,7 @@ class KnowledgeManager(BaseKnowledgeManager):
                 knowledge_id=claim.knowledge_id,
                 context=context,
             )
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[log_id],
                 context=context,
                 entries={
@@ -938,7 +937,7 @@ class KnowledgeManager(BaseKnowledgeManager):
                 knowledge_id=claim.knowledge_id,
                 context=context,
             )
-            unisdk.update_logs(
+            db.update_logs(
                 logs=[log_id],
                 context=context,
                 entries={
@@ -1046,7 +1045,7 @@ class KnowledgeManager(BaseKnowledgeManager):
     ) -> str:
         field = stored_hash_field("custom_knowledge_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -1065,13 +1064,13 @@ class KnowledgeManager(BaseKnowledgeManager):
     ) -> None:
         field = stored_hash_field("custom_knowledge_hash", managed_by)
         try:
-            logs = unisdk.get_logs(
+            logs = db.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unisdk.update_logs(
+                db.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={field: hash_value},
@@ -1092,7 +1091,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._ctx,
             filter=(
                 f"custom_key == '{custom_key}' and "
@@ -1102,7 +1101,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         )
         if not logs:
             return False
-        unisdk.delete_logs(context=self._ctx, logs=[logs[0].id])
+        db.delete_logs(context=self._ctx, logs=[logs[0].id])
         return True
 
     def _update_custom_knowledge(
@@ -1110,7 +1109,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         knowledge_id: int,
         data: Dict[str, Any],
     ) -> None:
-        log_ids = unisdk.get_logs(
+        log_ids = db.get_logs(
             context=self._ctx,
             filter=f"knowledge_id == {int(knowledge_id)}",
             limit=1,
@@ -1123,7 +1122,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "knowledge_id"},
         )
-        unisdk.update_logs(
+        db.update_logs(
             context=self._ctx,
             logs=[log_ids[0]],
             entries=update_data,
@@ -1145,7 +1144,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unisdk.get_logs(
+                logs = db.get_logs(
                     context=self._ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -1312,7 +1311,7 @@ def mark_knowledge_stale_for_deleted_sources(
             logs = []
             if filt is not None:
                 try:
-                    logs = unisdk.get_logs(
+                    logs = db.get_logs(
                         context=context,
                         filter=filt,
                         exclude_fields=private,
@@ -1321,7 +1320,7 @@ def mark_knowledge_stale_for_deleted_sources(
                     logs = []
             if not logs:
                 try:
-                    logs = unisdk.get_logs(
+                    logs = db.get_logs(
                         context=context,
                         filter=_ACTIVE_STATUS_FILTER,
                         limit=1000,
@@ -1339,7 +1338,7 @@ def mark_knowledge_stale_for_deleted_sources(
                     stale_reason_key(r) for r in existing
                 ]:
                     continue
-                unisdk.update_logs(
+                db.update_logs(
                     context=context,
                     logs=[log.id],
                     entries={
@@ -1366,7 +1365,7 @@ class _KnowledgeSyncAdapter(CustomSyncAdapter):
         self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
-        logs = unisdk.get_logs(
+        logs = db.get_logs(
             context=self._manager._ctx,
             filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._ctx),
@@ -1414,7 +1413,7 @@ class _KnowledgeSyncAdapter(CustomSyncAdapter):
         if self.managed_by != MANAGED_BY_DEPLOYMENT:
             return None
         title = json.dumps(str(fields.get("title", "")))
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._ctx,
             filter=f"title == {title} and custom_hash == None",
             limit=1,
@@ -1428,7 +1427,7 @@ class _KnowledgeSyncAdapter(CustomSyncAdapter):
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        existing = unisdk.get_logs(
+        existing = db.get_logs(
             context=self._manager._ctx,
             filter=f"custom_key == '{key}' and custom_hash == None",
             limit=1,
@@ -1438,7 +1437,7 @@ class _KnowledgeSyncAdapter(CustomSyncAdapter):
         return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
 
     def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        unisdk.delete_logs(
+        db.delete_logs(
             context=self._manager._ctx,
             logs=[live_row["_log_id"]],
         )
