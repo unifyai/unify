@@ -601,6 +601,64 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
+async def test_ask_path2_inbound_chat_message_answers_the_question(initialized_cm):
+    """
+    PATH 2: the user's next chat message is the answer.
+
+    While a question is open, an inbound ``UnifyMessageReceived`` is delivered
+    to the ask handle by the event handler itself, so the reply resolves the
+    ask without a brain turn in between.
+    """
+    cm = initialized_cm
+    contact = BOSS
+
+    await cm.step_until_wait(
+        UnifyMessageReceived(
+            contact=contact,
+            content="Hey, quick question about tomorrow.",
+        ),
+    )
+
+    handle = ConversationManagerHandle(
+        event_broker=cm.event_broker,
+        conversation_id="test_conv",
+        contact_id=contact["contact_id"],
+        conversation_manager=cm.cm,
+    )
+
+    questions_asked = _capture_questions(cm)
+
+    ask_handle = await handle.ask(
+        "What time would the user like to schedule the meeting?",
+        response_format=MeetingTime,
+    )
+
+    assert await _wait_for_condition(
+        lambda: len(questions_asked) >= 1,
+        timeout=_ASK_RESULT_TIMEOUT,
+    ), "PATH 2 never asked the user anything"
+    assert not ask_handle.done()
+
+    # The reply arrives as an ordinary chat message, not through the handle.
+    step = await cm.step(
+        UnifyMessageReceived(contact=contact, content="Let's do 2 PM"),
+        run_llm=False,
+    )
+    assert not step.llm_requested, "an open ask owns the reply; no brain turn"
+
+    result = await asyncio.wait_for(
+        ask_handle.result(),
+        timeout=_ASK_RESULT_TIMEOUT,
+    )
+
+    assert isinstance(result, MeetingTime)
+    assert result.hour == 14
+    assert result.period.upper() == "PM"
+
+
+@pytest.mark.asyncio
+@pytest.mark.llm_call
+@_handle_project
 async def test_ask_path2_multiple_followup_questions(initialized_cm):
     """
     PATH 2: LLM can ask multiple follow-up questions to get clarity.
