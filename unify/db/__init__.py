@@ -431,13 +431,14 @@ class Log:
         ts: str | datetime | None = None,
         project: str | None = None,
         context: str | None = None,
-        **entries: Any,
+        entries: Mapping[str, Any] | None = None,
+        **extra: Any,
     ) -> None:
         self._id = id
         self._ts = ts
         self._project = project
         self._context = context
-        self._entries = entries
+        self._entries = {**(entries or {}), **extra}
 
     @property
     def id(self) -> int | None:
@@ -485,7 +486,7 @@ class Log:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, dict):
-            other = Log(id=other.get("id"), **other.get("entries", {}))
+            other = Log(id=other.get("id"), entries=other.get("entries", {}))
         if not isinstance(other, Log):
             return NotImplemented
         if self._id is not None and other._id is not None:
@@ -554,7 +555,7 @@ def _log_from_row(row: Mapping[str, Any], project: str, context: str) -> Log:
         ts=row.get("ts"),
         project=project,
         context=context,
-        **row["entries"],
+        entries=row["entries"],
     )
 
 
@@ -619,7 +620,7 @@ def create_logs(
             id=row_id,
             project=project_name,
             context=context_name,
-            **{
+            entries={
                 k: v
                 for k, v in entry.items()
                 if k not in ("explicit_types", "infer_untyped_fields")

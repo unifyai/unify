@@ -9,7 +9,7 @@ from tests.helpers import _handle_project
 @_handle_project
 def test_json_shorthand_no_prune():
     msg = Message(
-        medium="email",
+        medium="unify_message",
         sender_id=7,
         receiver_ids=[3, 4],
         timestamp=datetime.now(UTC),
@@ -42,7 +42,7 @@ def test_json_shorthand_no_prune():
 @_handle_project
 def test_json_shorthand_prune_images():
     msg = Message(
-        medium="email",
+        medium="unify_message",
         sender_id=1,
         receiver_ids=[2],
         timestamp=datetime.now(UTC),

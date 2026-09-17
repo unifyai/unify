@@ -16,7 +16,7 @@ def test_row_created_explicit_id():
     ex_id = 424242
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -33,7 +33,7 @@ def test_row_created_explicit_id():
     )
     assert rows and rows[0].entries.get("exchange_id") == ex_id
     assert isinstance(rows[0].entries.get("metadata"), dict)
-    assert rows[0].entries.get("medium") == "email"
+    assert rows[0].entries.get("medium") == "unify_message"
 
 
 @_handle_project
@@ -43,7 +43,7 @@ def test_get_metadata_returns_model():
     ex_id = 555001
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -56,7 +56,7 @@ def test_get_metadata_returns_model():
     ex = tm.get_exchange_metadata(ex_id)
     assert isinstance(ex, Exchange)
     assert ex.exchange_id == ex_id
-    assert ex.medium == "email"
+    assert ex.medium == "unify_message"
     assert isinstance(ex.metadata, dict)
 
 
@@ -67,7 +67,7 @@ def test_update_metadata_updates_row():
     # Create a fresh exchange via the new helper
     exid, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": 1,
             "receiver_ids": [2],
             "timestamp": datetime.now(UTC),
@@ -83,7 +83,7 @@ def test_update_metadata_updates_row():
     assert updated.exchange_id == exid
     assert updated.metadata == new_meta
     # Medium should remain as originally set
-    assert updated.medium == "sms_message"
+    assert updated.medium == "unify_message"
 
     # Round-trip fetch
     fetched = tm.get_exchange_metadata(exid)
@@ -111,7 +111,7 @@ def test_filter_by_metadata():
     # Seed two new exchanges with distinct metadata
     ex_billing, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": 1,
             "receiver_ids": [2],
             "timestamp": datetime.now(UTC),
@@ -121,7 +121,7 @@ def test_filter_by_metadata():
     )
     ex_support, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": 1,
             "receiver_ids": [2],
             "timestamp": datetime.now(UTC),
@@ -151,7 +151,7 @@ def test_filter_by_nested_metadata():
     # Seed nested metadata with tags
     ex_nested, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": 3,
             "receiver_ids": [4],
             "timestamp": datetime.now(UTC),
@@ -163,7 +163,7 @@ def test_filter_by_nested_metadata():
     )
     ex_other, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": 3,
             "receiver_ids": [4],
             "timestamp": datetime.now(UTC),

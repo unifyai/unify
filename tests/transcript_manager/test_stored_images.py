@@ -35,7 +35,7 @@ def test_get_images_returns_metadata_only():
     exchange_id = 424242
     tm.log_messages(
         {
-            "medium": "phone_call",
+            "medium": "unify_message",
             "sender_id": Contact(first_name="Zoe"),
             "receiver_ids": [Contact(first_name="Alex")],
             "timestamp": datetime.now(timezone.utc),
@@ -123,7 +123,7 @@ async def test_ask_uses_images_for_color(static_now):
     # Log message linked to the image – provide Contact objects so contacts are auto-created
     tm.log_messages(
         {
-            "medium": "phone_call",
+            "medium": "unify_message",
             "sender_id": Contact(first_name="Zoe"),
             "receiver_ids": [Contact(first_name="Sam")],
             "timestamp": static_now - timedelta(days=7),

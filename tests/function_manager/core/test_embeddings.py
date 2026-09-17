@@ -89,34 +89,11 @@ def invoice_reconciliation_tool(ledger_id: str) -> str:
 
 @pytest.mark.requires_real_unify
 @_handle_project
-def _drive_embedding_pipeline():
-    """Run Orchestra's two-stage embedding workers once (generator + inserter).
-
-    Changed source text now refreshes its vector through the queue instead of
-    a synchronous re-embed inside the write request; tests drive the workers
-    explicitly instead of waiting for the scheduled cadence.
-    """
-    import os
-
-    import requests
-
-    headers = {"Authorization": f"Bearer {os.environ['ORCHESTRA_ADMIN_KEY']}"}
-    base = db.BASE_URL.rstrip("/")
-    for endpoint in ("generate_pending_embeddings", "index_ready_embeddings"):
-        resp = requests.post(
-            f"{base}/admin/{endpoint}",
-            headers=headers,
-            timeout=120,
-        )
-        resp.raise_for_status()
-
-
 def test_embedding_refreshed_on_overwrite():
-    """Overwriting a function refreshes its embedding via the queue pipeline.
+    """Overwriting a function refreshes its embedding.
 
-    The stale vector stays live (searchable) until the Stage-2 inserter
-    upserts the fresh one — there is no missing-embedding window, and no
-    provider call happens inside the write request.
+    Vector columns are materialised on write, so the overwritten row carries
+    a vector for its new source text as soon as the write lands.
     """
     fm = FunctionManager()
     fm.add_functions(
@@ -129,7 +106,6 @@ def overwrite_target_fn() -> str:
         ],
     )
     fm.warm_embeddings()
-    _drive_embedding_pipeline()
     original_emb, _ = _get_embedding(fm, "overwrite_target_fn")
     assert original_emb is not None, "_embedding_text_emb missing after insert"
 
@@ -143,13 +119,6 @@ def overwrite_target_fn() -> str:
         ],
         overwrite=True,
     )
-
-    # Before the workers run, the previous vector must still be live —
-    # the refresh window never leaves the row unsearchable.
-    stale_emb, _ = _get_embedding(fm, "overwrite_target_fn")
-    assert stale_emb is not None, "embedding must stay live during refresh"
-
-    _drive_embedding_pipeline()
 
     updated_emb, _ = _get_embedding(fm, "overwrite_target_fn")
     assert updated_emb is not None, "_embedding_text_emb missing after overwrite"

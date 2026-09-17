@@ -4,24 +4,19 @@ Foreign Key Tests for TranscriptManager
 Coverage
 ========
 ✓ sender_id → Contacts.contact_id (direct FK with SET NULL delete)
-  - Validation: Reject invalid sender_id on message creation
-  - SET NULL: sender_id becomes null when sender contact deleted
-  - CASCADE: Update sender_id when contact_id updated
+  - sender_id becomes null when the sender contact is deleted
+  - messages with a null sender still load into the Message model
 
 ✓ receiver_ids[*] → Contacts.contact_id (array FK)
-  - Validation: Reject invalid contact_ids in receiver array
-  - SET NULL: Remove deleted contact from receiver_ids array
-  - CASCADE: Update contact_id changes in receiver_ids array
+  - a deleted contact's slot in receiver_ids becomes None
+  - messages with a shortened receiver list still load into the Message model
 
 ✓ exchange_id → Exchanges.exchange_id (direct FK with CASCADE delete)
-  - Validation: Reject invalid exchange_id
-  - CASCADE: Messages deleted when exchange deleted
-  - CASCADE: Update exchange_id when changed
+  - messages are deleted when their exchange is deleted
 
 ✓ images[*].raw_image_ref.image_id → Images.image_id (deeply nested FK)
-  - Validation: Reject invalid image_id in nested structure
-  - SET NULL: Remove deleted image from images array
-  - CASCADE: Update image_id changes in nested refs
+  - the nested image_id is cleared in place when the image is deleted
+  - messages with a cleared image id still load into the Message model
 """
 
 from __future__ import annotations
@@ -87,7 +82,7 @@ def test_fk_message_sender_id_valid_reference():
     # Log message with valid sender
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Hello Bob!",
@@ -140,7 +135,7 @@ def test_fk_message_sender_id_set_null_on_delete():
     # Alice sends messages to Bob
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Message 1",
@@ -149,7 +144,7 @@ def test_fk_message_sender_id_set_null_on_delete():
     )
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Message 2",
@@ -217,7 +212,7 @@ def test_fk_message_sender_id_null_does_not_break_manager_init():
     # Alice sends message to Bob
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Hello from Alice",
@@ -250,8 +245,8 @@ def test_fk_message_sender_id_null_does_not_break_manager_init():
 
 
 @_handle_project
-def test_fk_message_receiver_ids_null_does_not_break_manager_init():
-    """Test that messages with null entries in receiver_ids can be loaded without errors."""
+def test_fk_message_receiver_ids_shortened_does_not_break_manager_init():
+    """Messages whose receiver list lost a deleted contact still load."""
     cm = ContactManager()
     tm = TranscriptManager()
 
@@ -295,7 +290,7 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
     # Log message with multiple receivers
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id, charlie_id],
             "content": "Hello Bob and Charlie!",
@@ -308,32 +303,25 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
     assert len(messages) == 1
     assert set(messages[0].entries["receiver_ids"]) == {bob_id, charlie_id}
 
-    # Delete Charlie (should trigger SET NULL on receiver_ids[*])
+    # Delete Charlie: the array FK nulls Charlie's slot in receiver_ids
     cm._delete_contact(contact_id=charlie_id)
 
-    # Verify message now has [bob_id, None] in receiver_ids
     messages = db.get_logs(context=tm._transcripts_ctx)
     assert len(messages) == 1
-    receiver_ids = messages[0].entries["receiver_ids"]
-    assert bob_id in receiver_ids
-    assert None in receiver_ids
-    assert len(receiver_ids) == 2
+    assert messages[0].entries["receiver_ids"] == [bob_id, None]
 
     # Create a new TranscriptManager instance and verify it loads successfully
     tm_new = TranscriptManager()
 
-    # Verify the new manager can successfully read messages with null entries in receiver_ids
     messages = db.get_logs(context=tm_new._transcripts_ctx)
     assert len(messages) == 1
-    assert bob_id in messages[0].entries["receiver_ids"]
-    assert None in messages[0].entries["receiver_ids"]
+    assert messages[0].entries["receiver_ids"] == [bob_id, None]
 
     # Verify we can construct Message objects from the DB data (no ValidationError)
     from unify.transcript_manager.types.message import Message
 
     msg = Message(**messages[0].entries)
-    assert bob_id in msg.receiver_ids
-    assert None in msg.receiver_ids
+    assert msg.receiver_ids == [bob_id, None]
 
 
 @_handle_project
@@ -385,7 +373,7 @@ def test_fk_message_images_null_does_not_break_manager_init():
     # Log message with multiple images
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Check out these images!",
@@ -453,7 +441,7 @@ def test_fk_message_images_null_does_not_break_manager_init():
 
 
 # --------------------------------------------------------------------------- #
-#  Unit Tests: receiver_ids[*] → Contacts.contact_id (SET NULL)              #
+#  Unit Tests: receiver_ids[*] → Contacts.contact_id (element nulled)        #
 # --------------------------------------------------------------------------- #
 
 
@@ -491,7 +479,7 @@ def test_fk_message_receiver_ids_valid_reference():
     # Log message with multiple receivers
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": contact_map["Alice"],
             "receiver_ids": [contact_map["Bob"], contact_map["Carol"]],
             "content": "Group message",
@@ -511,8 +499,8 @@ def test_fk_message_receiver_ids_valid_reference():
 
 
 @_handle_project
-def test_fk_message_receiver_ids_set_null_on_delete():
-    """Test SET NULL: Deleting contact replaces it with None in receiver_ids array (in-place)."""
+def test_fk_message_receiver_ids_null_deleted_contact():
+    """Deleting a contact nulls its slot in every receiver_ids array."""
     cm = ContactManager()
     tm = TranscriptManager()
 
@@ -544,7 +532,7 @@ def test_fk_message_receiver_ids_set_null_on_delete():
     # Alice sends to Bob and Carol
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": contact_map["Alice"],
             "receiver_ids": [contact_map["Bob"], contact_map["Carol"]],
             "content": "Group message",
@@ -561,19 +549,14 @@ def test_fk_message_receiver_ids_set_null_on_delete():
         [contact_map["Bob"], contact_map["Carol"]],
     )
 
-    # Delete Bob (SET NULL should replace Bob with None in-place, not remove from array)
     cm._delete_contact(contact_id=contact_map["Bob"])
 
-    # Verify Bob replaced with None in receiver_ids array (SET NULL = in-place replacement)
     messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "receiver_ids"],
     )
     assert len(messages_after) == 1  # Message still exists
-    receiver_ids = messages_after[0].entries.get("receiver_ids", [])
-    assert len(receiver_ids) == 2  # Array length unchanged (in-place replacement)
-    assert None in receiver_ids  # Bob replaced with None
-    assert contact_map["Carol"] in receiver_ids  # Carol preserved
+    assert messages_after[0].entries["receiver_ids"] == [None, contact_map["Carol"]]
 
 
 # --------------------------------------------------------------------------- #
@@ -617,7 +600,7 @@ def test_fk_message_exchange_id_cascade_delete():
     # Log messages in same exchange
     exchange_id, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Message 1",
@@ -628,7 +611,7 @@ def test_fk_message_exchange_id_cascade_delete():
     # Log more messages in same exchange (synchronous=True to ensure persisted before query)
     tm.log_messages(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": bob_id,
             "receiver_ids": [alice_id],
             "content": "Reply",
@@ -717,7 +700,7 @@ def test_fk_message_images_valid_reference():
     # Log message with images
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Check out these images!",
@@ -792,7 +775,7 @@ def test_fk_message_images_set_null_on_delete():
     # Log message with 3 images
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Three images",
@@ -836,7 +819,7 @@ def test_fk_message_images_set_null_on_delete():
 
 
 # --------------------------------------------------------------------------- #
-#  Integration Tests: Contact Merge & Blacklist                              #
+#  Integration Tests: Contact Merge                                          #
 # --------------------------------------------------------------------------- #
 
 
@@ -886,7 +869,7 @@ def test_contact_merge_with_transcripts():
     # Alice1 sends message to Bob
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice1_id,
             "receiver_ids": [bob_id],
             "content": "From Alice1",
@@ -897,7 +880,7 @@ def test_contact_merge_with_transcripts():
     # Alice2 sends message to Bob
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice2_id,
             "receiver_ids": [bob_id],
             "content": "From Alice2",
@@ -908,7 +891,7 @@ def test_contact_merge_with_transcripts():
     # Bob sends to both Alices
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": bob_id,
             "receiver_ids": [alice1_id, alice2_id],
             "content": "To both Alices",
@@ -970,125 +953,3 @@ def test_contact_merge_with_transcripts():
     assert sorted(bob_msg.entries["receiver_ids"]) == [
         alice1_id,
     ]  # Only one contact_id now
-
-
-@_handle_project
-@pytest.mark.integration
-def test_contact_blacklist_anonymizes_transcripts():
-    """
-    Test contact blacklist behavior with transcripts.
-
-    Flow:
-    1. Create contact with messages
-    2. Move contact to blacklist (creates blacklist entries + deletes contact)
-    3. Verify FK SET NULL anonymizes messages (sender_id=null)
-    4. Verify contact removed from receiver arrays (in-place None replacement)
-    """
-    cm = ContactManager()
-    tm = TranscriptManager()
-
-    # Create contacts
-    cm._create_contact(
-        first_name="Spammer",
-        email_address="spam@bad.com",
-        phone_number="9999999999",
-    )
-    cm._create_contact(
-        first_name="Alice",
-        email_address="alice@test.com",
-        phone_number="1111111111",
-    )
-    cm._create_contact(
-        first_name="Bob",
-        email_address="bob@test.com",
-        phone_number="2222222222",
-    )
-
-    contacts = db.get_logs(
-        context=cm._ctx,
-        from_fields=["contact_id", "first_name"],
-    )
-    contact_map = {
-        c.entries["first_name"]: int(c.entries["contact_id"]) for c in contacts
-    }
-    spammer_id = contact_map["Spammer"]
-    alice_id = contact_map["Alice"]
-    bob_id = contact_map["Bob"]
-
-    # Spammer sends messages
-    tm.log_first_message_in_new_exchange(
-        {
-            "medium": "email",
-            "sender_id": spammer_id,
-            "receiver_ids": [alice_id],
-            "content": "Spam message 1",
-            "timestamp": datetime.now(),
-        },
-    )
-    tm.log_first_message_in_new_exchange(
-        {
-            "medium": "sms_message",
-            "sender_id": spammer_id,
-            "receiver_ids": [bob_id],
-            "content": "Spam message 2",
-            "timestamp": datetime.now(),
-        },
-    )
-
-    # Alice sends to Spammer and Bob
-    tm.log_first_message_in_new_exchange(
-        {
-            "medium": "email",
-            "sender_id": alice_id,
-            "receiver_ids": [spammer_id, bob_id],
-            "content": "Reply to spammer",
-            "timestamp": datetime.now(),
-        },
-    )
-
-    # Verify 3 messages before blacklist
-    messages_before = db.get_logs(
-        context=tm._transcripts_ctx,
-        from_fields=["message_id"],
-    )
-    assert len(messages_before) == 3
-
-    # Move spammer to blacklist
-    cm._move_to_blacklist(contact_id=spammer_id, reason="sending spam")
-
-    # Verify spammer contact deleted (exclude system contacts: 0=assistant, 1=user)
-    contacts_after = db.get_logs(
-        context=cm._ctx,
-        filter="contact_id > 1",
-        from_fields=["contact_id", "first_name"],
-    )
-    assert len(contacts_after) == 2  # Only Alice and Bob remain
-    remaining_ids = [int(c.entries["contact_id"]) for c in contacts_after]
-    assert spammer_id not in remaining_ids
-
-    # Verify all 3 messages still exist (SET NULL preserves messages)
-    messages_after = db.get_logs(
-        context=tm._transcripts_ctx,
-        from_fields=["message_id", "sender_id", "receiver_ids", "content"],
-    )
-    assert len(messages_after) == 3
-
-    # Verify spam messages anonymized (sender_id = null)
-    spam_msgs = [
-        m
-        for m in messages_after
-        if m.entries["content"] in ["Spam message 1", "Spam message 2"]
-    ]
-    assert len(spam_msgs) == 2
-    for msg in spam_msgs:
-        assert msg.entries.get("sender_id") is None  # FK SET NULL anonymized
-
-    # Verify Alice's message preserved with spammer replaced by None in receivers
-    alice_msg = next(
-        m for m in messages_after if m.entries["content"] == "Reply to spammer"
-    )
-    assert alice_msg.entries["sender_id"] == alice_id
-    receivers = alice_msg.entries.get("receiver_ids", [])
-    assert len(receivers) == 2  # Array length unchanged (in-place replacement)
-    assert None in receivers  # Spammer replaced with None
-    assert bob_id in receivers  # Bob preserved

@@ -33,7 +33,7 @@ def test_delete_contact_transcripts_fk():
     """
     Test contact deletion effects on transcripts:
     - sender_id: SET NULL (message survives with null sender)
-    - receiver_ids[*]: SET NULL (the deleted contact is removed from the array)
+    - receiver_ids[*]: SET NULL (the deleted contact's slot becomes None)
     """
     cm = ContactManager()
     tm = TranscriptManager()
@@ -108,7 +108,7 @@ def test_delete_contact_transcripts_fk():
 
     # Verify all 3 messages still exist (SET NULL on sender_id preserves messages)
     # Alice's message survives with null sender_id
-    # Bob's and Carol's messages survive with Alice removed from receiver_ids
+    # Bob's and Carol's messages survive with Alice's slot nulled in receiver_ids
     messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids", "content"],
@@ -124,17 +124,17 @@ def test_delete_contact_transcripts_fk():
     assert alice_msg.entries.get("sender_id") is None  # SET NULL
     assert contact_map["Bob"] in alice_msg.entries["receiver_ids"]
 
-    # Bob's message: Alice removed from receiver_ids
+    # Bob's message: Alice's slot in receiver_ids is nulled in place
     bob_msg = next(
         m for m in messages_after if m.entries["sender_id"] == contact_map["Bob"]
     )
-    assert bob_msg.entries["receiver_ids"] == [contact_map["Carol"]]
+    assert bob_msg.entries["receiver_ids"] == [None, contact_map["Carol"]]
 
-    # Carol's message: Alice removed from receiver_ids
+    # Carol's message: Alice's slot in receiver_ids is nulled in place
     carol_msg = next(
         m for m in messages_after if m.entries["sender_id"] == contact_map["Carol"]
     )
-    assert carol_msg.entries["receiver_ids"] == [contact_map["Bob"]]
+    assert carol_msg.entries["receiver_ids"] == [None, contact_map["Bob"]]
 
 
 # --------------------------------------------------------------------------- #

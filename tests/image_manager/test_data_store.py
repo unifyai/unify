@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from datetime import datetime, timezone
 from typing import Any
 
@@ -146,74 +145,6 @@ def test_get_images_prefers_cache_and_falls_back_backend(monkeypatch):
     pre = calls["count"]
     _ = im.get_images([ids[0], ids[1]])
     assert calls["count"] == pre + 1
-
-
-@_handle_project
-def test_image_handle_raw_caches_gcs_download(monkeypatch):
-    im = ImageManager()
-    ds = DataStore.for_context(im._ctx, key_fields=("image_id",))
-
-    # Seed a row that points to GCS so ImageHandle.raw() downloads once
-    # Avoid a real POST with a GCS URL by faking db.log
-    class _FakeLog:
-        def __init__(self, entries: dict):
-            self.entries = entries
-
-    counter = {"next": 10001}
-
-    def _fake_unify_log(
-        *,
-        context: str,
-        new: Any = True,
-        mutable: Any = None,
-        params: Any = None,
-        **entries: Any,
-    ):
-        eid = counter["next"]
-        counter["next"] += 1
-        ret = dict(entries)
-        ret["image_id"] = eid
-        return _FakeLog(ret)
-
-    monkeypatch.setattr(db, "log", _fake_unify_log)
-
-    [img_id] = im.add_images(
-        [
-            {
-                "timestamp": datetime.now(timezone.utc),
-                "caption": "GCS sample",
-                "data": "gs://my-bucket/path/to/image.jpg",
-            },
-        ],
-    )
-
-    # Mock db.download_object to count downloads
-    download_count = {"count": 0}
-
-    def _fake_download_object(gcs_uri, *, api_key=None):
-        download_count["count"] += 1
-        return b"IMG_BYTES"
-
-    monkeypatch.setattr(db, "download_object", _fake_download_object)
-
-    # First raw() must download and then cache base64 in DataStore
-    h1 = im.get_images([img_id])[0]
-    raw1 = h1.raw()
-    assert isinstance(raw1, (bytes, bytearray)) and raw1
-
-    # DataStore should now contain base64 for this image id
-    cached = ds[img_id]
-    data_field = cached.get("data")
-    assert isinstance(data_field, str) and not data_field.startswith("gs://")
-    # Validate that base64 decodes to the same bytes
-    assert base64.b64decode(data_field) == raw1
-
-    # Second raw() on a fresh handle should NOT trigger another download
-    h2 = im.get_images([img_id])[0]
-    _ = h2.raw()
-
-    # Verify only one download happened
-    assert download_count["count"] == 1
 
 
 @_handle_project

@@ -273,25 +273,36 @@ async def test_persist_stop_with_memoize_intent_stores_function():
         # The memoize-stop premise requires the actor to have actually
         # executed the utility before the stop lands — the librarian only
         # stores code that ran successfully, so stopping a still-empty
-        # trajectory tests nothing. Wait for the first completed tool
-        # round-trip instead of a fixed sleep (slow high-reasoning models
-        # need well over 5s to emit their first execute_code call).
-        def _tool_round_trip_happened() -> bool:
+        # trajectory tests nothing. The discovery-first searches complete
+        # first, so wait for a completed ``execute_code`` round-trip
+        # specifically, not for the first tool result of any kind.
+        def _execute_code_round_trip_happened() -> bool:
             client = getattr(handle._inner, "_client", None)
-            msgs = list(getattr(client, "messages", []) or [])
-            has_call = any(
-                (m.get("tool_calls") if isinstance(m, dict) else None) for m in msgs
+            msgs = [
+                m
+                for m in (getattr(client, "messages", []) or [])
+                if isinstance(m, dict)
+            ]
+            exec_call_ids = {
+                call["id"]
+                for m in msgs
+                for call in (m.get("tool_calls") or [])
+                if call.get("function", {}).get("name") == "execute_code"
+            }
+            return any(
+                m.get("role") == "tool"
+                and any(
+                    str(m.get("tool_call_id", "")).startswith(call_id)
+                    for call_id in exec_call_ids
+                )
+                for m in msgs
             )
-            has_result = any(
-                (m.get("role") if isinstance(m, dict) else None) == "tool" for m in msgs
-            )
-            return has_call and has_result
 
-        exec_deadline = asyncio.get_event_loop().time() + 90
-        while not _tool_round_trip_happened():
+        exec_deadline = asyncio.get_event_loop().time() + 120
+        while not _execute_code_round_trip_happened():
             if asyncio.get_event_loop().time() > exec_deadline:
                 pytest.skip(
-                    "Actor did not complete a tool call within 90s — "
+                    "Actor did not complete an execute_code call within 120s — "
                     "this is an eval-sensitive path",
                 )
             await asyncio.sleep(1.0)

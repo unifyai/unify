@@ -22,7 +22,7 @@ def test_rewrites_sender_and_receivers():
     # 1) Old id appears as *sender_id*
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=OLD_ID,
             receiver_ids=[OLD_ID + 1],
             timestamp=base_ts,
@@ -34,7 +34,7 @@ def test_rewrites_sender_and_receivers():
     # 2) Old id appears inside *receiver_ids*
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=OLD_ID + 2,
             receiver_ids=[OLD_ID],
             timestamp=base_ts + timedelta(seconds=1),
@@ -46,7 +46,7 @@ def test_rewrites_sender_and_receivers():
     # 3) Old id appears multiple times in receiver_ids → should deduplicate
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=OLD_ID + 3,
             receiver_ids=[OLD_ID, OLD_ID, OLD_ID + 2],
             timestamp=base_ts + timedelta(seconds=2),

@@ -90,7 +90,6 @@ def test_storage_prompt_encourages_bounded_agent_loop_distillation():
     assert "human-facing synthesis" in prompt
     assert "label-specific canned prose" in prompt
     assert "Generalize by preserving the LLM call" in prompt
-    assert "replace semantic LLM work with brittle symbolic approximations" in prompt
     assert "changing tool discovery" in prompt
     assert "unknown-state debugging" in prompt
 

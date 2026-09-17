@@ -1978,10 +1978,10 @@ def _fk_walk(
 
     A path is dot-separated; a segment ending in ``[*]`` names a list and
     applies the rest of the path to every element. With ``mutate`` the
-    ``on_delete`` rule is applied in place: a matching list element is
-    dropped (CASCADE) or, when the path continues into it, the matching leaf
-    inside it is cleared (SET NULL); a list of scalars loses the matching
-    element under either rule; a scalar leaf is set to ``None``.
+    ``on_delete`` rule is applied in place: CASCADE drops a matching list
+    element, SET NULL replaces a matching scalar (in a list or not) with
+    ``None`` and, when the path continues into a list element, clears the
+    matching leaf inside it.
     """
     segment, rest = segments[0], segments[1:]
     listwise = segment.endswith("[*]")
@@ -1995,7 +1995,11 @@ def _fk_walk(
         if not rest:
             hit = any(item == value for item in current)
             if hit and mutate:
-                node[key] = [item for item in current if item != value]
+                node[key] = [
+                    item for item in current if item != value or on_delete != "CASCADE"
+                ]
+                if on_delete != "CASCADE":
+                    node[key] = [None if item == value else item for item in current]
             return hit
         hit = False
         kept = []

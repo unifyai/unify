@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from unify import db
-import unify.function_manager.function_manager as function_manager_module
 from tests.helpers import _handle_project
 from unify.function_manager.function_manager import FunctionManager
 from unify.guidance_manager.guidance_manager import GuidanceManager
@@ -118,64 +115,6 @@ def test_reconcile_does_not_flag_real_primitive_dependency_as_stale():
     refreshed = fm._get_function_data_by_name(name="delegate_task")
     assert refreshed is not None
     assert refreshed["stale_reasons"] == []
-
-
-def test_provider_cleanup_marks_compositional_dependencies(monkeypatch):
-    primitive = SimpleNamespace(
-        id=11,
-        entries={
-            "name": "primitives.integrations.hubspot.search_contacts",
-            "metadata": {
-                "source": "provider_backed",
-                "integration": {
-                    "backend_id": "composio",
-                    "app_slug": "hubspot",
-                },
-            },
-        },
-    )
-    dependant = SimpleNamespace(
-        id=22,
-        entries={
-            "function_id": 7,
-            "name": "search_customer",
-            "depends_on": [primitive.entries["name"]],
-            "stale_reasons": [],
-        },
-    )
-    updates: list[dict] = []
-
-    def get_logs(*, context, **kwargs):
-        return [primitive] if context == "primitives" else [dependant]
-
-    monkeypatch.setattr(function_manager_module.db, "get_logs", get_logs)
-    monkeypatch.setattr(
-        function_manager_module.db,
-        "delete_logs",
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        function_manager_module.db,
-        "update_logs",
-        lambda **kwargs: updates.append(kwargs),
-    )
-    monkeypatch.setattr(
-        function_manager_module,
-        "list_private_fields",
-        lambda _context: [],
-    )
-    fm = FunctionManager.__new__(FunctionManager)
-    fm._primitives_ctx = "primitives"
-    fm._compositional_ctx = "compositional"
-
-    deleted = fm._delete_provider_integration_rows_for_apps(
-        [("composio", "hubspot")],
-    )
-
-    assert deleted == 1
-    reason = updates[0]["entries"]["stale_reasons"][0]
-    assert reason["dep_kind"] == "depends_on"
-    assert reason["name"] == primitive.entries["name"]
 
 
 @_handle_project

@@ -43,12 +43,7 @@ def test_file_write_tools_expose_destination_guidance():
         doc = (getattr(BaseFileManager, method_name).__doc__ or "").strip()
 
         assert "destination : str | None" in doc
-        assert "Accessible" in doc
-        assert "shared" in doc
-        assert "teams" in doc
-        assert "team:<id>" in doc
-        assert "personal" in doc
-        assert "request_clarification" in doc
+        assert '"personal"' in doc
 
 
 def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:

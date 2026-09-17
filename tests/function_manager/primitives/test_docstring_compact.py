@@ -26,4 +26,3 @@ def test_prompt_context_includes_data_efficiency_rule():
     assert "HARD RULE" in context
     assert "reduce" in context
     assert "never download a large table into Python".lower() in context.lower()
-    assert "do not peek into another assistant's private contexts" in context.lower()

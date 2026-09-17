@@ -74,7 +74,7 @@ async def test_bound_injector_routes_manager_clar_to_per_call_queues():
         clarification_up_q=orphan_up,
         clarification_down_q=orphan_down,
     )
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sandbox.global_state["primitives"] = injector
     sb_token = _CURRENT_SANDBOX.set(sandbox)
     try:

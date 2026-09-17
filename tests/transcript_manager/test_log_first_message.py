@@ -14,7 +14,7 @@ def test_rejects_explicit_id_dict():
     tm = TranscriptManager()
 
     payload = {
-        "medium": "email",
+        "medium": "unify_message",
         "sender_id": 0,
         "receiver_ids": [1],
         "timestamp": datetime.now(UTC),
@@ -35,7 +35,7 @@ def test_rejects_explicit_id_model():
     tm = TranscriptManager()
 
     m = Message(
-        medium="email",
+        medium="unify_message",
         sender_id=0,
         receiver_ids=[1],
         timestamp=datetime.now(UTC),
@@ -56,7 +56,7 @@ def test_creates_exchange_returns_id():
     tm = TranscriptManager()
 
     payload = {
-        "medium": "sms_message",
+        "medium": "unify_message",
         "sender_id": 1,
         "receiver_ids": [2],
         "timestamp": datetime.now(UTC),
@@ -76,7 +76,7 @@ def test_creates_exchange_returns_id():
     )
     assert rows_e and rows_e[0].entries.get("exchange_id") == exid
     assert isinstance(rows_e[0].entries.get("metadata"), dict)
-    assert rows_e[0].entries.get("medium") == "sms_message"
+    assert rows_e[0].entries.get("medium") == "unify_message"
 
     # Transcript message should exist for this exchange
     rows_m = db.get_logs(
@@ -92,7 +92,7 @@ def test_sets_initial_metadata():
     tm = TranscriptManager()
 
     payload = {
-        "medium": "email",
+        "medium": "unify_message",
         "sender_id": 0,
         "receiver_ids": [1],
         "timestamp": datetime.now(UTC),
@@ -112,5 +112,5 @@ def test_sets_initial_metadata():
         limit=1,
     )
     assert rows_e and rows_e[0].entries.get("exchange_id") == exid
-    assert rows_e[0].entries.get("medium") == "email"
+    assert rows_e[0].entries.get("medium") == "unify_message"
     assert rows_e[0].entries.get("metadata") == meta

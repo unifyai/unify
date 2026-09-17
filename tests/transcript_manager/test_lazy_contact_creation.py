@@ -24,7 +24,7 @@ async def test_creates_contacts_and_logs():
     unique_content = "Lazy contact creation message – unique content"
 
     msg_dict = {
-        "medium": "email",
+        "medium": "unify_message",
         "sender_id": sender,
         "receiver_ids": [receiver],
         "timestamp": datetime.now(UTC),

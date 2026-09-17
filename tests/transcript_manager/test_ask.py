@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from typing import List
 import pytest
 
@@ -31,7 +30,6 @@ from unify.common.llm_helpers import _dumps
 from unify.common.llm_client import new_llm_client
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
-from tests.async_helpers import _wait_for_next_assistant_response_event
 
 # --------------------------------------------------------------------------- #
 #  DETERMINISTIC GROUND-TRUTH GENERATOR                                       #
@@ -50,37 +48,30 @@ def _answer_semantic(
     def cid(name: str) -> int:
         return _ID_BY_NAME[name]
 
-    if _is_summary_q(question):
-        # return the *two utterances* that form the last Dan–Julia phone call.
-        NAME_BY_ID = {v: k.capitalize() for k, v in _ID_BY_NAME.items()}
-        last_call_messages = sorted(
+    def dan_julia_messages() -> list[Message]:
+        return sorted(
             (
                 m
                 for m in messages
-                if m.medium == "phone_call"
-                and {m.sender_id} | set(m.receiver_ids) == {cid("dan"), cid("julia")}
+                if {m.sender_id} | set(m.receiver_ids) == {cid("dan"), cid("julia")}
             ),
             key=lambda m: m.timestamp,
-        )[-2:]
-        dialogue_date_str = ""
-        if last_call_messages:
-            # Let's use the date of the first message in the snippet
-            try:
-                dialogue_timestamp_iso = last_call_messages[0].timestamp.isoformat()
-                dialogue_date = datetime.fromisoformat(
-                    dialogue_timestamp_iso.replace("Z", "+00:00"),
-                ).strftime(
-                    "%B %d, %Y",
-                )  # Format as "April 26, 2025"
-                dialogue_date_str = f"Dialogue from {dialogue_date}:\n"
-            except ValueError:
-                dialogue_date_str = ""  # Fallback if parsing fails
-        # Construct dialogue with speaker names
-        dialogue_with_speakers = []
-        for m in last_call_messages:
-            sender_name = NAME_BY_ID.get(m.sender_id, f"Unknown({m.sender_id})")
-            dialogue_with_speakers.append(f"{sender_name}: {m.content}")
-        return dialogue_date_str + "\n".join(dialogue_with_speakers)
+        )
+
+    def last_dan_julia_exchange() -> list[Message]:
+        """All utterances of the most recent Dan–Julia exchange, in order."""
+        latest = dan_julia_messages()[-1]
+        return [m for m in dan_julia_messages() if m.exchange_id == latest.exchange_id]
+
+    if _is_summary_q(question):
+        NAME_BY_ID = {v: k.capitalize() for k, v in _ID_BY_NAME.items()}
+        last_messages = last_dan_julia_exchange()
+        dialogue_date = last_messages[0].timestamp.strftime("%B %d, %Y")
+        dialogue_with_speakers = [
+            f"{NAME_BY_ID.get(m.sender_id, f'Unknown({m.sender_id})')}: {m.content}"
+            for m in last_messages
+        ]
+        return f"Dialogue from {dialogue_date}:\n" + "\n".join(dialogue_with_speakers)
 
     if "quantity" in q and "carlos" in q:
         return "200"
@@ -100,13 +91,7 @@ def _answer_semantic(
         return f"Yes – {quote}"
 
     if "when did dan last speak with julia" in q:
-        last: str = max(
-            m.timestamp
-            for m in messages
-            if m.medium == "phone_call"
-            and {m.sender_id} | set(m.receiver_ids) == {cid("dan"), cid("julia")}
-        )
-        return last.isoformat().split("T")[0]
+        return dan_julia_messages()[-1].timestamp.isoformat().split("T")[0]
 
     if "jimmy" in q and "holiday" in q:
         pattern = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -120,21 +105,6 @@ def _answer_semantic(
     if "anne" in q and "why" in q:
         msg = next(m for m in messages if m.sender_id == cid("anne"))
         return "passport expired"
-
-    if "how many different media has dan used" in q:
-        media = {m.medium for m in messages if m.sender_id == cid("dan")}
-        return str(len(media))
-
-    if "one-sentence summary" in q or "one sentence summary" in q:
-        last_call = [
-            m
-            for m in messages
-            if m.medium == "phone_call"
-            and {m.sender_id} | set(m.receiver_ids) == {cid("dan"), cid("julia")}
-        ]
-        last_ts = max(m.timestamp for m in last_call)
-        combined = " ".join(m.content for m in last_call if m.timestamp == last_ts)
-        return " ".join(combined.split()[:12]) + "..."
 
     return "N/A"
 
@@ -156,12 +126,11 @@ def _is_summary_q(q: str) -> bool:
 
 QUESTIONS = [
     "Did Carlos seem interested in buying the product? Can you find a relevant quote to back up your answer?",
-    "When did Dan last speak with Julia on the phone?",
+    "When did Dan last speak with Julia?",
     "Did Jimmy ever tell us when he's on holiday? If so, what date?",
     "Why didn't Anne want to come with us on the trip? I forgot her excuse.",
     "What quantity did Carlos say he wanted to buy?",
-    "How many different media has Dan used so far?",
-    "Give me a one-sentence summary of the last Dan-Julia phone call. Do not omit any crucial facts or introduce false information. ",
+    "Give me a one-sentence summary of the last Dan-Julia conversation. Do not omit any crucial facts or introduce false information. ",
 ]
 
 
@@ -183,7 +152,7 @@ def _llm_assert_correct(
     if _is_summary_q(question):
         system_msg = (
             "You are a meticulous but fair summary evaluator. "
-            "You will be given the *source dialogue* of a short phone call and a candidate **one-sentence** summary. "
+            "You will be given the *source dialogue* of a short conversation and a candidate **one-sentence** summary. "
             "Your task is to decide whether the summary accurately conveys the main intent and key factual points. "
             "A good one-sentence summary will often synthesize information from multiple utterances into a coherent statement, potentially reflecting the implied outcome or joint understanding if reasonably inferred from the dialogue. "
             "For example, if the dialogue discusses 'planning to do X' or 'working on X', the summary can state that the conversation was about 'planning X' or 'addressing X'. "
@@ -269,14 +238,17 @@ async def test_interjection(
 ):
     """Ask one semantic question, then interject with a second, and verify both answers appear."""
     tm, _ID_BY_NAME = tm_manager_scenario
-    # 1) Initial semantic query – last Dan ⇢ Julia phone call date
-    q_initial = QUESTIONS[1]  # "When did Dan last speak with Julia on the phone?"
+    # 1) Initial semantic query – last Dan ⇢ Julia conversation date
+    q_initial = QUESTIONS[1]  # "When did Dan last speak with Julia?"
     handle = await tm.ask(q_initial, _return_reasoning_steps=True)
-    await _wait_for_next_assistant_response_event(handle._client, timeout=60)
 
-    # 2) Interject with a *different* question (Jimmy holiday date)
+    # 2) Interject with a *different* question (Jimmy holiday date). The loop
+    #    is held while the interjection is queued so it lands before the final
+    #    reply regardless of how quickly (cached) LLM turns complete.
     q_follow_up = QUESTIONS[2]  # "Did Jimmy ever tell us when he's on holiday...?"
+    await handle.pause()
     await handle.interject(q_follow_up)
+    await handle.resume()
 
     # 3) Await combined answer
     answer, steps = await handle.result()
@@ -309,7 +281,7 @@ async def test_stop():
 async def test_parent_context(
     tm_manager_scenario: tuple[TranscriptManager, dict[str, int]],
 ):
-    # The static scenario includes a Dan-Julia basketball phone call on 2025-05-20
+    # The static scenario includes a Dan-Julia basketball conversation on 2025-05-20
     # (exchange_id=5). This test verifies that when parent context references
     # "basketball", the LLM can use that to disambiguate and find the correct date.
     tm, _ID_BY_NAME = tm_manager_scenario
@@ -334,7 +306,7 @@ async def test_parent_context(
     # ── 3.  Assertions ─────────────────────────────────────────────────
     # a) Broader-context header is present
     assert any(m.get("_ctx_header") for m in steps), "System context header missing."
-    # b) LLM judged answer correct (basketball phone call is dated 2025-05-20)
+    # b) LLM judged answer correct (basketball conversation is dated 2025-05-20)
     expected = "2025-05-20"
     _llm_assert_correct("What date was the conversation?", expected, answer, steps)
 
@@ -351,8 +323,8 @@ async def test_clarification_request(
     tool use continues to completion.
 
     The static scenario includes:
-    - A Dan-Julia basketball phone call on 2025-05-20 (exchange_id=5)
-    - A Dan-Julia holiday planning email on 2025-05-25 (exchange_id=6)
+    - A Dan-Julia basketball conversation on 2025-05-20 (exchange_id=5)
+    - A Dan-Julia holiday planning conversation on 2025-05-25 (exchange_id=6)
     """
 
     tm, _ID_BY_NAME = tm_manager_scenario
@@ -368,28 +340,18 @@ async def test_clarification_request(
         "What day was the conversation? Request a clarification if you're unsure."
     )
     known_conversations = [
-        {
-            "topic": "basketball",
-            "medium": "phone_call",
-            "date": "2025-05-20",
-            "exchange_id": 5,
-        },
-        {
-            "topic": "holiday planning",
-            "medium": "email",
-            "date": "2025-05-25",
-            "exchange_id": 6,
-        },
+        {"topic": "basketball", "date": "2025-05-20", "exchange_id": 5},
+        {"topic": "holiday planning", "date": "2025-05-25", "exchange_id": 6},
     ]
 
     async def _clarification_worker() -> None:
         clarifier = new_llm_client(async_client=False)
         clarifier.set_system_message(
             "You are a helpful assistant that answers clarification questions succinctly. "
-            "You know about two possible conversations: a basketball phone call on 2025-05-20 (exchange 5), "
-            "and a holiday planning email on 2025-05-25 (exchange 6). "
+            "You know about two possible conversations: a basketball conversation on 2025-05-20 (exchange 5), "
+            "and a holiday planning conversation on 2025-05-25 (exchange 6). "
             "When asked to disambiguate which conversation the user means, prefer the basketball conversation. "
-            "Keep responses short and directly disambiguate (e.g., 'The basketball phone call last week.').",
+            "Keep responses short and directly disambiguate (e.g., 'The basketball conversation last week.').",
         )
 
         while True:
@@ -413,7 +375,7 @@ async def test_clarification_request(
                 answer = clarifier.generate(payload)
             except Exception:
                 # Fallback deterministic answer if LLM call fails
-                answer = "The basketball phone call last week."
+                answer = "The basketball conversation last week."
 
             await down_q.put(answer.strip())
 
@@ -504,20 +466,3 @@ async def test_ask_uses_reduce_for_numeric_aggregation(
         steps,
         "LLM should use reduce tool for numeric aggregation",
     )
-
-
-@pytest.mark.asyncio
-async def test_ask_email_cc_metadata(
-    tm_manager_scenario: tuple[TranscriptManager, dict[str, int]],
-) -> None:
-    """Verify TM.ask can surface CC recipients from email metadata."""
-    tm, _ID_BY_NAME = tm_manager_scenario
-
-    question = "Who was CC'd on the email about the product launch event?"
-    handle = await tm.ask(question, _return_reasoning_steps=True)
-    candidate, steps = await handle.result()
-
-    # Ground truth: Julia Nguyen and Anne Fischer were CC'd
-    expected = "Julia Nguyen and Anne Fischer (julia.nguyen@example.com, anne.fischer@example.com)"
-
-    _llm_assert_correct(question, expected, candidate, steps)

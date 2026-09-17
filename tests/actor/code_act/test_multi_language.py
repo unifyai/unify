@@ -62,8 +62,8 @@ class ValidationRecoveryResult(BaseModel):
 @pytest.mark.timeout(180)
 async def test_validation_error_self_correction():
     """
-    Real-world scenario: Actor makes an invalid call, sees structured validation error,
-    then self-corrects and succeeds.
+    Real-world scenario: Actor makes an invalid call, is refused with a message
+    explaining what to change, then self-corrects and succeeds.
     """
     ValidationRecoveryResult.model_rebuild()
 
@@ -72,7 +72,8 @@ async def test_validation_error_self_correction():
     handle = await actor.act(
         "You MUST do these steps in order:\n"
         "1) Intentionally make an INVALID execute_code call: language='bash', state_mode='stateless', session_name='oops', code='echo hi'.\n"
-        "   Confirm you saw a structured validation error dict (error_type='validation').\n"
+        "   The call is refused: the tool result is a message saying a stateless call cannot carry a session, with a suggestion for what to change.\n"
+        "   saw_validation_error is true if and only if you observed that refusal.\n"
         "2) Self-correct by calling execute_code again, but WITHOUT a session (still stateless), same code.\n"
         "3) Return JSON with keys: saw_validation_error (bool), final_stdout (string).\n"
         "Do not invent outputs; only use what you observe from tool results.\n",

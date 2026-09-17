@@ -66,8 +66,8 @@ def function_manager_factory(tmp_path):
     """Factory fixture that creates FunctionManager instances.
 
     Uses tmp_path as the LocalFileManager root so function files are written to
-    an ephemeral directory rather than ~/Unity/Local (which on macOS's
-    case-insensitive filesystem can collide with the repo checkout).
+    an ephemeral directory rather than the default workspace root (which on
+    macOS's case-insensitive filesystem can collide with the repo checkout).
     """
     managers = []
 

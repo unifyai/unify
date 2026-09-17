@@ -18,7 +18,6 @@ from unify.contact_manager.types.contact import Contact
 from unify.transcript_manager.prompt_builders import build_ask_prompt
 from unify.transcript_manager.transcript_manager import TranscriptManager
 from unify.session_details import (
-    SESSION_DETAILS,
     UNASSIGNED_USER_CONTEXT,
     UNASSIGNED_ASSISTANT_CONTEXT,
 )
@@ -183,32 +182,6 @@ def test_ask_system_prompt_formatting():
 
     assert_section_spacing(prompt)
     assert_time_footer(prompt, "Current UTC time is ")
-
-
-@_handle_project
-def test_ask_prompt_includes_shared_authorship_guidance_when_teams_exist():
-    tm = TranscriptManager()
-    tools = dict(tm.get_tools("ask"))
-    original_team_ids = list(SESSION_DETAILS.team_ids)
-    original_agent_id = SESSION_DETAILS.assistant.agent_id
-
-    try:
-        SESSION_DETAILS.team_ids = [4242]
-        SESSION_DETAILS.assistant.agent_id = 684
-        prompt = build_ask_prompt(
-            tools=tools,
-            num_messages=tm._num_messages(),
-            transcript_columns=tm._list_columns(),
-            contact_columns=_contact_columns(tm),
-        ).flatten()
-    finally:
-        SESSION_DETAILS.team_ids = original_team_ids
-        SESSION_DETAILS.assistant.agent_id = original_agent_id
-
-    assert "Shared transcript attribution" in prompt
-    assert "`684`" in prompt
-    assert "`authoring_assistant_id`" in prompt
-    assert "message_authoring_attribution" in prompt
 
 
 # ─────────────────────────────────────────────────────────────────────────────

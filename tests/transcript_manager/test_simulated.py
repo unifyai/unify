@@ -96,7 +96,7 @@ def test_filter_exchanges_sync():
     tm = SimulatedTranscriptManager()
     # Seed two exchanges
     m = {
-        "medium": Medium.EMAIL,
+        "medium": Medium.UNIFY_MESSAGE,
         "sender_id": 1,
         "receiver_ids": [2],
         "timestamp": datetime.now(timezone.utc),
@@ -104,7 +104,7 @@ def test_filter_exchanges_sync():
     }
     tm.log_first_message_in_new_exchange(m)
     m2 = {
-        "medium": Medium.SMS_MESSAGE,
+        "medium": Medium.UNIFY_MESSAGE,
         "sender_id": 3,
         "receiver_ids": [4],
         "timestamp": datetime.now(timezone.utc),
@@ -131,7 +131,7 @@ def test_update_contact_id_sync():
     # Create an exchange with a message referencing contact id 10
     exid, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": Medium.EMAIL,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 10,
             "receiver_ids": [20, 30],
             "timestamp": datetime.now(timezone.utc),
@@ -142,7 +142,7 @@ def test_update_contact_id_sync():
     # Add another message in the same exchange also referencing id 10
     created = tm.log_messages(
         {
-            "medium": Medium.EMAIL,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 5,
             "receiver_ids": [10],
             "timestamp": datetime.now(timezone.utc),
@@ -168,7 +168,7 @@ def test_clear_sync():
     # Create prior state
     exid, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": Medium.EMAIL,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 1,
             "receiver_ids": [2],
             "timestamp": datetime.now(timezone.utc),
@@ -177,7 +177,7 @@ def test_clear_sync():
     )
     tm.log_messages(
         {
-            "medium": Medium.EMAIL,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 2,
             "receiver_ids": [1],
             "timestamp": datetime.now(timezone.utc),
@@ -190,7 +190,7 @@ def test_clear_sync():
     # Post-clear, synchronous helper still works
     exid2, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": Medium.SMS_MESSAGE,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 3,
             "receiver_ids": [4],
             "timestamp": datetime.now(timezone.utc),
@@ -226,7 +226,7 @@ def test_log_sync_and_metadata():
     tm = SimulatedTranscriptManager()
     exid, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": Medium.EMAIL,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 100,
             "receiver_ids": [200],
             "timestamp": datetime.now(timezone.utc),
@@ -237,7 +237,7 @@ def test_log_sync_and_metadata():
     # Log another message into the same exchange
     created = tm.log_messages(
         {
-            "medium": Medium.EMAIL,
+            "medium": Medium.UNIFY_MESSAGE,
             "sender_id": 200,
             "receiver_ids": [100],
             "timestamp": datetime.now(timezone.utc),

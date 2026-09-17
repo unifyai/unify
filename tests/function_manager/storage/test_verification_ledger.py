@@ -57,12 +57,6 @@ def test_every_primitive_has_an_explicit_effect_class():
     assert not stale, f"Table entries for primitives that no longer exist: {stale}"
 
 
-def test_every_comms_send_is_unsafe():
-    for name, klass in PRIMITIVE_EFFECT_CLASSES.items():
-        if name.startswith("primitives.comms.send_"):
-            assert klass is SideEffectClass.unsafe_effectful, name
-
-
 # ────────────────────────────────────────────────────────────────────────────
 # Classification corpus
 # ────────────────────────────────────────────────────────────────────────────
@@ -73,13 +67,12 @@ _READ = (
 )
 _SEND = (
     "async def notify(to: str, body: str) -> None:\n"
-    "    await primitives.comms.send_email(to=to, subject='hi', body=body)\n"
+    "    await primitives.contacts.update(f'note for {to}: {body}')\n"
 )
 _UPSERT = (
     "async def save(rows: list) -> None:\n"
     "    await primitives.data.update_rows('T', rows)\n"
 )
-_DESKTOP = "async def press():\n    await primitives.computer.click(10, 20)\n"
 _THIRD_PARTY_HTTP = (
     "def fetch(url: str):\n    import requests\n    return requests.get(url)\n"
 )
@@ -89,9 +82,6 @@ _THIRD_PARTY_PURE = (
 _THIRD_PARTY_OTHER = "def s3(x):\n    import boto3\n    return x\n"
 _OPEN_WRITE = "def dump(p):\n    with open(p, 'w') as fh:\n        fh.write('x')\n"
 _UNKNOWN_PRIMITIVE = "async def odd():\n    await primitives.made_up.thing()\n"
-_LEGACY_NAMESPACE = (
-    "async def shot():\n    return await computer_primitives.get_screenshot()\n"
-)
 _CALLS_DEP = "def outer(x):\n    return inner(x)\n"
 
 
@@ -102,12 +92,10 @@ _CALLS_DEP = "def outer(x):\n    return inner(x)\n"
         (_READ, SideEffectClass.read_only, "primitives"),
         (_SEND, SideEffectClass.unsafe_effectful, "primitives"),
         (_UPSERT, SideEffectClass.idempotent_effectful, "primitives"),
-        (_DESKTOP, SideEffectClass.unsafe_effectful, "primitives"),
         (_THIRD_PARTY_HTTP, SideEffectClass.unsafe_effectful, "inferred_third_party"),
         (_THIRD_PARTY_PURE, SideEffectClass.safe_noop, "pure"),
         (_THIRD_PARTY_OTHER, SideEffectClass.read_only, "inferred_third_party"),
         (_OPEN_WRITE, SideEffectClass.unsafe_effectful, "inferred_third_party"),
-        (_LEGACY_NAMESPACE, SideEffectClass.read_only, "primitives"),
     ],
 )
 def test_classification_corpus(source, expected_class, expected_source):
@@ -152,22 +140,6 @@ def test_unresolved_dependency_is_unsafe():
         dependency_class=lambda name: None,
     )
     assert result.detected is SideEffectClass.unsafe_effectful
-
-
-def test_integration_primitive_classified_from_action_class():
-    rows = {
-        "primitives.integrations.gmail.send_email": {
-            "name": "primitives.integrations.gmail.send_email",
-            "is_primitive": True,
-            "metadata": {"action_class": "write"},
-        },
-    }
-    src = "async def go():\n    await primitives.integrations.gmail.send_email(x=1)\n"
-    assert (
-        classify_source(src, primitive_rows=rows).detected
-        is SideEffectClass.idempotent_effectful
-    )
-    assert classify_source(src).detected is SideEffectClass.unsafe_effectful
 
 
 def test_effective_class_bounds():
@@ -540,7 +512,7 @@ def test_overwrite_reclassifies_and_keeps_policy():
     fm.add_functions(
         implementations=(
             "async def add(a: int, b: int) -> int:\n"
-            "    await primitives.comms.send_sms(to='x', body='y')\n"
+            "    await primitives.contacts.update('rename x to y')\n"
             "    return a + b\n"
         ),
         overwrite=True,
@@ -577,7 +549,7 @@ def test_librarian_confirmation_survives_overwrite_only_within_bounds():
     fm.add_functions(
         implementations=(
             "async def lookup(q: str) -> str:\n"
-            "    await primitives.comms.send_sms(to=q, body='x')\n"
+            "    await primitives.contacts.update(q)\n"
             "    return q\n"
         ),
         overwrite=True,

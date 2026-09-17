@@ -133,7 +133,7 @@ _ID_BY_NAME: dict[str, int] = {}  # filled during seeding
 
 
 class ScenarioBuilder:
-    """Populate Unify with contacts, 6 'meaningful' exchanges + filler."""
+    """Populate the store with contacts, 7 'meaningful' exchanges + filler."""
 
     def __init__(self, cm: ContactManager, tm: TranscriptManager) -> None:
         self.cm = cm
@@ -153,13 +153,12 @@ class ScenarioBuilder:
     def _seed_key_exchanges(self) -> None:
         now = datetime(2025, 4, 20, 15, 0, tzinfo=timezone.utc)
 
-        # E0: first Dan–Julia phone call
+        # E0: first Dan–Julia conversation
         dan_id = _ID_BY_NAME["dan"]
         julia_id = _ID_BY_NAME["julia"]
 
         self._log(
             0,
-            "phone_call",
             [
                 (
                     dan_id,
@@ -176,11 +175,10 @@ class ScenarioBuilder:
             ],
         )
 
-        # E1: *last* Dan–Julia phone call (later date)
+        # E1: second Dan–Julia conversation (later date)
         later = datetime(2025, 4, 26, 9, 30, tzinfo=timezone.utc)
         self._log(
             1,
-            "phone_call",
             [
                 (
                     dan_id,
@@ -197,17 +195,16 @@ class ScenarioBuilder:
             ],
         )
 
-        # E2: Carlos interest e-mail
+        # E2: Carlos purchase interest
         carlos_id = _ID_BY_NAME["carlos"]
-        t_email = datetime(2025, 4, 21, 12, 0, tzinfo=timezone.utc)
+        t_carlos = datetime(2025, 4, 21, 12, 0, tzinfo=timezone.utc)
         self._log(
             2,
-            "email",
             [
                 (
                     carlos_id,
                     dan_id,
-                    t_email,
+                    t_carlos,
                     "Subject: Stapler bulk order\n\n"
                     "Hi Dan,\nI'm **interested in buying 200 units** of "
                     "your new stapler. Can you quote?\n\nThanks,\nCarlos",
@@ -215,18 +212,17 @@ class ScenarioBuilder:
                 (
                     dan_id,
                     carlos_id,
-                    t_email + timedelta(hours=2),
+                    t_carlos + timedelta(hours=2),
                     "Hi Carlos — sure, $4.50 per unit. See attached PDF.",
                 ),
             ],
         )
 
-        # E3: Jimmy holiday SMS
+        # E3: Jimmy holiday notice
         jimmy_id = _ID_BY_NAME["jimmy"]
         t_holiday = datetime(2025, 4, 22, 18, 10, tzinfo=timezone.utc)
         self._log(
             3,
-            "sms_message",
             [
                 (
                     jimmy_id,
@@ -238,12 +234,11 @@ class ScenarioBuilder:
             ],
         )
 
-        # E4: Anne passport excuse (SMS)
+        # E4: Anne passport excuse
         anne_id = _ID_BY_NAME["anne"]
         t_excuse = datetime(2025, 4, 23, 9, 0, tzinfo=timezone.utc)
         self._log(
             4,
-            "sms_message",
             [
                 (
                     anne_id,
@@ -255,11 +250,10 @@ class ScenarioBuilder:
             ],
         )
 
-        # E5: Dan–Julia "basketball" phone call (latest Dan-Julia phone call)
+        # E5: Dan–Julia "basketball" conversation
         t_basketball = datetime(2025, 5, 20, 18, 0, tzinfo=timezone.utc)
         self._log(
             5,
-            "phone_call",
             [
                 (
                     dan_id,
@@ -278,16 +272,15 @@ class ScenarioBuilder:
             ],
         )
 
-        # E6: Dan–Julia "holiday planning" email (for clarification test)
-        t_holiday_email = datetime(2025, 5, 25, 20, 0, tzinfo=timezone.utc)
+        # E6: Dan–Julia "holiday planning" conversation (latest Dan–Julia exchange)
+        t_holiday_plans = datetime(2025, 5, 25, 20, 0, tzinfo=timezone.utc)
         self._log(
             6,
-            "email",
             [
                 (
                     dan_id,
                     julia_id,
-                    t_holiday_email,
+                    t_holiday_plans,
                     "Subject: Summer holiday plans\n\n"
                     "Hi Julia,\nWhen are you next going on holiday? "
                     "I'm thinking of booking something for August.",
@@ -295,52 +288,10 @@ class ScenarioBuilder:
                 (
                     julia_id,
                     dan_id,
-                    t_holiday_email + timedelta(hours=2),
+                    t_holiday_plans + timedelta(hours=2),
                     "Hi Dan! I'm hoping to go in August too, "
                     "but let's see what my boss says about the timing.",
                 ),
-            ],
-        )
-
-        # E7: Carlos → Dan email about product launch, CC'ing Julia and Anne
-        carlos_id = _ID_BY_NAME["carlos"]
-        anne_id = _ID_BY_NAME["anne"]
-        t_launch = datetime(2025, 6, 2, 10, 0, tzinfo=timezone.utc)
-        self._log(
-            7,
-            "email",
-            [
-                (
-                    carlos_id,
-                    dan_id,
-                    t_launch,
-                    "Subject: Product launch event next Friday\n\n"
-                    "Hi Dan,\nJust confirming the product launch event is "
-                    "scheduled for next Friday at 3 PM in the main hall. "
-                    "Please make sure the demo stations are set up by noon.\n\n"
-                    "Best,\nCarlos",
-                ),
-                (
-                    dan_id,
-                    carlos_id,
-                    t_launch + timedelta(hours=1),
-                    "Thanks Carlos, noted. I'll have everything ready by noon. "
-                    "See you all on Friday!",
-                ),
-            ],
-            msg_metadata=[
-                {
-                    "email_id": "<launch-event-001@example.com>",
-                    "to": ["dan.turner@example.com"],
-                    "cc": ["julia.nguyen@example.com", "anne.fischer@example.com"],
-                    "bcc": [],
-                },
-                {
-                    "email_id_replied_to": "<launch-event-001@example.com>",
-                    "to": ["carlos.diaz@example.com"],
-                    "cc": ["julia.nguyen@example.com", "anne.fischer@example.com"],
-                    "bcc": [],
-                },
             ],
         )
 
@@ -348,7 +299,6 @@ class ScenarioBuilder:
     def _seed_filler(self, exchanges: int = 20, msgs_per: int = 15) -> None:
         """Adds irrelevant chatter so filtering matters."""
         random.seed(12345)
-        media = ["email", "phone_call", "sms_message"]
         start = datetime(
             2024,
             random.randint(1, 12),
@@ -358,7 +308,6 @@ class ScenarioBuilder:
 
         for ex_off in range(exchanges):
             ex_id = 10 + ex_off
-            mtype = random.choice(media)
             a, b = random.sample(list(_ID_BY_NAME.values()), 2)
             batch: List[tuple[int, int, datetime, str]] = []
             for i in range(msgs_per):
@@ -379,40 +328,35 @@ class ScenarioBuilder:
                         ),
                     ),
                 )
-            self._log(ex_id, mtype, batch)
+            self._log(ex_id, batch)
 
     # --------------------------------------------------------------------- #
     def _log(
         self,
         ex_id: int,
-        medium: str,
         msgs: List[tuple[int, int, datetime, str]],
-        msg_metadata: List[dict | None] | None = None,
     ) -> None:
         # Build messages with explicit message_id for ordering
         messages = []
-        for i, (s, r, ts, txt) in enumerate(msgs):
-            meta = msg_metadata[i] if msg_metadata else None
+        for s, r, ts, txt in msgs:
             messages.append(
                 Message(
-                    medium=medium,
+                    medium="unify_message",
                     sender_id=s,
                     receiver_ids=[r],
                     timestamp=ts,
                     content=txt,
                     exchange_id=ex_id,
                     message_id=self._message_counter,
-                    **({"metadata": meta} if meta else {}),
                 ),
             )
             self._message_counter += 1
 
-        # Async logging - fire and forget (ordering guaranteed by explicit message_id)
         # Skip EventBus to avoid cross-loop issues during fixture setup
         self.tm.log_messages(messages, synchronous=False, _skip_event_bus=True)
 
     def finalize(self) -> None:
-        """Wait for all async log operations to complete."""
+        """Flush any pending log operations."""
         self.tm.join_published()
 
 
@@ -536,7 +480,7 @@ def _setup_tm_scenario(
             sb._seed_contacts()
             sb._seed_key_exchanges()
             sb._seed_filler()
-            sb.finalize()  # Wait for all async log operations to complete
+            sb.finalize()
             # Pre-compute embeddings for pure columns before committing
             # This avoids recomputing on every test run
             _precompute_embeddings(transcript_ctx)
@@ -591,7 +535,7 @@ def tm_manager_scenario(tm_scenario):
         # from rolling back while this test is running
         scenario_names = list(SCENARIO_COMMIT_HASHES.keys())
         if scenario_names:
-            for _name in ctx_names:
+            for _name in scenario_names:
                 rollback_context(_name)
         restore_scenario_context("tests/transcript_manager/Scenario")
         yield tm, _ID_BY_NAME

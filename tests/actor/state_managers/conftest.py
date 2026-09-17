@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 
-from typing import Literal
-
 import pytest
 
 from unify.manager_registry import ManagerRegistry
@@ -17,15 +15,12 @@ def _in_tree(request: pytest.FixtureRequest, segment: str) -> bool:
     return segment in p
 
 
-def _apply_impl_overrides(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    impl: Literal["real", "simulated"],
-) -> None:
-    """Apply IMPL overrides for all state managers used by Actor primitives."""
-    # Env vars (documented contract): each manager settings uses prefix UNITY_<X>_.
+def _apply_simulated_impl_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the simulated implementation of every state manager the Actor primitives reach."""
+    impl = "simulated"
+
+    # Env vars (documented contract): each manager settings uses prefix UNIFY_<X>_.
     monkeypatch.setenv("UNIFY_CONTACT_IMPL", impl)
-    monkeypatch.setenv("UNIFY_TASK_IMPL", impl)
     monkeypatch.setenv("UNIFY_TRANSCRIPT_IMPL", impl)
     monkeypatch.setenv("UNIFY_KNOWLEDGE_IMPL", impl)
     monkeypatch.setenv("UNIFY_GUIDANCE_IMPL", impl)
@@ -46,7 +41,6 @@ def _apply_impl_overrides(
     from unify.settings import SETTINGS
 
     monkeypatch.setattr(SETTINGS.contact, "IMPL", impl, raising=False)
-    monkeypatch.setattr(SETTINGS.task, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.transcript, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.knowledge, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.guidance, "IMPL", impl, raising=False)
@@ -69,19 +63,7 @@ def configure_simulated_managers(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Autouse fixture for tests under test_simulated/: force simulated managers."""
+    """Autouse fixture for tests under simulated/: force simulated managers."""
     if not _in_tree(request, os.path.join("state_managers", "simulated")):
         return
-    _apply_impl_overrides(monkeypatch, impl="simulated")
-
-
-@pytest.fixture(autouse=True)
-def configure_real_managers(
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Autouse fixture for tests under test_real/: force real managers + stub network."""
-    if not _in_tree(request, os.path.join("state_managers", "real")):
-        return
-
-    _apply_impl_overrides(monkeypatch, impl="real")
+    _apply_simulated_impl_overrides(monkeypatch)

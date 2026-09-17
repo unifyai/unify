@@ -1,6 +1,6 @@
 # Actor State Manager Tests
 
-These tests verify that `CodeActActor` correctly routes to state manager primitives (contacts, tasks, knowledge, etc.) via code execution.
+These tests verify that `CodeActActor` correctly routes to state manager primitives (contacts, knowledge, etc.) via code execution.
 
 ## Overview
 

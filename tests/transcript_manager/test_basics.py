@@ -42,7 +42,7 @@ async def test_log_messages():
     [
         tm.log_messages(
             Message(
-                medium=random.choice(VALID_MEDIA),
+                medium=VALID_MEDIA[0],
                 sender_id=random.randint(0, 2),
                 receiver_ids=[random.randint(0, 2)],
                 timestamp=datetime.now(UTC),
@@ -65,7 +65,7 @@ async def test_get_messages():
     # Hard-coded messages for deterministic testing
     test_messages = [
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -73,7 +73,7 @@ async def test_get_messages():
             exchange_id=0,
         ),
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),
@@ -81,7 +81,7 @@ async def test_get_messages():
             exchange_id=1,
         ),
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -89,7 +89,7 @@ async def test_get_messages():
             exchange_id=2,
         ),
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),
@@ -97,7 +97,7 @@ async def test_get_messages():
             exchange_id=3,
         ),
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -105,7 +105,7 @@ async def test_get_messages():
             exchange_id=4,
         ),
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),
@@ -113,7 +113,7 @@ async def test_get_messages():
             exchange_id=5,
         ),
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -121,7 +121,7 @@ async def test_get_messages():
             exchange_id=6,
         ),
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),
@@ -129,7 +129,7 @@ async def test_get_messages():
             exchange_id=7,
         ),
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -137,7 +137,7 @@ async def test_get_messages():
             exchange_id=8,
         ),
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),
@@ -175,10 +175,8 @@ async def test_get_messages():
     assert all(isinstance(msg, Message) for msg in messages)
 
     # medium
-    messages = tm._filter_messages(
-        filter="medium in ('email', 'sms_message')",
-    )["messages"]
-    assert len(messages) == 10  # All 10 messages are either 'email' or 'sms_message'
+    messages = tm._filter_messages(filter="medium == 'unify_message'")["messages"]
+    assert len(messages) == 10
     assert all(isinstance(msg, Message) for msg in messages)
 
     # timestamp
@@ -207,7 +205,7 @@ async def test_multiple_receivers():
     cm._create_contact(first_name="TempUser")
 
     msg = Message(
-        medium="email",
+        medium="unify_message",
         sender_id=0,
         receiver_ids=[1, 2],
         timestamp=datetime.now(UTC),
@@ -238,7 +236,7 @@ async def test_filter_messages_contacts_table_output():
     # Seed a few deterministic messages
     msgs = [
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -246,7 +244,7 @@ async def test_filter_messages_contacts_table_output():
             exchange_id=111,
         ),
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),
@@ -294,7 +292,7 @@ def test_clear():
     # Seed a couple of messages (distinct exchange_ids)
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=0,
             receiver_ids=[1],
             timestamp=datetime.now(UTC),
@@ -304,7 +302,7 @@ def test_clear():
     )
     tm.log_messages(
         Message(
-            medium="sms_message",
+            medium="unify_message",
             sender_id=1,
             receiver_ids=[0],
             timestamp=datetime.now(UTC),

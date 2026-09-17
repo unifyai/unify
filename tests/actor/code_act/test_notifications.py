@@ -24,7 +24,6 @@ async def test_notify_is_a_silent_noop_in_bound_sandbox():
     actor = CodeActActor()
 
     sandbox = PythonExecutionSession(
-        computer_primitives=actor._computer_primitives,
         environments=actor.environments,
         venv_pool=actor._venv_pool,
         shell_pool=actor._shell_pool,
@@ -82,7 +81,6 @@ async def test_notify_is_a_silent_noop_in_named_stateful_session():
     actor = CodeActActor()
 
     sandbox = PythonExecutionSession(
-        computer_primitives=actor._computer_primitives,
         environments=actor.environments,
         venv_pool=actor._venv_pool,
         shell_pool=actor._shell_pool,

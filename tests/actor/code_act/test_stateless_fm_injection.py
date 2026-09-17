@@ -101,7 +101,7 @@ async def test_stateless_execute_code_can_call_fm_discovered_function():
     execute_code = tools["execute_code"]
     search_fn = tools["FunctionManager_search_functions"]
 
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sb_token = _CURRENT_SANDBOX.set(sandbox)
     try:
         # Step 1: FM discovery — injects sentinel_func into sandbox.global_state
@@ -147,7 +147,7 @@ async def test_stateless_does_not_inherit_intermediate_variables():
     execute_code = tools["execute_code"]
     search_fn = tools["FunctionManager_search_functions"]
 
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sb_token = _CURRENT_SANDBOX.set(sandbox)
     try:
         # Step 1: FM discovery
@@ -214,7 +214,7 @@ async def test_fm_functions_available_in_stateful_session_gt_zero():
     execute_code = tools["execute_code"]
     search_fn = tools["FunctionManager_search_functions"]
 
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sb_token = _CURRENT_SANDBOX.set(sandbox)
     try:
         # Step 1: FM discovery (injects into session 0, registers on executor)

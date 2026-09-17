@@ -18,7 +18,7 @@ def test_json_omits_empty_fields():
 
     # Message with default-empty images and screen_share → should omit both
     msg_empty = Message(
-        medium="email",
+        medium="unify_message",
         sender_id=0,
         receiver_ids=[1],
         timestamp=datetime.now(UTC),
@@ -31,7 +31,7 @@ def test_json_omits_empty_fields():
 
     # Message with a non-empty images list → images must be preserved
     msg_with_image = Message(
-        medium="email",
+        medium="unify_message",
         sender_id=1,
         receiver_ids=[2],
         timestamp=datetime.now(UTC),
@@ -78,7 +78,7 @@ async def test_ask_search_tool_omits_empty(static_now, monkeypatch):
     tm.log_messages(
         [
             Message(
-                medium="email",
+                medium="unify_message",
                 sender_id=0,
                 receiver_ids=[1],
                 timestamp=static_now,
@@ -86,7 +86,7 @@ async def test_ask_search_tool_omits_empty(static_now, monkeypatch):
                 exchange_id=100,
             ),
             Message(
-                medium="email",
+                medium="unify_message",
                 sender_id=1,
                 receiver_ids=[0],
                 timestamp=static_now,

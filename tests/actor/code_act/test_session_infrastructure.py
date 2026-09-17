@@ -196,7 +196,6 @@ async def test_session_executor_python_stateful_reuses_session():
         venv_pool=VenvPool(),
         shell_pool=ShellPool(),
         environments={},  # no primitives injection needed for this unit test
-        computer_primitives=None,
         function_manager=None,
         timeout=5.0,
     )
@@ -256,7 +255,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
         venv_pool=VenvPool(),
         shell_pool=ShellPool(),
         environments={},
-        computer_primitives=None,
         function_manager=None,
         timeout=5.0,
     )
@@ -300,7 +298,6 @@ async def test_session_executor_shell_stateless_executes():
         venv_pool=VenvPool(),
         shell_pool=ShellPool(),
         environments={},
-        computer_primitives=None,
         function_manager=None,
         timeout=5.0,
     )
@@ -327,7 +324,6 @@ async def test_session_executor_shell_stateful_persists_env():
         venv_pool=VenvPool(),
         shell_pool=ShellPool(),
         environments={},
-        computer_primitives=None,
         function_manager=None,
         timeout=5.0,
     )
@@ -363,7 +359,6 @@ async def test_session_executor_shell_read_only_does_not_mutate_state():
         venv_pool=VenvPool(),
         shell_pool=ShellPool(),
         environments={},
-        computer_primitives=None,
         function_manager=None,
         timeout=5.0,
     )
@@ -405,7 +400,6 @@ async def test_session_executor_isolation_between_python_sessions():
         venv_pool=VenvPool(),
         shell_pool=ShellPool(),
         environments={},
-        computer_primitives=None,
         function_manager=None,
         timeout=5.0,
     )

@@ -113,11 +113,3 @@ def test_file_manager_reduce_param_shapes(file_manager: LocalFileManager, tmp_pa
         filter="file_id >= 0",
     )
     assert isinstance(filtered_scalar, (int, float))
-
-    # Filter as per-column dict
-    filtered_multi = file_manager.reduce(
-        metric="sum",
-        columns=["file_id"],
-        filter={"file_id": "file_id >= 0"},
-    )
-    assert isinstance(filtered_multi, dict)

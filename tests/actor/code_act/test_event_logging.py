@@ -67,7 +67,7 @@ def _result_stdout_text(res: Any) -> str:
 @_handle_project
 async def test_execute_code_boundary_publishes_events_and_cleans_lineage(monkeypatch):
     actor = CodeActActor(
-        environments=[],  # avoid default computer/state-manager envs in unit test
+        environments=[],  # avoid default state-manager envs in unit test
     )
 
     async def _fake_execute(**_kwargs):
@@ -399,7 +399,7 @@ async def test_execute_code_function_boundary_to_manager_includes_full_hierarchy
     actor = CodeActActor(environments=[])
     execute_code = actor.get_tools("act")["execute_code"]
 
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sandbox.global_state["primitives"] = _make_primitives()
 
     async def send_meeting_invite():
@@ -462,7 +462,7 @@ async def test_concurrent_function_boundaries_do_not_cross_talk_lineage_or_calli
     actor = CodeActActor(environments=[])
     execute_code = actor.get_tools("act")["execute_code"]
 
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sandbox.global_state["primitives"] = _make_primitives()
 
     async def f1():
@@ -539,7 +539,7 @@ async def test_function_boundary_error_restores_lineage_and_surfaces_error():
     actor = CodeActActor(environments=[])
     execute_code = actor.get_tools("act")["execute_code"]
 
-    sandbox = PythonExecutionSession(environments={}, computer_primitives=None)
+    sandbox = PythonExecutionSession(environments={})
     sandbox.global_state["primitives"] = _make_primitives()
 
     async def boom():

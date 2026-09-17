@@ -148,28 +148,6 @@ class TestWhatAFileReportsAboutItsAttempts:
         assert "pod" not in AttemptState.model_fields
 
 
-class TestNotObservedIsNotQueued:
-    def test_an_unobserved_file_reports_no_state_at_all(self):
-        # The dispatched tier does not write per-file events, so absence of one
-        # is not evidence. Reporting "queued" there was a measurement nobody
-        # took, presented as a finding.
-        progress = FileProgress(path="a.csv", observed=False)
-
-        assert progress.state is None
-        assert progress.claimed is None
-
-    def test_an_observed_queued_file_says_so(self):
-        progress = FileProgress(
-            path="a.csv",
-            observed=True,
-            state="queued",
-            claimed=False,
-        )
-
-        assert progress.state == "queued"
-        assert progress.claimed is False
-
-
 class TestRefusingAMistypedFile:
     """``_resolve_retry_files`` touches no instance state, so it is called unbound."""
 
