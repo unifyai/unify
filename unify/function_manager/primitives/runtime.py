@@ -81,8 +81,17 @@ class _AsyncPrimitiveWrapper:
     def __getattr__(self, name: str) -> Any:
         """
         Get an attribute - returns async wrapper for primitive methods, else delegates.
+
+        A miss names the manager's real primitive surface so a plan that
+        guessed a verb from another manager can correct itself in one step.
         """
-        attr = getattr(self._wrapped_manager, name)
+        try:
+            attr = getattr(self._wrapped_manager, name)
+        except AttributeError:
+            raise AttributeError(
+                f"primitives.{self._manager_alias} has no method {name!r}. "
+                f"Its methods are: {sorted(self._primitive_methods)}",
+            ) from None
 
         # Only wrap methods that are in our primitive methods set
         if name not in self._primitive_methods:

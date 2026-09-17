@@ -410,6 +410,7 @@ async def async_tool_loop_inner(
     prompt_caching: Optional["PromptCacheParam"] = None,
     time_awareness: bool = False,
     extra_ask_tools: Optional[Dict[str, Callable]] = None,
+    completed_askable_tools: Optional[Dict[str, dict]] = None,
     enable_compression: bool = True,
     extra_compression_tools: Optional[list[str]] = None,
     clarification_queues: Optional[Tuple["asyncio.Queue", "asyncio.Queue"]] = None,
@@ -858,6 +859,7 @@ async def async_tool_loop_inner(
         logger=logger,
         time_ctx=time_ctx,
         extra_ask_tools=extra_ask_tools,
+        completed_askable_tools=completed_askable_tools,
         call_counts=runtime_state.call_counts,
     )
     logger.debug(

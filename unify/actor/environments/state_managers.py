@@ -159,19 +159,27 @@ class StateManagerEnvironment(BaseEnvironment):
 ### State Manager Rules
 
 - **Do not answer from scratch when `primitives` is available**: prefer \
-calling the relevant state manager via `await primitives.<manager>.ask(...)` \
-over answering purely from memory — even when you think you "already know" \
-the answer. Treat manager return values as the primary ground truth.
+calling the relevant state manager over answering purely from memory — even \
+when you think you "already know" the answer. Treat manager return values as \
+the primary ground truth.
 
-- **Read vs write**: `.ask(...)` is typically **pure** (read-only); \
-`.update(...)`, `.execute(...)`, `.refactor(...)` are **impure** (they \
-mutate state or start work).
+- **A manager has exactly the methods listed under it below**: some take \
+natural language (`ask(text)` reads, `update(text)` mutates); others expose \
+typed verbs with structured arguments (`filter`, `search`, `reduce`, `join`, \
+`describe_table`, `update_rows`, `submit`, …). A typed manager has no `ask` \
+and no `update` — express the request as a typed call, not as a sentence, \
+and never route around it through a sub-actor.
 
-- **Mutation methods are self-contained**: go straight to `.update(...)` / \
-`.execute(...)` / `.refactor(...)` — do NOT first call `.ask(...)` on the \
-**same manager** to check existing state (mutation methods already inspect \
-existing records). Bundle the full intent, including any "check if exists" \
-logic, into the mutation call's natural-language `text` argument.
+- **Read vs write**: `ask(...)` and the typed read verbs (`filter`, `search`, \
+`reduce`, `*_join`, `describe*`, `list*`, `get*`) are **pure** (read-only); \
+`update(...)`, `update_rows`, `insert_rows`, `delete_*`, `submit` are \
+**impure** (they mutate state or start work).
+
+- **Mutation methods are self-contained**: go straight to the mutating call \
+— do NOT first call `ask(...)` on the **same manager** to check existing \
+state (a natural-language mutation already inspects existing records). \
+Bundle the full intent, including any "check if exists" logic, into the \
+mutation call's natural-language `text` argument.
 
 - **Steerable handles**: Manager calls are nested tool loops returning \
 `SteerableToolHandle` objects for in-flight control. Default to \

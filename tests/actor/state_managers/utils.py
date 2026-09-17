@@ -71,6 +71,11 @@ class _TracingProxy:
 
     __slots__ = ("_real", "_traced_methods")
 
+    def __dir__(self):
+        # `dir(primitives.<manager>)` must list the real method surface, as
+        # it does in production, rather than the proxy's own slots.
+        return dir(object.__getattribute__(self, "_real"))
+
     def __init__(
         self,
         real_manager: Any,

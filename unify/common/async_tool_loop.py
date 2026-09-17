@@ -472,6 +472,20 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             _get_ask_tools = getattr(self._task, "get_ask_tools", lambda: {})
             ask_tools = _get_ask_tools()
 
+        # 1c. Snapshot the completed-askable registry too: the inspected
+        #     transcript announces its finished steerable calls as
+        #     "[askable <call_id>] ... ask_about_completed_tool(...)", and the
+        #     inspection loop's own ask_about_completed_tool must resolve those
+        #     ids to the same handles rather than to its (empty) registry.
+        completed_askable_tools: dict = {}
+        with suppress(Exception):
+            _get_completed = getattr(
+                self._task,
+                "get_completed_tool_metadata",
+                lambda: {},
+            )
+            completed_askable_tools = _get_completed()
+
         # 2.  Prepare an *in-memory* Unify client for the **inspection** loop
         #     (LLM sees only the system header + follow-up user question).
         from .llm_client import new_llm_client
@@ -674,6 +688,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 inspection_client,
                 _ask_message,
                 inspection_tools,  # ask_* tools (+ read_child_message when completed)
+                completed_askable_tools=completed_askable_tools,
                 loop_id=loop_id_label,
                 parent_lineage=_sibling_lineage,
                 parent_chat_context=(
@@ -1397,6 +1412,7 @@ def start_async_tool_loop(
     prompt_caching: Optional["PromptCacheParam"] = None,
     time_awareness: bool = False,
     extra_ask_tools: Optional[Dict[str, Callable]] = None,
+    completed_askable_tools: Optional[Dict[str, dict]] = None,
     enable_compression: bool = True,
     extra_compression_tools: Optional[list[str]] = None,
     clarification_queues: Optional[Tuple["asyncio.Queue", "asyncio.Queue"]] = None,
@@ -1541,6 +1557,7 @@ def start_async_tool_loop(
                 prompt_caching=prompt_caching,
                 time_awareness=time_awareness,
                 extra_ask_tools=extra_ask_tools,
+                completed_askable_tools=completed_askable_tools,
                 enable_compression=enable_compression,
                 extra_compression_tools=extra_compression_tools,
                 clarification_queues=clarification_queues,
@@ -1624,6 +1641,7 @@ def start_async_tool_loop(
         "prompt_caching": prompt_caching,
         "time_awareness": time_awareness,
         "extra_ask_tools": extra_ask_tools,
+        "completed_askable_tools": completed_askable_tools,
         "enable_compression": enable_compression,
         "extra_compression_tools": extra_compression_tools,
         "clarification_queues": clarification_queues,

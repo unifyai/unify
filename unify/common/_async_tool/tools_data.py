@@ -384,6 +384,7 @@ class ToolsData:
         logger: "LoopLogger",
         time_ctx: "Optional[TimeContext]" = None,
         extra_ask_tools: "Optional[Dict[str, Callable]]" = None,
+        completed_askable_tools: Optional[Dict[str, dict]] = None,
         call_counts: Optional[Dict[str, int]] = None,
     ):
         self._client = client
@@ -418,7 +419,13 @@ class ToolsData:
         self._task_ask_keys: Dict[asyncio.Task, str] = {}
         # Metadata for completed steerable tools, keyed by call_id.
         # Each entry: {"name": str, "call_id": str, "ask_fn": Callable, "handle": Any}
-        self._completed_askable_tools: Dict[str, dict] = {}
+        # Seeded by an inspection loop with the registry of the loop it
+        # inspects: that transcript announces "[askable <call_id>]" ids from
+        # the inspected loop's namespace, so ask_about_completed_tool must
+        # resolve them here too.
+        self._completed_askable_tools: Dict[str, dict] = (
+            dict(completed_askable_tools) if completed_askable_tools else {}
+        )
         # Caller-supplied ask tools injected at construction time (e.g.
         # domain-specific read-only tools for handle.ask() inspection loops).
         self._extra_ask_tools: Dict[str, Callable] = (

@@ -168,7 +168,15 @@ async def test_tools_array_byte_identical_across_full_scripted_act(
 
     # 2) response tool attempted while pending -> refused --------------------
     await _next_turn(
-        _asst_msg([_tool_call("call_fr1", "final_response", {"answer": "too early"})]),
+        _asst_msg(
+            [
+                _tool_call(
+                    "call_fr1",
+                    "final_response",
+                    {"answer": {"answer": "too early"}},
+                ),
+            ],
+        ),
     )
     await _wait_for_tool_message_prefix(client, "final_response")
     refusal_msg = next(
@@ -286,10 +294,29 @@ async def test_tools_array_byte_identical_across_full_scripted_act(
 
     # 8) release the last pending call and finish -------------------------------
     slow_release.set()
-    await _wait_for_tool_message_prefix(client, "slow_tool")
+
+    # slow_tool's result lands on the clarify placeholder (the steer:clarify
+    # tool message), not on a message named "slow_tool" — the only tool
+    # message carrying that name is the pending stub, which is already
+    # present, so a prefix wait would return at once without waiting.
+    async def _slow_tool_done() -> bool:
+        return any(
+            m.get("role") == "tool" and "slow-done" in str(m.get("content") or "")
+            for m in client.messages
+        )
+
+    await _wait_for_condition(_slow_tool_done, poll=0.05, timeout=30.0)
 
     await _next_turn(
-        _asst_msg([_tool_call("call_fr2", "final_response", {"answer": "done"})]),
+        _asst_msg(
+            [
+                _tool_call(
+                    "call_fr2",
+                    "final_response",
+                    {"answer": {"answer": "done"}},
+                ),
+            ],
+        ),
     )
     final = await asyncio.wait_for(handle.result(), timeout=60)
     assert final is not None

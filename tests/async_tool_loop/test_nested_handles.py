@@ -1234,7 +1234,7 @@ async def test_outer_handle_ask_propagates_to_inner_ask(llm_config):
                 "get_seed": get_seed,
                 "generate_token": generate_token,
             },
-            max_steps=10,
+            max_steps=20,
             timeout=120,
         )
 

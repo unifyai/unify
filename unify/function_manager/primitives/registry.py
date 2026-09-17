@@ -912,18 +912,22 @@ class ToolSurfaceRegistry:
         lines = ["### State manager primitives (`primitives.*`)\n"]
         lines.append(
             "Always available — call by exact name via `execute_function` or "
-            "inside `execute_code`; the full method surface is also indexed "
-            "by FunctionManager search. Each manager owns one domain of the "
-            "assistant's durable state:\n",
+            "inside `execute_code`. The **Methods** line under each manager "
+            "is its complete callable surface (also indexed by FunctionManager "
+            "search; read a signature with `help()` / `inspect.signature`): a "
+            "name that is not listed does not exist on that manager. Each "
+            "manager owns one domain of the assistant's durable state:\n",
         )
 
         exposed_aliases = primitive_scope.scoped_managers
 
         # ── Section 1: Brief manager overview (routing-focused) ──
         # Compact by design: one description bullet (+ use-when, + note where
-        # a contract demands it). Deeper routing between overlapping
-        # managers lives in builtin guidance ("choosing between overlapping
-        # state managers"); method APIs live behind search + help().
+        # a contract demands it) plus the bare method names, so the model
+        # never has to guess a manager's verbs from another manager's.
+        # Deeper routing between overlapping managers lives in builtin
+        # guidance ("choosing between overlapping state managers"); method
+        # docs live behind search + help().
         for spec in specs:
             text = spec.prompt_text(exposed_aliases)
             lines.append(f"\n**{text.domain}** → `primitives.{spec.manager_alias}`")
@@ -931,6 +935,10 @@ class ToolSurfaceRegistry:
             if text.use_when:
                 description = f"{description}. **Use when**: {text.use_when}"
             lines.append(f"- {description}")
+            methods = self.primitive_methods(manager_alias=spec.manager_alias)
+            lines.append(
+                "- **Methods**: " + ", ".join(f"`{name}`" for name in methods),
+            )
             if text.special_note:
                 lines.append(f"- **Note**: {text.special_note}")
 

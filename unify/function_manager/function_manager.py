@@ -2630,9 +2630,17 @@ class FunctionManager(BaseFunctionManager):
         stored_fixtures = list(prior.get("fixtures") or [])
         if authored_fixtures is not None:
             if effective is not SideEffectClass.safe_noop:
+                inferred = (
+                    " (inferred from its third-party imports; it stays "
+                    "unsafe_effectful until confirmed and cannot be confirmed "
+                    "below its detected bound)"
+                    if classification.source == "inferred_third_party"
+                    else ""
+                )
                 raise ValueError(
                     "Fixtures are only meaningful for safe_noop functions; "
-                    f"this function is {effective.value}.",
+                    f"this function is {effective.value}{inferred}. Store it "
+                    "without fixtures.",
                 )
             authored = coerce_fixtures(
                 authored_fixtures,
@@ -3898,7 +3906,10 @@ class FunctionManager(BaseFunctionManager):
                         f"FunctionManager_add_venv first, then pass the "
                         f"returned venv_id to FunctionManager_add_functions "
                         f"(or link it afterwards with "
-                        f"FunctionManager_set_function_venv).",
+                        f"FunctionManager_set_function_venv). Every import "
+                        f"form counts, including importlib.import_module "
+                        f"and __import__ with a literal name: the package "
+                        f"must be installed wherever the function runs.",
                     )
 
                 all_calls = self._collect_function_calls(node)

@@ -234,6 +234,34 @@ def collect_dependencies_from_source(
 # ---------------------------------------------------------------------------
 
 
+_DYNAMIC_IMPORT_CALLS: frozenset[str] = frozenset(
+    {"__import__", "import_module", "importlib.import_module"},
+)
+
+
+def _dynamic_import_target(node: ast.Call) -> Optional[str]:
+    """The literal module name a dynamic import call loads, if it is literal.
+
+    A dependency on a package is a property of the package, not of the
+    import syntax: ``importlib.import_module("pkg")`` and ``__import__("pkg")``
+    need ``pkg`` installed exactly as ``import pkg`` does. Only a string
+    constant can be resolved at storage time; a computed name is invisible.
+    """
+    func = node.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        dotted = f"{func.value.id}.{func.attr}"
+    elif isinstance(func, ast.Name):
+        dotted = func.id
+    else:
+        return None
+    if dotted not in _DYNAMIC_IMPORT_CALLS or not node.args:
+        return None
+    target = node.args[0]
+    if isinstance(target, ast.Constant) and isinstance(target.value, str):
+        return target.value
+    return None
+
+
 def detect_third_party_imports(
     fn_node: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
@@ -243,24 +271,29 @@ def detect_third_party_imports(
     *fn_node*'s body.
 
     Walks the function body for ``import X`` and ``from X import Y``
-    statements, extracts the root module name, and returns those that are
-    **not** in ``sys.stdlib_module_names`` and **not** in
-    *environment_modules* (modules already provided by the execution
-    environment, e.g. ``primitives``, ``pydantic``, ``typing``).
+    statements and for dynamic imports with a literal name
+    (``importlib.import_module("X")``, ``__import__("X")``), extracts the
+    root module name, and returns those that are **not** in
+    ``sys.stdlib_module_names`` and **not** in *environment_modules*
+    (modules already provided by the execution environment, e.g.
+    ``primitives``, ``pydantic``, ``typing``).
     """
-    third_party: Set[str] = set()
+    module_names: Set[str] = set()
     for node in ast.walk(fn_node):
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".")[0]
-                if root not in _STDLIB_MODULE_NAMES and root not in environment_modules:
-                    third_party.add(root)
+            module_names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.module is not None:
-                root = node.module.split(".")[0]
-                if root not in _STDLIB_MODULE_NAMES and root not in environment_modules:
-                    third_party.add(root)
-    return third_party
+                module_names.add(node.module)
+        elif isinstance(node, ast.Call):
+            target = _dynamic_import_target(node)
+            if target is not None:
+                module_names.add(target)
+    return {
+        root
+        for root in (name.split(".")[0] for name in module_names)
+        if root not in _STDLIB_MODULE_NAMES and root not in environment_modules
+    }
 
 
 def detect_third_party_imports_from_source(

@@ -100,8 +100,12 @@ class BaseFunctionManager(BaseStateManager):
         venv_id : int | None
             **Required** when a function imports third-party packages (beyond
             the standard library and the execution environment); otherwise
-            ``ValueError`` is raised. Create a venv via ``add_venv`` first
-            and pass the returned ID.
+            ``ValueError`` is raised. Detection covers every import form —
+            ``import``, ``from … import`` and dynamic imports with a literal
+            name (``importlib.import_module("pkg")``, ``__import__("pkg")``)
+            — so the venv, not the import syntax, is what makes the package
+            available. Create a venv via ``add_venv`` first and pass the
+            returned ID.
 
         Returns
         -------

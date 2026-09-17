@@ -357,6 +357,41 @@ async def fetch_data():
         result = detect_third_party_imports_from_source(source)
         assert result == {"aiohttp"}
 
+    def test_dynamic_import_module_literal(self):
+        source = """
+def format_size(n):
+    from importlib import import_module
+    humanize = import_module("humanize")
+    return humanize.naturalsize(n)
+"""
+        assert detect_third_party_imports_from_source(source) == {"humanize"}
+
+    def test_dynamic_importlib_attribute_and_dunder_import(self):
+        source = """
+def load():
+    import importlib
+    storage = importlib.import_module("google.cloud.storage")
+    requests = __import__("requests")
+    return storage, requests
+"""
+        result = detect_third_party_imports_from_source(source)
+        assert result == {"google", "requests"}
+
+    def test_dynamic_import_of_stdlib_excluded(self):
+        source = """
+def load():
+    import importlib
+    return importlib.import_module("json")
+"""
+        assert detect_third_party_imports_from_source(source) == set()
+
+    def test_dynamic_import_with_computed_name_is_invisible(self):
+        source = """
+def load(name):
+    return __import__(name)
+"""
+        assert detect_third_party_imports_from_source(source) == set()
+
     def test_invalid_source_returns_empty(self):
         assert detect_third_party_imports_from_source("not valid python {{") == set()
 
