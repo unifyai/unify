@@ -182,6 +182,8 @@ def _llm_assert_correct(
             + scenario_str
             + "Your role is to decide whether the candidate answer conveys the same factual information as the ground-truth answer. "
             "Formatting or wording differences should be considered equivalent as long as the facts match. "
+            "Dates are equal when they denote the same day whatever the notation (2025-05-15, May 15, 2025, 15 May); "
+            "when the question asks for a date and the candidate gives a period that begins on the ground-truth date, that is correct. "
             "Additional correct details that do not contradict the ground truth are acceptable. "
             "Mark correct⇢true if the candidate clearly contains the ground-truth fact(s) and introduces no contradiction; otherwise false. "
             'Respond ONLY with valid JSON of the form {"correct": true} or {"correct": false}. '
