@@ -239,7 +239,6 @@ def build_live_image_tools(
     - attach_image_raw
     """
     from contextlib import suppress as _suppress
-    from datetime import timedelta as _timedelta
 
     id_to_handle: dict[int, Any] = {}
     listings: list[str] = []
@@ -386,54 +385,8 @@ def build_live_image_tools(
 
         try:
             data_str = ih._image.data  # type: ignore[attr-defined]
-            # GCS signed URL path mirrors ImageHandle.ask
-            is_gcs_url = isinstance(data_str, str) and (
-                data_str.startswith("gs://")
-                or data_str.startswith("https://storage.googleapis.com/")
-            )
             content_block: dict
-            if is_gcs_url:
-                try:
-                    from urllib.parse import urlparse as _urlparse
-
-                    parsed_url = _urlparse(data_str)
-                    bucket_name = ""
-                    object_path = ""
-                    if parsed_url.scheme == "gs":
-                        bucket_name = parsed_url.netloc
-                        object_path = parsed_url.path.lstrip("/")
-                    elif parsed_url.hostname == "storage.googleapis.com":
-                        parts = parsed_url.path.lstrip("/").split("/", 1)
-                        if len(parts) == 2:
-                            bucket_name, object_path = parts
-                    storage_client = ih._manager.storage_client  # type: ignore[attr-defined]
-                    bucket = storage_client.bucket(bucket_name)
-                    blob = bucket.blob(object_path)
-                    signed_url = blob.generate_signed_url(version="v4", expiration=_timedelta(hours=1), method="GET")  # type: ignore[name-defined]
-                    content_block = {
-                        "type": "image_url",
-                        "image_url": {"url": signed_url},
-                    }
-                except Exception:
-                    # fallback: try raw bytes
-                    raw = ih.raw()
-                    import base64 as _b64  # local import
-
-                    head = (
-                        bytes(raw[:10]) if isinstance(raw, (bytes, bytearray)) else b""
-                    )
-                    if head.startswith(b"\xff\xd8"):
-                        mime = "image/jpeg"
-                    elif head.startswith(b"\x89PNG\r\n\x1a\n"):
-                        mime = "image/png"
-                    else:
-                        mime = "image/png"
-                    b64 = _b64.b64encode(raw).decode("ascii")
-                    content_block = {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
-                    }
-            elif isinstance(data_str, str) and (
+            if isinstance(data_str, str) and (
                 data_str.startswith("http://")
                 or data_str.startswith("https://")
                 or data_str.startswith("data:image/")

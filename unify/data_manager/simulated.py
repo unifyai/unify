@@ -1107,7 +1107,6 @@ class SimulatedDataManager(BaseDataManager):
         post_ingest: Optional[PostIngestConfig] = None,
         on_task_complete=None,
         coerce_types: bool = True,
-        storage_client=None,
         skip_rows: int = 0,
         destination: str | None = None,
         expected_total_rows: int | None = None,
@@ -1121,11 +1120,7 @@ class SimulatedDataManager(BaseDataManager):
             )
 
             rows = list(
-                iter_table_input_rows(
-                    table_input_handle,
-                    storage_client=storage_client,
-                    skip_rows=skip_rows,
-                ),
+                iter_table_input_rows(table_input_handle, skip_rows=skip_rows),
             )
         if rows is None:
             rows = []

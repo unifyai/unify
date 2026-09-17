@@ -49,7 +49,7 @@ def _image_bytes_from_payload(
         if match is None:
             raise ValueError("Invalid data:image URL")
         return base64.b64decode(match.group("payload"))
-    if image.startswith(("http://", "https://", "gs://")):
+    if image.startswith(("http://", "https://")):
         return None
     if adapter is not None:
         return adapter.open_bytes(image)
@@ -64,7 +64,7 @@ def scale_image_payload_for_observation(
 ) -> str | bytes:
     """Fit raster image payloads to the model-aware observation space.
 
-    Remote ``http(s)://`` and ``gs://`` URLs are returned unchanged. Local
+    Remote ``http(s)://`` URLs are returned unchanged. Local
     paths, raw bytes, and ``data:image/...`` payloads are decoded, resized
     with the same policy as ``display()``, and re-encoded as PNG bytes.
     """

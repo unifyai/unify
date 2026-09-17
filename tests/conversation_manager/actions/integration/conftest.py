@@ -274,13 +274,16 @@ async def conversation_manager_codeact(
 @pytest_asyncio.fixture
 async def code_act_actor() -> AsyncIterator[object]:
     """Create a production-wired CodeActActor for CM integration tests."""
+    from unify.actor.code_act_actor import CodeActActor
     from unify.actor.environments import ActorEnvironment, StateManagerEnvironment
     from unify.function_manager.primitives import Primitives, default_runtime_scope
     from unify.manager_registry import ManagerRegistry
 
     ManagerRegistry.clear()
-    actor = ManagerRegistry.get_actor(
-        description="cm integration test",
+    # Built directly rather than through the registry: the parent suite pins
+    # the registry's actor implementation to the simulated one, and these
+    # tests exercise the production actor.
+    actor = CodeActActor(
         environments=[
             StateManagerEnvironment(
                 Primitives(primitive_scope=default_runtime_scope()),

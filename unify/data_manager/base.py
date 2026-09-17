@@ -2446,7 +2446,6 @@ class BaseDataManager(BaseStateManager):
         post_ingest: Optional["PostIngestConfig"] = None,
         on_task_complete: Optional[Callable] = None,
         coerce_types: bool = True,
-        storage_client: Optional[Any] = None,
         skip_rows: int = 0,
         destination: str | None = None,
         expected_total_rows: Optional[int] = None,
@@ -2572,12 +2571,6 @@ class BaseDataManager(BaseStateManager):
             When ``False``, only the universal empty-string → ``None``
             coercion is applied; no type inference or type-mismatch
             coercion occurs, and the store's default inference is used.
-
-        storage_client : Any | None, default ``None``
-            Optional storage adapter used by streaming handles that reference
-            remote objects.  The deployment pipeline supplies this for
-            ``gs://`` artifacts so rows can be streamed without first
-            materialising the entire table in memory.
 
         skip_rows : int, default ``0``
             Number of leading rows to discard from a streaming handle before

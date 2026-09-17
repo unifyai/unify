@@ -120,7 +120,7 @@ class TestObjectStoreHandlePassthrough:
     def test_already_materialized_handle_is_returned_as_is(self, tmp_path):
         store = LocalArtifactStore(root_dir=tmp_path)
         existing = ObjectStoreArtifactHandle(
-            storage_uri="gs://bucket/artifact.jsonl",
+            storage_uri="file:///artifacts/artifact.jsonl",
             logical_path="data.csv",
             artifact_format="jsonl",
             columns=["a", "b"],

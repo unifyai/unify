@@ -286,7 +286,6 @@ def execute_ingest_content(
     content_rows_handle: Optional[TableInputHandle] = None,
     config: FilePipelineConfig,
     on_task_complete=None,
-    storage_client=None,
     skip_rows: int = 0,
 ) -> Dict[str, Any]:
     """Ingest ALL content rows for a file via ``dm.ingest()``.
@@ -347,7 +346,6 @@ def execute_ingest_content(
         for batch in iter_table_input_row_batches(
             content_rows_handle,
             batch_size=max(int(config.ingest.content_rows_batch_size or 1000), 1),
-            storage_client=storage_client,
             skip_rows=skip_rows,
         ):
             for row in batch:
@@ -474,7 +472,6 @@ def execute_ingest_table(
     columns: List[str],
     config: FilePipelineConfig,
     on_task_complete=None,
-    storage_client=None,
     skip_rows: int = 0,
 ) -> Dict[str, Any]:
     """Ingest ALL rows for one table via ``dm.ingest()``.
@@ -589,7 +586,6 @@ def execute_ingest_table(
         infer_untyped_fields=config.ingest.infer_untyped_fields,
         execution=execution,
         on_task_complete=on_task_complete,
-        storage_client=storage_client,
         skip_rows=skip_rows,
         expected_total_rows=expected_total_rows,
     )

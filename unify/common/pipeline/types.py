@@ -52,7 +52,7 @@ class XlsxSheetHandle(BaseModel):
 
 
 class ObjectStoreArtifactHandle(BaseModel):
-    """Reference to a materialized artifact in a local or remote store.
+    """Reference to a materialized artifact in an artifact store.
 
     Currently only ``"jsonl"`` is implemented.  ``"parquet"`` and
     ``"arrow_ipc"`` are reserved for future backends and will raise
@@ -64,11 +64,10 @@ class ObjectStoreArtifactHandle(BaseModel):
     kind: Literal["object_store_artifact"] = "object_store_artifact"
     storage_uri: str
     logical_path: str
-    # Optional local filesystem path where the artifact has been staged.
-    # Populated by consumers (e.g. the ingest worker) after copying a
-    # remote object to a scratch dir, so ``row_streaming`` can iterate
-    # rows without needing a store-aware reader. An empty
-    # string means "no local copy staged; resolve from ``storage_uri``".
+    # Optional local filesystem path where the artifact has been staged
+    # so ``row_streaming`` can iterate rows without a store-aware reader.
+    # An empty string means "no local copy staged; resolve from
+    # ``storage_uri``".
     source_local_path: str = ""
     artifact_format: Literal["jsonl", "parquet", "arrow_ipc"] = "jsonl"
     columns: list[str] = Field(default_factory=list)

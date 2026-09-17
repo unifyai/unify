@@ -1194,12 +1194,8 @@ class TranscriptManager(BaseTranscriptManager):
         """Attach a single image (by id) as raw base64 for persistent context.
 
         Loads the image bytes for ``image_id`` and returns a payload suitable
-        for inclusion as an image block in the current tool‑use loop. Behaviour
-        aligns with :pyfunc:`ImageHandle.raw` for source resolution:
-        - If ``data`` is a GCS URL (``gs://`` or
-          ``https://storage.googleapis.com/...``), the bytes are downloaded
-          (raising if not accessible).
-        - Otherwise, ``data`` is expected to be base64 and is decoded to bytes.
+        for inclusion as an image block in the current tool‑use loop. ``data``
+        is base64 and is decoded to bytes, as in :pyfunc:`ImageHandle.raw`.
 
         Parameters
         ----------

@@ -219,7 +219,6 @@ class CheckpointedIngest:
         should_surrender: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[str, int, int], None]] = None,
         verify: bool = True,
-        storage_client: Any = None,
         retry_config: Any = None,
     ) -> IngestOutcome:
         """Ingest every table in *work*, resuming each from its checkpoint.
@@ -248,7 +247,6 @@ class CheckpointedIngest:
                 entry,
                 dm=dm,
                 destination=destination,
-                storage_client=storage_client,
             )
             for entry in work
         ]
@@ -312,7 +310,6 @@ class CheckpointedIngest:
         *,
         dm: Any,
         destination: Optional[str],
-        storage_client: Any = None,
     ) -> ArtifactWorkItem:
         checkpoint = self._store.read_checkpoint(self._job_id, entry.table_id)
         skip_rows = checkpoint.rows_committed if checkpoint else 0
@@ -349,7 +346,6 @@ class CheckpointedIngest:
                 "fields": fields,
                 "skip_rows": skip_rows,
                 "initial_chunks": initial_chunks,
-                "storage_client": storage_client,
             },
             meta={
                 "row_count": entry.declared_rows,
@@ -491,7 +487,6 @@ class CheckpointedIngest:
                 if entry.unique_keys
                 else (entry.ingest_key_prefix or f"{self._job_id}:{entry.table_id}")
             ),
-            storage_client=payload.get("storage_client"),
             on_task_complete=_on_chunk,
             before_insert_chunk=_before_chunk,
         )

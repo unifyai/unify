@@ -23,7 +23,7 @@ class Image(AuthoredRow):
         json_schema_extra={"ui_editable": True},
     )
     data: str = Field(
-        description="Image payload as base64 (PNG/JPEG) or a URL (GCS signed or https).",
+        description="Image payload as base64 (PNG/JPEG) or an https URL.",
         json_schema_extra={"unify_type": "image"},
     )
     filepath: Optional[str] = Field(

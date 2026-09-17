@@ -482,11 +482,8 @@ class GuidanceManager(BaseGuidanceManager):
     ) -> Dict[str, Any]:
         """Attach a single image (by id) as raw base64 for persistent context.
 
-        Behaviour mirrors :pyfunc:`ImageHandle.raw` for source resolution:
-        - If the stored ``data`` is a GCS URL (``gs://`` or
-          ``https://storage.googleapis.com/...``), bytes are downloaded
-          (raising if inaccessible).
-        - Otherwise, ``data`` is expected to be base64 and is decoded to bytes.
+        The stored ``data`` is base64 and is decoded to bytes, as in
+        :pyfunc:`ImageHandle.raw`.
 
         Parameters
         ----------

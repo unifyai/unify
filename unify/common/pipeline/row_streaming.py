@@ -17,7 +17,7 @@ import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict
+from typing import Dict
 from urllib.parse import unquote, urlparse
 
 from .types import (
@@ -32,23 +32,16 @@ logger = logging.getLogger(__name__)
 
 JsonObject = Dict[str, object]
 
-_GCS_STREAM_CHUNK_SIZE = 5 * 1024 * 1024  # 5 MB
-
 
 def iter_table_input_rows(
     handle: TableInputHandle,
     *,
-    storage_client: Any = None,
     skip_rows: int = 0,
 ) -> Iterator[JsonObject]:
     """Yield table rows from any supported transport handle.
 
     Parameters
     ----------
-    storage_client:
-        Optional ``google.cloud.storage.Client``.  When provided and the
-        handle carries a ``gs://`` URI, rows are streamed directly from
-        GCS via ``blob.open("r")`` with zero local disk staging.
     skip_rows:
         Number of leading data rows to consume and discard before
         yielding.  Used by crash-recovery to resume after a checkpoint.
@@ -104,11 +97,7 @@ def iter_table_input_rows(
         return
 
     if isinstance(handle, ObjectStoreArtifactHandle):
-        yield from _iter_object_store_rows(
-            handle,
-            storage_client=storage_client,
-            skip_rows=skip_rows,
-        )
+        yield from _iter_object_store_rows(handle, skip_rows=skip_rows)
         return
 
     raise TypeError(f"Unsupported table input handle: {type(handle)!r}")
@@ -118,18 +107,13 @@ def iter_table_input_row_batches(
     handle: TableInputHandle,
     batch_size: int,
     *,
-    storage_client: Any = None,
     skip_rows: int = 0,
 ) -> Iterator[list[JsonObject]]:
     """Yield bounded row batches from a table input handle."""
 
     size = max(int(batch_size or 0), 1)
     batch: list[JsonObject] = []
-    for row in iter_table_input_rows(
-        handle,
-        storage_client=storage_client,
-        skip_rows=skip_rows,
-    ):
+    for row in iter_table_input_rows(handle, skip_rows=skip_rows):
         batch.append(row)
         if len(batch) >= size:
             yield batch
@@ -169,7 +153,6 @@ def _apply_skip(
 def _iter_object_store_rows(
     handle: ObjectStoreArtifactHandle,
     *,
-    storage_client: Any = None,
     skip_rows: int = 0,
 ) -> Iterator[JsonObject]:
     if handle.artifact_format != "jsonl":
@@ -177,7 +160,7 @@ def _iter_object_store_rows(
             f"Artifact streaming is not implemented for {handle.artifact_format!r}",
         )
 
-    fh = _open_jsonl_handle(handle, storage_client=storage_client)
+    fh = _open_jsonl_handle(handle)
     try:
         skipped = 0
         emitted = 0
@@ -207,37 +190,12 @@ def _iter_object_store_rows(
             fh.close()
 
 
-def _open_jsonl_handle(
-    handle: ObjectStoreArtifactHandle,
-    *,
-    storage_client: Any = None,
-):
+def _open_jsonl_handle(handle: ObjectStoreArtifactHandle):
     """Return a line-iterable file handle for the JSONL artifact.
 
-    Resolution order:
-    1. ``source_local_path`` set → open local file (backward compat / tests).
-    2. ``storage_client`` provided and URI is ``gs://`` → stream via
-       ``blob.open("r")`` (zero disk, memory bounded by BlobReader buffer).
-    3. Fall through to ``_resolve_local_path`` which handles ``file://``
-       and raises for unresolvable ``gs://``.
+    A staged ``source_local_path`` wins; otherwise the ``file://`` storage
+    URI is opened directly.
     """
-    if handle.source_local_path:
-        path = Path(handle.source_local_path).expanduser().resolve()
-        return path.open("r", encoding="utf-8")
-
-    if storage_client is not None and handle.storage_uri.startswith("gs://"):
-        parsed = urlparse(handle.storage_uri)
-        bucket_name = parsed.netloc
-        blob_key = parsed.path.lstrip("/")
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(blob_key)
-        logger.info(
-            "[row_streaming] Streaming gs://%s/%s via blob.open()",
-            bucket_name,
-            blob_key,
-        )
-        return blob.open("r", chunk_size=_GCS_STREAM_CHUNK_SIZE)
-
     path = _resolve_local_path(
         source_local_path=handle.source_local_path,
         storage_uri=handle.storage_uri,
@@ -256,11 +214,4 @@ def _resolve_local_path(*, source_local_path: str, storage_uri: str) -> Path:
     parsed = urlparse(storage_uri)
     if parsed.scheme == "file":
         return Path(unquote(parsed.path)).expanduser().resolve()
-    if parsed.scheme == "gs":
-        raise NotImplementedError(
-            f"gs:// URIs require a GCS adapter that downloads the object to a "
-            f"local path before streaming.  Received: {storage_uri}  "
-            f"Pass a storage_client to enable direct GCS streaming, or call "
-            f"download_to_local() and set source_local_path on the handle.",
-        )
     raise ValueError(f"Cannot resolve local path from storage URI: {storage_uri}")

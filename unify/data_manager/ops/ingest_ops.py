@@ -578,7 +578,6 @@ def run_ingest(
     post_ingest: Optional[PostIngestConfig] = None,
     on_task_complete=None,
     coerce_types: bool = True,
-    storage_client=None,
     skip_rows: int = 0,
     expected_total_rows: int | None = None,
     private_ingest_key_column: str = "",
@@ -639,7 +638,6 @@ def run_ingest(
             post_ingest=post_ingest,
             on_task_complete=on_task_complete,
             coerce_types=coerce_types,
-            storage_client=storage_client,
             skip_rows=skip_rows,
             expected_total_rows=expected_total_rows,
             private_ingest_key_column=private_ingest_key_column,
@@ -833,7 +831,6 @@ def _run_ingest_streaming(
     post_ingest: Optional[PostIngestConfig] = None,
     on_task_complete=None,
     coerce_types: bool = True,
-    storage_client=None,
     skip_rows: int = 0,
     expected_total_rows: int | None = None,
     private_ingest_key_column: str = "",
@@ -865,11 +862,7 @@ def _run_ingest_streaming(
             f"{expected_total_rows} for {context}",
         )
 
-    row_iter = iter_table_input_rows(
-        handle,
-        storage_client=storage_client,
-        skip_rows=skip_rows,
-    )
+    row_iter = iter_table_input_rows(handle, skip_rows=skip_rows)
 
     # Phase 1: drain sample for type inference
     type_map: Optional[TypeMap] = None
