@@ -12,6 +12,7 @@ any class it confirms stays within bounds.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
 from unittest.mock import MagicMock
@@ -24,6 +25,22 @@ from unify.actor.code_act_actor import (
     _verification_librarian_tools,
 )
 from unify.function_manager.function_manager import FunctionManager
+
+
+def _calls(implementation: str | None, name: str) -> bool:
+    """Whether the stored source calls *name*, ignoring mentions in prose."""
+    try:
+        tree = ast.parse(implementation or "")
+    except SyntaxError:
+        return name in (implementation or "")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == name:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr == name:
+                return True
+    return False
 
 
 @pytest.fixture(autouse=True)
@@ -314,7 +331,7 @@ async def test_librarian_stores_thin_effects_and_confirms_within_bounds(monkeypa
         pure = [
             r
             for r in new_rows.values()
-            if "send_slack_report" not in (r["implementation"] or "")
+            if not _calls(r["implementation"], "send_slack_report")
             and r["side_effect_class"] == "safe_noop"
         ]
         assert (
@@ -323,7 +340,7 @@ async def test_librarian_stores_thin_effects_and_confirms_within_bounds(monkeypa
         bundled = [
             n
             for n, r in new_rows.items()
-            if "send_slack_report" in (r["implementation"] or "")
+            if _calls(r["implementation"], "send_slack_report")
             and any(tok in (r["implementation"] or "") for tok in ("sum(", "amount"))
         ]
         assert (
