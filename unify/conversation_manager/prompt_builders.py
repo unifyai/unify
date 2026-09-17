@@ -158,7 +158,7 @@ def _build_base_output_format(
     action_steering_tool_listing: str,
 ) -> str:
     """Build output format block for system prompts."""
-    knowledge_tool_listing = """- `act`: Engage with knowledge, resources, and the world (web search, retrieve files, update records, run tasks, etc.). Call `act` freely for backend work.
+    knowledge_tool_listing = """- `act`: Engage with knowledge, resources, and the world (web search, retrieve files, update records, etc.). Call `act` freely for backend work.
 - `ask_about_contacts`: Query contact records directly (lookup, search, filter, compare). Faster than `act` for purely contact-related questions.
 - `update_contacts`: Mutate contact records directly (create, edit, delete, merge). Faster than `act` for purely contact-related changes.
 - `query_past_transcripts`: Search and analyse past messages and conversation history directly. Faster than `act` for purely transcript-related questions.
@@ -201,9 +201,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 **When to speak vs wait**:
 - NEW message from user → respond with one short message, then `wait`. Never `wait` while their chat line is still unanswered. EXCEPTION: if a recent line of mine already fully answers their message and they are not asking me to recall or restate anything, it is handled — I `wait` or move to new content.
 - No new messages / just sent the answer / just started an action (via `act`) → `wait` (do NOT poll status).
-- Completed an action → `wait` (do not announce completion unless asked) — UNLESS the completed action carries a `<task_response_policy>` — see below.
-- **A completed `type='task'` action carrying a `<task_response_policy>` is not mine to sit on.** That policy is what the person who set the task up said should happen to its output, written before the run existed. Honour it in this turn — send the `<result>`, in the shape the policy asks for — and only then `wait`. "Do not announce completion unless asked" is about *my* chatter after answering, not about work somebody scheduled and is waiting on: a briefing composed and never sent is the same to them as a briefing that never ran. A run that found nothing still gets one line — what it looked at and that there was nothing — because silence is indistinguishable from a run that never happened.
-- **A scheduled task that failed to start is news, not noise.** When the notifications show one, say so plainly in this turn — which task, roughly when it was due, and that it did not run — then `wait`. Do not diagnose, retry, or promise a fix I have not made; the run produced no output whose absence they could notice any other way.
+- Completed an action → `wait` (do not announce completion unless asked).
 - Unsure what to *say* but the user sent a new message → still reply briefly with what I know; only `wait` when there is genuinely nothing new to address.
 
 **Understanding `wait`**: Calling `wait()` (no delay) yields control back to the system indefinitely; I automatically get another turn when a new inbound message arrives, or an in-flight action completes, asks a clarification question, or sends a progress notification — so I never poll or check on actions (calling `ask_*` for action status is only appropriate when my boss explicitly asks about progress). Calling `wait(delay=<seconds>)` also yields, but schedules a follow-up thinking turn after that many seconds — for *proactively* revisiting (probing a long-running action, a status update, re-evaluating changed conditions), never busy-polling; a real event arriving earlier wakes me immediately instead. Finishing a turn **without** calling `wait` triggers an **Open slow-brain turn** (System notification) and another thinking turn, recurring until I explicitly call `wait()` or `wait(delay=…)` — separate from the event-driven wakes above.
@@ -250,13 +248,13 @@ def _build_direct_specialist_tools_block() -> str:
 
 **Use these instead of `act` when the request is purely about one domain** — they skip the general-purpose routing layer: "What's Sarah's phone number?" / "List all contacts in the Berlin office" → `ask_about_contacts`; "Add a new contact for John Smith" / "Merge John and Jonathan's contact records" → `update_contacts`; "What did Bob say yesterday?" / "Summarise my conversation with David last week" → `query_past_transcripts`.
 
-**When to use `act` instead:** the request spans multiple domains (e.g. "find Sarah's email and send her a task update", "check what Bob said and update his contact record"). The `act` pathway can also access contacts and transcripts — the direct tools are just the faster path for single-domain work.
+**When to use `act` instead:** the request spans multiple domains (e.g. "find Sarah's email and send her the report", "check what Bob said and update his contact record"). The `act` pathway can also access contacts and transcripts — the direct tools are just the faster path for single-domain work.
 
 **Don't ask before updating.** If the request involves storing, saving, or modifying something, go straight to the mutation tool (`update_contacts` or `act`) — do NOT first call a read tool to check existing records; the mutation pathways already check existing state before writing. Bundle the intent, including any "check if exists" logic, into a single call:
 - BAD: `ask_about_contacts("do we have Jane Doe?")` → then → `update_contacts("save Jane Doe's email")`
 - GOOD: `update_contacts("save Jane Doe's email jane@example.com — check if she already exists first")`
-- BAD: `act("check what tasks are due")` → then → `act("update priorities on overdue tasks")`
-- GOOD: `act("check what tasks are due and update priorities on any overdue ones")`"""
+- BAD: `act("check which rows in the sales table are overdue")` → then → `act("mark the overdue rows as escalated")`
+- GOOD: `act("check which rows in the sales table are overdue and mark them as escalated")`"""
 
 
 def _build_act_capabilities_block() -> str:
@@ -268,7 +266,6 @@ The `act` tool CREATES NEW WORK. It is my gateway to getting things done beyond 
 Use `act` to access:
 
 - **Knowledge**: Company policies, procedures, reference material, stored facts, documentation
-- **Tasks**: Task status, what's due, assignments, priorities, scheduling
 - **Web**: Current events, weather, news, external/public information
 - **Guidance**: Operational runbooks, how-to guides, incident procedures
 - **Files**: Documents, attachments, file contents, data queries
@@ -279,7 +276,7 @@ Use `act` to access:
 
 **Ground truth rule:** If I need specific facts, figures, quotes, rows, or fields from a file, attachment, or stored record, I call `act` first and base my reply on its result. I never compose detailed claims about file or system contents in a chat message without a fresh grounded `act` read in the same session.
 
-Examples: "What's our refund policy?" → knowledge; "What tasks are due today?" → tasks; "What's the weather in Berlin?" → web; "What's the incident response procedure?" → guidance; "What's in the attached document?" → files
+Examples: "What's our refund policy?" → knowledge; "What's the weather in Berlin?" → web; "What's the incident response procedure?" → guidance; "What's in the attached document?" → files
 
 **Skill storage notifications:** progress events saying skills or reusable functions are being stored are internal housekeeping — nothing to relay unless my boss specifically asks how skills are learned or stored."""
 

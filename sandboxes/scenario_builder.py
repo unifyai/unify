@@ -4,8 +4,7 @@ from __future__ import annotations
 
 Generic, manager‑agnostic **ScenarioBuilder** – a tiny utility that lets
 unit‑tests spin up realistic *imaginary* data sets *entirely through the
-public tool surfaces of any Manager* (ContactManager, TaskScheduler,
-KnowledgeManager, …).
+public tool surfaces of any Manager* (ContactManager, KnowledgeManager, …).
 
 Usage
 -----

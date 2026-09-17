@@ -9,13 +9,11 @@ import functools
 from ..contact_manager.base import BaseContactManager
 from ..transcript_manager.base import BaseTranscriptManager
 from ..knowledge_manager.base import BaseKnowledgeManager
-from ..task_scheduler.base import BaseTaskScheduler
 
 # Simulated defaults
 from ..contact_manager.simulated import SimulatedContactManager
 from ..transcript_manager.simulated import SimulatedTranscriptManager
 from ..knowledge_manager.simulated import SimulatedKnowledgeManager
-from ..task_scheduler.simulated import SimulatedTaskScheduler
 from ..common.simulated import (
     maybe_tool_log_scheduled,
     maybe_tool_log_completed,
@@ -41,7 +39,6 @@ class SimulatedMemoryManager(MemoryManager):
         contact_manager: Optional[BaseContactManager] = None,
         transcript_manager: Optional[BaseTranscriptManager] = None,
         knowledge_manager: Optional[BaseKnowledgeManager] = None,
-        task_scheduler: Optional[BaseTaskScheduler] = None,
         config: Optional["MemoryManager.MemoryConfig"] = None,
         # Accept but ignore parameters that real MemoryManager may use
         loop: Any = None,
@@ -50,7 +47,6 @@ class SimulatedMemoryManager(MemoryManager):
         cm = contact_manager or SimulatedContactManager(description=description)
         tm = transcript_manager or SimulatedTranscriptManager(description=description)
         km = knowledge_manager or SimulatedKnowledgeManager(description=description)
-        ts = task_scheduler or SimulatedTaskScheduler(description=description)
 
         # Preserve simulated behavior: callbacks disabled unless explicitly provided
         cfg = (
@@ -65,7 +61,6 @@ class SimulatedMemoryManager(MemoryManager):
             contact_manager=cm,
             transcript_manager=tm,
             knowledge_manager=km,
-            task_scheduler=ts,
             config=cfg,
             loop=loop,
         )
@@ -126,34 +121,6 @@ class SimulatedMemoryManager(MemoryManager):
                 label,
                 cid,
                 "update_knowledge",
-                {"result_preview": SimulatedLineage.preview(str(result))},
-                t0,
-            )
-        return result
-
-    @functools.wraps(MemoryManager.update_tasks, updated=())
-    async def update_tasks(
-        self,
-        transcript: str,
-        guidance: Optional[str] = None,
-    ) -> str:
-        sched = maybe_tool_log_scheduled(
-            "SimulatedMemoryManager.update_tasks",
-            "update_tasks",
-            {
-                "transcript_chars": (
-                    len(transcript) if isinstance(transcript, str) else 0
-                ),
-                "has_guidance": guidance is not None,
-            },
-        )
-        result = await super().update_tasks(transcript, guidance)
-        if sched:
-            label, cid, t0 = sched
-            maybe_tool_log_completed(
-                label,
-                cid,
-                "update_tasks",
                 {"result_preview": SimulatedLineage.preview(str(result))},
                 t0,
             )

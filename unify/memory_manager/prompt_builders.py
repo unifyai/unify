@@ -134,40 +134,6 @@ def build_knowledge_prompt(
     return _with_guidance(lines, guidance)
 
 
-def build_task_prompt(
-    tools: Dict[str, Callable],
-    guidance: Optional[str] = None,
-) -> str:
-    lines = [
-        get_broader_context(),
-        "",
-        "You are responsible for maintaining the *task schedule* in light of the **latest transcript chunk**.",
-        "",
-        "\U0001f9ed **General process:**",
-        "\u26a0\ufe0f  **Important:** General descriptions of responsibilities or examples of typical duties (e.g. \u2018You\u2019ll be responsible for X\u2019) are **NOT** explicit task requests. Only create, update, or cancel tasks when the transcript includes a clear utterance whereby a concrete action should be taken, and sufficient details are given to act upon (such as \u2018Please do X when you get the chance\u2019 or \u2018Y was already completed by Z, so don\u2019t worry about it\u2019). When in doubt, make no changes.",
-        "\U0001f9e0 **Not tasks:** Requests such as \u2018remember that\u2026\u2019, \u2018store this information\u2019, or sharing credentials like passwords are **knowledge storage operations**, not actionable tasks. These must *never* generate or modify tasks in the schedule.",
-        "1\ufe0f\u20e3 Reflect on the broader context of your role and recent activity above and decide whether the conversation requests or implies new tasks or any changes to the existing tasks.",
-        "2\ufe0f\u20e3 Always begin by calling `TaskScheduler.ask` to retrieve the **current** task list.",
-        "3\ufe0f\u20e3 For each required change:",
-        "   \u2022 Create a **new** task if it does not yet exist.",
-        "   \u2022 Update the **existing** task if details (status, priority, due date, etc.) have changed.",
-        "   \u2022 Cancel a task that is no longer relevant.",
-        "   \u2022 Re-order tasks or adjust priorities where it improves clarity.",
-        "   \u2022 Perform these adjustments via **a single** `TaskScheduler.update` call whenever possible.",
-        "",
-        "\U0001f6ab **Avoid redundant actions:** If you have already inspected or updated the task list during this turn you do **NOT** need to repeat the same tool call.",
-        "\U0001f512  If the transcript chunk contains a `manager_method` event indicating this operation is already in progress or completed, treat it as handled and **do not** perform it again.",
-        "",
-        "Return a short, human-readable summary of what you changed; if nothing required updating, then please briefly explain why.",
-        "",
-        "Tools (name \u2192 argspec):",
-        json.dumps(_sig_dict(tools), indent=4),
-        "",
-        "Current UTC time: " + now(),
-    ]
-    return _with_guidance(lines, guidance)
-
-
 # ---------------------------------------------------------------------------
 # Unified prompt (used by process_chunk for passive 50-message trigger)
 # ---------------------------------------------------------------------------
@@ -181,7 +147,6 @@ def build_unified_prompt(
     rolling_summaries: bool = True,
     response_policies: bool = True,
     knowledge: bool = True,
-    tasks: bool = True,
     guidance: Optional[str] = None,
 ) -> str:
     """Build a single system prompt covering all enabled memory capabilities."""
@@ -263,20 +228,6 @@ def build_unified_prompt(
                 "\u2022 Always `KnowledgeManager_search` (then filter/get as needed) before writing.",
                 "\u2022 Add with `KnowledgeManager_add_knowledge`; correct in place with `update_knowledge`; replace with `supersede_knowledge`; withdraw with `invalidate_knowledge`.",
                 "\u2022 A no-op is fine when nothing durable is present.",
-                "",
-            ],
-        )
-
-    if tasks:
-        lines.extend(
-            [
-                "## Tasks",
-                "",
-                "Maintain the task schedule based on the transcript.",
-                "\u2022 Only create/update/cancel tasks when the transcript includes a clear, concrete action request with sufficient detail.",
-                "\u2022 General descriptions of responsibilities are **NOT** task requests.",
-                "\u2022 \u2018Remember that\u2026\u2019 or credential-sharing are knowledge operations, not tasks.",
-                "\u2022 Always call `TaskScheduler.ask` first to check the current task list.",
                 "",
             ],
         )

@@ -1484,7 +1484,6 @@ class ContactManager(BaseContactManager):
             context=self._ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            recompute_derived=True,
         )
         if isinstance(result, list) and len(result) > 0:
             log = result[0]

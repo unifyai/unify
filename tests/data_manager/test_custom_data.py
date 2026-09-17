@@ -176,7 +176,6 @@ def test_compute_custom_data_hash_empty():
     assert compute_custom_data_hash(source_tables={}) == ""
 
 
-@pytest.mark.requires_orchestra
 @pytest.mark.asyncio
 async def test_sync_custom_data_inserts_rows(
     data_manager_factory,
@@ -199,7 +198,6 @@ async def test_sync_custom_data_inserts_rows(
     assert rows[0]["code"] == "A1"
 
 
-@pytest.mark.requires_orchestra
 @pytest.mark.asyncio
 async def test_sync_custom_data_is_idempotent(
     data_manager_factory,
@@ -219,7 +217,6 @@ async def test_sync_custom_data_is_idempotent(
     assert dm.sync_custom(source_tables=source) is False
 
 
-@pytest.mark.requires_orchestra
 @pytest.mark.asyncio
 async def test_two_sources_seed_one_table_without_pruning_each_other(
     data_manager_factory,
@@ -273,7 +270,6 @@ async def test_two_sources_seed_one_table_without_pruning_each_other(
     assert codes == {"A1": "deployment", "W1": "wf_demo"}
 
 
-@pytest.mark.requires_orchestra
 @pytest.mark.asyncio
 async def test_an_empty_source_prunes_the_tables_it_seeded_last_pass(
     data_manager_factory,
@@ -311,7 +307,6 @@ async def test_an_empty_source_prunes_the_tables_it_seeded_last_pass(
     assert dm._table_exists("CRM/WorkflowSeeded", None)
 
 
-@pytest.mark.requires_orchestra
 @pytest.mark.asyncio
 async def test_a_table_with_no_rows_is_still_created(
     data_manager_factory,

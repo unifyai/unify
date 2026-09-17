@@ -328,7 +328,6 @@ def delete_rows_impl(
     filter: Optional[str] = None,
     log_ids: Optional[List[int]] = None,
     dangerous_ok: bool = False,
-    delete_empty_rows: bool = False,
 ) -> int:
     """
     Implementation of delete_rows operation.
@@ -345,8 +344,6 @@ def delete_rows_impl(
         Specific log IDs to delete. More efficient than filter when IDs are known.
     dangerous_ok : bool
         Safety flag; must be True to confirm destructive operation.
-    delete_empty_rows : bool, default False
-        When True, also deletes rows with no data (empty logs).
 
     Returns
     -------
@@ -364,11 +361,10 @@ def delete_rows_impl(
         raise ValueError("Either filter or log_ids must be provided for delete_rows")
 
     logger.info(
-        "Deleting rows from %s (filter=%s, log_ids=%s, delete_empty_rows=%s)",
+        "Deleting rows from %s (filter=%s, log_ids=%s)",
         context,
         filter,
         f"{len(log_ids)} ids" if log_ids else None,
-        delete_empty_rows,
     )
 
     ids_to_delete: List[int] = []
@@ -394,7 +390,6 @@ def delete_rows_impl(
     db.delete_logs(
         context=context,
         logs=ids_to_delete,
-        delete_empty_logs=delete_empty_rows,
     )
 
     return len(ids_to_delete)

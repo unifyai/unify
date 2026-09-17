@@ -23,17 +23,10 @@ from unify.conversation_manager.events import (
     OpenSlowBrainTurn,
     Ping,
     SyncContacts,
-    TaskDue,
-    TaskTriggerRequested,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
 from unify.conversation_manager.domains import managers_utils
-from unify.conversation_manager.domains.task_execution import (
-    _handle_task_due_event,
-    _handle_task_trigger_requested_event,
-    _surface_trigger_task_candidates,
-)
 from unify.conversation_manager.cm_types import Medium
 from unify.logger import LOGGER
 from unify.session_details import SESSION_DETAILS
@@ -229,14 +222,6 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
 
     if role == "user":
-        await _surface_trigger_task_candidates(
-            cm=cm,
-            event=event,
-            medium=Medium.UNIFY_MESSAGE,
-            contact_id=contact_id,
-            sender_name=sender_name,
-            timestamp=event.timestamp,
-        )
         cm.record_last_inbound_reply(
             {"medium": Medium.UNIFY_MESSAGE.value, "contact_id": contact_id},
         )
@@ -316,28 +301,6 @@ async def _(
     )
 
     await cm.request_llm_run(delay=0)
-
-
-@EventHandler.register(TaskDue)
-async def _(
-    event: TaskDue,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    if await _handle_task_due_event(event, cm):
-        await cm.request_llm_run(delay=0)
-
-
-@EventHandler.register(TaskTriggerRequested)
-async def _(
-    event: TaskTriggerRequested,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    if await _handle_task_trigger_requested_event(event, cm):
-        await cm.request_llm_run(delay=0)
 
 
 @EventHandler.register(NotificationUnpinnedEvent)

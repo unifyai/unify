@@ -368,9 +368,9 @@ def get_fields(
 
 
 def create_fields(
+    fields: Mapping[str, Mapping[str, Any] | str],
     *,
     context: str | None = None,
-    fields: Mapping[str, Mapping[str, Any] | str],
     project: str | None = None,
 ) -> None:
     get_store().create_fields(_project(project), _write_context(context), fields)

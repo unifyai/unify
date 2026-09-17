@@ -193,7 +193,6 @@ def _run_post_ingest_rules(
                 context,
                 key=rule.target_name,
                 equation=equation,
-                referenced_logs_context=context,
             )
             created.append(rule.target_name)
 
@@ -215,7 +214,6 @@ def _run_post_ingest_rules(
                     context,
                     key=target,
                     equation=equation,
-                    referenced_logs_context=context,
                 )
                 created.append(target)
 

@@ -181,7 +181,6 @@ class TestRunPostIngestRules:
             "test/ctx",
             key="Trip travel time duration seconds",
             equation="duration_seconds({lg:Trip travel time})",
-            referenced_logs_context="test/ctx",
         )
         mock_unify.get_fields.assert_not_called()
 
@@ -212,13 +211,11 @@ class TestRunPostIngestRules:
             "test/ctx",
             key="VisitDate_Date",
             equation="date({lg:VisitDate})",
-            referenced_logs_context="test/ctx",
         )
         mock_ensure.assert_any_call(
             "test/ctx",
             key="Departure_Date",
             equation="date({lg:Departure})",
-            referenced_logs_context="test/ctx",
         )
 
     @patch("unify.data_manager.ops.ingest_ops._ensure_derived_column")

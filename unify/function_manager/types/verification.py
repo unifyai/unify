@@ -142,7 +142,6 @@ class Fixture(BaseModel):
     result: Any = None
     args_signature: str
     captured_at: Optional[datetime] = None
-    run_key: Optional[str] = None
 
 
 class VerificationRow(_FaultRequiredOnFail):
@@ -156,8 +155,6 @@ class VerificationRow(_FaultRequiredOnFail):
     fault: Optional[Fault] = None
     call_site: str = "root"
     args_signature: Optional[str] = None
-    run_key: Optional[str] = None
-    task_id: Optional[int] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0.0

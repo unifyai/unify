@@ -223,8 +223,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "checkpoints, verifies, or can resume). FOR A CANVAS OVER "
             "CONNECTED APPS the shape is always: integration tool → "
             "`submit(RowsSource(rows=...), TableTarget(...))` → `wait` → "
-            "schedule freshness via `primitives.tasks` → read from "
-            "that table; also the only way to show two providers together, "
+            "read from that table; also the only way to show two providers together, "
             "since providers cannot be joined directly."
         ),
     ),
@@ -238,17 +237,6 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         description="Past messages, conversation history, communication records (chat/SMS/email)",
         use_when="Questions about past communications, 'what did X say?'",
         examples="'What did Bob say yesterday?', 'Last SMS with Alice?', 'Messages mentioning budget?'",
-    ),
-    ManagerSpec(
-        manager_alias="tasks",
-        manager_registry_key="tasks",
-        primitive_class_path="unify.task_scheduler.task_scheduler.TaskScheduler",
-        excluded_methods=frozenset({"get_active_singleton_handle"}),
-        priority=4,
-        domain="Durable Work & Tracking",
-        description="Task management, assignments, deadlines, priorities, execution event diagnostics",
-        use_when="Questions about tasks/work items, 'what's due?', diagnosing a failed run via EventBus tree walk",
-        examples="'What tasks are due today?', 'Show Alice's open tasks', 'Walk EventBus children for run_key=…'",
     ),
     ManagerSpec(
         manager_alias="secrets",

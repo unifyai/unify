@@ -800,7 +800,6 @@ def _init_managers(
                 rolling_summaries=SETTINGS.memory.ROLLING_SUMMARIES,
                 response_policies=SETTINGS.memory.RESPONSE_POLICIES,
                 knowledge=SETTINGS.memory.KNOWLEDGE,
-                tasks=SETTINGS.memory.TASKS,
             )
             cm.memory_manager = ManagerRegistry.get_memory_manager(
                 transcript_manager=cm.transcript_manager,
@@ -1054,29 +1053,6 @@ async def init_conv_manager(
                     traceback.print_exc()
                 finally:
                     cm._hydration_future = None
-
-            # Start the in-process activation scheduler: the asyncio
-            # supervisor that fires scheduled tasks onto the event broker.
-            # Must run after managers are initialised because the scheduler
-            # reads ``Tasks/Executions`` through the same storage layer the
-            # managers configure.
-            try:
-                from unify.task_scheduler.local_scheduler import build_materializer
-
-                _t0 = perf_counter()
-                cm._activation_materializer = build_materializer(cm)
-                await cm._activation_materializer.start()
-                log_startup_timing(
-                    LOGGER,
-                    "⏱️ [StartupTiming] managers.init_conv_manager.start_local_scheduler duration=%.2fs",
-                    perf_counter() - _t0,
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    f"{ICONS['managers_worker']} [ManagersWorker] "
-                    f"LocalActivationScheduler failed to start (degraded): {exc}",
-                )
-                cm._activation_materializer = None
 
             # Publish initialization complete event.  The registered
             # InitializationComplete handler pushes a notification and

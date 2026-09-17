@@ -645,7 +645,7 @@ class TranscriptManager(BaseTranscriptManager):
     def build_plain_transcript(
         messages: list[dict],
         *,
-        contact_manager: Optional["ContactManager"] = None,
+        contact_manager: Optional[BaseContactManager] = None,
     ) -> str:
         """Return a plain-text transcript (``Full Name: content``) for ``messages``.
 

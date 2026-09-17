@@ -6,39 +6,26 @@ Global pytest configuration for Unity test suite.
 
 Sections:
   1. Imports and logging guard
-  2. Test stubs (Redis, ComputerWorker, DateTime)
+  2. Test stubs (DateTime)
   3. Singleton isolation
   4. Command-line options
   5. Custom logging helpers
   6. Session lifecycle hooks
   7. Test run hooks
-  8. HTTP client cleanup
-  9. Pre-run context creation
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import random
 import re
-import time
 
 import hashlib
 
-import httpx
 import pytest
-import requests
 from unify import db
 from pytest_metadata.plugin import metadata_key
-
-# Imported as a symbol (not via module attribute access at call time) so a
-# unisdk checkout that predates it fails collection with an ImportError here,
-# rather than an AttributeError inside per-test setup's broad exception
-# handlers — which would silently skip set_context and collapse every test
-# into one shared context root.
-from db.utils.http import default_timeout as unisdk_default_timeout
 
 from datetime import datetime, timezone
 
@@ -50,7 +37,7 @@ _root_logger_early = logging.getLogger()
 if not _root_logger_early.handlers:
     _root_logger_early.addHandler(logging.NullHandler())
 
-from tests.helpers import PRECREATED_CONTEXTS, set_session_tags
+from tests.helpers import set_session_tags
 from tests.settings import SETTINGS
 from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
@@ -62,64 +49,6 @@ from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_
 # an `if __debug__` label. `setdefault` so an explicit override (e.g. a
 # targeted rerun with it forced off) still wins.
 os.environ.setdefault("UNIFY_TRANSCRIPT_INVARIANT_CHECKS", "1")
-
-
-# --------------------------------------------------------------------------- #
-# Orchestra availability check for requires_orchestra marker                   #
-# --------------------------------------------------------------------------- #
-def _check_orchestra_available() -> bool:
-    """Check if Orchestra server is reachable.
-
-    The verdict is cached for the process lifetime so every caller —
-    pytest_sessionstart's init decision, per-test ``requires_orchestra``
-    skips, per-test remote context setup — agrees with the decision made at
-    session start. A mid-session flip would be worse than either steady
-    state: if session setup skipped ``unify.init()``, later tests seeing
-    True would run against an uninitialised runtime.
-
-    Under parallel_run (``UNIFY_TEST_SOCKET`` set) the first call retries
-    for up to 30s before concluding False: parallel_run boots Orchestra
-    just before spawning sessions, and dozens of sessions probing a
-    still-warming server can also transiently time out even after
-    ``local.sh check`` passed. Caching one racy False made
-    pytest_sessionstart skip ``unify.init()`` while tests still ran,
-    crashing later with "EVENT_BUS has not been initialised yet". Outside
-    parallel_run a single probe decides immediately, so a developer running
-    plain pytest without Orchestra doesn't wait.
-    """
-    if hasattr(_check_orchestra_available, "_cached"):
-        return _check_orchestra_available._cached
-
-    base = os.environ.get("ORCHESTRA_URL", "http://localhost:8000")
-    # ORCHESTRA_URL may or may not include the `/v0` API prefix — both
-    # `http://127.0.0.1:8000` and `http://127.0.0.1:8000/v0` are valid in
-    # practice (parallel_run.sh exports the latter via local.sh's
-    # cmd_check). Mirror the URL handling in _prepare_shared_project.py
-    # (added in e47d5c648) so we hit `/v0/projects` exactly once. Before
-    # this fix, a `/v0`-suffixed ORCHESTRA_URL would resolve to
-    # `/v0/v0/projects` → 404 → returns False → pytest_sessionstart
-    # silently skipped unify.init() → eval tests crashed downstream with
-    # "EVENT_BUS has not been initialised yet".
-    if base.endswith("/v0"):
-        url = f"{base}/projects"
-    else:
-        url = f"{base.rstrip('/')}/v0/projects"
-
-    deadline = time.monotonic() + (30.0 if os.environ.get("UNIFY_TEST_SOCKET") else 0.0)
-    while True:
-        try:
-            with httpx.Client(timeout=2.0) as client:
-                resp = client.get(url)
-                # 200 = success, 401/403 = auth required but server is up
-                available = resp.status_code in (200, 401, 403)
-        except Exception:
-            available = False
-        if available or time.monotonic() >= deadline:
-            break
-        time.sleep(1.0)
-
-    _check_orchestra_available._cached = available
-    return available
 
 
 def _derive_test_context(item: pytest.Item) -> str:
@@ -156,34 +85,6 @@ def _derive_test_context(item: pytest.Item) -> str:
     return f"{test_path}/{func_name}/{UNASSIGNED_USER_CONTEXT}/{UNASSIGNED_ASSISTANT_CONTEXT}"
 
 
-# Trips permanently for this process the first time a per-test setup call
-# stalls or loses the connection, so one network incident costs one bounded
-# timeout instead of taxing every subsequent test. Local context activation
-# still happens for every test; only the remote round-trips are skipped.
-_ORCHESTRA_SETUP_BROKEN = False
-
-_SETUP_NETWORK_ERRORS = (
-    requests.exceptions.Timeout,
-    requests.exceptions.ConnectionError,
-)
-
-
-def _trip_orchestra_setup_breaker(exc: Exception) -> None:
-    global _ORCHESTRA_SETUP_BROKEN
-    if not _ORCHESTRA_SETUP_BROKEN:
-        _ORCHESTRA_SETUP_BROKEN = True
-        print(
-            "\n[unity-conftest] Orchestra became unreachable during test setup "
-            f"({type(exc).__name__}); switching to local-only context setup for "
-            "the rest of this session. Tests that need Orchestra will fail or "
-            "skip on their own.\n",
-        )
-
-
-def _orchestra_usable_for_setup() -> bool:
-    return not _ORCHESTRA_SETUP_BROKEN and _check_orchestra_available()
-
-
 def _reset_singleton_registries() -> None:
     # Ensure singleton registries don't leak across tests and that fixtures see
     # the correct context for any context-derived subcontexts (e.g. FunctionManager).
@@ -200,10 +101,9 @@ def _reset_singleton_registries() -> None:
 
 
 def _assert_test_context_active(ctx: str) -> None:
-    # set_context activates the local context vars before any remote
-    # round-trip, so after setup they must hold the per-test root no matter
-    # what the network did. If they don't, every subsequent test would share
-    # one context root and cross-contaminate — fail the session here instead.
+    # After setup the context vars must hold the per-test root. If they
+    # don't, every subsequent test would share one context root and
+    # cross-contaminate — fail the session here instead.
     active = db.get_active_context()
     assert active.get("read") == ctx and active.get("write") == ctx, (
         f"Per-test Unify context activation failed: expected {ctx!r}, "
@@ -212,46 +112,14 @@ def _assert_test_context_active(ctx: str) -> None:
 
 
 def _set_unify_context_for_test(item: pytest.Item) -> None:
-    """Set a unique per-test Unify context early (before fixtures)."""
+    """Bind a fresh, unique per-test Unify context early (before fixtures)."""
     ctx = _derive_test_context(item)
     setattr(item, "_unity_unify_test_ctx", ctx)
 
-    if not _orchestra_usable_for_setup():
-        # Local-only: activate the per-test context without touching the
-        # network, keeping context isolation for tests that never leave the
-        # process. Tests that need Orchestra fail or skip on their own.
-        db.set_context(ctx, relative=False, skip_create=True)
-        _reset_singleton_registries()
-        _assert_test_context_active(ctx)
-        return
-
-    # Clean slate unless contexts are pre-created during collection.
-    skip_ctx_create = False
-    if SETTINGS.UNIFY_PRETEST_CONTEXT_CREATE:
-        skip_ctx_create = ctx in PRECREATED_CONTEXTS
-    else:
-        try:
-            with unisdk_default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
-                db.delete_context(ctx)
-        except _SETUP_NETWORK_ERRORS as exc:
-            _trip_orchestra_setup_breaker(exc)
-            db.set_context(ctx, relative=False, skip_create=True)
-            _reset_singleton_registries()
-            _assert_test_context_active(ctx)
-            return
-        except Exception:
-            pass
-
-    try:
-        with unisdk_default_timeout(SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT):
-            db.set_context(ctx, relative=False, skip_create=skip_ctx_create)
-    except _SETUP_NETWORK_ERRORS as exc:
-        # set_context activates the local context vars before its remote
-        # round-trip, so the test still runs in the right context.
-        _trip_orchestra_setup_breaker(exc)
-    except Exception:
-        pass  # Project may not exist yet; tests that need it will fail on their own
-
+    # Clean slate: a rerun of the same test in a reused store must not see
+    # the previous run's rows.
+    db.delete_context(ctx)
+    db.set_context(ctx, relative=False)
     _reset_singleton_registries()
     _assert_test_context_active(ctx)
 
@@ -266,39 +134,23 @@ def _unset_unify_context_for_test(item: pytest.Item) -> None:
     """Unset (and optionally delete) the per-test Unify context after fixture teardown."""
     ctx = getattr(item, "_unity_unify_test_ctx", None)
     try:
-        if (
-            ctx
-            and SETTINGS.UNIFY_DELETE_CONTEXT_ON_EXIT
-            and _orchestra_usable_for_setup()
-        ):
-            try:
-                with unisdk_default_timeout(
-                    SETTINGS.UNIFY_TEST_SETUP_HTTP_TIMEOUT,
-                ):
-                    db.delete_context(ctx)
-            except _SETUP_NETWORK_ERRORS as exc:
-                _trip_orchestra_setup_breaker(exc)
-            except Exception:
-                pass
+        if ctx and SETTINGS.UNIFY_DELETE_CONTEXT_ON_EXIT:
+            db.delete_context(ctx)
     finally:
-        try:
-            db.unset_context()
-        except Exception:
-            pass
+        db.unset_context()
 
 
 def pytest_report_header(config):
     settings_str = [f"{k}={v}" for k, v in SETTINGS.model_dump().items()]
     return [
-        f"orchestra_url={os.environ.get('ORCHESTRA_URL')}",
-        f"unity_comms_url={os.environ.get('UNIFY_COMMS_URL')}",
+        f"unify_store={os.environ.get('UNIFY_STORE_PATH')}",
         f"unify_project={db.active_project()}",
         f"UNILLM_CACHE={os.environ.get('UNILLM_CACHE', 'not set')}",
     ] + settings_str
 
 
 # --------------------------------------------------------------------------- #
-# 2. Test stubs (ComputerWorker, DateTime)                                     #
+# 2. Test stubs (DateTime)                                                    #
 # --------------------------------------------------------------------------- #
 
 _FIXED_DATETIME = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -357,41 +209,8 @@ def stub_external_deps(monkeypatch):
         _static_now,
     )
     monkeypatch.setattr(
-        "unify.conversation_manager.domains.managers_utils.prompt_now",
-        _static_now,
-    )
-    monkeypatch.setattr(
         "unify.conversation_manager.conversation_manager.prompt_now",
         _static_now,
-    )
-
-    # --- DateTime stub for production wall-clock comparisons ---------------
-    # task_scheduler.task_scheduler uses `datetime.now(timezone.utc)`
-    # directly (not prompt_helpers.now) to decide whether a
-    # schedule.start_at lands in the future. With prompt_helpers.now stubbed
-    # to 2025-06-13 (so cached LLM responses are deterministic), the LLM
-    # generates start_at values relative to 2025-06-13 — e.g. "next Monday"
-    # → 2025-06-16. But production then compares those LLM-generated
-    # timestamps against the real wall-clock, which is now ~12 months in
-    # the future. Result: tasks the LLM intends as future-scheduled may get
-    # an incorrect resolved status. Patch task_scheduler.datetime so the
-    # two time sources agree under test.
-    #
-    # NOTE: the production class is `from datetime import datetime`, so we
-    # patch the imported name on the module. A subclass-with-overridden-
-    # now() shim is needed because only `.now()` should be overridden —
-    # the rest of the datetime API (datetime.combine, datetime.strptime,
-    # etc., as used in repeat-pattern math) must keep working.
-    class _StubbedDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            if tz is None:
-                return _FIXED_DATETIME
-            return _FIXED_DATETIME.astimezone(tz)
-
-    monkeypatch.setattr(
-        "unify.task_scheduler.task_scheduler.datetime",
-        _StubbedDatetime,
     )
 
     def _static_perf_counter() -> float:
@@ -574,119 +393,41 @@ def pytest_sessionstart(session):
     if os.environ.get("SKIP_UNIFY_TEST_INIT"):
         return
 
-    # ------------------------------------------------------------------
-    #  Initialize Unity's OpenTelemetry TracerProvider FIRST
-    #  This ensures Unity owns the provider (service: "unity") before
-    #  any library (unify, unillm) makes traced calls.
-    # ------------------------------------------------------------------
-    from unify.logger import get_tracer
-
-    get_tracer()  # Creates TracerProvider with service="unity" if OTEL enabled
-
-    # ------------------------------------------------------------------
-    #  Skip Orchestra-dependent setup if Orchestra isn't reachable.
-    #
-    #  Two scenarios produce this state in practice:
-    #   - CI: parallel_run.sh's `local.sh start` failed (e.g. docker
-    #     unavailable, port conflict). The warning is logged but the
-    #     session still launches.
-    #   - Local: developer running `pytest` without `unity setup`.
-    #
-    #  In both cases, crashing here would kill the whole pytest session
-    #  before any test (including pure unit tests that don't need
-    #  Orchestra) gets to run. Bailing out of session setup instead
-    #  leaves the per-test `requires_orchestra` skip logic to do its
-    #  job — Orchestra-needing tests skip, unit tests still run.
-    # ------------------------------------------------------------------
-    if not _check_orchestra_available():
-        print(
-            "\n[unity-conftest] Orchestra not reachable at "
-            f"{os.environ.get('ORCHESTRA_URL', 'http://localhost:8000')}; "
-            "skipping session-level project/context setup. "
-            "Tests marked `requires_orchestra` will skip; others run as normal.\n",
-        )
-        return
-
-    # ------------------------------------------------------------------
-    #  Optionally delete the project before starting (clean slate)
-    #  Skip in shared project mode (UNIFY_SKIP_SESSION_SETUP) because
-    #  parallel_run.sh handles deletion at the script level to avoid
-    #  race conditions between parallel sessions.
-    # ------------------------------------------------------------------
-
     project_name = SETTINGS.test_project_name
 
-    if (
-        SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_START
-        and not SETTINGS.UNIFY_SKIP_SESSION_SETUP
-    ):
-        try:
-            db.delete_project(project_name)
-        except Exception:
-            pass  # Project may not exist yet
-
     # ------------------------------------------------------------------
-    #  Activate the UnityTests project
+    #  Optionally delete the project before starting (clean slate). Only
+    #  meaningful when the store is reused across runs via UNIFY_STORE_PATH;
+    #  a per-process store starts empty anyway.
     # ------------------------------------------------------------------
+    if SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_START:
+        db.delete_project(project_name)
 
     if os.environ.get("GITHUB_ACTIONS"):
         import unillm
 
         unillm.set_cache_backend("local_separate")
 
-    if SETTINGS.UNIFY_SKIP_SESSION_SETUP:
-        # Project and shared contexts already prepared externally (e.g., by
-        # ._prepare_shared_project.sh). Just activate without overwrite.
-        db.activate(project_name, overwrite=False)
-        db.set_user_logging(False)
-    else:
-        db.activate(
-            project_name,
-            overwrite=SETTINGS.UNIFY_OVERWRITE_PROJECT,
-        )
-        db.set_user_logging(False)
-
     # ------------------------------------------------------------------
-    #  Ensure the unity runtime is fully initialised for the test suite
+    #  Activate the test project and initialise the runtime
     # ------------------------------------------------------------------
+    db.activate(project_name, overwrite=SETTINGS.UNIFY_OVERWRITE_PROJECT)
 
     import unify  # local import to avoid affecting stub installation order
 
-    try:
-        unify.init(project_name)
-    except Exception:
-        # Fallback to default project if UnityTests not available yet
-        unify.init()
+    unify.init(project_name)
 
     # ------------------------------------------------------------------
-    #  Ensure the global builtins catalogues (primitives + guidance)
-    #  exist. Normally seeded once by tests/_prepare_shared_project.py
-    #  before sessions spawn (making this a cheap hash check); the
-    #  cross-process lock serialises the rare cold-start race between
-    #  parallel sessions.
+    #  Seed the global builtins catalogues (primitives + guidance). Each
+    #  process owns its store, so this is a cold seed every session; both
+    #  seeders are hash-guarded and the embeddings they compute come from
+    #  the cross-process embeddings cache.
     # ------------------------------------------------------------------
-    from unify.common.builtins import (
-        builtins_project,
-        builtins_seed_key_override,
-    )
-    from unify.common.embed_utils import _cross_process_column_lock
     from unify.function_manager.builtins_catalog import seed_builtin_primitives
     from unify.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from unify.integrations.builtins_catalog import seed_builtin_integrations
-    from unify.workflow_manager.builtins_catalog import ensure_catalog_storage
 
-    with _cross_process_column_lock(builtins_project(), "builtins_seed"):
-        with builtins_seed_key_override():
-            seed_builtin_primitives()
-            seed_builtin_guidance()
-            seed_builtin_integrations()
-            # Workflows: storage only. The catalogue is a shared, public
-            # shelf keyed by project name alone, so it is the same rows a
-            # deployment serves — seeding desired state from here publishes
-            # whatever this checkout happens to hold, and an empty desired
-            # state deletes the shelf out from under everyone pointed at
-            # the same backend. Tests that need rows seed their own.
-            ensure_catalog_storage(builtins_project())
+    seed_builtin_primitives()
+    seed_builtin_guidance()
 
     # ------------------------------------------------------------------
     #  Configure EventBus publishing (disabled by default in tests)
@@ -707,27 +448,18 @@ def pytest_sessionstart(session):
 
     # ------------------------------------------------------------------
     #  Ensure the Combined context exists for duration and LLM I/O logging
-    #  (idempotent: tolerates pre-existing context/fields and concurrent
-    #  creation attempts from parallel pytest sessions)
     # ------------------------------------------------------------------
-    if SETTINGS.UNIFY_SKIP_SESSION_SETUP:
-        # Combined context already prepared externally; skip creation
-        pass
-    else:
-        db.create_context("Combined")
-        try:
-            db.create_fields(
-                context="Combined",
-                fields={
-                    "test_fpath": {"type": "str", "mutable": True},
-                    "tags": {"type": "list", "mutable": True},
-                    "duration": {"type": "float", "mutable": True},
-                    "llm_io": {"type": "list", "mutable": True},
-                    "settings": {"type": "dict", "mutable": True},
-                },
-            )
-        except Exception:
-            pass  # Fields already exist or transient failure
+    db.create_context("Combined")
+    db.create_fields(
+        context="Combined",
+        fields={
+            "test_fpath": {"type": "str", "mutable": True},
+            "tags": {"type": "list", "mutable": True},
+            "duration": {"type": "float", "mutable": True},
+            "llm_io": {"type": "list", "mutable": True},
+            "settings": {"type": "dict", "mutable": True},
+        },
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -756,14 +488,7 @@ def pytest_sessionfinish(session, exitstatus):
     except Exception:
         pass
 
-    # A session that was handed a prepared project does not own it, so it does
-    # not tear it down — the runner that prepared it deletes once, after every
-    # session has finished. Mirrors the same guard on delete-on-start; without
-    # it the first session to exit takes the project out from under the rest.
-    if (
-        SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_EXIT
-        and not SETTINGS.UNIFY_SKIP_SESSION_SETUP
-    ):
+    if SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_EXIT and db.active_project():
         db.delete_project(db.active_project())
 
 
@@ -798,10 +523,6 @@ def pytest_unconfigure(config):
         os.environ["HOME"] = _original_home
     if _hf_home_set_by_us:
         os.environ.pop("HF_HOME", None)
-    if _speaker_model_set_by_us:
-        os.environ.pop("UNIFY_SPEAKER_MODEL_PATH", None)
-    if _playwright_path_set_by_us:
-        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -842,8 +563,6 @@ _session_costs: list[tuple[str, float]] = []
 
 _original_home: str | None = None
 _hf_home_set_by_us: bool = False
-_speaker_model_set_by_us: bool = False
-_playwright_path_set_by_us: bool = False
 
 
 def pytest_configure(config):
@@ -886,32 +605,6 @@ def pytest_configure(config):
             os.environ["HF_HOME"] = original_hf
             _hf_home_set_by_us = True
 
-    # Same problem, same fix, for the speaker-embedding model: it is cached
-    # under ~/.cache/unify/speaker_id/ and the HOME override hides it, so
-    # every real-model speaker-identification test silently skips instead of
-    # running. Globbing (rather than importing speaker_id for the filename)
-    # keeps pytest_configure free of heavy imports.
-    global _speaker_model_set_by_us
-    if "UNIFY_SPEAKER_MODEL_PATH" not in os.environ and _original_home:
-        import glob as _glob
-
-        cached_models = _glob.glob(
-            os.path.join(_original_home, ".cache", "unify", "speaker_id", "*.onnx"),
-        )
-        if len(cached_models) == 1:
-            os.environ["UNIFY_SPEAKER_MODEL_PATH"] = cached_models[0]
-            _speaker_model_set_by_us = True
-
-    # Same problem again, for playwright's browser cache under
-    # ~/.cache/ms-playwright.  Without this the canvas render gate finds no
-    # chromium and every test that exercises it skips rather than runs.
-    global _playwright_path_set_by_us
-    if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and _original_home:
-        original_browsers = os.path.join(_original_home, ".cache", "ms-playwright")
-        if os.path.isdir(original_browsers):
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = original_browsers
-            _playwright_path_set_by_us = True
-
     config.addinivalue_line(
         "markers",
         "requires_real_unify: mark test as requiring the real unify implementation",
@@ -929,10 +622,6 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "enable_eventbus: enable EventBus publishing for this test",
-    )
-    config.addinivalue_line(
-        "markers",
-        "requires_orchestra: mark test as requiring a running Orchestra server",
     )
 
     # Required to disable explicit log level if set from pytest.ini or command line options
@@ -964,17 +653,10 @@ def pytest_configure(config):
         pass
 
 
-# Skip tests marked with requires_real_unify when using the unify stub
-# Skip tests marked with requires_orchestra when Orchestra is not available
 def pytest_runtest_setup(item):
     test_name_log_filter.set_test_name(item.nodeid)
     if not os.environ.get("SKIP_UNIFY_TEST_INIT") and _uses_unify_context(item):
         _set_unify_context_for_test(item)
-
-    # Skip requires_orchestra tests if Orchestra is not running
-    if item.get_closest_marker("requires_orchestra"):
-        if not _check_orchestra_available():
-            pytest.skip("Orchestra server not available")
 
 
 def _normalize_pytest_nodeid(nodeid):
@@ -1070,91 +752,6 @@ def pytest_html_results_summary(prefix, summary, postfix):
                 f"<p>Reads: {stats.reads} | Writes: {stats.writes}</p>",
             ],
         )
-
-
-# --------------------------------------------------------------------------- #
-# 8. HTTP client cleanup                                                      #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _close_httpx_clients_at_session_end():
-    """
-    Track every httpx.AsyncClient that gets created during the session
-    and close it gracefully *before* pytest tears the event-loop down.
-    """
-    created: list[httpx.AsyncClient] = []
-
-    # monkey-patch __init__ to collect instances
-    orig_init = httpx.AsyncClient.__init__
-
-    def _patched_init(self, *a, **kw):
-        orig_init(self, *a, **kw)
-        created.append(self)
-
-    httpx.AsyncClient.__init__ = _patched_init  # type: ignore[assignment]
-
-    yield  # ← tests run here
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    for c in created:
-        if not c.is_closed:
-            # swallow "loop closed" if it still happens for a stray client
-            try:
-                loop.run_until_complete(c.aclose())
-            except RuntimeError:
-                pass
-    loop.run_until_complete(loop.shutdown_asyncgens())
-    loop.close()
-
-
-# --------------------------------------------------------------------------- #
-# 9. Pre-run context creation                                                 #
-# --------------------------------------------------------------------------- #
-
-
-def _get_context_name_for_item(item):
-    """
-    Return the unify context name for a collected pytest item.
-
-    This uses the same logic as tests.helpers._ctx_name to generate a unique context
-    path for the test, including any parametrization suffixes.
-    """
-    original_name = item.originalname or item.name
-
-    # Append normalized parametrization suffix if available
-    normalized = _normalize_pytest_nodeid(item.nodeid)
-
-    func_name = original_name
-    if normalized is not None:
-        func_name = f"{original_name}/{normalized}"
-
-    path = item._nodeid.split(".py")[0]
-    return f"{path}/{func_name}"
-
-
-def pytest_collection_finish(session):
-    # Compute all contexts and fire off background creation tasks
-    # Skip when UNIFY_SKIP_SESSION_SETUP is set (shared project mode)
-    if SETTINGS.UNIFY_PRETEST_CONTEXT_CREATE and not SETTINGS.UNIFY_SKIP_SESSION_SETUP:
-        if not _orchestra_usable_for_setup():
-            return
-        contexts: set[str] = set()
-        for item in session.items:
-            ctx = _get_context_name_for_item(item)
-            contexts.add(ctx)
-            contexts.add(f"{ctx}/Events/_callbacks/")
-
-        # TODO: Should delete contexts before creating them
-        # But this is mostly fine now for CI purpose, as we create
-        # a fresh project anyway
-        try:
-            db.create_contexts(list(contexts))
-        except _SETUP_NETWORK_ERRORS as exc:
-            _trip_orchestra_setup_breaker(exc)
-            return
-        PRECREATED_CONTEXTS.update(contexts)
 
 
 @pytest.fixture(autouse=True)

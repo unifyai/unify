@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import pytest
-import requests
-from unify.db import StoreError
-from unify.common.context_store import TableStore, _create_context_with_retry
+from unify import db
+from unify.common.context_store import TableStore
 
 
 @pytest.fixture(autouse=True)
@@ -16,25 +15,20 @@ def _reset_ensured_cache():
 
 def test_ensure_creates_and_idempotent(monkeypatch):
     # Arrange: stable project and call counters
-    monkeypatch.setattr(unisdk, "active_project", lambda: "proj-ctx")
-
-    # Simulate 404 so ensure_context proceeds to creation
-    def _fail_get(*args, **kwargs):
-        raise Exception("Context not found")
-
-    monkeypatch.setattr(unisdk, "get_context", _fail_get)
+    monkeypatch.setattr(db, "active_project", lambda: "proj-ctx")
 
     calls = {"create_context": 0, "create_fields": 0}
 
     def _create_context(
         ctx,
-        *,
+        description=None,
+        is_versioned=True,
+        allow_duplicates=True,
         unique_keys=None,
         auto_counting=None,
-        description=None,
         foreign_keys=None,
-        owner_scope=None,
-        owner_id=None,
+        exist_ok=True,
+        *,
         project=None,
     ):
         calls["create_context"] += 1
@@ -43,14 +37,25 @@ def test_ensure_creates_and_idempotent(monkeypatch):
         assert unique_keys == {"contact_id": "int"}
         assert auto_counting == {"contact_id": None}
         assert description == "Contacts table"
+        return True
 
-    def _create_fields(fields, *, context):
+    def _get_context(name, *, project=None):
+        # The identity check reads the live context back after creation.
+        assert name == "Test/Contacts"
+        return {
+            "name": name,
+            "unique_keys": ["contact_id"],
+            "auto_counting": {"contact_id": None},
+        }
+
+    def _create_fields(*, fields, context=None, project=None):
         calls["create_fields"] += 1
         assert context == "Test/Contacts"
         assert fields == {"first_name": {"type": "str"}, "surname": {"type": "str"}}
 
-    monkeypatch.setattr(unisdk, "create_context", _create_context)
-    monkeypatch.setattr(unisdk, "create_fields", _create_fields)
+    monkeypatch.setattr(db, "create_context", _create_context)
+    monkeypatch.setattr(db, "get_context", _get_context)
+    monkeypatch.setattr(db, "create_fields", _create_fields)
 
     store = TableStore(
         "Test/Contacts",
@@ -73,10 +78,10 @@ def test_ensure_creates_and_idempotent(monkeypatch):
 
 def test_get_columns_transforms(monkeypatch):
     # Arrange stable project and capture parameters
-    monkeypatch.setattr(unisdk, "active_project", lambda: "proj-Z")
+    monkeypatch.setattr(db, "active_project", lambda: "proj-Z")
     seen = {"project_name": None, "context": None}
 
-    def _get_fields(*, project, context):
+    def _get_fields(*, project=None, context=None):
         seen["project_name"] = project
         seen["context"] = context
         return {
@@ -84,10 +89,10 @@ def test_get_columns_transforms(monkeypatch):
             "contact_id": {"data_type": "int"},
             "_internal": {
                 "data_type": "dict",
-            },  # still returned by backend – consumer filters
+            },  # still returned by the store – consumer filters
         }
 
-    monkeypatch.setattr(unisdk, "get_fields", _get_fields)
+    monkeypatch.setattr(db, "get_fields", _get_fields)
 
     store = TableStore("Org/Contacts")
     cols = store.get_columns()
@@ -95,22 +100,3 @@ def test_get_columns_transforms(monkeypatch):
     # Assert mapping and the exact call arguments
     assert cols == {"first_name": "str", "contact_id": "int", "_internal": "dict"}
     assert seen == {"project_name": "proj-Z", "context": "Org/Contacts"}
-
-
-def test_ensure_context_treats_400_context_already_exists_as_success(monkeypatch):
-    response = requests.Response()
-    response.status_code = 400
-    response._content = b"A context with this name already exists in the project."
-
-    monkeypatch.setattr(
-        unisdk,
-        "create_context",
-        lambda *_, **__: (_ for _ in ()).throw(
-            StoreError("https://api.unify.ai", "POST", response),
-        ),
-    )
-
-    _create_context_with_retry(
-        "Org/Coordinator/State",
-        unique_keys={"mode": "str"},
-    )

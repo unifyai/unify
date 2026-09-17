@@ -13,7 +13,6 @@ This module is the single source of truth for:
 Usage:
     # Get a manager via typed method (auto-resolves IMPL, returns singleton):
     contact_manager = ManagerRegistry.get_contact_manager()
-    task_scheduler = ManagerRegistry.get_task_scheduler()
 
     # For simulated managers, pass description:
     ManagerRegistry.get_contact_manager(description="test scenario")
@@ -33,7 +32,6 @@ Available typed methods:
     - get_knowledge_manager()
     - get_memory_manager()
     - get_secret_manager()
-    - get_task_scheduler()
     - get_transcript_manager()
     - get_web_searcher()
 """
@@ -57,7 +55,6 @@ if TYPE_CHECKING:
     from .knowledge_manager.base import BaseKnowledgeManager
     from .memory_manager.base import BaseMemoryManager
     from .secret_manager.base import BaseSecretManager
-    from .task_scheduler.base import BaseTaskScheduler
     from .transcript_manager.base import BaseTranscriptManager
     from .web_searcher.base import BaseWebSearcher
     from .function_manager.primitives.scope import PrimitiveScope
@@ -603,24 +600,6 @@ class ManagerRegistry:
         )
 
     @classmethod
-    def get_task_scheduler(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseTaskScheduler":
-        """Get the TaskScheduler singleton (respects IMPL settings)."""
-        return cls.get(
-            "tasks",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
     def get_transcript_manager(
         cls,
         *,
@@ -699,7 +678,6 @@ def _populate_registry() -> None:
     ManagerRegistry.register_settings("actor", lambda: SETTINGS.actor)
     ManagerRegistry.register_settings("contacts", lambda: SETTINGS.contact)
     ManagerRegistry.register_settings("transcripts", lambda: SETTINGS.transcript)
-    ManagerRegistry.register_settings("tasks", lambda: SETTINGS.task)
     ManagerRegistry.register_settings("conversation", lambda: SETTINGS.conversation)
     ManagerRegistry.register_settings("knowledge", lambda: SETTINGS.knowledge)
     ManagerRegistry.register_settings("guidance", lambda: SETTINGS.guidance)
@@ -742,15 +720,6 @@ def _populate_registry() -> None:
         "simulated",
         SimulatedTranscriptManager,
     )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # TaskScheduler implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .task_scheduler.task_scheduler import TaskScheduler
-    from .task_scheduler.simulated import SimulatedTaskScheduler
-
-    ManagerRegistry.register_class("tasks", "real", TaskScheduler)
-    ManagerRegistry.register_class("tasks", "simulated", SimulatedTaskScheduler)
 
     # ─────────────────────────────────────────────────────────────────────────
     # ConversationManager implementations

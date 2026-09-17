@@ -291,7 +291,7 @@ async def query_llm(
 
     Do this research while authoring or storing the function, then bake the
     selected endpoint into the function. Do not put benchmark browsing or
-    model shopping inside the hot path of a recurring task.
+    model shopping inside the hot path of a recurring job.
 
     When two or three candidate endpoints look plausible, do not guess —
     trial them. The live trajectory (or the function's fixtures) already

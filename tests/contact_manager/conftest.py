@@ -181,7 +181,8 @@ def _rollback_to_committed(commit_hashes: Dict[str, Any]) -> None:
 
     ctx_names = list(commit_hashes.keys())
     if ctx_names:
-        db.map(rollback_context, ctx_names, mode="asyncio")
+        for _name in ctx_names:
+            rollback_context(_name)
 
 
 def _setup_scenario(
@@ -314,8 +315,8 @@ def contact_manager_scenario(contact_read_scenario):
         # from rolling back while this test is running
         ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            db.map(rollback_context, ctx_names, mode="asyncio")
-
+            for _name in ctx_names:
+                rollback_context(_name)
         restore_scenario_context("tests/contact/ReadScenario")
         yield cm, id_map
 
@@ -376,8 +377,8 @@ def contact_manager_mutation_scenario(contact_mutation_scenario):
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            db.map(rollback_context, ctx_names, mode="asyncio")
-
+            for _name in ctx_names:
+                rollback_context(_name)
         restore_scenario_context("tests/contact/MutationScenario")
         yield cm, id_map
 

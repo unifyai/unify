@@ -2,8 +2,7 @@
 and restricted to Pydantic payload types declared in *events/types/*.
 
 Published events are persisted to the store's ``Events/*`` contexts (one per
-event type) when publishing is enabled, so a run's ManagerMethod and ToolLoop
-tree can be joined back to its ``Tasks/Executions`` row via ``run_key``.
+event type) when publishing is enabled.
 """
 
 from __future__ import annotations
@@ -50,7 +49,6 @@ from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
 from ..common.log_utils import _inject_private_fields, payload_from_log_entries
 from ..common.model_to_fields import model_to_fields
 from ..logger import LOGGER
-from .task_run_lineage import enrich_payload_with_task_run_lineage
 
 # ---------------------------------------------------------------------------
 # Context-variable to track the *root* sequence number of a callback cascade.
@@ -966,9 +964,6 @@ class EventBus:
             if isinstance(event.payload, BaseModel)
             else Event._to_python(event.payload)
         )
-        if isinstance(payload_dict, dict):
-            enrich_payload_with_task_run_lineage(payload_dict)
-
         # Base entries for the log write (before private field injection)
         base_entries = {
             "row_id": event.row_id,

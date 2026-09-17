@@ -1296,7 +1296,6 @@ class SecretManager(BaseSecretManager):
             context=self._ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            recompute_derived=True,
         )
         name = insert_data.get("name")
         value = insert_data.get("value")

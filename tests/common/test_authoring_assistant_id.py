@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from unify.blacklist_manager.types.blacklist import BlackList
 from unify.common.authorship import (
     AUTHORING_ASSISTANT_ID_FIELD,
     fields_with_authoring,
@@ -69,7 +68,6 @@ def test_update_payloads_cannot_change_authoring_assistant_id() -> None:
         VirtualEnv,
         FileRecord,
         Document,
-        BlackList,
         Message,
         Exchange,
         Image,

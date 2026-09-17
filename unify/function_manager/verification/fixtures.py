@@ -43,7 +43,6 @@ def make_fixture(
     args: Mapping[str, Any],
     result: Any,
     max_bytes: int,
-    run_key: Optional[str] = None,
 ) -> Optional[Fixture]:
     """Build a fixture, or None when the pair is not JSON-serialisable within ``max_bytes``."""
     try:
@@ -57,7 +56,6 @@ def make_fixture(
         result=json.loads(canonical_json(result)),
         args_signature=args_signature(args),
         captured_at=datetime.now(timezone.utc),
-        run_key=run_key,
     )
 
 
@@ -96,7 +94,6 @@ def coerce_fixtures(
                 args=dict(data["args"]),
                 result=data["result"],
                 max_bytes=max_bytes,
-                run_key=data.get("run_key"),
             )
             if candidate is None:
                 raise ValueError(

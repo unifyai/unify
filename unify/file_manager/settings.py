@@ -18,16 +18,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def get_local_root() -> str:
     """Return the resolved local file root directory.
 
-    Uses ``SETTINGS.UNIFY_LOCAL_ROOT`` when set, otherwise defaults to
-    ``~/Unity/Local``.  All code that needs the local file root should
-    call this function instead of hard-coding the path.
+    Uses ``SETTINGS.UNIFY_LOCAL_ROOT`` when set, otherwise the ``workspace``
+    directory under the store home (``UNIFY_HOME``, default ``~/.unify``).
+    All code that needs the local file root should call this function
+    instead of hard-coding the path.
     """
+    from unify.db.engine import store_home
     from unify.settings import SETTINGS
 
     explicit = SETTINGS.UNIFY_LOCAL_ROOT.strip()
     if explicit:
         return str(Path(explicit).expanduser().resolve())
-    return str(Path.home() / "Unity" / "Local")
+    return str(store_home() / "workspace")
 
 
 class FileSettings(BaseSettings):

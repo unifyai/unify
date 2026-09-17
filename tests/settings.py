@@ -14,8 +14,6 @@ until first actual use, allowing env vars to be set first.
 """
 
 import os
-import random
-import string
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,67 +56,24 @@ class TestingSettings(ProductionSettings):
     EVENTBUS_PUBLISHING_ENABLED: bool = False  # Disabled by default in tests
     UNIFY_DELETE_CONTEXT_ON_EXIT: bool = False
     UNIFY_OVERWRITE_PROJECT: bool = False
-    UNIFY_TESTS_RAND_PROJ: bool = False
-    # Deleting the test project is opt-in, like its on-exit twin below. The
-    # project is shared: parallel_run.sh prepares it once and every session
-    # runs against it, so a session that deletes it on the way in destroys the
-    # baseline (the Combined context, assistant contexts, builtins catalogues)
-    # and 404s whatever else is mid-run. parallel_run.sh reads these flags from
-    # the environment, where unset means off, and deletes at script level
-    # instead; defaulting on here made a bare `pytest` the one caller that
-    # still wiped a project other runs were using.
+    # Each pytest process owns its own store, so deleting the project at the
+    # session boundary only matters when a store is reused across runs via
+    # UNIFY_STORE_PATH. Both are opt-in.
     UNIFY_TESTS_DELETE_PROJ_ON_START: bool = False
     UNIFY_TESTS_DELETE_PROJ_ON_EXIT: bool = False
     UNIFY_CACHE_STATS: bool = False
-    UNIFY_PRETEST_CONTEXT_CREATE: bool = False
-    # Per-request timeout (seconds) for the Orchestra metadata calls made in
-    # per-test setup/teardown (context delete/create). These calls normally
-    # complete in well under a second; the bound exists so a stalled network
-    # degrades to local-only context setup instead of hanging the session.
-    UNIFY_TEST_SETUP_HTTP_TIMEOUT: float = 10.0
     UNIFY_TEST_TAGS: str = ""  # Comma-separated list of tags for duration logging
-    UNIFY_SKIP_SESSION_SETUP: bool = False  # Skip project/context creation (pre-done)
     UNIFY_TEST_PROJECT_NAME: str = "UnityTests"
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Local Orchestra Settings
-    # ─────────────────────────────────────────────────────────────────────────
-    LOCAL_ORCHESTRA_BRANCH: str = (
-        # Git branch for local orchestra (default: auto-detect from unify branch)
-        "staging"  # IMPORTANT: Currently hard-coded to staging, but should DELETE once staging becomes the true unity dev branch!
-    )
 
     # ─────────────────────────────────────────────────────────────────────────
     # File Lock Settings (for parallel test coordination)
     # ─────────────────────────────────────────────────────────────────────────
     UNIFY_FILE_LOCK_TIMEOUT: float = 3600.0  # 1 hour - handles slow tests under load
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Trace Upload Settings (for uploading OTEL traces to test context)
-    # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_TRACE_UPLOAD: bool = (
-        False  # Enable/disable trace upload to {TestContext}/Trace
-    )
-    UNIFY_TRACE_SERVICES: str = (
-        "all"  # Services to include: "all" or comma-separated list
-    )
-    UNIFY_TRACE_EXCLUDE_PATTERNS: str = (
-        ""  # Comma-separated span name patterns to exclude
-    )
-
     @computed_field
     @property
     def test_project_name(self) -> str:
-        """Return the test project name based on settings.
-
-        If UNIFY_TESTS_RAND_PROJ is True, returns a random project name.
-        Otherwise, returns UNIFY_TEST_PROJECT_NAME (defaults to 'UnityTests').
-        """
-        if self.UNIFY_TESTS_RAND_PROJ:
-            suffix = "".join(
-                random.choices(string.ascii_letters + string.digits, k=8),
-            )
-            return f"UnityTests_{suffix}"
+        """Return the project name every test session activates."""
         return self.UNIFY_TEST_PROJECT_NAME
 
 

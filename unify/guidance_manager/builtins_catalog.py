@@ -90,10 +90,9 @@ Reading vs storing: `primitives.data.*` vs `primitives.ingestion.*`
 Manager selection priorities (when in doubt, the most specific domain wins):
 1. `transcripts` for historical communications (what was said/written)
 2. `contacts` for people/relationship information
-3. `tasks` for work items, deadlines, assignments
-4. `web` for current external information (weather, news, real-time data)
-5. `files` when dealing with specific documents or file-level operations
-6. `data` for tabular contexts (`Data/*` and other tables):
+3. `web` for current external information (weather, news, real-time data)
+4. `files` when dealing with specific documents or file-level operations
+5. `data` for tabular contexts (`Data/*` and other tables):
    filter, reduce, join, update_rows — never client-scan large tables in
    Python
 
@@ -112,104 +111,6 @@ Worked examples (data vs files):
   `primitives.files.render_pdf(...)` (files)
 """
 
-_DURABLE_TASKS_CONTENT = """\
-How to create, verify, arm, and run durable tasks — work that happens
-later, repeatedly, or on future inbound messages: schedules, recurring
-cadences, communication triggers, offline jobs.
-
-Operative contract
-- Create and edit through the text-driven mutation loop:
-  `primitives.tasks.update(text)` handles ALL durable task mutations,
-  including one-shot creates and field edits. Example:
-
-      await primitives.tasks.update(
-          'Create a live task named Weekly digest (marketing) with '
-          'description Summarize the week and email it to Dana, '
-          'repeating every Monday at 09:00 UTC.'
-      )
-
-- Armed vs draft: a task only fires while armed — `enabled=True` plus a
-  resolved `schedule.start_at` or trigger. A draft NEVER fires. Say
-  "live"/"armed" in the create text rather than leaving a draft.
-- MANDATORY post-create verification: after every create, call
-  `primitives.tasks.ask(...)` and confirm (1) the exact fields, (2) it
-  is armed (`enabled=True`), and (3) trigger bindings resolved — a
-  communication trigger needs named senders resolved to contact ids.
-- Verbatim copy: quoted task names, descriptions, and reference tokens
-  (`Ref: TASK-…`) are matched exactly — copy them verbatim, including
-  punctuation and parenthetical suffixes; creates reject duplicates,
-  and verification and later lookups depend on the literal string.
-- `primitives.tasks.execute(task_id)` runs one instance now: a
-  contained child actor interprets the task; returns a steerable handle.
-
-Task model and taxonomy
-A definition row carries authored intent only; every wake is projected by
-the scheduler into a `Tasks/Executions` run row, where run state and
-outcomes live. `schedule` and `trigger` are mutually exclusive on one task.
-- scheduled: `schedule.start_at` (ISO-8601) with no `repeat` and no
-  `trigger` — a one-shot. After it runs it is disarmed and can never be
-  re-armed; create a new task instead of re-running it.
-- recurring: `schedule` plus `repeat` patterns (minutely/hourly for
-  sub-daily intervals; daily/weekly/monthly/yearly for calendar
-  cadences). The successor occurrence is projected by the scheduler
-  when a run is marked running — recurrence is a ledger invariant, and
-  the definition stays armed across runs.
-- triggered (communication): `trigger.kind="communication"` names the
-  `medium` (`unify_message`) with optional `from_contact_ids` /
-  `omit_contact_ids` filters and a `recurring` flag (True returns the
-  task to the triggerable state after each completion).
-- offline is a delivery lane, not a task type: `offline=True` runs in
-  the hidden headless lane without the live assistant runtime, so the
-  run is not steerable from chat. Do not mark tasks offline unless
-  asked.
-- `deadline` is a calendar due date; `start_at` is when work should
-  begin; `max_runtime_seconds` bounds one attempt's wall clock. For
-  short predictable work set only `start_at`. `priority` is
-  low|normal|high|urgent; `tags` carry no scheduling semantics.
-- `enabled=False` disarms everything: schedules and triggers do not
-  activate, and manual execute is rejected until re-enabled.
-
-Update semantics (`update_task`)
-- Only provided fields change. `start_at`/`deadline`/`repeat`/`trigger`
-  distinguish omitted from explicit None: None clears the field, and
-  clearing the schedule sweeps `repeat` with it unless a new repeat is
-  set in the same call. Convert scheduled→triggered in one call:
-  `trigger=..., start_at=None`.
-- Deployment-owned tasks (`custom_hash` set, deployment-managed) refuse
-  runtime edits of authored fields — edit the source definition and
-  re-sync.
-
-Binding resolution in depth
-- Communication triggers: resolve named senders to contact ids before
-  creating — `from_contact_ids` is a list of contact ids, and a filter
-  that never got resolved to ids cannot match. Unset matches any
-  sender; `omit_contact_ids` overrides.
-
-Entrypoint vs description-driven execution
-- Default to description-driven: `entrypoint=None` makes the task
-  agentic — the due wake calls `primitives.tasks.execute(task_id=...)`
-  and a contained child actor interprets the name, description, and
-  metadata. Put the operative context into the description.
-- Do not attach an untested entrypoint at creation. Entrypoint
-  persistence should follow an explicit user request or a successful
-  run reviewed as stable enough to store; the stored function then earns
-  trust from independent verification, and offline promotion follows once
-  every function it calls is trusted.
-- Stored entrypoints: prefer `async def` + `await`; never nest
-  `asyncio.run(...)` (offline Jobs already own the loop — use
-  `run_coro_sync` for a sync façade); keep expressive stdlib `logging`
-  PHASE/SKIP/SOFT_FAIL trails so soft outcomes (empty results, skips,
-  degraded fallbacks) leave evidence; focused `query_llm(...)` calls for
-  bounded semantic judgment are fine.
-
-Execution guards (`execute`)
-- Rejected: disabled tasks, one-shots that already ran, a task invoking
-  its own task_id within its execution chain, and a wake targeting an
-  instance that is already active. Concurrent instances of the same
-  task_id from distinct wakes are allowed — serialize in the entrypoint
-  if needed.
-"""
-
 PLATFORM_GUIDANCE_ENTRIES: Dict[str, Dict[str, str]] = {
     "platform/manager-routing": {
         "title": (
@@ -217,13 +118,6 @@ PLATFORM_GUIDANCE_ENTRIES: Dict[str, Dict[str, str]] = {
             "files vs ingestion"
         ),
         "content": _MANAGER_ROUTING_CONTENT,
-    },
-    "platform/durable-tasks": {
-        "title": (
-            "[platform] Durable tasks: creating, verifying, arming, and "
-            "running scheduled and triggered tasks"
-        ),
-        "content": _DURABLE_TASKS_CONTENT,
     },
 }
 
@@ -347,7 +241,6 @@ def _insert_entries(project: str, entries: List[Dict[str, str]]) -> None:
         project=project,
         context=BUILTINS_GUIDANCE_CONTEXT,
         entries=rows,
-        recompute_derived=True,
     )
 
 
@@ -360,8 +253,7 @@ def seed_builtin_guidance(
 
     Idempotent and hash-guarded per skill: only skills whose title/content
     changed (or disappeared from the snapshot) are deleted and re-inserted,
-    with ``recompute_derived=True`` so embeddings recompute only for written
-    rows. Always ensures the ``content`` and ``title`` vector columns exist
+    so embeddings recompute only for written rows. Always ensures the ``content`` and ``title`` vector columns exist
     when the catalogue has rows, so read-only consumers can run ranked
     semantic search without any write access.
 

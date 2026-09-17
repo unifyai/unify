@@ -40,6 +40,32 @@ if "UNILLM_CACHE_DIR" not in os.environ:
             pass  # Fall back to current repo root
     os.environ["UNILLM_CACHE_DIR"] = str(repo_root)
 
+# Every pytest process owns its own store, so sessions running side by side
+# (one tmux session per test under parallel_run.sh) never share tables and
+# nothing touches the real ``~/.unify``. The embeddings cache is the one file
+# shared across processes: embeddings are keyed by (model, text) and cost
+# real compute, so reusing them between sessions is pure gain. Set before
+# anything imports ``unify.db``, which opens the store lazily on first use.
+import tempfile
+
+_TEST_TMP = Path(tempfile.gettempdir())
+_TEST_STORE_DIR = _TEST_TMP / "unity_test_stores"
+_TEST_STORE_DIR.mkdir(parents=True, exist_ok=True)
+_TEST_HOME_DIR = _TEST_TMP / "unity_test_home"
+_TEST_HOME_DIR.mkdir(parents=True, exist_ok=True)
+_OWNS_STORE = "UNIFY_STORE_PATH" not in os.environ
+_OWNS_UNIFY_HOME = "UNIFY_HOME" not in os.environ
+os.environ.setdefault(
+    "UNIFY_STORE_PATH",
+    str(_TEST_STORE_DIR / f"unify_test_{os.getpid()}.sqlite"),
+)
+os.environ.setdefault(
+    "UNIFY_HOME",
+    str(_TEST_STORE_DIR / f"unify_home_{os.getpid()}"),
+)
+os.makedirs(os.environ["UNIFY_HOME"], exist_ok=True)
+os.environ.setdefault("UNIFY_EMBED_CACHE", str(_TEST_HOME_DIR / "embeddings.sqlite"))
+
 from unify.settings import SETTINGS
 
 _TEE_FILE_HANDLE: Optional[object] = None
@@ -465,30 +491,11 @@ class _TeeStream:
 
 
 def pytest_sessionstart(session):
-    # Initialize OpenTelemetry tracing early (before any test imports)
-    # This ensures httpx/aiohttp clients are instrumented before creation
-    try:
-        from unify.common.test_tracing import _initialize_tracer
-
-        _initialize_tracer()
-    except ImportError:
-        pass  # OpenTelemetry not installed
-
-    # Configure file-based logging directories for trace correlation.
+    # Configure file-based logging directories.
     # Unity LOGGER output goes to pytest stdout (captured in logs/pytest/),
     # so we don't configure a separate logs/unity/ directory during tests.
     root_path = _get_log_root(Path(session.config.rootpath))
     subdir = _get_log_subdir()
-
-    # Unify SDK file logging
-    unisdk_log_dir = root_path / "logs" / "unify" / subdir
-    unisdk_log_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        from db.utils.http import configure_log_dir as configure_unisdk_log_dir
-
-        configure_unisdk_log_dir(str(unisdk_log_dir))
-    except ImportError:
-        os.environ["UNISDK_LOG_DIR"] = str(unisdk_log_dir)
 
     # Unillm LLM I/O file logging (raw request/response traces)
     unillm_log_dir = root_path / "logs" / "unillm" / subdir
@@ -567,8 +574,26 @@ def pytest_sessionstart(session):
     # Test body prints are captured by pytest; we mirror them via pytest_runtest_logreport.
 
 
+def _remove_process_store() -> None:
+    """Delete the store this process created, if it created one.
+
+    A store handed in through ``UNIFY_STORE_PATH`` belongs to whoever set it
+    and is left alone.
+    """
+    import shutil
+
+    from unify import db
+
+    db.reset_store()
+    if _OWNS_STORE:
+        Path(os.environ["UNIFY_STORE_PATH"]).unlink(missing_ok=True)
+    if _OWNS_UNIFY_HOME:
+        shutil.rmtree(os.environ["UNIFY_HOME"], ignore_errors=True)
+
+
 def pytest_unconfigure(config):
     """Print the log file path after pytest's own terminal summary has been emitted."""
+    _remove_process_store()
     if not SETTINGS.PYTEST_LOG_TO_FILE:
         return
     global _TEE_FILE_HANDLE, _TEE_ORIG_STREAM, _TEE_STREAM_ATTR, _TEE_LOG_PATH
@@ -588,7 +613,6 @@ def pytest_unconfigure(config):
         tr.write_line(
             f"📁 This run's logs: {root_path / 'logs' / 'pytest' / subdir}/",
         )
-        tr.write_line(f"📂 Unify HTTP logs:  {root_path / 'logs' / 'unify' / subdir}/")
         tr.write_line(f"📂 LLM I/O logs:     {root_path / 'logs' / 'unillm' / subdir}/")
         tr.write_line(f"📂 All log directories:  {root_path / 'logs'}/*/")
         tr.write_line("=" * 72)
@@ -637,38 +661,6 @@ def pytest_runtest_logreport(report):
     if out:
         _TEE_FILE_HANDLE.write("".join(out))
         _TEE_FILE_HANDLE.flush()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# OpenTelemetry Test Tracing
-# ─────────────────────────────────────────────────────────────────────────────
-# Each test gets a unique trace_id that propagates to all HTTP calls,
-# enabling correlation between pytest logs and Orchestra API traces.
-
-
-@pytest.fixture(autouse=True)
-def _trace_test(request):
-    """Wrap each test in an OpenTelemetry span for trace correlation.
-
-    The trace_id is logged to the pytest output and propagated via traceparent
-    header to all HTTP calls (httpx and aiohttp), allowing Orchestra traces
-    to be correlated with specific test runs.
-
-    Enable/disable via UNIFY_TEST_TRACING env var (default: true).
-    """
-    try:
-        from unify.common.test_tracing import trace_test
-
-        test_name = request.node.name
-        with trace_test(test_name) as (trace_id, span):
-            if trace_id:
-                # Log trace_id for correlation with Orchestra logs
-                # Format: TRACE_ID=<32-char-hex> for easy grep
-                print(f"\n[TRACE] TRACE_ID={trace_id} test={test_name}")
-            yield
-    except ImportError:
-        # OpenTelemetry not installed, skip tracing
-        yield
 
 
 # ─────────────────────────────────────────────────────────────────────────────

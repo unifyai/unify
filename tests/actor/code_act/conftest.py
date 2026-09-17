@@ -1,11 +1,8 @@
 import asyncio
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-from unify.function_manager.computer_backends import ActResult
 from unify.function_manager.function_manager import FunctionManager
-from unify.function_manager.primitives import ComputerPrimitives
 
 _FM_METHOD_NAMES = (
     "search_functions",
@@ -39,25 +36,6 @@ def make_fm_mock() -> MagicMock:
         method.__name__ = name
         method.__self__ = fm
     return fm
-
-
-@pytest.fixture
-def mock_computer_primitives():
-    """Fixture to create a mock ComputerPrimitives for testing.
-
-    Returns a mock with ``desktop`` sub-namespace matching the real API.
-    """
-    desktop_ns = MagicMock()
-    desktop_ns.navigate = AsyncMock(return_value="navigated")
-    desktop_ns.act = AsyncMock(
-        return_value=ActResult(summary="acted", screenshot=""),
-    )
-    desktop_ns.observe = AsyncMock(return_value={"data": "observed_data"})
-    desktop_ns.get_screenshot = AsyncMock(return_value=MagicMock())
-
-    mock_provider = MagicMock(spec=ComputerPrimitives)
-    mock_provider.desktop = desktop_ns
-    return mock_provider
 
 
 async def wait_for_turn_completion(task, initial_history_len, timeout=30):

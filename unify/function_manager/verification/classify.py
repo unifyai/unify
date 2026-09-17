@@ -39,7 +39,6 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     "primitives.data.claim": _S.unsafe_effectful,
     "primitives.data.create_column": _S.idempotent_effectful,
     "primitives.data.create_derived_column": _S.idempotent_effectful,
-    "primitives.data.create_external_column": _S.idempotent_effectful,
     "primitives.data.create_table": _S.idempotent_effectful,
     "primitives.data.delete_column": _S.unsafe_effectful,
     "primitives.data.delete_rows": _S.unsafe_effectful,
@@ -58,7 +57,6 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     "primitives.data.reduce_join": _S.read_only,
     "primitives.data.rename_column": _S.idempotent_effectful,
     "primitives.data.rename_table": _S.idempotent_effectful,
-    "primitives.data.request_external_write": _S.unsafe_effectful,
     "primitives.data.search": _S.read_only,
     "primitives.data.search_join": _S.read_only,
     "primitives.data.search_multi_join": _S.read_only,
@@ -91,12 +89,6 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     # secrets
     "primitives.secrets.ask": _S.read_only,
     "primitives.secrets.update": _S.unsafe_effectful,
-    # tasks
-    "primitives.tasks.ask": _S.read_only,
-    "primitives.tasks.execute": _S.unsafe_effectful,
-    "primitives.tasks.get_run_event": _S.read_only,
-    "primitives.tasks.get_run_event_children": _S.read_only,
-    "primitives.tasks.update": _S.unsafe_effectful,
     # transcripts / web
     "primitives.transcripts.ask": _S.read_only,
     "primitives.web.ask": _S.read_only,

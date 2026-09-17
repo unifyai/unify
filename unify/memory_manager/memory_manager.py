@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from ..contact_manager.base import BaseContactManager
     from ..transcript_manager.base import BaseTranscriptManager
     from ..knowledge_manager.base import BaseKnowledgeManager
-    from ..task_scheduler.base import BaseTaskScheduler
 
 # Fields MemoryManager refuses to expose to the contact-update LLM. The
 # platform identity ids are set by system provisioning, never by the LLM.
@@ -161,7 +160,6 @@ class MemoryManager(BaseMemoryManager):
         rolling_summaries: bool = True
         response_policies: bool = True
         knowledge: bool = True
-        tasks: bool = True
 
     def __init__(
         self,
@@ -169,7 +167,6 @@ class MemoryManager(BaseMemoryManager):
         contact_manager: Optional["BaseContactManager"] = None,
         transcript_manager: Optional["BaseTranscriptManager"] = None,
         knowledge_manager: Optional["BaseKnowledgeManager"] = None,
-        task_scheduler: Optional["BaseTaskScheduler"] = None,
         config: Optional["MemoryManager.MemoryConfig"] = None,
         loop: Optional[asyncio.AbstractEventLoop] = None,
     ):
@@ -189,11 +186,6 @@ class MemoryManager(BaseMemoryManager):
             knowledge_manager
             if knowledge_manager is not None
             else ManagerRegistry.get_knowledge_manager()
-        )
-        self._task_scheduler = (
-            task_scheduler
-            if task_scheduler is not None
-            else ManagerRegistry.get_task_scheduler()
         )
 
         # \u2500\u2500 Config-controlled callback registration ----------------
@@ -392,49 +384,6 @@ class MemoryManager(BaseMemoryManager):
         return await handle.result()
 
     # ------------------------------------------------------------------ #
-    # 3  update_tasks                                                    #
-    # ------------------------------------------------------------------ #
-    @log_manager_result(
-        "MemoryManager",
-        "update_tasks",
-        payload_key="transcript",
-        display_label="Updating tasks from transcript",
-    )
-    async def update_tasks(
-        self,
-        transcript: str,
-        guidance: Optional[str] = None,
-    ) -> str:
-        """
-        Analyse the latest transcript chunk and update the task list using
-        the TaskScheduler's public API (ask / update).  Returns a concise
-        description of what was changed or 'no-op' when no updates were
-        necessary.
-        """
-        tools: Dict[str, Callable[..., Any]] = methods_to_tool_dict(
-            ToolSpec(fn=self._task_scheduler.ask, display_label="Querying tasks"),
-            ToolSpec(fn=self._task_scheduler.update, display_label="Updating tasks"),
-            include_class_name=True,
-        )
-
-        llm = new_llm_client()
-        llm.set_system_message(
-            pb.build_task_prompt(
-                tools,
-                guidance=guidance,
-            ),
-        )
-
-        handle = start_async_tool_loop(
-            llm,
-            transcript,
-            tools,
-            loop_id="MemoryManager.update_tasks",
-        )
-
-        return await handle.result()
-
-    # ------------------------------------------------------------------ #
     # 4  process_chunk  (unified single-loop for passive chunk trigger)  #
     # ------------------------------------------------------------------ #
     @log_manager_result(
@@ -450,7 +399,7 @@ class MemoryManager(BaseMemoryManager):
     ) -> str:
         """Run a single LLM tool loop that handles all enabled memory
         maintenance tasks (contacts, bios, rolling summaries, response
-        policies, knowledge, tasks) in one pass.
+        policies, knowledge) in one pass.
 
         The ``self._cfg`` flags determine which tools and prompt sections
         are included.
@@ -498,22 +447,6 @@ class MemoryManager(BaseMemoryManager):
                     display_label="Looking up contacts",
                 )
 
-        # Task tools
-        if self._cfg.tasks:
-            tools.update(
-                methods_to_tool_dict(
-                    ToolSpec(
-                        fn=self._task_scheduler.ask,
-                        display_label="Querying tasks",
-                    ),
-                    ToolSpec(
-                        fn=self._task_scheduler.update,
-                        display_label="Updating tasks",
-                    ),
-                    include_class_name=True,
-                ),
-            )
-
         if not tools:
             return "no-op (all memory capabilities disabled)"
 
@@ -526,7 +459,6 @@ class MemoryManager(BaseMemoryManager):
                 rolling_summaries=self._cfg.rolling_summaries,
                 response_policies=self._cfg.response_policies,
                 knowledge=self._cfg.knowledge,
-                tasks=self._cfg.tasks,
                 guidance=guidance,
             ),
         )

@@ -627,7 +627,7 @@ def render_table_info(
     Parameters
     ----------
     entity_plural : str
-        Plural name of the entity (e.g., "contacts", "tasks").
+        Plural name of the entity (e.g., "contacts", "files").
     count : int
         Current number of entities in the table.
     schema_name : Optional[str]
@@ -791,7 +791,7 @@ def images_extras_for_transcripts(
 
 
 def images_first_ask_for_tasks(*, ask_image_name: Optional[str]) -> str:
-    """Images‑first procedure guidance for TaskScheduler.ask."""
+    """Images‑first procedure guidance for manager ask loops."""
     lines: List[str] = [
         "Images-first procedure for ask()",
         "--------------------------------",

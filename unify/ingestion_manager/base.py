@@ -51,6 +51,7 @@ from unify.ingestion_manager.types.request import (
     IngestionTarget,
 )
 from unify.ingestion_manager.types.run import (
+    TableReconciliation,
     IngestionRun,
     IngestionSummary,
     LogEntry,
@@ -130,7 +131,7 @@ class BaseIngestionManager(ABC):
     # ── observing ─────────────────────────────────────────────────────────
 
     @abstractmethod
-    def reconcile(self, run_id: str) -> List["TableReconciliation"]:
+    def reconcile(self, run_id: str) -> List[TableReconciliation]:
         """Check what landed against what the source held, per table.
 
         The honest closing step of an ingestion, and the one a row count cannot

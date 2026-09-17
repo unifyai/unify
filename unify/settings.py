@@ -25,7 +25,6 @@ from unify.ingestion_manager.settings import IngestionSettings
 from unify.knowledge_manager.settings import KnowledgeSettings
 from unify.memory_manager.settings import MemorySettings
 from unify.secret_manager.settings import SecretSettings
-from unify.task_scheduler.settings import TaskSettings
 from unify.transcript_manager.settings import TranscriptSettings
 from unify.web_searcher.settings import WebSettings
 
@@ -154,7 +153,6 @@ class ProductionSettings(BaseSettings):
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     secret: SecretSettings = Field(default_factory=SecretSettings)
-    task: TaskSettings = Field(default_factory=TaskSettings)
     transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
     web: WebSettings = Field(default_factory=WebSettings)
 

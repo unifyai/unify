@@ -11,77 +11,29 @@ license = {text = "MIT"}
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.8.0",
-    "anticaptchaofficial>=1.0.69",
-    "browser-use>=0.1.4",
-    "deepgram-sdk>=4",
-    "fastapi>=0.104.0",
-    "google-api-python-client==2.70.0",
-    "google-auth>=2.17.0",
-    "google-cloud-pubsub>=2.18.0",
-    "google-cloud-storage>=3.4.1",
-    "langchain-anthropic>=1.0.0",
-    "langchain-openai>=1.0.1",
-    "livekit-agents[cartesia,deepgram,elevenlabs,openai,silero,turn-detector]==1.5.2",
-    "livekit-plugins-noise-cancellation==0.2.5",
     "openai>=1.0.0",
-    "playwright==1.52.0",
-    "psutil>=5.9.0",
-    "pyaudio>=0.2.11",
     "pydantic>=2.0.0",
     "pydantic-core>=2.0.0",
+    "pydantic-settings>=2.0.0",
     "pygments>=2.19.2",
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
-    # kubernetes>=36 causes AssistantSession discovery calls to reach GKE as
-    # anonymous in preview Unity jobs.
-    "kubernetes>=35.0.0,<36.0.0",
-    "textual>=0.40.0",
-    "textual-dev>=1.2.0",
-    "twilio>=8.0.0",
-    # Microsoft 365 (Outlook + Teams channels in unity.gateway.channels).
-    "azure-identity>=1.14.0",
-    "msgraph-sdk>=1.0.0",
-    # Bot Framework inbound JWT verification for the MS Teams bot adapter.
-    "pyjwt[crypto]>=2.8.0",
-    "uvicorn[standard]>=0.24.0",
-    "unisdk",
+    "httpx>=0.27.0",
     "unillm",
-    # Virtual devices and remote browser setup
-    "websockify>=0.13.0",
-    "sounddevice>=0.5.3",
-    "soundfile>=0.13.1",
     "numpy>=2.3.4",
-    "opencv-python>=4.11.0.86",
     # Document parsing
-    "langchain>=0.3.27",
     "tiktoken>=0.11.0",
     "docling>=2.82.0",
     "spacy>=3.8.7",
     "en-core-web-sm",
+    "pymupdf>=1.27.1",
+    "openpyxl>=3.1.5",
+    "pillow>=11.3.0",
+    "polars>=1.39.3",
+    "jsonschema>=4.20",
     # Web search
     "tavily-python>=0.7.12",
-    # Screen sharing annotation
-    "scikit-image>=0.25.2",
-    "pillow>=11.3.0",
-    # Telemetry (OTel metrics → GCP Managed Prometheus)
-    "opentelemetry-api>=1.20.0",
-    "opentelemetry-sdk>=1.20.0",
-    # Pin the GCP exporter and its resource-detector companion to the same
-    # release series. They share an internal module path; a newer detector
-    # (1.13.x) drops the layout the 1.12.x exporter imports, breaking the
-    # opentelemetry.resourcedetector namespace at import time.
-    "opentelemetry-exporter-gcp-monitoring>=1.9.0a0,<1.13",
-    "opentelemetry-resourcedetector-gcp>=1.9.0a0,<1.13",
-    "pymupdf>=1.27.1",
-    "pypdf>=6.0.0",
-    "openpyxl>=3.1.5",
-    "jinja2>=3.1.6",
-    "itsdangerous>=2.2.0",
-    "python-multipart>=0.0.27",
-    "polars>=1.39.3",
-    "sherpa-onnx>=1.13.3",
-    "sherpa-onnx-core>=1.13.3",
-    "jsonschema>=4.20",
+    # Local embeddings for derived vector columns
     "fastembed>=0.8.0",
 ]
 
@@ -105,11 +57,7 @@ dev = [
     "ipykernel>=7.1.0",
     "rich>=13.9.4",
     "pre-commit>=4.0.1",
-    # OpenTelemetry for test trace correlation with Orchestra
-    "opentelemetry-api>=1.20.0",
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-instrumentation-httpx>=0.41b0",
-    "opentelemetry-instrumentation-aiohttp-client>=0.41b0",
+    "pyflakes>=3.2.0",
     {include-group = "lint"},
 ]
 
@@ -120,8 +68,10 @@ include = ["unify", "unify.*"]
 "unify.assets.audio" = ["*.mp3"]
 "unify.assets.onboarding.learning.billsplit" = ["*.csv"]
 
+[project.scripts]
+unify = "unify.__main__:main"
+
 [tool.uv.sources]
-unisdk = { path = "../unisdk", editable = true }
 unillm = { path = "../unillm", editable = true }
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 

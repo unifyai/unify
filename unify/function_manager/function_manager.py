@@ -3757,7 +3757,6 @@ class FunctionManager(BaseFunctionManager):
                 entries=entries,
                 stamp_authoring=True,
                 batched=True,
-                recompute_derived=True,
                 on_duplicate="skip",
             )
             written_ids = (
@@ -3972,7 +3971,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._compositional_ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            recompute_derived=True,
         )
         # unity_create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:
@@ -4601,7 +4599,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=entries_to_create,
                     stamp_authoring=True,
                     batched=True,
-                    recompute_derived=True,
                 )
             except Exception as e:
                 logger.error(
@@ -4801,7 +4798,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=entries_to_create,
                     stamp_authoring=True,
                     batched=True,
-                    recompute_derived=True,
                 )
             except Exception as e:
                 logger.error(

@@ -6,7 +6,7 @@ import hashlib
 
 from unify import db
 from .embed_utils import (
-    EMBED_MODEL,
+    embed_model,
     ensure_vector_column,
     ensure_derived_column,
     list_private_fields,
@@ -25,7 +25,7 @@ def _build_term_equations(embed_col: str, ref_text: str) -> tuple[str, str]:
         "((cosine({lg:"
         + embed_col
         + "}, "
-        + f"embed('{escaped_ref}', model='{EMBED_MODEL}'))) "
+        + f"embed('{escaped_ref}', model='{embed_model()}'))) "
         + f"if exists({{lg:{embed_col}}}) else 0)"
     )
     den = f"(1 if exists({{lg:{embed_col}}}) else 0)"
@@ -159,7 +159,6 @@ def ensure_join_context(
     new_context: str,
     columns: Dict[str, str],
     mode: str = "inner",
-    copy: bool = True,
 ) -> str:
     """Materialize a joined context with aliased columns and return its name.
 
@@ -175,7 +174,6 @@ def ensure_join_context(
         mode=mode,
         new_context=new_context,
         columns=columns,
-        copy=copy,
     )
     return new_context
 
@@ -278,7 +276,7 @@ def _fetch_single_term_scored(
     """
     escaped_ref = escape_single_quotes(ref_text)
     sorting = {
-        f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
+        f"cosine({embed_col}, embed('{escaped_ref}', model='{embed_model()}'))": "ascending",
     }
     if allowed_fields is not None:
         from_fields = list(dict.fromkeys([*allowed_fields, SORT_DISTANCE_KEY]))
@@ -568,7 +566,7 @@ def fetch_top_k_by_terms(
                 project=project,
                 filter=row_filter,
                 sorting={
-                    f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
+                    f"cosine({embed_col}, embed('{escaped_ref}', model='{embed_model()}'))": "ascending",
                 },
                 limit=k,
                 from_fields=allowed_fields,
@@ -579,7 +577,7 @@ def fetch_top_k_by_terms(
                 project=project,
                 filter=row_filter,
                 sorting={
-                    f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
+                    f"cosine({embed_col}, embed('{escaped_ref}', model='{embed_model()}'))": "ascending",
                 },
                 limit=k,
                 exclude_fields=list_private_fields(context, project=project),

@@ -14,8 +14,6 @@ from tests.helpers import _handle_project
 from unify.events.event_bus import EventBus, Event as BusEvent
 from unify.events.types.comms import CommsPayload
 from unify.conversation_manager.events import (
-    SMSReceived,
-    EmailReceived,
     UnifyMessageReceived,
     Event as CommsEvent,
 )
@@ -57,47 +55,6 @@ def test_comms_payload_coerces_string_to_datetime():
 # -------------------------------------------------------------------
 
 
-def test_sms_received_roundtrip():
-    """SMSReceived event should preserve timestamp through bus conversion."""
-    original_ts = dt.datetime(2025, 6, 15, 14, 30, 0, tzinfo=dt.UTC)
-    original = SMSReceived(
-        timestamp=original_ts,
-        contact={"contact_id": 1, "name": "Test User"},
-        content="Hello world",
-    )
-
-    # Convert to bus event
-    bus_event = original.to_bus_event()
-
-    # Verify bus event has correct type
-    assert bus_event.type == "Comms"
-    assert bus_event.payload_cls == "SMSReceived"
-
-    # Convert back to comms event
-    restored = CommsEvent.from_bus_event(bus_event)
-
-    # Verify timestamp is preserved
-    assert restored.timestamp == original_ts
-    assert isinstance(restored.timestamp, dt.datetime)
-
-
-def test_email_received_roundtrip():
-    """EmailReceived event should preserve timestamp through bus conversion."""
-    original_ts = dt.datetime(2025, 6, 15, 14, 30, 0, tzinfo=dt.UTC)
-    original = EmailReceived(
-        timestamp=original_ts,
-        contact={"contact_id": 2, "email": "test@example.com"},
-        subject="Test Subject",
-        body="Test body content",
-    )
-
-    bus_event = original.to_bus_event()
-    restored = CommsEvent.from_bus_event(bus_event)
-
-    assert restored.timestamp == original_ts
-    assert isinstance(restored.timestamp, dt.datetime)
-
-
 def test_unify_message_roundtrip():
     """UnifyMessageReceived event should preserve timestamp through bus conversion."""
     original_ts = dt.datetime(2025, 6, 15, 14, 30, 0, tzinfo=dt.UTC)
@@ -108,6 +65,9 @@ def test_unify_message_roundtrip():
     )
 
     bus_event = original.to_bus_event()
+    assert bus_event.type == "Comms"
+    assert bus_event.payload_cls == "UnifyMessageReceived"
+
     restored = CommsEvent.from_bus_event(bus_event)
 
     assert restored.timestamp == original_ts

@@ -4,7 +4,6 @@ import pytest
 from pydantic import TypeAdapter
 
 from unify.actor.code_act_actor import CodeActActor
-from unify.actor.environments.computer import ComputerEnvironment
 from unify.actor.execution import (
     PythonExecutionSession,
     ExecutionResult,
@@ -195,48 +194,6 @@ decision
     assert result["error"] is None
     assert parts_to_text(result["stdout"]).strip() == "yes"
     assert result["result"] == "yes"
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(30)
-async def test_sandbox_computer_tool_execution(mock_computer_primitives):
-    """
-    Tests that the sandbox can execute code that calls computer tools via
-    the injected primitives.computer.desktop namespace.
-    """
-    import types
-
-    sandbox = PythonExecutionSession()
-    sandbox.global_state["primitives"] = types.SimpleNamespace(
-        computer=mock_computer_primitives,
-    )
-
-    nav_code = "await primitives.computer.desktop.navigate('https://example.com')"
-    nav_result = await sandbox.execute(nav_code)
-    assert nav_result["error"] is None
-    mock_computer_primitives.desktop.navigate.assert_awaited_once_with(
-        "https://example.com",
-    )
-
-    act_code = "await primitives.computer.desktop.act('Click login button')"
-    act_result = await sandbox.execute(act_code)
-    assert act_result["error"] is None
-    mock_computer_primitives.desktop.act.assert_awaited_once_with("Click login button")
-
-    observe_code = """
-from pydantic import BaseModel
-
-class MyData(BaseModel):
-    data: str
-
-result = await primitives.computer.desktop.observe('get data', response_format=MyData)
-print(result['data'])
-"""
-    observe_result = await sandbox.execute(observe_code)
-    assert observe_result["error"] is None
-    assert parts_to_text(observe_result["stdout"]).strip() == "observed_data"
-    mock_computer_primitives.desktop.observe.assert_awaited_once()
-    assert mock_computer_primitives.desktop.observe.call_args[0][0] == "get data"
 
 
 @pytest.mark.asyncio
@@ -503,65 +460,6 @@ print("text after image")
         "This indicates images are being collected at the end instead of "
         "preserving their original interleaved positions."
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(60)
-async def test_get_screenshot_display_produces_image_in_stdout():
-    """
-    When sandbox code calls ``get_screenshot()`` + ``display()``, the resulting
-    ExecutionResult should contain an image block in stdout — the standard
-    rich-output pipeline — rather than relying on post-hoc injection.
-    """
-    from unify.function_manager.primitives.runtime import ComputerPrimitives
-    from unify.manager_registry import ManagerRegistry
-
-    ManagerRegistry.clear()
-    cp = ComputerPrimitives(computer_mode="mock")
-    computer_env = ComputerEnvironment(cp)
-    actor = CodeActActor(environments=[computer_env], timeout=30)
-    try:
-        tools = actor._build_tools()
-        execute_code = tools["execute_code"]
-
-        res = await execute_code(
-            thought="Take a screenshot and display it",
-            language="python",
-            state_mode="stateful",
-            code=(
-                "screenshot = await primitives.computer.desktop.get_screenshot()\n"
-                "display(screenshot)"
-            ),
-        )
-
-        assert isinstance(res, ExecutionResult)
-
-        llm_content = serialize_tool_content(
-            tool_name="execute_code",
-            payload=res,
-            is_final=True,
-        )
-        assert isinstance(llm_content, list)
-
-        image_blocks = [
-            b
-            for b in llm_content
-            if isinstance(b, dict) and b.get("type") == "image_url"
-        ]
-
-        assert image_blocks, "Expected a screenshot image_url block in stdout"
-        assert all(
-            isinstance(b.get("image_url"), dict)
-            and isinstance(b["image_url"].get("url"), str)
-            and b["image_url"]["url"].startswith("data:image")
-            for b in image_blocks
-        )
-    finally:
-        try:
-            await actor.close()
-        except Exception:
-            pass
-        ManagerRegistry.clear()
 
 
 @pytest.mark.asyncio

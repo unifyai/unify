@@ -8,7 +8,7 @@ modules while providing a clean stepping API.
 Usage:
     driver = CMStepDriver(conversation_manager)
     result = await driver.step(some_event)
-    assert driver.cm.mode == "call"  # access underlying CM state
+    assert driver.cm.in_flight_actions  # access underlying CM state
 """
 
 from __future__ import annotations
@@ -21,13 +21,13 @@ from typing import TYPE_CHECKING
 from unify.conversation_manager.domains.event_handlers import EventHandler
 from unify.conversation_manager.events import (
     Event,
-    SMSSent,
-    EmailSent,
     UnifyMessageSent,
-    PhoneCallSent,
-    ApiMessageSent,
     ActorHandleStarted,
 )
+
+# Events a step reports back to the test as its observable output: outbound
+# chat messages and action starts.
+_OUTPUT_EVENT_TYPES = (UnifyMessageSent, ActorHandleStarted)
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -169,17 +169,7 @@ class CMStepDriver:
             # Apply any published events to local state so callers can inspect state
             # without depending on background broker subscribers.
             for evt in published_events:
-                if isinstance(
-                    evt,
-                    (
-                        SMSSent,
-                        EmailSent,
-                        UnifyMessageSent,
-                        PhoneCallSent,
-                        ApiMessageSent,
-                        ActorHandleStarted,
-                    ),
-                ):
+                if isinstance(evt, _OUTPUT_EVENT_TYPES):
                     output_events.append(evt)
                 await EventHandler.handle_event(
                     evt,
@@ -228,22 +218,12 @@ class CMStepDriver:
             except Exception:
                 evt = None
             if evt is not None:
-                if isinstance(
-                    evt,
-                    (
-                        SMSSent,
-                        EmailSent,
-                        UnifyMessageSent,
-                        PhoneCallSent,
-                        ApiMessageSent,
-                        ActorHandleStarted,
-                    ),
-                ):
+                if isinstance(evt, _OUTPUT_EVENT_TYPES):
                     all_output_events.append(evt)
                 # Handle the event locally for deterministic state updates.
                 # Don't forward to the real broker — wait_for_events() (running
                 # as a background task) subscribes to these channels and would
-                # process the same event a second time, causing duplicate SMS
+                # process the same event a second time, causing duplicate chat
                 # sends, duplicate notifications, and uncontrolled LLM runs.
                 await EventHandler.handle_event(
                     evt,

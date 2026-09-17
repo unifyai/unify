@@ -437,7 +437,8 @@ def _commit_contexts_for_rollback(ctx_prefix: str) -> None:
             pass  # May already be committed
 
     if created_context_names:
-        db.map(commit_context_and_store, created_context_names, mode="asyncio")
+        for _name in created_context_names:
+            commit_context_and_store(_name)
 
 
 def _rebuild_commit_hashes(ctx_prefix: str) -> None:
@@ -463,7 +464,8 @@ def _rollback_to_committed() -> None:
 
     ctx_names = list(SCENARIO_COMMIT_HASHES.keys())
     if ctx_names:
-        db.map(rollback_context, ctx_names, mode="asyncio")
+        for _name in ctx_names:
+            rollback_context(_name)
 
 
 def _setup_tm_scenario(
@@ -490,11 +492,8 @@ def _setup_tm_scenario(
         existing_contexts = db.get_contexts(prefix=ctx)
         existing_context_names = list(existing_contexts.keys())
         if existing_context_names:
-            db.map(
-                lambda c: db.delete_context(c),
-                existing_context_names,
-                mode="asyncio",
-            )
+            for _name in existing_context_names:
+                db.delete_context(_name)
 
     # Set context before any operations (create first like ContactManager does)
     db.create_context(ctx)  # exist_ok=True by default
@@ -592,7 +591,7 @@ def tm_manager_scenario(tm_scenario):
         # from rolling back while this test is running
         scenario_names = list(SCENARIO_COMMIT_HASHES.keys())
         if scenario_names:
-            db.map(rollback_context, scenario_names, mode="asyncio")
-
+            for _name in ctx_names:
+                rollback_context(_name)
         restore_scenario_context("tests/transcript_manager/Scenario")
         yield tm, _ID_BY_NAME

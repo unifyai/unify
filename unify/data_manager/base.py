@@ -636,7 +636,6 @@ class BaseDataManager(BaseStateManager):
         column_name: str,
         column_type: str,
         mutable: bool = True,
-        backfill_logs: bool = False,
         destination: str | None = None,
     ) -> Dict[str, str]:
         """
@@ -662,10 +661,6 @@ class BaseDataManager(BaseStateManager):
         mutable : bool, default ``True``
             Whether the column values can be updated after creation.
             Set to ``False`` for immutable audit columns.
-
-        backfill_logs : bool, default ``False``
-            Whether to backfill existing rows with ``None`` values.
-            Usually not needed for new columns.
 
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
@@ -939,130 +934,6 @@ class BaseDataManager(BaseStateManager):
         - For dynamic values, use ``update_rows`` instead.
         """
 
-    @abstractmethod
-    def create_external_column(
-        self,
-        context: str,
-        *,
-        column_name: str,
-        connector_id: str,
-        binding: Dict[str, Any],
-        column_type: str = "Any",
-        destination: str | None = None,
-    ) -> Dict[str, Any]:
-        """
-        Create a REST-bound external column (Orchestra ``external_entry``).
-
-        Values are hydrated lazily on read via ``filter(..., hydrate=...)``.
-        The remote API is the source of truth for the bound field; keep local
-        columns for join keys and process state only — do **not** full-mirror
-        a remote database into Orchestra.
-
-        ``binding["auth_secret_ref"]`` is the *name* of a secret in the tenant
-        ``Secrets`` vault owned by this table's context
-        (``Teams/{id}/Secrets`` or ``{user}/{agent}/Secrets``). Never put the
-        secret value in the binding JSON. Plant secrets via
-        ``primitives.secrets`` (or an out-of-band provisioner) before hydrate
-        / through-write.
-
-        Binding sketch (connector ``http.generic``)::
-
-            {
-              "auth_secret_ref": "MY_API_TOKEN",  # pragma: allowlist secret
-              "auth": {"placement": "bearer"},  # or query + param
-              "inputs": [{"name": "item_id", "column": "item_id"}],
-              "cache": {"ttl_seconds": 300},
-              "http": {
-                "method": "GET",
-                "url_template": "https://api.example.com/items/{item_id}",
-                "response_jsonpath": "$.status",
-              },
-            }
-
-        See Orchestra ``docs/external-field-bindings.md``.
-
-        Parameters
-        ----------
-        context : str
-            Full context path of the table.
-        column_name : str
-            Name for the new external column.
-        connector_id : str
-            Registered connector id (e.g. ``http.generic``).
-        binding : dict
-            Binding config (inputs, cache, http, on_error, auth, …).
-            ``connector_id`` is also accepted inside ``binding``; the explicit
-            argument wins. Never inline secret values.
-        column_type : str, default ``Any``
-            Declared Orchestra field type for the hydrated value.
-        destination : str | None
-            Write destination (same semantics as ``create_derived_column``).
-        """
-
-    @abstractmethod
-    def request_external_write(
-        self,
-        context: str,
-        *,
-        payload: Dict[str, Any],
-        idempotency_key: str,
-        field_name: Optional[str] = None,
-        connector_id: Optional[str] = None,
-        binding: Optional[Dict[str, Any]] = None,
-        log_event_ids: Optional[List[int]] = None,
-        deliver: str = "async",
-        destination: str | None = None,
-    ) -> Dict[str, Any]:
-        """
-        Enqueue an external through-write intent (Orchestra outbox).
-
-        Prefer ``field_name`` of an ``external_entry`` column so the write
-        binding (including ``auth_secret_ref``) is loaded server-side. Auth
-        resolves from the tenant Secrets vault at deliver time (async drain
-        or ``deliver="sync"``).
-
-        Use ``deliver="sync"`` for latency-sensitive ticks; otherwise enqueue
-        async and let ``POST /admin/external_writes/drain`` deliver.
-
-        Parameters
-        ----------
-        context : str
-            Context path of the table the write belongs to.
-        payload : dict
-            Body handed to the external system, shaped by the binding.
-        idempotency_key : str
-            Caller-chosen key that makes the write exactly-once. Re-enqueuing
-            with the same key will not deliver twice, so derive it from the
-            thing being written (a row id plus the change), never from a
-            timestamp or a random value.
-        field_name : str, optional
-            Name of an ``external_entry`` column whose binding — including
-            ``auth_secret_ref`` — is loaded server-side. Preferred over
-            passing ``binding`` inline.
-        connector_id : str, optional
-            Explicit connector to deliver through, when the column's binding
-            does not name one.
-        binding : dict, optional
-            Inline write binding, for cases with no ``external_entry`` column.
-            ``auth_secret_ref`` must name an existing entry in the owning
-            ``Secrets`` vault; never inline an API key here.
-        log_event_ids : list[int], optional
-            Log rows this write is attributed to, for tracing delivery back to
-            the change that caused it.
-        deliver : str, default ``"async"``
-            ``"async"`` enqueues for the drain job. ``"sync"`` delivers inline
-            and surfaces provider failures to this call, at the cost of its
-            latency.
-        destination : str | None, optional
-            Which Data root holds the table: ``"personal"`` (default) or
-            ``"team:<id>"``.
-
-        Returns
-        -------
-        dict
-            The enqueued outbox entry, including its delivery status.
-        """
-
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────
@@ -1081,9 +952,6 @@ class BaseDataManager(BaseStateManager):
         descending: bool = False,
         return_ids_only: bool = False,
         include_ids: bool = False,
-        hydrate: Optional[str] = None,
-        hydrate_fields: Optional[List[str]] = None,
-        materialize: Optional[bool] = None,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         """
         Filter rows from a table by expression (Orchestra evaluates
@@ -1169,22 +1037,6 @@ class BaseDataManager(BaseStateManager):
             ``update_by_ids`` / ``delete_rows`` call needs stable ids.
             Mutually exclusive with ``return_ids_only``. Requires a single
             resolved context (not federated multi-source reads).
-
-        hydrate : str | None, default ``None``
-            External-column hydrate mode passed to Orchestra:
-            ``none`` (skip), ``stale_ok`` (default server behavior when
-            omitted on some paths), or ``force`` (always re-fetch). Use when
-            reading ``external_entry`` columns so remote values are fresh
-            enough for the decision.
-
-        hydrate_fields : list[str] | None, default ``None``
-            Optional subset of external field names to hydrate. When
-            ``None``, all active external columns on the context hydrate.
-
-        materialize : bool | None, default ``None``
-            When ``True``, Orchestra persists hydrated values and cache
-            sidecars into ``LogEvent.data`` so later filters can use them.
-            Prefer ``True`` for fields you will filter/sort on later.
 
         Returns
         -------
@@ -2551,7 +2403,6 @@ class BaseDataManager(BaseStateManager):
         filter: Optional[str] = None,
         log_ids: Optional[List[int]] = None,
         dangerous_ok: bool = False,
-        delete_empty_rows: bool = False,
         destination: str | None = None,
     ) -> int:
         """
@@ -2574,9 +2425,6 @@ class BaseDataManager(BaseStateManager):
 
         dangerous_ok : bool, default ``False``
             Safety flag that MUST be set to ``True`` to confirm deletion.
-
-        delete_empty_rows : bool, default ``False``
-            When ``True``, also deletes rows that have no data (empty logs).
 
         destination : str | None, default ``None``
             Which Data root contains the rows. Pass ``"personal"`` (the

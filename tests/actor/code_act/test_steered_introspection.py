@@ -15,7 +15,6 @@ chat context bound, exactly as ``execute_code`` composes them.
 
 from __future__ import annotations
 
-import inspect
 import textwrap
 
 import pytest
@@ -55,29 +54,17 @@ def simulated_managers(monkeypatch: pytest.MonkeyPatch):
 
 
 def _steered_environments():
-    """State-manager + computer environments merged under ``primitives``."""
+    """State-manager environment exposed under ``primitives``."""
     from unify.actor.environments.base import _CompositeEnvironment
-    from unify.actor.environments.computer import ComputerEnvironment
     from unify.actor.environments.state_managers import StateManagerEnvironment
-    from unify.function_manager.primitives import (
-        ComputerPrimitives,
-        Primitives,
-        PrimitiveScope,
-    )
+    from unify.function_manager.primitives import Primitives, PrimitiveScope
 
-    cp = ComputerPrimitives(computer_mode="mock")
     scope = PrimitiveScope(
         scoped_managers=frozenset({"contacts", "data", "tasks"}),
     )
     composite = _CompositeEnvironment(
-        [
-            StateManagerEnvironment(Primitives(primitive_scope=scope)),
-            ComputerEnvironment(cp),
-        ],
+        [StateManagerEnvironment(Primitives(primitive_scope=scope))],
     )
-    # The composite builds a fresh merged Primitives; pin the mock computer
-    # instance on it so no real backend is constructed on attribute access.
-    composite.get_instance()._managers["computer"] = cp
     return {"primitives": composite}
 
 
@@ -89,9 +76,6 @@ _INTROSPECTION_CODE = textwrap.dedent(
     info = {}
     info["help_contacts_ask"] = pydoc.render_doc(primitives.contacts.ask)
     info["sig_data_filter"] = str(inspect.signature(primitives.data.filter))
-    info["sig_desktop_click"] = str(
-        inspect.signature(primitives.computer.desktop.click)
-    )
     info["dir_tasks"] = dir(primitives.tasks)
     info["dir_data"] = dir(primitives.data)
     info
@@ -142,36 +126,8 @@ async def test_steered_sandbox_introspection_renders_real_docs(
     assert "*args" not in sig_filter, sig_filter
     assert "context" in sig_filter and "filter" in sig_filter, sig_filter
 
-    # inspect.signature on a computer session method shows the backend
-    # contract (``__signature__`` copied by _make_session_method).
-    sig_click = info["sig_desktop_click"]
-    assert "*args" not in sig_click, sig_click
-    assert "x" in sig_click and "y" in sig_click, sig_click
-
     # dir(primitives.<manager>) lists the primitive method surface.
     assert "ask" in info["dir_tasks"], info["dir_tasks"]
     assert "update" in info["dir_tasks"], info["dir_tasks"]
     assert "filter" in info["dir_data"], info["dir_data"]
     assert "reduce" in info["dir_data"], info["dir_data"]
-
-
-@pytest.mark.timeout(60)
-def test_computer_session_methods_carry_signature_metadata():
-    """_make_session_method copies __signature__/__wrapped__/__doc__ so
-    introspection works on desktop and web session methods directly."""
-    from unify.function_manager.computer_backends import ComputerBackend
-    from unify.function_manager.primitives import ComputerPrimitives
-
-    cp = ComputerPrimitives(computer_mode="mock")
-    click = cp.desktop.click
-
-    sig = inspect.signature(click)
-    assert list(sig.parameters) == ["x", "y"], sig
-    assert click.__wrapped__ is ComputerBackend.click
-    assert click.__doc__ == ComputerBackend.click.__doc__
-    assert click.__doc__, "backend click docstring must be non-empty"
-
-    # get_screenshot goes through the dedicated screenshot branch.
-    screenshot = cp.desktop.get_screenshot
-    assert screenshot.__doc__
-    assert "self" not in inspect.signature(screenshot).parameters

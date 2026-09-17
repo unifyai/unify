@@ -12,7 +12,6 @@ from unify.session_details import SESSION_DETAILS
 AUTHORING_ASSISTANT_ID_FIELD = "authoring_assistant_id"
 SHARED_SCOPED_TABLES: frozenset[str] = frozenset(
     {
-        "Tasks",
         "Contacts",
         "Secrets",
         "Knowledge",

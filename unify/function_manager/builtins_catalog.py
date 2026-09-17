@@ -124,7 +124,6 @@ def _replace_rows(
         project=project,
         context=BUILTINS_PRIMITIVES_CONTEXT,
         entries=entries,
-        recompute_derived=True,
     )
 
 

@@ -3,7 +3,6 @@ import datetime as dt
 
 from unify.events.event_bus import EventBus, Event
 from unify.events.types.comms import CommsPayload
-from unify.events.types.coordinator_activity import CoordinatorActivityPayload
 from unify.transcript_manager.types.message import Message
 from unify.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
@@ -15,7 +14,7 @@ async def test_prefill_populates_comms_deque():
     """Comms events should be prefilled into the in-memory deque on startup.
 
     Comms is in _PREFILL_TYPES, so a new EventBus instance should hydrate
-    recent Comms events from Orchestra into its deque without a backend
+    recent Comms events from the store into its deque without a backend
     fallback call.
     """
     window = 10
@@ -52,7 +51,7 @@ async def test_prefill_populates_comms_deque():
 @_handle_project
 async def test_non_prefilled_types_still_searchable():
     """Event types outside _PREFILL_TYPES should still be retrievable via
-    search(), which falls back to the Orchestra backend when the in-memory
+    search(), which falls back to the store when the in-memory
     deque is empty.
     """
     bus1 = EventBus()
@@ -108,49 +107,3 @@ async def test_row_id_seeded_for_non_prefilled_types():
         f"row_id counter ({next_id}) should be seeded above the "
         f"persisted row_id ({first_row_id})"
     )
-
-
-@pytest.mark.enable_eventbus
-@pytest.mark.asyncio
-@_handle_project
-async def test_coordinator_activity_is_registered_searchable_and_not_prefilled():
-    """CoordinatorActivity persists like other non-prefilled typed events."""
-
-    assert "CoordinatorActivity" not in EventBus._PREFILL_TYPES
-
-    bus = EventBus()
-    captured: list[Event] = []
-
-    async def _capture(events):
-        captured.extend(events)
-
-    await bus.register_callback(
-        event_type="CoordinatorActivity",
-        callback=_capture,
-        every_n=1,
-    )
-    evt = Event(
-        type="CoordinatorActivity",
-        payload=CoordinatorActivityPayload(
-            activity_id="activity-eventbus-1",
-            phase="completed",
-            stage="integration_setup",
-            surfaces=["colleagues"],
-            title="Created Revenue Ops colleague",
-            occurred_at=dt.datetime.now(dt.UTC),
-        ),
-    )
-
-    await bus.publish(evt)
-    await bus.ajoin_callbacks()
-    bus.join_published()
-
-    assert [event.event_id for event in captured] == [evt.event_id]
-
-    reloaded_bus = EventBus()
-    results = await reloaded_bus.search(
-        filter="type == 'CoordinatorActivity'",
-        limit=10,
-    )
-
-    assert evt.event_id in {result.event_id for result in results}

@@ -349,8 +349,7 @@ class ConversationManagerBrainActionTools:
 
         - **Retrieval**: Search contact records, query knowledge bases, look up past
           conversations, find calendar events, search the web, retrieve files
-        - **Action**: Update records, modify spreadsheets, schedule tasks, create
-          reminders
+        - **Action**: Update records, modify spreadsheets, store knowledge
         - **Combined**: Find information and act on it (e.g., "find David's email")
 
         **When uncertain, call ``act``**: If you need information you don't have (like
@@ -649,7 +648,7 @@ class ConversationManagerBrainActionTools:
         message her." Looking up a contact to send them a message is still
         a contact query; after this action returns the contact_id, call
         ``send_unify_message`` yourself. If the question also involves
-        non-contact information (tasks, knowledge, transcripts, web, files,
+        non-contact information (knowledge, transcripts, web, files,
         etc.) or requires cross-domain reasoning, use ``act`` instead.
 
         Args:
@@ -730,7 +729,7 @@ class ConversationManagerBrainActionTools:
 
         **Route here instead of ``act`` when the question is purely about
         past messages or conversation history.** If the question also involves
-        non-transcript information (contacts, knowledge, tasks, web, files,
+        non-transcript information (contacts, knowledge, web, files,
         etc.) or requires cross-domain reasoning, use ``act`` instead.
 
         Args:

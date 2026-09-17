@@ -175,14 +175,7 @@ def iter_unique_values_via_groups(context: str, column: str) -> List[Any]:
     """Return a list of unique values for `column` using db.get_groups.
 
     Accept diverse backend return shapes (dict or list)."""
-    try:
-        groups = db.get_groups(context=context, key=column)
-    except Exception:
-        # Fallback: try alternate param name
-        try:
-            groups = db.get_groups(context=context, field=column)
-        except Exception:
-            groups = None
+    groups = db.get_groups(context=context, key=column)
     vals: List[Any] = []
     if isinstance(groups, dict):
         try:

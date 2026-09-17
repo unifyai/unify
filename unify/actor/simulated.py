@@ -7,7 +7,6 @@ from .base import BaseActor, BaseActorHandle
 import functools
 from typing import Any, Optional, Type
 from pydantic import BaseModel
-from unify.manager_registry import ManagerRegistry
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS, DEFAULT_ICON
 from unify.common.simulated import (
@@ -105,9 +104,6 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
         clarification_up_q: asyncio.Queue[str] | None = None,
         clarification_down_q: asyncio.Queue[str] | None = None,
         log_mode: "str | None" = "log",
-        # Optional: function entrypoint context and prebaked result
-        entrypoint_info: dict | None = None,
-        planned_result: str | None = None,
         # New: optional session suffix to reuse across simulated logs
         session_suffix: "str | None" = None,
         # Optional response format for structured output
@@ -129,10 +125,6 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
         )
         self._response_format = response_format
         self._emit_notifications = emit_notifications
-
-        # Store optional entrypoint metadata and a planned completion result
-        self._entrypoint_info: dict | None = entrypoint_info
-        self._planned_result: str | None = planned_result or None
 
         self._steps_taken = 0
         self._step_lock = threading.Lock()
@@ -213,18 +205,13 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
                     and (time.monotonic() - self._last_started_at)
                     >= self._remaining_duration
                 ):
-                    # Prefer prebaked function-aware result if available
                     msg = (
-                        self._planned_result
-                        or f"Completed '{request}' after {self._duration}\u2009s duration."
+                        f"Completed '{request}' after {self._duration}\u2009s duration."
                     )
                     self._complete(msg)
                     return
                 if self._steps is not None and self._steps_taken >= (self._steps or 0):
-                    msg = (
-                        self._planned_result
-                        or f"Completed '{request}' in {self._steps} steps."
-                    )
+                    msg = f"Completed '{request}' in {self._steps} steps."
                     self._complete(msg)
                     return
                 self._pause_event.wait()
@@ -398,16 +385,7 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
             pass
 
         # Compose prompt (kept consistent with previous behaviour)
-        if self._entrypoint_info:
-            fn = self._entrypoint_info
-            prompt = (
-                "You are mid-execution of a function-driven simulated task.\n"
-                f"Task: {self._request}\n"
-                f"Entrypoint: {fn.get('name')} {fn.get('argspec','')} (id={fn.get('function_id')})\n"
-                f"Docstring:\n{fn.get('docstring','')}\n\n"
-            )
-        else:
-            prompt = f"Current simulated actions:\n{self._request}\n\n"
+        prompt = f"Current simulated actions:\n{self._request}\n\n"
         # Unified LLM roundtrip (includes timing, gated body, and optional dumps)
         try:
             _sys = getattr(self._llm, "system_message", None)
@@ -478,20 +456,10 @@ class SimulatedActorHandle(BaseActorHandle, SimulatedHandleMixin):
         except Exception:
             pass
 
-        if self._entrypoint_info:
-            fn = self._entrypoint_info
-            prompt = (
-                "You are executing a simulated function as part of a task. Answer briefly.\n"
-                f"Task: {self._request}\n"
-                f"Entrypoint: {fn.get('name')} {fn.get('argspec','')} (id={fn.get('function_id')})\n"
-                f"Docstring:\n{fn.get('docstring','')}\n\n"
-                f"User asks: {question}"
-            )
-        else:
-            prompt = (
-                f"You are working on simulating these actions:\n{self._request}\n\n"
-                f"User asks: {question}"
-            )
+        prompt = (
+            f"You are working on simulating these actions:\n{self._request}\n\n"
+            f"User asks: {question}"
+        )
         try:
             _sys = getattr(self._llm, "system_message", None)
         except Exception:
@@ -661,7 +629,7 @@ class SimulatedActor(BaseActor):
         duration: float | None = None,
         _requests_clarification: bool = False,
         log_mode: "str | None" = "log",
-        # New: simulation-only guidance (does not alter TaskScheduler flow)
+        # Simulation-only guidance
         simulation_guidance: Optional[str] = None,
         # Whether handles emit notifications via next_notification()
         emit_notifications: bool = True,
@@ -720,8 +688,6 @@ class SimulatedActor(BaseActor):
         _parent_chat_context: list[dict] | None = None,
         _clarification_up_q: Optional[asyncio.Queue[str]] = None,
         _clarification_down_q: Optional[asyncio.Queue[str]] = None,
-        # optional function entrypoint id
-        entrypoint: Optional[int] = None,
         # New: optional session suffix to reuse across simulated logs
         session_suffix: Optional[str] = None,
         **kwargs,
@@ -759,46 +725,7 @@ class SimulatedActor(BaseActor):
         except Exception:
             pass
 
-        entrypoint_info: dict | None = None
-        planned_result: str | None = None
-
-        # If an entrypoint is provided, fetch real function metadata/code and prebake a result
-        if entrypoint is not None:
-            try:
-                fm = ManagerRegistry.get_function_manager()
-                log = fm._get_log_by_function_id(function_id=int(entrypoint), raise_if_missing=True)  # type: ignore[attr-defined]
-                ent = log.entries if hasattr(log, "entries") else {}
-                entrypoint_info = {
-                    "function_id": ent.get("function_id", entrypoint),
-                    "name": ent.get("name"),
-                    "argspec": ent.get("argspec"),
-                    "docstring": ent.get("docstring") or "",
-                    "implementation": ent.get("implementation") or "",
-                }
-
-                # Compose a concise final completion sentence consistent with the function
-                impl = entrypoint_info.get("implementation", "")
-                name = entrypoint_info.get("name") or f"function_{entrypoint}"
-                sig = entrypoint_info.get("argspec", "")
-                doc = entrypoint_info.get("docstring", "")
-                prompt = (
-                    "You are simulating the execution of a Python function inside a task.\n"
-                    "Return ONE short past-tense sentence that STARTS with 'Completed',\n"
-                    "summarising the concrete outcome of running the function in the context below.\n"
-                    "Do not include code or steps. Keep it under two sentences.\n\n"
-                    f"Task request: {request}\n"
-                    f"Function: {name} {sig} (id={entrypoint})\n"
-                    f"Docstring:\n{doc}\n\n"
-                    f"Implementation:\n{impl}"
-                )
-                planned_result = await self._llm.generate(prompt)
-                if not isinstance(planned_result, str) or not planned_result.strip():
-                    planned_result = None
-            except Exception:
-                entrypoint_info = None
-                planned_result = None
-
-        # Construct the simulated handle with optional entrypoint context
+        # Construct the simulated handle
         return SimulatedActorHandle(
             self._llm,
             request,
@@ -809,8 +736,6 @@ class SimulatedActor(BaseActor):
             clarification_up_q=_clarification_up_q,
             clarification_down_q=_clarification_down_q,
             log_mode=self._log_mode,
-            entrypoint_info=entrypoint_info,
-            planned_result=planned_result,
             session_suffix=session_suffix,
             response_format=response_format,
             emit_notifications=self._emit_notifications,

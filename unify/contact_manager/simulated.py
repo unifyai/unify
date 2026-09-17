@@ -409,7 +409,7 @@ class _SimulatedContactHandle(SimulatedHandleMixin, SteerableToolHandle):
             initial_instruction=self._initial,
             extra_messages=list(self._extra_msgs),
         )
-        # Create a nested helper handle so we can log using its stable label, mirroring TaskScheduler/Actor
+        # Create a nested helper handle so we can log using its stable label, mirroring the Actor
         handle = _SimulatedContactHandle(
             self._llm,
             follow_up_prompt,

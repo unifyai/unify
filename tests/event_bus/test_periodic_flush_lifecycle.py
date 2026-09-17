@@ -9,7 +9,7 @@ The failure being locked out: the flusher is a task on whatever loop first
 touched the bus, and the bus is a process-lifetime singleton. An embedder
 that replaces its event loop mid-process (an in-process CM reboot between
 benchmark weeks) stranded the flusher on the dead loop; every later publish
-buffered into ``_pending_writes`` forever, no Comms row reached Orchestra,
+buffered into ``_pending_writes`` forever, no Comms row reached the store,
 and the next boot's hydration truthfully found nothing to restore.
 """
 
@@ -96,21 +96,21 @@ def test_publish_revives_flusher_and_keeps_buffering_on_new_loop():
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_comms_row_lands_in_orchestra_after_flush():
-    """A published Comms event reaches the backend once flushed.
+async def test_comms_row_lands_in_store_after_flush():
+    """A published Comms event reaches the store once flushed.
 
     This is the write path hydration depends on end-to-end: publish
-    buffers the row, flush writes it through ``db.create_logs``, and a
+    buffers the row, flush writes it through the store, and a
     plain read of the bus's own Comms context sees it. If this holds and a
     deployment still hydrates nothing, the gap is in that deployment's
     lifecycle (a stranded flusher, a teardown that never flushed), not in
     the write path itself.
     """
     from unify import db
-    from unify.conversation_manager.events import SMSReceived
+    from unify.conversation_manager.events import UnifyMessageReceived
 
     bus = EventBus()
-    ev = SMSReceived(
+    ev = UnifyMessageReceived(
         contact={"contact_id": 2, "first_name": "Alice", "surname": "Smith"},
         content="persist probe",
     ).to_bus_event()
@@ -118,7 +118,7 @@ async def test_comms_row_lands_in_orchestra_after_flush():
     await bus.publish(ev)
     assert any(
         entries.get("event_id") == ev.event_id for entries, _ctx in bus._pending_writes
-    ), "publish must buffer the Comms row for Orchestra persistence"
+    ), "publish must buffer the Comms row for persistence"
 
     bus.flush()
     assert bus._pending_writes == []
@@ -126,7 +126,7 @@ async def test_comms_row_lands_in_orchestra_after_flush():
     rows = db.get_logs(context=bus._specific_ctxs["Comms"], limit=100)
     assert any(
         (log.entries or {}).get("event_id") == ev.event_id for log in rows
-    ), "the flushed Comms row must be readable from the backend"
+    ), "the flushed Comms row must be readable from the store"
 
 
 @pytest.mark.asyncio

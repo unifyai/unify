@@ -1,30 +1,12 @@
 import json
 import uuid
-from collections.abc import Mapping as _Mapping
 from typing import Any, ClassVar
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
 
 from pydantic import BaseModel
 
-from unify.common.context_registry import ContextRegistry
 from unify.common.prompt_helpers import now as prompt_now
-from unify.task_scheduler.types.run_source import RunSource
-
-
-def _coerce_int(value: Any) -> int | None:
-    """Best-effort integer coercion for untyped JSON-derived task payloads.
-
-    Returns ``None`` for empty values or anything that won't parse cleanly
-    as an int.
-    """
-
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def custom_dict_factory(kv):
@@ -395,140 +377,6 @@ class ActorHandleStarted(Event):
     handle_id: id
     query: str
     response_format: dict | None = None
-
-
-@dataclass
-class TaskDue(Event):
-    """A scheduled task activation became due.
-
-    The in-process activation scheduler publishes this event from an asyncio
-    timer. The activation identity fields let the slow brain reject stale
-    deliveries before executing the task, and the packet carries compact
-    human-facing wake context so the brain does not have to infer meaning
-    from a bare task id alone.
-    """
-
-    topic: ClassVar[str | None] = "app:comms:task_due"
-
-    task_id: int
-    source_task_log_id: int
-    revision: str
-    scheduled_for: str
-    destination: str | None = None
-    wake: str = RunSource.scheduled.value
-    task_label: str = ""
-    task_summary: str = ""
-    visibility_policy: str = "silent_by_default"
-    recurrence_hint: str = "one_off"
-    reason: str = ""
-
-    @classmethod
-    def from_dict(
-        cls,
-        payload: Any,
-        *,
-        reason: str = "",
-    ) -> "TaskDue | None":
-        """Build a `TaskDue` from a dict-shaped payload, or return ``None``.
-
-        The activation scheduler converts a projected
-        `TaskExecutionSnapshot` into a dict before calling this method.
-        Returns ``None`` when any required identity field (``task_id``,
-        ``source_task_log_id``, ``revision``, ``scheduled_for``) is missing
-        or malformed; the caller decides how to log / drop the event.
-        """
-
-        if not isinstance(payload, _Mapping):
-            return None
-        task_id = _coerce_int(payload.get("task_id"))
-        source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
-        revision = str(payload.get("revision") or "")
-        scheduled_for = str(payload.get("scheduled_for") or "")
-        wake = str(payload.get("wake") or RunSource.scheduled.value)
-        if task_id is None or source_task_log_id is None:
-            return None
-        if not revision:
-            return None
-        if wake == RunSource.scheduled.value and not scheduled_for:
-            return None
-        try:
-            destination = ContextRegistry.canonical_destination(
-                payload.get("destination"),
-            )
-        except ValueError:
-            return None
-        task_label = str(payload.get("task_label") or "")
-        resolved_reason = reason or (
-            f"Scheduled task '{task_label}' became due."
-            if task_label
-            else f"Scheduled task {task_id} became due."
-        )
-        return cls(
-            task_id=task_id,
-            source_task_log_id=source_task_log_id,
-            revision=revision,
-            scheduled_for=scheduled_for,
-            destination=destination,
-            wake=wake,
-            task_label=task_label,
-            task_summary=str(payload.get("task_summary") or ""),
-            visibility_policy=str(
-                payload.get("visibility_policy") or "silent_by_default",
-            ),
-            recurrence_hint=str(payload.get("recurrence_hint") or "one_off"),
-            reason=resolved_reason,
-        )
-
-
-@dataclass
-class TaskTriggerRequested(Event):
-    """A request to start a task immediately, outside its schedule."""
-
-    topic: ClassVar[str | None] = "app:comms:task_trigger"
-
-    task_id: int
-    source_task_log_id: int | None = None
-    destination: str | None = None
-    source_ref: str = ""
-    task_label: str = ""
-    task_summary: str = ""
-    reason: str = ""
-
-    @classmethod
-    def from_dict(
-        cls,
-        payload: Any,
-        *,
-        reason: str = "",
-    ) -> "TaskTriggerRequested | None":
-        """Build a task-trigger event from a dict-shaped payload."""
-
-        if not isinstance(payload, _Mapping):
-            return None
-        task_id = _coerce_int(payload.get("task_id"))
-        if task_id is None:
-            return None
-        try:
-            destination = ContextRegistry.canonical_destination(
-                payload.get("destination"),
-            )
-        except ValueError:
-            return None
-        task_label = str(payload.get("task_label") or "")
-        resolved_reason = reason or (
-            f"Task '{task_label}' was triggered."
-            if task_label
-            else f"Task {task_id} was triggered."
-        )
-        return cls(
-            task_id=task_id,
-            source_task_log_id=_coerce_int(payload.get("source_task_log_id")),
-            destination=destination,
-            source_ref=str(payload.get("source_ref") or ""),
-            task_label=task_label,
-            task_summary=str(payload.get("task_summary") or ""),
-            reason=resolved_reason,
-        )
 
 
 @dataclass

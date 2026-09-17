@@ -41,57 +41,17 @@ def make_contacts_visible(cm: "CMStepDriver", *contact_ids: int) -> None:
     they have messages in the deque. This pushes a lightweight marker message
     for each contact so the LLM can see their contact_ids and metadata.
 
-    Use this in tests that are about email routing mechanics (to/cc/bcc),
-    not about contact resolution.  The contacts must already exist in the
+    Use this in tests that are about addressing a known contact, not about
+    contact resolution.  The contacts must already exist in the
     ContactManager (e.g., via TEST_CONTACTS in conftest).
     """
-    from unify.conversation_manager.cm_types import Medium
-
     for cid in contact_ids:
         cm.contact_index.push_message(
             contact_id=cid,
             sender_name="System",
-            thread_name=Medium.UNIFY_MESSAGE,
             message_content="<Contact added to conversation>",
             role="user",
         )
-
-
-async def step_voice_user_turn(
-    cm: "CMStepDriver",
-    utterance,
-    *,
-    max_steps: int = 5,
-    classification: str | None = None,
-    intended_speech: str = "",
-    turn_id: int = 1,
-) -> "StepResult":
-    """Record a voice utterance, then wake the slow brain via FastBrainTurnCompleted.
-
-    Engaged voice utterances are transcript-only; the slow brain runs after the
-    Voice Agent finishes the turn. Flow tests that assert cross-channel tools
-    must publish ``FastBrainTurnCompleted`` (classification ``defer`` for
-    action requests) rather than stepping the raw utterance with ``run_llm``.
-    """
-    from unify.conversation_manager.events import (
-        FAST_BRAIN_TURN_DEFER,
-        FastBrainTurnCompleted,
-    )
-
-    if classification is None:
-        classification = FAST_BRAIN_TURN_DEFER
-
-    await cm.step(utterance, run_llm=False)
-    return await cm.step_until_wait(
-        FastBrainTurnCompleted(
-            contact=utterance.contact,
-            turn_id=turn_id,
-            user_content=getattr(utterance, "content", "") or "",
-            classification=classification,
-            intended_speech=intended_speech,
-        ),
-        max_steps=max_steps,
-    )
 
 
 # =============================================================================
@@ -104,7 +64,7 @@ def filter_events_by_type(events: list, typ: type[T]) -> list[T]:
 
     Args:
         events: List of events (typically StepResult.output_events)
-        typ: Event type to filter by (e.g., SMSSent, EmailSent)
+        typ: Event type to filter by (e.g., UnifyMessageSent, ActorHandleStarted)
 
     Returns:
         List of events matching the given type.
@@ -117,7 +77,7 @@ def get_exactly_one(events: list, typ: type[T]) -> T:
 
     Args:
         events: List of events (typically StepResult.output_events)
-        typ: Event type to find (e.g., SMSSent, EmailSent)
+        typ: Event type to find (e.g., UnifyMessageSent, ActorHandleStarted)
 
     Returns:
         The single event of the given type.
@@ -135,7 +95,7 @@ def assert_has_one(events: list, typ: type) -> bool:
 
     Args:
         events: List of events (typically StepResult.output_events)
-        typ: Event type to check for (e.g., SMSSent, EmailSent)
+        typ: Event type to check for (e.g., UnifyMessageSent, ActorHandleStarted)
 
     Returns:
         True if exactly one event exists.

@@ -1,7 +1,6 @@
 """Loop-safe helpers for bridging sync and async call sites.
 
-Offline TaskScheduler Jobs (and other Unify entrypoints) already own an
-event loop via ``asyncio.run``. Nested ``asyncio.run`` then fails with
+Runtime entrypoints already own an event loop via ``asyncio.run``. Nested ``asyncio.run`` then fails with
 ``RuntimeError: asyncio.run() cannot be called from a running event
 loop``. Use :func:`run_coro_sync` from sync façades that need to drive
 async work from either context.

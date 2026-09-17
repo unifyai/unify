@@ -33,13 +33,6 @@ class BaseMemoryManager(ABC, metaclass=SingletonABCMeta):
     ) -> str: ...
 
     @abstractmethod
-    async def update_tasks(
-        self,
-        transcript: str,
-        guidance: Optional[str] = None,
-    ) -> str: ...
-
-    @abstractmethod
     async def process_chunk(
         self,
         transcript: str,

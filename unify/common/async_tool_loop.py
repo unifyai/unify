@@ -192,8 +192,7 @@ class SteerableToolHandle(ABC):
     ----------------------------
     Derived classes **may** extend any steering method signature with additional
     keyword arguments that are specific to their domain.  For example,
-    ``BaseActiveTask.stop`` adds a ``cancel`` kwarg that does not exist on the
-    base ``stop(reason)`` signature, and ``ConversationManagerHandle.interject``
+    ``ConversationManagerHandle.interject``
     replaces ``_parent_chat_context_cont`` with ``pinned`` / ``interjection_id``.
 
     The signatures defined here represent the **minimum universal contract** —
@@ -618,8 +617,8 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
         # 3.  Fire off a *stand-alone* read-only loop.
         # Compose a clear loop identifier so logs show exactly which loop the
-        # question refers to, e.g. "Question(TaskScheduler.execute)" or
-        # "Question(TaskScheduler.execute->TaskScheduler.ask)" when a single
+        # question refers to, e.g. "Question(CodeActActor.act)" or
+        # "Question(CodeActActor.act->ContactManager.ask)" when a single
         # nested handle is present.
         parent_label: str = "unknown"
         with suppress(Exception):

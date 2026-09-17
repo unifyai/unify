@@ -13,7 +13,7 @@ class BaseStateManager(ABC):
 
     This abstract base exists solely to provide a single common ancestor for
     manager interfaces such as ContactManager, TranscriptManager, KnowledgeManager,
-    TaskScheduler, FileManager, FunctionManager, GuidanceManager, ImageManager,
+    FileManager, FunctionManager, GuidanceManager, ImageManager,
     SecretManager, and WebSearcher.
 
     Purpose
@@ -121,7 +121,7 @@ def get_caller_description(manager_class_name: str) -> Optional[str]:
     Parameters
     ----------
     manager_class_name : str
-        The class name of the manager (e.g., "TaskScheduler", "ContactManager").
+        The class name of the manager (e.g., "ContactManager").
 
     Returns
     -------
@@ -149,7 +149,7 @@ def _iter_unity_subpackages() -> Iterable[str]:
     for mod in pkgutil.walk_packages(unify.__path__, unify.__name__ + "."):
         name = mod.name
         # We consider any package directly under unity whose name ends with "_manager"
-        # as a candidate (e.g., unify.contact_manager, unify.task_scheduler, ...).
+        # as a candidate (e.g., unify.contact_manager, unify.file_manager, ...).
         try:
             base = name.rsplit(".", 1)[-1]
         except Exception:

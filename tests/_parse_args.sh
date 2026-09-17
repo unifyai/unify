@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Shared argument parsing for parallel test runners.
 #
-# This file is sourced by both parallel_run.sh and parallel_cloud_run.sh
-# to ensure identical argument handling.
+# This file is sourced by parallel_run.sh.
 #
 # Usage:
 #   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

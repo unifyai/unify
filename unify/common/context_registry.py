@@ -194,7 +194,6 @@ class ContextRegistry:
         from unify.image_manager.image_manager import ImageManager
         from unify.knowledge_manager.knowledge_manager import KnowledgeManager
         from unify.secret_manager.secret_manager import SecretManager
-        from unify.task_scheduler.task_scheduler import TaskScheduler
         from unify.transcript_manager.transcript_manager import TranscriptManager
         from unify.web_searcher.web_searcher import WebSearcher
 
@@ -202,7 +201,6 @@ class ContextRegistry:
             ContactManager,
             KnowledgeManager,
             TranscriptManager,
-            TaskScheduler,
             ImageManager,
             GuidanceManager,
             SecretManager,

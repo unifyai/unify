@@ -22,10 +22,7 @@ from unify.conversation_manager.events import (
     ActorClarificationRequest,
     Event,
     Error,
-    SMSSent,
-    EmailSent,
     UnifyMessageSent,
-    PhoneCallSent,
 )
 
 T = TypeVar("T")
@@ -298,7 +295,7 @@ async def inject_actor_result(
     - In these integration tests, we drive CM via `CMStepDriver.step_until_wait()`,
       which patches the event broker and does not always forward background events.
     - Some smoke flows need the CM brain to observe the actor's completion result
-      before it can take the next step (e.g., "find phone → send SMS").
+      before it can take the next step (e.g., "find contact → send message").
     """
     from unify.conversation_manager.domains.event_handlers import EventHandler
 
@@ -327,7 +324,8 @@ async def run_cm_until_wait(
     events (e.g., ActorResult) request another LLM turn.
 
     Returns:
-        Output events emitted during these LLM steps (e.g., SMSSent, ActorHandleStarted).
+        Output events emitted during these LLM steps (e.g., UnifyMessageSent,
+        ActorHandleStarted).
     """
     cm = cm_driver.cm
     output_events: list[Event] = []
@@ -341,13 +339,7 @@ async def run_cm_until_wait(
             evt = None
         if evt is not None and isinstance(
             evt,
-            (
-                SMSSent,
-                EmailSent,
-                UnifyMessageSent,
-                PhoneCallSent,
-                ActorHandleStarted,
-            ),
+            (UnifyMessageSent, ActorHandleStarted),
         ):
             output_events.append(evt)
         # Handle locally for deterministic state updates.

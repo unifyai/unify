@@ -37,8 +37,6 @@ from unify.data_manager.ops.table_ops import (
     delete_column_impl,
     rename_column_impl,
     create_derived_column_impl,
-    create_external_column_impl,
-    request_external_write_impl,
 )
 from unify.data_manager.ops.query_ops import (
     filter_impl,
@@ -106,7 +104,6 @@ _ABSOLUTE_PREFIXES = (
     "Teams/",
     "Contacts",
     "Knowledge/",
-    "Tasks",
     "Messages",
     "Exchanges",
 )
@@ -628,7 +625,6 @@ class DataManager(BaseDataManager):
         column_name: str,
         column_type: str,
         mutable: bool = True,
-        backfill_logs: bool = False,
         destination: str | None = None,
     ) -> Dict[str, str]:
         try:
@@ -643,7 +639,6 @@ class DataManager(BaseDataManager):
             column_name=column_name,
             column_type=column_type,
             mutable=mutable,
-            backfill_logs=backfill_logs,
         )
 
     @functools.wraps(BaseDataManager.delete_column, updated=())
@@ -703,64 +698,6 @@ class DataManager(BaseDataManager):
             equation=equation,
         )
 
-    @functools.wraps(BaseDataManager.create_external_column, updated=())
-    def create_external_column(
-        self,
-        context: str,
-        *,
-        column_name: str,
-        connector_id: str,
-        binding: Dict[str, Any],
-        column_type: str = "Any",
-        destination: str | None = None,
-    ) -> Dict[str, Any]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
-        return create_external_column_impl(
-            resolved,
-            column_name=column_name,
-            connector_id=connector_id,
-            binding=binding,
-            column_type=column_type,
-        )
-
-    @functools.wraps(BaseDataManager.request_external_write, updated=())
-    def request_external_write(
-        self,
-        context: str,
-        *,
-        payload: Dict[str, Any],
-        idempotency_key: str,
-        field_name: Optional[str] = None,
-        connector_id: Optional[str] = None,
-        binding: Optional[Dict[str, Any]] = None,
-        log_event_ids: Optional[List[int]] = None,
-        deliver: str = "async",
-        destination: str | None = None,
-    ) -> Dict[str, Any]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
-        return request_external_write_impl(
-            resolved,
-            payload=payload,
-            idempotency_key=idempotency_key,
-            field_name=field_name,
-            connector_id=connector_id,
-            binding=binding,
-            log_event_ids=log_event_ids,
-            deliver=deliver,
-        )
-
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────
@@ -779,9 +716,6 @@ class DataManager(BaseDataManager):
         descending: bool = False,
         return_ids_only: bool = False,
         include_ids: bool = False,
-        hydrate: Optional[str] = None,
-        hydrate_fields: Optional[List[str]] = None,
-        materialize: Optional[bool] = None,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         if return_ids_only and include_ids:
             raise ValueError("return_ids_only and include_ids are mutually exclusive")
@@ -803,9 +737,6 @@ class DataManager(BaseDataManager):
                 descending=descending,
                 return_ids_only=return_ids_only,
                 include_ids=include_ids,
-                hydrate=hydrate,
-                hydrate_fields=hydrate_fields,
-                materialize=materialize,
             )
 
         sorting = None
@@ -1281,7 +1212,6 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         log_ids: Optional[List[int]] = None,
         dangerous_ok: bool = False,
-        delete_empty_rows: bool = False,
         destination: str | None = None,
     ) -> int:
         try:
@@ -1296,7 +1226,6 @@ class DataManager(BaseDataManager):
             filter=filter,
             log_ids=log_ids,
             dangerous_ok=dangerous_ok,
-            delete_empty_rows=delete_empty_rows,
         )
 
     # ──────────────────────────────────────────────────────────────────────────

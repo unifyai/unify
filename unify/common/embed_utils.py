@@ -38,8 +38,11 @@ else:
         fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
 
 
-# Model to use for text embeddings
-EMBED_MODEL = "text-embedding-3-small"
+def embed_model() -> str:
+    """The embedding model vector columns and semantic search bind to."""
+    from unify.db.embeddings import configured_model
+
+    return configured_model()
 
 
 # In‑process locks keyed by (context, column_key) to avoid race conditions when
@@ -183,7 +186,6 @@ def _backfill_derived_for_ids(
             context=context,
             key=key,
             equation=equation,
-            derived=True,
             from_ids=chunk,
             project=project,
         )
@@ -194,8 +196,6 @@ def ensure_derived_column(
     key: str,
     equation: str,
     *,
-    referenced_logs_context: str | None = None,
-    derived: bool | None = None,
     from_ids: list[int] | None = None,
     project: str | None = None,
 ) -> None:
@@ -204,9 +204,8 @@ def ensure_derived_column(
 
     - Creates the column if missing, guarded by a process-local lock to avoid
       duplicate creations under concurrency.
-    - Tolerates backend uniqueness races.
-    - By default, scopes placeholders to a local alias `lg` referencing the
-      provided `context` when `referenced_logs_context` is not specified.
+    - Tolerates uniqueness races between concurrent creators.
+    - Placeholders use the local alias `lg` for the context's own rows.
     """
     # Fast path: if field already exists and we are not doing targeted
     # derived logs creation using from_ids, return without locking or logging
@@ -235,33 +234,20 @@ def ensure_derived_column(
                 return
 
             try:
-                referenced_logs = {}
-                if from_ids:
-                    # Instruct backend to scope the operation to a subset of log entries
-                    referenced_logs = {
-                        "lg": list(from_ids),
-                    }
-                else:
-                    referenced_logs = {
-                        "lg": {"context": referenced_logs_context or context},
-                    }
-
                 response = db.create_derived_logs(
                     context=context,
                     key=key,
                     equation=equation,
-                    referenced_logs=referenced_logs,
-                    derived=derived,
+                    from_ids=list(from_ids) if from_ids else None,
                     project=project,
                 )
                 id_count = len(from_ids) if from_ids else None
                 logger.debug(
                     "create_derived_logs response context=%s key=%s "
-                    "from_ids_count=%s referenced_logs=%s => %s",
+                    "from_ids_count=%s => %s",
                     context,
                     key,
                     id_count,
-                    referenced_logs,
                     response,
                 )
             except db.StoreError as e:
@@ -323,7 +309,6 @@ def ensure_vector_column(
             context=context,
             key=source_column,
             equation=scoped_derived_expr,
-            derived=True,
             from_ids=from_ids,
             project=project,
         )
@@ -355,7 +340,7 @@ def ensure_vector_column(
                     created_or_backfilled = True
 
     embed_expr = (
-        f"embed({{lg:{source_column}}}, model='{EMBED_MODEL}', "
+        f"embed({{lg:{source_column}}}, model='{embed_model()}', "
         f"async_embeddings={async_embeddings})"
     )
 
@@ -365,7 +350,6 @@ def ensure_vector_column(
             context=context,
             key=embed_column,
             equation=embed_expr,
-            derived=True,
             from_ids=from_ids,
             project=project,
         )
@@ -377,7 +361,6 @@ def ensure_vector_column(
             context=context,
             key=embed_column,
             equation=embed_expr,
-            derived=True,
             from_ids=None,
             project=project,
         )

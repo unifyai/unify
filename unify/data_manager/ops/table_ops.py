@@ -80,7 +80,7 @@ def create_table_impl(
     if is_shared_authored_context(context):
         fields = fields_with_authoring(fields)
     if fields:
-        db.create_fields(fields, context=context)
+        db.create_fields(fields=fields, context=context)
 
     return context
 
@@ -382,7 +382,6 @@ def create_column_impl(
     column_name: str,
     column_type: str,
     mutable: bool = True,
-    backfill_logs: bool = False,
 ) -> Dict[str, str]:
     """
     Implementation of create_column operation.
@@ -399,8 +398,6 @@ def create_column_impl(
         Unify data type for the column.
     mutable : bool
         Whether values can be updated.
-    backfill_logs : bool
-        Whether to backfill existing rows.
 
     Returns
     -------
@@ -426,7 +423,6 @@ def create_column_impl(
     return db.create_fields(
         context=context,
         fields={column_name: {"type": column_type, "mutable": mutable}},
-        backfill_logs=backfill_logs,
     )
 
 
@@ -554,59 +550,4 @@ def create_derived_column_impl(
         context=context,
         key=column_name,
         equation=transformed_equation,
-        referenced_logs={"lg": {"context": context}},
-    )
-
-
-def create_external_column_impl(
-    context: str,
-    *,
-    column_name: str,
-    connector_id: str,
-    binding: Dict[str, Any],
-    column_type: str = "Any",
-) -> Dict[str, Any]:
-    """Create an ``external_entry`` column bound to a REST connector."""
-    body = dict(binding or {})
-    body["connector_id"] = connector_id
-    logger.debug(
-        "Creating external column %s in %s via connector %s",
-        column_name,
-        context,
-        connector_id,
-    )
-    return db.create_fields(
-        {
-            column_name: {
-                "type": column_type,
-                "category": "external_entry",
-                "binding": body,
-            },
-        },
-        context=context,
-        backfill_logs=True,
-    )
-
-
-def request_external_write_impl(
-    context: str,
-    *,
-    payload: Dict[str, Any],
-    idempotency_key: str,
-    field_name: Optional[str] = None,
-    connector_id: Optional[str] = None,
-    binding: Optional[Dict[str, Any]] = None,
-    log_event_ids: Optional[List[int]] = None,
-    deliver: str = "async",
-) -> Dict[str, Any]:
-    """Enqueue an external through-write intent via UniSDK."""
-    return db.request_external_write(
-        payload=payload,
-        idempotency_key=idempotency_key,
-        field_name=field_name,
-        connector_id=connector_id,
-        binding=binding,
-        log_event_ids=log_event_ids,
-        deliver=deliver,
-        context=context,
     )

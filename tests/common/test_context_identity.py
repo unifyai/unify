@@ -1,10 +1,10 @@
 """Identity verification for provisioned contexts.
 
-A row write that reaches the backend before provisioning auto-creates the
-target context bare — no unique keys, no auto-counting — and the backend
+A row write that reaches the store before provisioning auto-creates the
+target context bare — no unique keys, no auto-counting — and the store
 cannot retrofit that configuration later. Rows inserted into a bare context
 receive no identity column, which is silent corruption. These tests pin the
-backend shape and prove `_create_context_with_retry` refuses to treat such a
+store shape and prove `create_context_checked` refuses to treat such a
 context as provisioned.
 """
 
@@ -15,7 +15,7 @@ from unify import db
 from tests.helpers import _handle_project
 from unify.common.context_store import (
     ContextIdentityError,
-    _create_context_with_retry,
+    create_context_checked,
 )
 from unify.common.log_utils import log as unity_log
 
@@ -36,7 +36,7 @@ def test_bare_context_write_assigns_no_identity():
     assert rows and "row_id" not in rows[0].entries
 
     with pytest.raises(ContextIdentityError):
-        _create_context_with_retry(
+        create_context_checked(
             name,
             unique_keys={"row_id": "int"},
             auto_counting={"row_id": None},
@@ -48,13 +48,13 @@ def test_configured_context_passes_verification_and_assigns_ids():
     base = db.get_active_context()["write"]
     name = f"{base}/ConfiguredTable"
 
-    _create_context_with_retry(
+    create_context_checked(
         name,
         unique_keys={"row_id": "int"},
         auto_counting={"row_id": None},
     )
     # Re-ensuring an existing, correctly configured context stays idempotent.
-    _create_context_with_retry(
+    create_context_checked(
         name,
         unique_keys={"row_id": "int"},
         auto_counting={"row_id": None},

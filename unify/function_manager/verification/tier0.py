@@ -170,14 +170,10 @@ class Tier0Checker:
         row: Mapping[str, Any],
         writer: LedgerWriter,
         call_site: str = "root",
-        run_key: Optional[str] = None,
-        task_id: Optional[int] = None,
     ) -> None:
         self.row = dict(row)
         self.writer = writer
         self.call_site = call_site
-        self.run_key = run_key
-        self.task_id = task_id
         self.name = str(self.row.get("name") or "function")
 
     @property
@@ -195,8 +191,6 @@ class Tier0Checker:
                 fault=verdict.fault,
                 call_site=self.call_site,
                 args_signature=signature,
-                run_key=self.run_key,
-                task_id=self.task_id,
             ),
         )
 
@@ -231,7 +225,6 @@ class Tier0Checker:
             args=kwargs,
             result=result,
             max_bytes=settings.max_fixture_bytes,
-            run_key=self.run_key,
         )
         if fixture is None:
             return

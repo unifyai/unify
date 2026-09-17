@@ -20,7 +20,6 @@ class MemorySettings(BaseSettings):
         ROLLING_SUMMARIES: Auto-refresh rolling conversation summaries.
         RESPONSE_POLICIES: Auto-refresh per-contact response policies.
         KNOWLEDGE: Auto-extract facts to the knowledge base.
-        TASKS: Auto-update the task schedule from transcript chunks.
     """
 
     IMPL: str = "real"
@@ -31,7 +30,6 @@ class MemorySettings(BaseSettings):
     ROLLING_SUMMARIES: bool = True
     RESPONSE_POLICIES: bool = True
     KNOWLEDGE: bool = False
-    TASKS: bool = False
 
     model_config = SettingsConfigDict(
         env_prefix="UNIFY_MEMORY_",
