@@ -392,9 +392,24 @@ class SimulatedWebSearcher(BaseWebSearcher):
         # The guard still runs: a simulated searcher that accepted addresses the
         # real one refuses would let a rejection surface first in production.
         assert_fetchable(url)
+        # The file holds what a download of that page would contain, told by
+        # the same stateful simulator that answered the searches, so a caller
+        # that opens it finds the story the earlier answers cited.
+        instruction = build_simulated_method_prompt(
+            "fetch",
+            f"Write the full plain-text content of the page at {url} exactly "
+            "as a download of it would read: its title, byline or dateline, "
+            "and body, consistent with every finding you have reported so "
+            "far. Output only the page content.",
+        )
+        content = await simulated_llm_roundtrip(
+            self._llm,
+            label="SimulatedWebSearcher.fetch",
+            prompt=instruction,
+        )
         target = Path(get_local_root()) / "Downloads" / filename_for(url)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"simulated download\n")
+        target.write_text(str(content), encoding="utf-8")
         return str(target)
 
     @functools.wraps(BaseWebSearcher.clear, updated=())

@@ -416,6 +416,26 @@ _STORAGE_SESSION_NOTICE = textwrap.dedent("""
 """).strip()
 
 
+def _build_clock_context() -> str:
+    """State the assistant's current time so a plan never has to discover it.
+
+    Read through the shared helper at build time, so it is the same clock
+    every other prompt shows and it is authoritative for "today" and "this
+    week": code run inside ``execute_code`` may execute on a host whose own
+    clock is set differently.
+    """
+    from unify.common import prompt_helpers
+
+    return textwrap.dedent(f"""
+        ### Current Time
+
+        The current date and time is **{prompt_helpers.now()}**. This is the
+        assistant's clock; resolve "today", "this week" and similar against
+        it, and prefer it over any clock read inside `execute_code`, which
+        may run on a host set differently.
+    """).strip()
+
+
 def _build_filesystem_context() -> str:
     pass
 
@@ -600,6 +620,7 @@ def build_code_act_prompt(
             )
 
         # ── Per-assistant / dynamic tail ──
+        parts.append(_build_clock_context())
         parts.append(_build_filesystem_context())
 
         if rules_and_examples:
