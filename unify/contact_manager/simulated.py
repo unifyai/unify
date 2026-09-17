@@ -923,8 +923,6 @@ class SimulatedContactManager(BaseContactManager):
         should_respond: bool = True,
         response_policy: Optional[str] = None,
         is_system: bool = False,
-        custom_key: Optional[str] = None,
-        custom_hash: Optional[str] = None,
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         destination: Optional[str] = None,
@@ -959,8 +957,6 @@ class SimulatedContactManager(BaseContactManager):
             "should_respond": should_respond,
             "response_policy": response_policy,
             "is_system": is_system,
-            "custom_key": custom_key,
-            "custom_hash": custom_hash,
         }
         if user_id is not None:
             contact["user_id"] = user_id

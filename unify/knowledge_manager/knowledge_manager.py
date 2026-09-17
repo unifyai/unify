@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import datetime
 from typing import FrozenSet, List, Dict, Optional, Any, Tuple
 import functools
 import inspect
-import json
 import logging
-import threading
 
 from unify import db
 from ..common.log_utils import (
     assigned_row_id,
-    create_logs as unity_create_logs,
     log as unity_log,
 )
-from ..common.authorship import strip_authoring_assistant_id
 from ..common.stale_reason import (
     StaleReason,
     coerce_stale_reasons,
@@ -33,25 +28,12 @@ from ..common.federated_search import (
 )
 from .base import BaseKnowledgeManager
 from .types.knowledge import Knowledge, KnowledgeKind, KnowledgeStatus
-from .types.meta import KnowledgeMeta
 from .types.source_ref import SourceKind, SourceRef, coerce_source_refs
-from .custom_knowledge import (
-    compute_custom_knowledge_hash,
-)
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
-from ..common.custom_sync import (
-    MANAGED_BY_DEPLOYMENT,
-    CustomSyncAdapter,
-    managed_rows_filter,
-    run_custom_sync,
-    stored_hash_field,
-)
-from ..common.sync_lease import exclusive_sync_lease
 
 KNOWLEDGE_TABLE = "Knowledge"
-KNOWLEDGE_META_TABLE = "Knowledge/Meta"
 FILE_RECORDS_TABLE = "FileRecords"
 CONTACTS_TABLE = "Contacts"
 
@@ -105,12 +87,6 @@ class KnowledgeManager(BaseKnowledgeManager):
                     },
                 ],
             ),
-            TableContext(
-                name=KNOWLEDGE_META_TABLE,
-                description="Metadata for source-defined custom knowledge sync state.",
-                fields=model_to_fields(KnowledgeMeta),
-                unique_keys={"meta_id": "int"},
-            ),
         ]
 
     def __init__(
@@ -122,13 +98,9 @@ class KnowledgeManager(BaseKnowledgeManager):
     ) -> None:
         super().__init__()
         self._ctx = ContextRegistry.get_context(self, KNOWLEDGE_TABLE)
-        self._meta_ctx = ContextRegistry.get_context(self, KNOWLEDGE_META_TABLE)
 
         self._filter_scope = filter_scope
         self._exclude_ids = frozenset(exclude_ids) if exclude_ids else None
-        self._custom_knowledge_synced_sources: set[tuple[str, str]] = set()
-        self._destination_context_lock = threading.RLock()
-        self._destination_write_scoped = False
 
         self._BUILTIN_FIELDS: Tuple[str, ...] = tuple(Knowledge.model_fields.keys())
         self._REQUIRED_COLUMNS: set[str] = set(self._BUILTIN_FIELDS)
@@ -147,35 +119,6 @@ class KnowledgeManager(BaseKnowledgeManager):
             destination=destination,
         )
         return self._knowledge_context_for_root(root_context)
-
-    def _meta_context_for_destination(self, destination: str | None) -> str:
-        root_context = ContextRegistry.write_root(
-            self,
-            KNOWLEDGE_META_TABLE,
-            destination=destination,
-        )
-        return f"{root_context.strip('/')}/{KNOWLEDGE_META_TABLE}"
-
-    @contextmanager
-    def _temporary_knowledge_context(self, attr_name: str, context: str):
-        with self._destination_context_lock:
-            original = getattr(self, attr_name)
-            was_write_scoped = self._destination_write_scoped
-            setattr(self, attr_name, context)
-            self._destination_write_scoped = True
-            try:
-                yield
-            finally:
-                setattr(self, attr_name, original)
-                self._destination_write_scoped = was_write_scoped
-
-    def _sync_destination_contexts(
-        self,
-        destination: str | None,
-    ) -> tuple[str, str, bool]:
-        data_context = self._knowledge_context_for_destination(destination)
-        meta_context = self._meta_context_for_destination(destination)
-        return data_context, meta_context, destination in (None, "personal")
 
     def _read_knowledge_contexts(self) -> list[str]:
         return list(
@@ -286,17 +229,8 @@ class KnowledgeManager(BaseKnowledgeManager):
     @functools.wraps(BaseKnowledgeManager.clear, updated=())
     def clear(self) -> None:
         db.delete_context(self._ctx)
-        db.delete_context(self._meta_ctx)
-
-        try:
-            self._custom_knowledge_synced_sources.clear()
-        except Exception:
-            pass
 
         self._ctx = ContextRegistry.refresh(self, KNOWLEDGE_TABLE) or self._ctx
-        self._meta_ctx = (
-            ContextRegistry.refresh(self, KNOWLEDGE_META_TABLE) or self._meta_ctx
-        )
         self._provision_storage()
 
         try:
@@ -345,8 +279,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         status: KnowledgeStatus = KnowledgeStatus.active,
         supersedes_ids: Optional[List[int]] = None,
         superseded_by_id: Optional[int] = None,
-        custom_key: Optional[str] = None,
-        custom_hash: Optional[str] = None,
         knowledge_id: Optional[int] = None,
     ) -> Knowledge:
         kwargs: Dict[str, Any] = {
@@ -362,8 +294,6 @@ class KnowledgeManager(BaseKnowledgeManager):
             "status": status,
             "supersedes_ids": supersedes_ids or [],
             "superseded_by_id": superseded_by_id,
-            "custom_key": custom_key,
-            "custom_hash": custom_hash,
         }
         if knowledge_id is not None:
             kwargs["knowledge_id"] = knowledge_id
@@ -1035,193 +965,6 @@ class KnowledgeManager(BaseKnowledgeManager):
     #  Custom Knowledge Sync                                             #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_custom_knowledge_hash(
-        self,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> str:
-        field = stored_hash_field("custom_knowledge_hash", managed_by)
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                return logs[0].entries.get(field, "") or ""
-        except Exception as exc:
-            logger.warning("Failed to retrieve custom knowledge hash: %s", exc)
-        return ""
-
-    def _store_custom_knowledge_hash(
-        self,
-        hash_value: str,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> None:
-        field = stored_hash_field("custom_knowledge_hash", managed_by)
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                db.update_logs(
-                    context=self._meta_ctx,
-                    logs=[logs[0].id],
-                    entries={field: hash_value},
-                    overwrite=True,
-                )
-            else:
-                unity_create_logs(
-                    context=self._meta_ctx,
-                    entries=[{"meta_id": 1, field: hash_value}],
-                    stamp_authoring=True,
-                )
-        except Exception as exc:
-            logger.warning("Failed to store custom knowledge hash: %s", exc)
-
-    def _delete_custom_knowledge_by_key(
-        self,
-        custom_key: str,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        logs = db.get_logs(
-            context=self._ctx,
-            filter=(
-                f"custom_key == '{custom_key}' and "
-                f"{managed_rows_filter(managed_by)}"
-            ),
-            limit=1,
-        )
-        if not logs:
-            return False
-        db.delete_logs(context=self._ctx, logs=[logs[0].id])
-        return True
-
-    def _update_custom_knowledge(
-        self,
-        knowledge_id: int,
-        data: Dict[str, Any],
-    ) -> None:
-        log_ids = db.get_logs(
-            context=self._ctx,
-            filter=f"knowledge_id == {int(knowledge_id)}",
-            limit=1,
-            return_ids_only=True,
-        )
-        if not log_ids:
-            raise ValueError(
-                f"No knowledge found with knowledge_id {knowledge_id} to update.",
-            )
-        update_data = strip_authoring_assistant_id(
-            {k: v for k, v in data.items() if k != "knowledge_id"},
-        )
-        db.update_logs(
-            context=self._ctx,
-            logs=[log_ids[0]],
-            entries=update_data,
-            overwrite=True,
-        )
-
-    def _insert_custom_knowledge(self, data: Dict[str, Any]) -> int:
-        insert_data = {k: v for k, v in data.items() if k != "knowledge_id"}
-        result = unity_create_logs(
-            context=self._ctx,
-            entries=[insert_data],
-            stamp_authoring=True,
-        )
-        if isinstance(result, list) and len(result) > 0:
-            log = result[0]
-            if hasattr(log, "entries"):
-                return log.entries.get("knowledge_id", -1)
-        elif isinstance(result, dict):
-            log_ids = result.get("log_event_ids", [])
-            if log_ids:
-                logs = db.get_logs(
-                    context=self._ctx,
-                    filter=f"id == {log_ids[0]}",
-                    limit=1,
-                )
-                if logs and hasattr(logs[0], "entries"):
-                    return logs[0].entries.get("knowledge_id")
-        return -1
-
-    def sync_custom_knowledge(
-        self,
-        *,
-        source_claims: Optional[Dict[str, Dict[str, Any]]] = None,
-        destination: str | None = None,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        """Ensure custom knowledge claims match source definitions.
-
-        Reconciles only the rows *managed_by* owns; rows planted in the same
-        context by other sources are neither read nor pruned.
-        """
-        try:
-            knowledge_context, meta_context, _is_personal = (
-                self._sync_destination_contexts(destination)
-            )
-        except ToolErrorException as exc:
-            logger.warning(
-                "Skipping custom knowledge sync for destination %r: %s",
-                destination,
-                exc.payload,
-            )
-            return False
-
-        with (
-            exclusive_sync_lease(f"{meta_context}:custom_sync"),
-            self._temporary_knowledge_context("_ctx", knowledge_context),
-            self._temporary_knowledge_context("_meta_ctx", meta_context),
-        ):
-            source_claims = source_claims or {}
-            synced_key = (knowledge_context, managed_by)
-
-            return run_custom_sync(
-                adapter=_KnowledgeSyncAdapter(self, managed_by=managed_by),
-                source=source_claims,
-                expected_hash=compute_custom_knowledge_hash(
-                    source_claims=source_claims,
-                ),
-                stored_hash=self._get_stored_custom_knowledge_hash(managed_by),
-                already_synced=synced_key in self._custom_knowledge_synced_sources,
-                mark_synced=lambda: self._custom_knowledge_synced_sources.add(
-                    synced_key,
-                ),
-                store_hash=lambda value: self._store_custom_knowledge_hash(
-                    value,
-                    managed_by=managed_by,
-                ),
-            )
-
-    def sync_custom(
-        self,
-        *,
-        source_claims: Optional[Dict[str, Dict[str, Any]]] = None,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        """Sync custom knowledge claims from pre-collected sources."""
-        if source_claims is None:
-            source_claims = {}
-
-        by_destination: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        for custom_key, source_data in source_claims.items():
-            destination = source_data.get("destination") or "personal"
-            by_destination.setdefault(destination, {})[custom_key] = source_data
-
-        changed = False
-        for destination, group in by_destination.items():
-            destination_arg = None if destination == "personal" else destination
-            changed |= self.sync_custom_knowledge(
-                source_claims=group,
-                destination=destination_arg,
-                managed_by=managed_by,
-            )
-        return changed
-
 
 def _append_destination_guidance(method_name: str) -> None:
     method = getattr(KnowledgeManager, method_name)
@@ -1343,96 +1086,3 @@ def mark_knowledge_stale_for_deleted_sources(
                     },
                     overwrite=True,
                 )
-
-
-class _KnowledgeSyncAdapter(CustomSyncAdapter):
-    """Storage mechanics for the custom knowledge reconcile."""
-
-    kind = "knowledge"
-
-    def __init__(
-        self,
-        manager: KnowledgeManager,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> None:
-        self._manager = manager
-        self.managed_by = managed_by
-
-    def live_rows(self) -> List[Dict[str, Any]]:
-        logs = db.get_logs(
-            context=self._manager._ctx,
-            filter=managed_rows_filter(self.managed_by),
-            exclude_fields=list_private_fields(self._manager._ctx),
-        )
-        return [dict(lg.entries or {}) for lg in logs]
-
-    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
-        fields.pop("destination", None)
-        return fields
-
-    def insert(self, key: str, fields: Dict[str, Any]) -> None:
-        self._manager._insert_custom_knowledge(fields)
-
-    def update(
-        self,
-        key: str,
-        live_row: Dict[str, Any],
-        fields: Dict[str, Any],
-    ) -> None:
-        self._manager._update_custom_knowledge(
-            knowledge_id=live_row["knowledge_id"],
-            data=fields,
-        )
-
-    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_knowledge_by_key(key, managed_by=self.managed_by)
-
-    def find_adoptable(
-        self,
-        key: str,
-        fields: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
-        """Claim a provenance-less row carrying this entry's title rather
-        than inserting a second copy beside it.
-
-        Rows planted before ``custom_key``/``custom_hash`` existed carry
-        neither, so the managed index and the collision probe (both keyed
-        on ``custom_key``) cannot see them and every reconcile would
-        duplicate the whole seed set. Title is the only identity such a
-        row still shares with its source entry; adoption updates it in
-        place via ``knowledge_id`` and the write stamps the provenance.
-
-        Deployment-only: another source adopting by bare title would
-        claim rows it never planted."""
-        if self.managed_by != MANAGED_BY_DEPLOYMENT:
-            return None
-        title = json.dumps(str(fields.get("title", "")))
-        existing = db.get_logs(
-            context=self._manager._ctx,
-            filter=f"title == {title} and custom_hash == None",
-            limit=1,
-        )
-        if not existing:
-            return None
-        return dict(existing[0].entries or {})
-
-    def find_collision(
-        self,
-        key: str,
-        fields: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
-        existing = db.get_logs(
-            context=self._manager._ctx,
-            filter=f"custom_key == '{key}' and custom_hash == None",
-            limit=1,
-        )
-        if not existing:
-            return None
-        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
-
-    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        db.delete_logs(
-            context=self._manager._ctx,
-            logs=[live_row["_log_id"]],
-        )

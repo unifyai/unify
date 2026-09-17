@@ -261,24 +261,6 @@ class Function(AuthoredRow):
         ),
     )
 
-    # Source-defined custom function tracking
-    custom_key: Optional[str] = Field(
-        None,
-        description=(
-            "Stable sync identity of a source-defined custom function. "
-            "Defined to equal the function name (the call-site contract). "
-            "None for user-added functions or primitives."
-        ),
-    )
-    custom_hash: Optional[str] = Field(
-        None,
-        description=(
-            "Hash of source-defined custom function for sync detection. "
-            "None for user-added functions or primitives. "
-            "Present for functions defined in the custom/ folder."
-        ),
-    )
-
     @field_validator("stale_reasons", mode="before")
     @classmethod
     def _validate_stale_reasons(cls, v):

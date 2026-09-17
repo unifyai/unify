@@ -23,7 +23,7 @@ def test_filter_update_sends_only_the_callers_columns(monkeypatch) -> None:
     class _Log:
         id = 101
         entries = {
-            "custom_key": "stargazer-v1",
+            "binding_key": "stargazer-v1",
             "campaign_slug": "stargazer-v1",
             AUTHORING_ASSISTANT_ID_FIELD: 1406,
         }
@@ -49,11 +49,11 @@ def test_filter_update_sends_only_the_callers_columns(monkeypatch) -> None:
     updated = mutation_ops.update_rows_impl(
         _CONTEXT,
         {
-            "custom_hash": "abc123",
+            "binding_hash": "abc123",
             "campaign_slug": "stargazer-v1",
             AUTHORING_ASSISTANT_ID_FIELD: 999,
         },
-        filter="custom_key == 'stargazer-v1'",
+        filter="binding_key == 'stargazer-v1'",
     )
 
     assert updated == 1
@@ -62,10 +62,10 @@ def test_filter_update_sends_only_the_callers_columns(monkeypatch) -> None:
     assert payload["logs"] == [101]
     assert payload["overwrite"] is True
     assert AUTHORING_ASSISTANT_ID_FIELD not in payload["entries"]
-    assert payload["entries"]["custom_hash"] == "abc123"
+    assert payload["entries"]["binding_hash"] == "abc123"
     assert payload["entries"]["campaign_slug"] == "stargazer-v1"
     # The row's own columns stay in the store; only the update is sent.
-    assert "custom_key" not in payload["entries"]
+    assert "binding_key" not in payload["entries"]
 
 
 def test_log_id_update_strips_authoring_from_delta_payload(monkeypatch) -> None:
@@ -82,7 +82,7 @@ def test_log_id_update_strips_authoring_from_delta_payload(monkeypatch) -> None:
 
     updated = mutation_ops.update_rows_impl(
         _CONTEXT,
-        {"custom_hash": "xyz", AUTHORING_ASSISTANT_ID_FIELD: 7},
+        {"binding_hash": "xyz", AUTHORING_ASSISTANT_ID_FIELD: 7},
         log_ids=[55],
         overwrite=True,
     )
@@ -90,4 +90,4 @@ def test_log_id_update_strips_authoring_from_delta_payload(monkeypatch) -> None:
     assert updated == 1
     assert captured[0]["logs"] == [55]
     assert AUTHORING_ASSISTANT_ID_FIELD not in captured[0]["entries"]
-    assert captured[0]["entries"] == {"custom_hash": "xyz"}
+    assert captured[0]["entries"] == {"binding_hash": "xyz"}

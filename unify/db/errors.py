@@ -1,7 +1,7 @@
 """Exceptions raised by the local store.
 
 Every failure the store reports is one of these, so callers can react to the
-specific condition (a missing context, a duplicate unique key, a held lease)
+specific condition (a missing context, a duplicate unique key, a lost race)
 without inspecting message text.
 """
 
@@ -34,24 +34,4 @@ class InvalidExpression(StoreError):
 
 
 class Conflict(StoreError):
-    """A write lost a race with another writer (claims, leases, overwrite=False)."""
-
-
-class SyncLeaseHeldError(Conflict):
-    """The requested sync lease is currently held by someone else."""
-
-    def __init__(
-        self,
-        lease_key: str,
-        *,
-        held_by: str | None = None,
-        expires_at: str | None = None,
-    ) -> None:
-        super().__init__(
-            f"Sync lease {lease_key!r} is held"
-            + (f" by {held_by!r}" if held_by else "")
-            + (f" until {expires_at}" if expires_at else ""),
-        )
-        self.lease_key = lease_key
-        self.held_by = held_by
-        self.expires_at = expires_at
+    """A write lost a race with another writer (claims, overwrite=False)."""

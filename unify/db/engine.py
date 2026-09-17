@@ -1,7 +1,7 @@
 """The SQLite engine behind :mod:`unify.db`.
 
 One file holds every project, context, row, field definition, derived-column
-equation, commit snapshot, sync lease and assistant record for an install. A
+equation, commit snapshot and assistant record for an install. A
 context is a named, hierarchically-addressed table (``Contacts``,
 ``tests/foo/Contacts``) whose rows are JSON documents typed by the fields
 declared on it. Rows carry a global integer id, so a row id alone identifies a
@@ -22,7 +22,6 @@ import os
 import sqlite3
 import statistics
 import threading
-import time
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -36,7 +35,6 @@ from .errors import (
     InvalidExpression,
     NotFound,
     StoreError,
-    SyncLeaseHeldError,
 )
 from .expressions import (
     ROW_ID_NAMES,
@@ -108,13 +106,6 @@ CREATE TABLE IF NOT EXISTS commits (
     message TEXT,
     created_at TEXT NOT NULL,
     snapshot TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS leases (
-    project_id INTEGER NOT NULL,
-    lease_key TEXT NOT NULL,
-    holder TEXT NOT NULL,
-    expires_at REAL NOT NULL,
-    PRIMARY KEY (project_id, lease_key)
 );
 CREATE TABLE IF NOT EXISTS assistants (
     agent_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -337,7 +328,6 @@ class Store:
             if row is None:
                 return False
             conn.execute("DELETE FROM logs WHERE project_id = ?", (row["id"],))
-            conn.execute("DELETE FROM leases WHERE project_id = ?", (row["id"],))
             conn.execute("DELETE FROM projects WHERE id = ?", (row["id"],))
             return True
 
@@ -1605,59 +1595,6 @@ class Store:
                     r["updated_at"],
                 ),
             )
-
-    # ------------------------------------------------------------------
-    # Sync leases
-    # ------------------------------------------------------------------
-
-    def acquire_lease(
-        self,
-        project: str,
-        lease_key: str,
-        holder: str,
-        *,
-        ttl_seconds: float = 300.0,
-    ) -> dict[str, Any]:
-        with self._tx() as conn:
-            project_id = self._project_id(project)
-            now = time.time()
-            row = conn.execute(
-                "SELECT holder, expires_at FROM leases WHERE project_id = ? AND lease_key = ?",
-                (project_id, lease_key),
-            ).fetchone()
-            if row is not None and row["holder"] != holder and row["expires_at"] > now:
-                raise SyncLeaseHeldError(
-                    lease_key,
-                    held_by=row["holder"],
-                    expires_at=datetime.fromtimestamp(
-                        row["expires_at"],
-                        tz=timezone.utc,
-                    ).isoformat(),
-                )
-            expires_at = now + float(ttl_seconds)
-            conn.execute(
-                "INSERT INTO leases (project_id, lease_key, holder, expires_at) VALUES (?, ?, ?, ?)"
-                " ON CONFLICT(project_id, lease_key) DO UPDATE SET holder = excluded.holder,"
-                " expires_at = excluded.expires_at",
-                (project_id, lease_key, holder, expires_at),
-            )
-            return {
-                "lease_key": lease_key,
-                "holder": holder,
-                "expires_at": datetime.fromtimestamp(
-                    expires_at,
-                    tz=timezone.utc,
-                ).isoformat(),
-            }
-
-    def release_lease(self, project: str, lease_key: str, holder: str) -> bool:
-        with self._tx() as conn:
-            project_id = self._project_id(project)
-            cursor = conn.execute(
-                "DELETE FROM leases WHERE project_id = ? AND lease_key = ? AND holder = ?",
-                (project_id, lease_key, holder),
-            )
-            return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Assistants

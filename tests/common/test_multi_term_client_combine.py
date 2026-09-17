@@ -48,10 +48,20 @@ def _fake_get_logs(
 
     row_ids = list(distances)
     if filter:
-        in_match = re.search(r"guidance_id in \[([^\]]*)\]", filter)
-        assert in_match, f"unexpected filter {filter!r}"
-        wanted = {int(value) for value in in_match.group(1).split(",")}
-        row_ids = [row_id for row_id in row_ids if row_id in wanted]
+        remaining = filter
+        exists_match = re.search(rf"exists\({embed_col}\)", remaining)
+        if exists_match:
+            # A row without a vector for this term is not a result for it.
+            row_ids = [row_id for row_id in row_ids if distances[row_id] is not None]
+            remaining = remaining.replace(exists_match.group(0), "")
+        in_match = re.search(r"guidance_id in \[([^\]]*)\]", remaining)
+        if in_match:
+            wanted = {int(value) for value in in_match.group(1).split(",")}
+            row_ids = [row_id for row_id in row_ids if row_id in wanted]
+            remaining = remaining.replace(in_match.group(0), "")
+        assert not remaining.replace("and", "").strip(
+            "() ",
+        ), f"unexpected filter {filter!r}"
 
     # Backend orders by ascending distance with NULLs last.
     row_ids.sort(key=lambda rid: (distances[rid] is None, distances[rid] or 0.0))
@@ -88,9 +98,9 @@ def test_combined_client_side_mean_with_missing_penalty(monkeypatch):
     assert by_id[2] == 0.5
     # Row 3: outside term a's top-k window but exact score backfilled.
     assert by_id[3] == (0.9 + 0.2) / 2
-    # Row 4: no embeddings at all -> maximal distance 2.
-    assert by_id[4] == 2.0
-    assert [row["guidance_id"] for row in rows] == [1, 2, 3, 4]
+    # Row 4: no embeddings at all -> not a hit for any term, so not a result.
+    assert 4 not in by_id
+    assert [row["guidance_id"] for row in rows] == [1, 2, 3]
 
 
 def test_combined_client_side_applies_k_window(monkeypatch):

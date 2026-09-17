@@ -12,9 +12,7 @@ import textwrap
 from typing import Dict, Callable
 
 from ..common.prompt_helpers import (
-    clarification_guidance,
     sig_dict,
-    now,
     tool_name as _shared_tool_name,
     require_tools as _shared_require_tools,
     # Standardized composer utilities

@@ -3,7 +3,6 @@
 from unify.common.stale_reason import StaleReason
 
 from .knowledge import Knowledge, KnowledgeKind, KnowledgeStatus, UNASSIGNED
-from .meta import KnowledgeMeta
 from .source_ref import (
     ContactSourceRef,
     DataSourceRef,
@@ -21,7 +20,6 @@ __all__ = [
     "FileSourceRef",
     "Knowledge",
     "KnowledgeKind",
-    "KnowledgeMeta",
     "KnowledgeStatus",
     "SourceKind",
     "SourceRef",

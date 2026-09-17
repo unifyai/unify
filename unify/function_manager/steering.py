@@ -1071,7 +1071,7 @@ _MISSING = object()
 #: ordinary code: instrumenting every library call would bury the program in
 #: probes, and memoising one would claim an effect happened that we cannot
 #: describe well enough to skip safely.
-DEFAULT_TOOL_NAMESPACES = frozenset({"primitives", "actor", "computer_primitives"})
+DEFAULT_TOOL_NAMESPACES = frozenset({"primitives", "actor"})
 
 
 def bind_session(

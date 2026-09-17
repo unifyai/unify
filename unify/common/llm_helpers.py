@@ -23,7 +23,7 @@ from typing import (
 )
 
 
-from .tool_spec import ToolSpec, normalise_tools  # Backward-compatibility
+from .tool_spec import ToolSpec  # Backward-compatibility
 
 
 def short_id(length=4):

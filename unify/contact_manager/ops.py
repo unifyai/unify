@@ -32,8 +32,6 @@ _NAMED_CREATE_FIELDS = frozenset(
         "should_respond",
         "response_policy",
         "is_system",
-        "custom_key",
-        "custom_hash",
         "user_id",
         "agent_id",
         "destination",
@@ -59,8 +57,6 @@ _NAMED_UPDATE_FIELDS = frozenset(
         "should_respond",
         "response_policy",
         "is_system",
-        "custom_key",
-        "custom_hash",
         "user_id",
         "agent_id",
         "destination",
@@ -255,8 +251,6 @@ def create_contact(
     should_respond: bool = True,
     response_policy: Optional[str] = None,
     is_system: bool = False,
-    custom_key: Optional[str] = None,
-    custom_hash: Optional[str] = None,
     user_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     contact_id: Optional[int] = None,
@@ -281,8 +275,6 @@ def create_contact(
         "should_respond": should_respond,
         "response_policy": response_policy,
         "is_system": is_system,
-        "custom_key": custom_key,
-        "custom_hash": custom_hash,
     }
     if user_id is not None:
         contact_details["user_id"] = user_id
@@ -350,8 +342,6 @@ def update_contact(
     should_respond: Optional[bool] = None,
     response_policy: Optional[str] = None,
     is_system: Optional[bool] = None,
-    custom_key: Optional[str] = None,
-    custom_hash: Optional[str] = None,
     user_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     _log_id: Optional[int] = None,
@@ -376,8 +366,6 @@ def update_contact(
         "should_respond": should_respond,
         "response_policy": response_policy,
         "is_system": is_system,
-        "custom_key": custom_key,
-        "custom_hash": custom_hash,
         "user_id": user_id,
         "agent_id": agent_id,
     }

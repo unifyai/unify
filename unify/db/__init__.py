@@ -32,7 +32,6 @@ from .errors import (
     InvalidExpression,
     NotFound,
     StoreError,
-    SyncLeaseHeldError,
 )
 from .expressions import compile_expression
 
@@ -48,8 +47,6 @@ __all__ = [
     "NotFound",
     "Store",
     "StoreError",
-    "SyncLeaseHeldError",
-    "acquire_sync_lease",
     "activate",
     "active_project",
     "claim_logs",
@@ -84,7 +81,6 @@ __all__ = [
     "list_assistants",
     "list_projects",
     "log",
-    "release_sync_lease",
     "rename_context",
     "rename_field",
     "reset_store",
@@ -872,35 +868,6 @@ def join_query(
         "metric": results[names[0]] if isinstance(key, str) else results,
         "count": len(rows),
     }
-
-
-# ---------------------------------------------------------------------------
-# Sync leases
-# ---------------------------------------------------------------------------
-
-
-def acquire_sync_lease(
-    lease_key: str,
-    holder: str,
-    *,
-    ttl_seconds: float = 300.0,
-    project: str | None = None,
-) -> dict[str, Any]:
-    return get_store().acquire_lease(
-        _project(project),
-        lease_key,
-        holder,
-        ttl_seconds=ttl_seconds,
-    )
-
-
-def release_sync_lease(
-    lease_key: str,
-    holder: str,
-    *,
-    project: str | None = None,
-) -> bool:
-    return get_store().release_lease(_project(project), lease_key, holder)
 
 
 # ---------------------------------------------------------------------------

@@ -40,15 +40,6 @@ from unify.db import StoreError as _UnifyRequestError
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
-from ..common.custom_sync import (
-    MANAGED_BY_DEPLOYMENT,
-    CustomSyncAdapter,
-    CustomSyncPartialFailure,
-    managed_rows_filter,
-    run_custom_sync,
-    stored_hash_field,
-)
-from ..common.sync_lease import exclusive_sync_lease
 from ..common.federated_search import (
     SCORE_FIELD,
     FederatedSearchContext,
@@ -133,11 +124,6 @@ from unify.function_manager.primitives.scope import (
     default_runtime_scope,
 )
 from unify.function_manager.primitives.registry import get_registry
-from .custom_functions import (
-    CustomFunctionSyncPartialFailure,
-    compute_custom_functions_hash,
-    compute_custom_venvs_hash,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -230,26 +216,6 @@ def function_id_resolves(function_id: int) -> bool:
         ):
             return True
     return False
-
-
-def function_managed_by(function_id: int) -> str | None:
-    """Which reconcile source owns this function row, if any.
-
-    ``None`` for a function no source authored -- one a user wrote, or one a
-    run distilled from its own trajectory. Callers use it to tell "this row
-    belongs to a bundle and its surface will prune it" from "this row belongs
-    to nobody and would otherwise be left behind".
-    """
-
-    for context in _compositional_contexts():
-        logs = db.get_logs(
-            context=context,
-            filter=f"function_id == {int(function_id)}",
-            limit=1,
-        )
-        if logs:
-            return (logs[0].entries or {}).get("managed_by") or None
-    return None
 
 
 def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
@@ -433,69 +399,6 @@ class _DependencyVisitor(ast.NodeVisitor):
             elif returned_name in self._assignment_map:
                 self.dependencies.add(self._assignment_map[returned_name])
         self.generic_visit(node)
-
-
-def _strip_custom_function_decorators(source: str) -> str:
-    """
-    Remove @custom_function decorators from a function source string.
-
-    The @custom_function decorator is used for sync metadata only (it is effectively
-    a no-op at runtime), but the symbol is not guaranteed to exist inside execution
-    environments (e.g., Actor sandboxes or venv runner subprocesses).
-
-    Handles both single-line and multi-line decorator syntax:
-        @custom_function(venv_name="foo")  # single-line
-        @custom_function(                   # multi-line
-            venv_name="foo",
-            verify=True,
-        )
-    """
-    try:
-        lines = source.splitlines(keepends=True)
-    except Exception:
-        return source
-
-    out: List[str] = []
-    seen_def = False
-    in_custom_decorator = False
-    paren_depth = 0
-
-    for line in lines:
-        stripped = line.lstrip()
-
-        # Once we've seen the function definition, keep all lines
-        if seen_def:
-            out.append(line)
-            continue
-
-        if stripped.startswith("def ") or stripped.startswith("async def "):
-            seen_def = True
-            out.append(line)
-            continue
-
-        # Check if this line starts a @custom_function decorator
-        if stripped.startswith("@custom_function"):
-            in_custom_decorator = True
-            # Count parentheses to handle multi-line decorators
-            paren_depth += stripped.count("(") - stripped.count(")")
-            # If parens are balanced on this line, decorator is complete
-            if paren_depth <= 0:
-                in_custom_decorator = False
-                paren_depth = 0
-            continue
-
-        # If we're inside a multi-line @custom_function decorator, skip lines
-        if in_custom_decorator:
-            paren_depth += stripped.count("(") - stripped.count(")")
-            if paren_depth <= 0:
-                in_custom_decorator = False
-                paren_depth = 0
-            continue
-
-        # Keep other decorators and lines before the function def
-        out.append(line)
-
-    return "".join(out)
 
 
 # Pattern for shell script metadata comments
@@ -1693,7 +1596,6 @@ class _VenvFunctionProxy:
             raise ValueError(f"Venv function '{self.__name__}' has no implementation")
 
         # Strip @custom_function decorators (not available in subprocess runner).
-        implementation = _strip_custom_function_decorators(implementation)
 
         # Determine async-ness based on source.
         is_async = "async def" in implementation
@@ -2013,10 +1915,6 @@ class FunctionManager(BaseFunctionManager):
             FUNCTIONS_VERIFICATIONS_TABLE,
         )
 
-        # (context, managed_by) pairs whose custom sync already ran this
-        # process; each source's pass is memoised independently.
-        self._custom_venvs_synced_sources: set[tuple[str, str]] = set()
-        self._custom_functions_synced_sources: set[tuple[str, str]] = set()
         self._destination_context_lock = threading.RLock()
         self._destination_write_scoped = False
 
@@ -2228,23 +2126,6 @@ class FunctionManager(BaseFunctionManager):
             finally:
                 setattr(self, attr_name, original)
                 self._destination_write_scoped = was_write_scoped
-
-    def _sync_destination_contexts(
-        self,
-        table_name: str,
-        destination: str | None,
-    ) -> tuple[str, str, bool]:
-        """Return the destination-scoped data context, meta context, and personal flag."""
-
-        data_context = self._function_context_for_destination(
-            table_name,
-            destination=destination,
-        )
-        meta_context = self._function_context_for_destination(
-            FUNCTIONS_META_TABLE,
-            destination=destination,
-        )
-        return data_context, meta_context, destination in (None, "personal")
 
     @property
     def _dangerous_builtins(self) -> Set[str]:
@@ -2922,7 +2803,7 @@ class FunctionManager(BaseFunctionManager):
                 continue
             fields = self._unclassifiable_verification_fields()
             if str(row.get("language") or "python") == "python":
-                stripped = _strip_custom_function_decorators(source)
+                stripped = source
                 fn_obj: Any = None
                 try:
                     namespace = create_base_globals()
@@ -3579,8 +3460,6 @@ class FunctionManager(BaseFunctionManager):
         # Reset any manager-local counters or caches
         try:
             self._next_id = None
-            self._custom_venvs_synced_sources.clear()
-            self._custom_functions_synced_sources.clear()
             # Clear in-process session state
             self._in_process_sessions.clear()
         except Exception:
@@ -3791,130 +3670,6 @@ class FunctionManager(BaseFunctionManager):
     #  Custom Functions Sync                                              #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_custom_functions_hash(
-        self,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> str:
-        """Retrieve one source's stored custom functions hash."""
-        field = stored_hash_field("custom_functions_hash", managed_by)
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                return logs[0].entries.get(field, "")
-        except Exception as e:
-            logger.warning(f"Failed to retrieve custom functions hash: {e}")
-        return ""
-
-    def _store_custom_functions_hash(
-        self,
-        hash_value: str,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> None:
-        """Store one source's custom functions hash in the Meta context."""
-        field = stored_hash_field("custom_functions_hash", managed_by)
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                db.update_logs(
-                    context=self._meta_ctx,
-                    logs=[logs[0].id],
-                    entries={field: hash_value},
-                    overwrite=True,
-                )
-            else:
-                # Create the meta row if it doesn't exist
-                unity_create_logs(
-                    context=self._meta_ctx,
-                    entries=[{"meta_id": 1, field: hash_value}],
-                    stamp_authoring=True,
-                )
-        except Exception as e:
-            logger.warning(f"Failed to store custom functions hash: {e}")
-
-    def _get_custom_functions_from_db(self) -> Dict[str, Dict[str, Any]]:
-        """Get all custom functions from the database (those with custom_hash set)."""
-        logs = db.get_logs(
-            context=self._compositional_ctx,
-            filter="custom_hash != None",
-            exclude_fields=list_private_fields(self._compositional_ctx),
-        )
-        return {
-            lg.entries.get("name"): lg.entries for lg in logs if lg.entries.get("name")
-        }
-
-    def _delete_custom_function_by_name(
-        self,
-        name: str,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        """Delete one source's custom function by name.
-
-        Scoped to *managed_by*: two sources may each own a function of the
-        same name, and a prune must reach only its own.
-        """
-        logs = db.get_logs(
-            context=self._compositional_ctx,
-            filter=f"name == '{name}' and {managed_rows_filter(managed_by)}",
-            limit=1,
-        )
-        if not logs:
-            return False
-        db.delete_logs(
-            context=self._compositional_ctx,
-            logs=[logs[0].id],
-        )
-        return True
-
-    def _update_custom_function(
-        self,
-        function_id: int,
-        data: Dict[str, Any],
-    ) -> None:
-        """Update an existing custom function."""
-        log = self._get_log_by_function_id(
-            function_id=function_id,
-            raise_if_missing=True,
-        )
-        # Update all fields except function_id (preserve it)
-        update_data = strip_authoring_assistant_id(
-            {k: v for k, v in data.items() if k != "function_id"},
-        )
-        if "depends_on" in update_data:
-            update_data["stale_reasons"] = [
-                reason.model_dump(mode="json")
-                for reason in self._dependency_stale_reasons(
-                    update_data["depends_on"] or [],
-                    available_names=self._available_dependency_names(),
-                )
-            ]
-        # Synced content changed: the row goes back on the ramp under a fresh
-        # classification (a librarian confirmation survives if still in bounds).
-        update_data.update(
-            self._derived_verification_fields_for_row(
-                update_data,
-                prior=log.entries,
-            ),
-        )
-        db.update_logs(
-            context=self._compositional_ctx,
-            logs=[log.id],
-            entries=update_data,
-            overwrite=True,
-        )
-        name = update_data.get("name") or log.entries.get("name")
-        if name:
-            self._invalidate_dependents_of([str(name)])
-
     def _derived_verification_fields_for_row(
         self,
         data: Dict[str, Any],
@@ -3927,7 +3682,7 @@ class FunctionManager(BaseFunctionManager):
             return self._unclassifiable_verification_fields()
         if str(data.get("language") or "python") != "python":
             return self._unclassifiable_verification_fields()
-        stripped = _strip_custom_function_decorators(source)
+        stripped = source
         fn_obj: Any = None
         try:
             namespace = create_base_globals()
@@ -3949,360 +3704,9 @@ class FunctionManager(BaseFunctionManager):
         except (SyntaxError, ValueError):
             return self._unclassifiable_verification_fields()
 
-    def _insert_custom_function(self, data: Dict[str, Any]) -> int:
-        """Insert a new custom function."""
-        # Remove function_id if present - let it be auto-assigned
-        insert_data = {k: v for k, v in data.items() if k != "function_id"}
-        insert_data["stale_reasons"] = [
-            reason.model_dump(mode="json")
-            for reason in self._dependency_stale_reasons(
-                insert_data.get("depends_on") or [],
-                available_names=self._available_dependency_names(),
-            )
-        ]
-        insert_data.update(self._derived_verification_fields_for_row(insert_data))
-        result = unity_create_logs(
-            context=self._compositional_ctx,
-            entries=[insert_data],
-            stamp_authoring=True,
-        )
-        # unity_create_logs can return either a dict or a list of Log objects
-        if isinstance(result, list) and len(result) > 0:
-            log = result[0]
-            if hasattr(log, "entries"):
-                return log.entries.get("function_id", -1)
-        elif isinstance(result, dict):
-            log_ids = result.get("log_event_ids", [])
-            if log_ids:
-                logs = db.get_logs(
-                    context=self._compositional_ctx,
-                    filter=f"id == {log_ids[0]}",
-                    limit=1,
-                )
-                if logs and hasattr(logs[0], "entries"):
-                    return logs[0].entries.get("function_id")
-        return -1
-
     # ------------------------------------------------------------------ #
     #  Custom Venvs Sync                                                  #
     # ------------------------------------------------------------------ #
-
-    def _get_stored_custom_venvs_hash(
-        self,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> str:
-        """Retrieve one source's stored custom venvs hash."""
-        field = stored_hash_field("custom_venvs_hash", managed_by)
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                return logs[0].entries.get(field, "")
-        except Exception as e:
-            logger.warning(f"Failed to retrieve custom venvs hash: {e}")
-        return ""
-
-    def _store_custom_venvs_hash(
-        self,
-        hash_value: str,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> None:
-        """Store one source's custom venvs hash in the Meta context."""
-        field = stored_hash_field("custom_venvs_hash", managed_by)
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                db.update_logs(
-                    context=self._meta_ctx,
-                    logs=[logs[0].id],
-                    entries={field: hash_value},
-                    overwrite=True,
-                )
-            else:
-                unity_create_logs(
-                    context=self._meta_ctx,
-                    entries=[{"meta_id": 1, field: hash_value}],
-                    stamp_authoring=True,
-                )
-        except Exception as e:
-            logger.warning(f"Failed to store custom venvs hash: {e}")
-
-    def _get_custom_venvs_from_db(self) -> Dict[str, Dict[str, Any]]:
-        """Get all custom venvs from the database (those with custom_hash set)."""
-        logs = db.get_logs(
-            context=self._venvs_ctx,
-            filter="custom_hash != None",
-            exclude_fields=list_private_fields(self._venvs_ctx),
-        )
-        return {
-            lg.entries.get("name"): lg.entries for lg in logs if lg.entries.get("name")
-        }
-
-    def _delete_custom_venv_by_name(
-        self,
-        name: str,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        """Delete one source's custom venv by name.
-
-        Scoped to *managed_by*: two sources may each own a venv of the
-        same name, and a prune must reach only its own.
-        """
-        logs = db.get_logs(
-            context=self._venvs_ctx,
-            filter=f"name == '{name}' and {managed_rows_filter(managed_by)}",
-            limit=1,
-        )
-        if not logs:
-            return False
-        db.delete_logs(
-            context=self._venvs_ctx,
-            logs=[logs[0].id],
-        )
-        return True
-
-    def _update_custom_venv(self, venv_id: int, data: Dict[str, Any]) -> None:
-        """Update an existing custom venv."""
-        logs = db.get_logs(
-            context=self._venvs_ctx,
-            filter=f"venv_id == {venv_id}",
-            limit=1,
-        )
-        if not logs:
-            raise ValueError(f"VirtualEnv with ID {venv_id} not found")
-        update_data = strip_authoring_assistant_id(
-            {k: v for k, v in data.items() if k != "venv_id"},
-        )
-        db.update_logs(
-            context=self._venvs_ctx,
-            logs=[logs[0].id],
-            entries=update_data,
-            overwrite=True,
-        )
-
-    def _insert_custom_venv(self, data: Dict[str, Any]) -> int:
-        """Insert a new custom venv."""
-        insert_data = {k: v for k, v in data.items() if k != "venv_id"}
-        result = unity_create_logs(
-            context=self._venvs_ctx,
-            entries=[insert_data],
-            stamp_authoring=True,
-        )
-        # unity_create_logs can return either a dict or a list of Log objects
-        if isinstance(result, list) and len(result) > 0:
-            log = result[0]
-            if hasattr(log, "entries"):
-                return log.entries.get("venv_id", -1)
-        elif isinstance(result, dict):
-            log_ids = result.get("log_event_ids", [])
-            if log_ids:
-                logs = db.get_logs(
-                    context=self._venvs_ctx,
-                    filter=f"id == {log_ids[0]}",
-                    limit=1,
-                )
-                if logs and hasattr(logs[0], "entries"):
-                    return logs[0].entries.get("venv_id")
-        return -1
-
-    def sync_custom_venvs(
-        self,
-        *,
-        source_venvs: Optional[Dict[str, Dict[str, Any]]] = None,
-        destination: str | None = None,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> Dict[str, int]:
-        """
-        Ensure custom venvs in the database match source definitions.
-
-        Args:
-            source_venvs: Pre-collected venvs (from
-                :func:`collect_custom_venvs` or
-                :func:`collect_venvs_from_directories`).  If *None*,
-                an empty set is assumed (no custom venvs).
-            destination: Where the custom venv definitions live. Only the
-                personal root exists: pass ``"personal"`` or leave it
-                ``None``.
-
-        Returns:
-            Dict mapping venv name to venv_id.
-        """
-        try:
-            venv_context, meta_context, is_personal = self._sync_destination_contexts(
-                FUNCTIONS_VENVS_TABLE,
-                destination,
-            )
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
-
-        with (
-            exclusive_sync_lease(f"{meta_context}:custom_sync"),
-            self._temporary_function_context(
-                "_venvs_ctx",
-                venv_context,
-            ),
-            self._temporary_function_context("_meta_ctx", meta_context),
-        ):
-            source_venvs = source_venvs or {}
-            synced_key = (venv_context, managed_by)
-
-            run_custom_sync(
-                adapter=_VenvSyncAdapter(self, managed_by=managed_by),
-                source=source_venvs,
-                expected_hash=compute_custom_venvs_hash(source_venvs=source_venvs),
-                stored_hash=self._get_stored_custom_venvs_hash(managed_by),
-                already_synced=synced_key in self._custom_venvs_synced_sources,
-                mark_synced=lambda: self._custom_venvs_synced_sources.add(
-                    synced_key,
-                ),
-                store_hash=lambda value: self._store_custom_venvs_hash(
-                    value,
-                    managed_by=managed_by,
-                ),
-            )
-            db_venvs = self._get_custom_venvs_from_db()
-            return {name: v["venv_id"] for name, v in db_venvs.items()}
-
-    def sync_custom_functions(
-        self,
-        venv_name_to_id: Optional[Dict[str, int]] = None,
-        *,
-        source_functions: Optional[Dict[str, Dict[str, Any]]] = None,
-        destination: str | None = None,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        """
-        Ensure custom functions in the database match source definitions.
-
-        Args:
-            venv_name_to_id: Optional mapping from venv name to venv_id.
-                Used to resolve ``venv_name`` in decorators.
-            source_functions: Pre-collected functions (from
-                :func:`collect_custom_functions` or
-                :func:`collect_functions_from_directories`).  If *None*,
-                an empty set is assumed (no custom functions).
-            destination: Where the custom functions live. Only the personal
-                root exists: pass ``"personal"`` or leave it ``None``.
-
-        Returns:
-            True if sync was performed, False if already up-to-date.
-        """
-        try:
-            function_context, meta_context, is_personal = (
-                self._sync_destination_contexts(
-                    FUNCTIONS_COMPOSITIONAL_TABLE,
-                    destination,
-                )
-            )
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
-
-        with (
-            exclusive_sync_lease(f"{meta_context}:custom_sync"),
-            self._temporary_function_context(
-                "_compositional_ctx",
-                function_context,
-            ),
-            self._temporary_function_context("_meta_ctx", meta_context),
-        ):
-            source_functions = source_functions or {}
-            synced_key = (function_context, managed_by)
-
-            try:
-                return run_custom_sync(
-                    adapter=_FunctionSyncAdapter(
-                        self,
-                        venv_name_to_id=venv_name_to_id or {},
-                        managed_by=managed_by,
-                    ),
-                    source=source_functions,
-                    expected_hash=compute_custom_functions_hash(
-                        source_functions=source_functions,
-                    ),
-                    stored_hash=self._get_stored_custom_functions_hash(managed_by),
-                    already_synced=(
-                        synced_key in self._custom_functions_synced_sources
-                    ),
-                    mark_synced=lambda: self._custom_functions_synced_sources.add(
-                        synced_key,
-                    ),
-                    store_hash=lambda value: self._store_custom_functions_hash(
-                        value,
-                        managed_by=managed_by,
-                    ),
-                )
-            except CustomFunctionSyncPartialFailure:
-                raise
-            except CustomSyncPartialFailure as exc:
-                raise CustomFunctionSyncPartialFailure(exc.failures) from exc
-
-    def sync_custom(
-        self,
-        *,
-        source_functions: Optional[Dict[str, Dict[str, Any]]] = None,
-        source_venvs: Optional[Dict[str, Dict[str, Any]]] = None,
-        destination: str | None = None,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> bool:
-        """
-        Sync custom venvs and functions from pre-collected sources.
-
-        Ensures venvs are synced first (so venv_name can be resolved),
-        then syncs functions. Reconciles only the rows *managed_by* owns;
-        rows planted in the same context by other sources are neither
-        read nor pruned.
-
-        Args:
-            source_functions: Pre-collected functions dict.
-            source_venvs: Pre-collected venvs dict.
-            destination: Where the custom functions and venvs live.
-            managed_by: The source whose rows this pass reconciles.
-
-        Returns:
-            True if any sync was performed, False if everything up-to-date.
-        """
-        try:
-            venv_context, meta_context, _ = self._sync_destination_contexts(
-                FUNCTIONS_VENVS_TABLE,
-                destination,
-            )
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
-
-        with exclusive_sync_lease(f"{meta_context}:custom_sync"):
-            with (
-                self._temporary_function_context(
-                    "_venvs_ctx",
-                    venv_context,
-                ),
-                self._temporary_function_context("_meta_ctx", meta_context),
-            ):
-                venvs_hash_changed = self._get_stored_custom_venvs_hash(
-                    managed_by,
-                ) != compute_custom_venvs_hash(source_venvs=source_venvs or {})
-
-            venv_name_to_id = self.sync_custom_venvs(
-                source_venvs=source_venvs,
-                destination=destination,
-                managed_by=managed_by,
-            )
-            functions_changed = self.sync_custom_functions(
-                venv_name_to_id,
-                source_functions=source_functions,
-                destination=destination,
-                managed_by=managed_by,
-            )
-
-            return venvs_hash_changed or functions_changed
 
     def list_primitives(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -4927,32 +4331,9 @@ class FunctionManager(BaseFunctionManager):
         if not isinstance(func_name, str) or not func_name:
             raise ValueError("func_data missing valid 'name'")
 
-        # Deployment-owned functions (custom_hash set) execute their live
-        # source module when the deployment tree is present on this machine.
-        # The stored implementation is a synced cache that can lag the
-        # deployed tree between reconciles; the on-disk module is the source
-        # of truth and its real globals also make annotation resolution and
-        # sibling imports behave exactly as authored.
-        if func_data.get("custom_hash"):
-            from unify.function_manager.custom_functions import (
-                resolve_live_custom_callable,
-            )
-
-            live_fn = resolve_live_custom_callable(func_name)
-            if live_fn is not None:
-                namespace[func_name] = live_fn
-                return _InProcessFunctionProxy(
-                    function_manager=self,
-                    func_data=func_data,
-                    namespace=namespace,
-                    raw_callable=live_fn,
-                )
-
         implementation = func_data.get("implementation")
         if not isinstance(implementation, str) or not implementation.strip():
             raise ValueError(f"Function '{func_name}' has no implementation")
-
-        implementation = _strip_custom_function_decorators(implementation)
 
         # Ensure user-defined annotation symbols don't cause NameErrors when callers
         # (e.g., CodeActActor) later resolve type hints via typing.get_type_hints().
@@ -6006,7 +5387,6 @@ class FunctionManager(BaseFunctionManager):
                 "metadata",
                 "venv_id",
                 "windows_os_required",
-                "custom_hash",
                 # The usage trace rides along so ranking can compute
                 # standing without a second read per row.
                 "created_at",
@@ -7475,7 +6855,6 @@ class FunctionManager(BaseFunctionManager):
     ) -> Dict[str, Any]:
         """Execute a Python function with venv and state mode support."""
         # Strip @custom_function decorators (not available in subprocess runner)
-        implementation = _strip_custom_function_decorators(implementation)
 
         # Determine execution target venv
         if target_venv_id is ...:
@@ -7578,7 +6957,6 @@ class FunctionManager(BaseFunctionManager):
         - "stateful": Uses ShellPool for persistent sessions
         - "read_only": Not yet implemented (requires state snapshot/restore)
         """
-        from .shell_pool import ShellPool  # noqa: F811
 
         language = func_data.get("language", "bash")
 
@@ -8336,197 +7714,3 @@ for _method_name in (
     "update_venv",
 ):
     _wrap_venv_write(_method_name)
-
-
-class _VenvSyncAdapter(CustomSyncAdapter):
-    """Storage mechanics for the custom venvs reconcile.
-
-    Venv identity is the name (``custom_key == name``). Legacy rows with
-    a null ``custom_key`` are matched by name, and same-named rows outside
-    the managed index are adopted in place so their ``venv_id`` survives:
-    function rows hold that id.
-    """
-
-    kind = "venvs"
-
-    def __init__(
-        self,
-        manager: FunctionManager,
-        *,
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> None:
-        self._manager = manager
-        self.managed_by = managed_by
-
-    def live_rows(self) -> List[Dict[str, Any]]:
-        logs = db.get_logs(
-            context=self._manager._venvs_ctx,
-            filter=managed_rows_filter(self.managed_by),
-            exclude_fields=list_private_fields(self._manager._venvs_ctx),
-        )
-        rows: List[Dict[str, Any]] = []
-        for lg in logs:
-            entries = dict(lg.entries or {})
-            # A null custom_key would survive setdefault and drop the row
-            # from the managed index — see _FunctionSyncAdapter.live_rows.
-            if not entries.get("custom_key"):
-                entries["custom_key"] = entries.get("name")
-            rows.append(entries)
-        return rows
-
-    def insert(self, key: str, fields: Dict[str, Any]) -> None:
-        self._manager._insert_custom_venv(fields)
-
-    def update(
-        self,
-        key: str,
-        live_row: Dict[str, Any],
-        fields: Dict[str, Any],
-    ) -> None:
-        self._manager._update_custom_venv(
-            venv_id=live_row["venv_id"],
-            data=fields,
-        )
-
-    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_venv_by_name(
-            str(live_row["name"]),
-            managed_by=self.managed_by,
-        )
-
-    def find_adoptable(
-        self,
-        key: str,
-        fields: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
-        """Claim any same-named row rather than reinserting, preserving
-        the ``venv_id`` that function rows reference.
-
-        Deployment-only: the unscoped probe exists to adopt legacy rows
-        written before ``custom_key``/``managed_by``, all of which belong
-        to the deployment. Any other source adopting by bare name would
-        steal a sibling source's row — restamping it, breaking the
-        sibling's next reconcile, and ping-ponging ownership between the
-        two."""
-        if self.managed_by != MANAGED_BY_DEPLOYMENT:
-            return None
-        existing = db.get_logs(
-            context=self._manager._venvs_ctx,
-            filter=f"name == '{fields['name']}'",
-            limit=1,
-        )
-        if not existing:
-            return None
-        return dict(existing[0].entries or {})
-
-
-class _FunctionSyncAdapter(CustomSyncAdapter):
-    """Storage mechanics for the custom functions reconcile.
-
-    Function identity is the name (``custom_key == name``) — the
-    call-site contract — so a rename is a delete-and-create by design.
-    Legacy rows carrying a null ``custom_key`` are matched by name, and
-    same-named rows outside the managed index are adopted in place so
-    their ``function_id`` survives: task entrypoints hold that id, and a
-    delete-and-reinsert would orphan every one of them.
-    """
-
-    kind = "functions"
-
-    def __init__(
-        self,
-        manager: FunctionManager,
-        *,
-        venv_name_to_id: Dict[str, int],
-        managed_by: str = MANAGED_BY_DEPLOYMENT,
-    ) -> None:
-        self._manager = manager
-        self._venv_name_to_id = venv_name_to_id
-        self.managed_by = managed_by
-
-    def live_rows(self) -> List[Dict[str, Any]]:
-        logs = db.get_logs(
-            context=self._manager._compositional_ctx,
-            filter=managed_rows_filter(self.managed_by),
-            exclude_fields=list_private_fields(self._manager._compositional_ctx),
-        )
-        rows: List[Dict[str, Any]] = []
-        for lg in logs:
-            entries = dict(lg.entries or {})
-            # The column may exist with a null value on legacy rows, which
-            # setdefault would keep — and a null key drops the row from the
-            # managed index, sending every entry down the reinsert path.
-            if not entries.get("custom_key"):
-                entries["custom_key"] = entries.get("name")
-            rows.append(entries)
-        return rows
-
-    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
-        venv_name = fields.get("venv_name")
-        if venv_name and venv_name in self._venv_name_to_id:
-            fields["venv_id"] = self._venv_name_to_id[venv_name]
-        fields.pop("venv_name", None)
-        return fields
-
-    def insert(self, key: str, fields: Dict[str, Any]) -> None:
-        self._manager._insert_custom_function(fields)
-
-    def update(
-        self,
-        key: str,
-        live_row: Dict[str, Any],
-        fields: Dict[str, Any],
-    ) -> None:
-        self._manager._update_custom_function(
-            function_id=live_row["function_id"],
-            data=fields,
-        )
-
-    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_function_by_name(
-            str(live_row["name"]),
-            managed_by=self.managed_by,
-        )
-
-    def derived_stale(
-        self,
-        key: str,
-        live_row: Dict[str, Any],
-        fields: Dict[str, Any],
-    ) -> bool:
-        """Refresh the workflows membership field when it moved without the content.
-
-        ``workflows`` records which installed workflows reference a shared
-        function. It is deliberately outside the content hash — two
-        installs of one bundle must plant byte-identical rows — so a
-        membership change alone leaves the hash equal and the engine
-        would otherwise skip the update that records it."""
-        return (live_row.get("workflows") or []) != (fields.get("workflows") or [])
-
-    def find_adoptable(
-        self,
-        key: str,
-        fields: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
-        """Claim any same-named row rather than reinserting.
-
-        Adoption updates in place via ``function_id``, so references held
-        by task entrypoints stay valid; the update stamps
-        ``custom_key``/``custom_hash``/``managed_by`` alongside the body.
-
-        Deployment-only: the unscoped probe exists to adopt legacy rows
-        written before ``custom_key``/``managed_by``, all of which belong
-        to the deployment. Any other source adopting by bare name would
-        steal a sibling source's row — restamping it, breaking the
-        sibling's next reconcile, and ping-ponging ownership between the
-        two."""
-        if self.managed_by != MANAGED_BY_DEPLOYMENT:
-            return None
-        existing = db.get_logs(
-            context=self._manager._compositional_ctx,
-            filter=f"name == '{fields['name']}'",
-            limit=1,
-        )
-        if not existing:
-            return None
-        return dict(existing[0].entries or {})

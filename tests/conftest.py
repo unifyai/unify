@@ -198,7 +198,6 @@ def stub_external_deps(monkeypatch):
 
     # Patch prompt_helpers.now everywhere it's imported
     monkeypatch.setattr("unify.common.prompt_helpers.now", _static_now)
-    monkeypatch.setattr("unify.secret_manager.prompt_builders.now", _static_now)
     monkeypatch.setattr("unify.image_manager.prompt_builders.now", _static_now)
     monkeypatch.setattr("unify.memory_manager.prompt_builders.now", _static_now)
     monkeypatch.setattr("unify.file_manager.prompt_builders.now", _static_now)

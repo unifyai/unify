@@ -116,20 +116,6 @@ class Knowledge(AuthoredRow):
             "False for tenant-authored entries."
         ),
     )
-    custom_key: Optional[str] = Field(
-        None,
-        description=(
-            "Stable source-defined key for sync identity. "
-            "None for user-added entries."
-        ),
-    )
-    custom_hash: Optional[str] = Field(
-        None,
-        description=(
-            "Hash of source-defined custom knowledge for sync detection. "
-            "None for user-added entries or builtins."
-        ),
-    )
 
     @field_validator("is_builtin", mode="before")
     @classmethod

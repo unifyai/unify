@@ -6,18 +6,15 @@ import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Set, Union, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Union, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
 from unify import db
 from unify.common.tool_spec import manager_tool, read_only, ToolSpec
-from unify.common.log_utils import create_logs as unity_create_logs
 from unify.file_manager.base import BaseFileManager
-from unify.file_manager.custom_files import compute_custom_files_hash
 from unify.file_manager.file_parsers import FileParser
 from unify.file_manager.types.file import FileRecord
-from unify.file_manager.types.meta import FileMeta
 from unify.file_manager.types.config import (
     FilePipelineConfig as _FilePipelineConfig,
 )
@@ -140,9 +137,6 @@ class _ImageVisionHandle(SteerableToolHandle):
         pass
 
 
-FILE_META_TABLE = "FileRecords/Meta"
-
-
 class FileManager(BaseFileManager):
     """A FileManager bound to exactly one filesystem adapter.
 
@@ -160,12 +154,6 @@ class FileManager(BaseFileManager):
             TableContext(
                 name="Files",
                 description="Root namespace for per-file content storage.",
-            ),
-            TableContext(
-                name=FILE_META_TABLE,
-                description="Metadata for source-defined custom file sync state.",
-                fields=model_to_fields(FileMeta),
-                unique_keys={"meta_id": "int"},
             ),
         ]
 
@@ -230,9 +218,6 @@ class FileManager(BaseFileManager):
         )
         self._default_index_context = f"{file_records_base}/{self._fs_alias}"
         self._default_files_root = f"{files_base}/{self._fs_alias}"
-        self._meta_ctx = ContextRegistry.get_context(self, FILE_META_TABLE)
-        self._custom_files_synced = False
-        self._custom_files_synced_contexts: Set[str] = set()
 
         # Ensure context and fields exist
         self._default_store = self._store_for_context(self._default_index_context)
@@ -641,42 +626,6 @@ class FileManager(BaseFileManager):
     #  Custom required-file overlay sync                                 #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_custom_files_hash(self) -> str:
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                return logs[0].entries.get("custom_files_hash", "") or ""
-        except Exception as exc:
-            logger.warning("Failed to read custom files hash: %s", exc)
-        return ""
-
-    def _store_custom_files_hash(self, hash_value: str) -> None:
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                db.update_logs(
-                    context=self._meta_ctx,
-                    logs=[logs[0].id],
-                    entries={"custom_files_hash": hash_value},
-                    overwrite=True,
-                )
-            else:
-                unity_create_logs(
-                    context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_files_hash": hash_value}],
-                    stamp_authoring=True,
-                )
-        except Exception as exc:
-            logger.warning("Failed to store custom files hash: %s", exc)
-
     def _dest_content_hash(self, dest_path: str) -> str | None:
         """Return sha256 of an existing Local dest file, or None if missing."""
         import hashlib as _hashlib
@@ -747,88 +696,6 @@ class FileManager(BaseFileManager):
                 exc,
             )
         return True
-
-    def sync_custom_files(
-        self,
-        *,
-        source_files: Optional[Dict[str, Dict[str, Any]]] = None,
-        destination: str | None = None,
-    ) -> bool:
-        """Ensure deployment-defined required files exist on Local and are indexed.
-
-        This is a required overlay: mapped paths are created/overwritten and
-        ingested. Paths not in the map are left untouched, including files that
-        were previously mapped and later removed from the source.
-        """
-        if source_files is None:
-            source_files = {}
-
-        index_context, _files_root = self._file_contexts_for_destination(destination)
-        is_personal = destination in (None, "personal")
-        expected_hash = compute_custom_files_hash(source_files=source_files)
-        current_hash = self._get_stored_custom_files_hash()
-        already_synced = (
-            self._custom_files_synced
-            if is_personal
-            else index_context in self._custom_files_synced_contexts
-        )
-
-        if already_synced and current_hash == expected_hash:
-            return False
-
-        if current_hash == expected_hash:
-            logger.debug("Custom files hash matches, skipping sync")
-            if is_personal:
-                self._custom_files_synced = True
-            else:
-                self._custom_files_synced_contexts.add(index_context)
-            return False
-
-        logger.info(
-            "Custom files hash mismatch (current=%s, expected=%s), syncing...",
-            current_hash,
-            expected_hash,
-        )
-
-        for dest_path, spec in sorted(source_files.items()):
-            source_path = str(spec.get("source_path") or "")
-            content_hash = str(spec.get("content_hash") or "")
-            if not source_path or not content_hash:
-                logger.warning(
-                    "Skipping incomplete custom file mapping for %s",
-                    dest_path,
-                )
-                continue
-            try:
-                self._ensure_required_file(
-                    dest_path=dest_path,
-                    source_path=source_path,
-                    content_hash=content_hash,
-                    destination=destination,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Skipping custom file sync for %s: %s",
-                    dest_path,
-                    exc,
-                )
-
-        self._store_custom_files_hash(expected_hash)
-        if is_personal:
-            self._custom_files_synced = True
-        else:
-            self._custom_files_synced_contexts.add(index_context)
-        return True
-
-    def sync_custom(
-        self,
-        *,
-        source_files: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> bool:
-        """Sync required custom files from pre-collected source mappings."""
-        if source_files is None:
-            source_files = {}
-        return self.sync_custom_files(source_files=source_files)
 
     # ------ Public accessors for cross-module use (attachment ingestion) ----- #
 

@@ -97,17 +97,6 @@ class TestDegradableStepResilience:
         assert cm.initialized is True
 
     @pytest.mark.asyncio
-    async def test_custom_function_sync_failure(self, resilience_cm):
-        cm = resilience_cm
-        with patch(
-            "unify.function_manager.custom_functions.collect_functions_from_directories",
-            side_effect=RuntimeError("filesystem error"),
-        ):
-            await _init(cm, "resilience_funcsyns")
-
-        assert cm.initialized is True
-
-    @pytest.mark.asyncio
     async def test_function_manager_warmup_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(

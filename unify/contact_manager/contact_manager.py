@@ -1,17 +1,14 @@
 import logging
-from contextlib import contextmanager
 from typing import List, Dict, Optional, Callable, Any, Tuple, Type, Union
 from pydantic import BaseModel
 import asyncio
 import functools
 import re
-import threading
 
 _log = logging.getLogger(__name__)
 logger = _log
 
 CONTACTS_TABLE = "Contacts"
-CONTACTS_META_TABLE = "Contacts/Meta"
 from .prompt_builders import build_ask_prompt, build_update_prompt
 from ..common.embed_utils import ensure_vector_column
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
@@ -19,13 +16,6 @@ from ..common.tool_spec import read_only, manager_tool, ToolSpec
 
 from unify import db
 from .types.contact import Contact
-from .types.meta import ContactMeta
-from .custom_contacts import compute_custom_contacts_hash
-from ..common.log_utils import create_logs as unity_create_logs
-from ..common.authorship import strip_authoring_assistant_id
-from ..common.custom_sync import CustomSyncAdapter, run_custom_sync
-from ..common.embed_utils import list_private_fields
-from ..common.sync_lease import exclusive_sync_lease
 from .base import BaseContactManager
 from ..common.context_registry import (
     ContextRegistry,
@@ -85,12 +75,6 @@ class ContactManager(BaseContactManager):
                 unique_keys={"contact_id": "int"},
                 auto_counting={"contact_id": None},
             ),
-            TableContext(
-                name=CONTACTS_META_TABLE,
-                description="Metadata for source-defined custom contact sync state.",
-                fields=model_to_fields(ContactMeta),
-                unique_keys={"meta_id": "int"},
-            ),
         ]
 
     # ──────────────────────────────────────────────────────────────────────
@@ -131,11 +115,6 @@ class ContactManager(BaseContactManager):
         """
         super().__init__()
         self._ctx = ContextRegistry.get_context(self, CONTACTS_TABLE)
-        self._meta_ctx = ContextRegistry.get_context(self, CONTACTS_META_TABLE)
-        self._custom_contacts_synced = False
-        self._custom_contacts_synced_contexts: set[str] = set()
-        self._destination_context_lock = threading.RLock()
-        self._destination_write_scoped = False
 
         # Local DataStore mirror (write-through only; never read from it)
         self._data_store = DataStore.for_context(self._ctx, key_fields=("contact_id",))
@@ -898,8 +877,6 @@ class ContactManager(BaseContactManager):
         should_respond: bool = True,
         response_policy: Optional[str] = None,
         is_system: bool = False,
-        custom_key: Optional[str] = None,
-        custom_hash: Optional[str] = None,
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         destination: Optional[str] = None,
@@ -947,8 +924,6 @@ class ContactManager(BaseContactManager):
             contact. When omitted, a safe default policy is automatically applied.
         is_system : bool, default False
             Mark as a system contact (assistant/user/org member). Optional.
-        custom_key / custom_hash : str | None
-            Deployment-defined contact identity fields. Optional.
         destination : str | None, default None
             Where to file this contact. Only the personal root
             exists: pass ``"personal"`` or leave it ``None``.
@@ -993,8 +968,6 @@ class ContactManager(BaseContactManager):
             should_respond=should_respond,
             response_policy=response_policy,
             is_system=is_system,
-            custom_key=custom_key,
-            custom_hash=custom_hash,
             user_id=user_id,
             agent_id=agent_id,
             contact_id=_contact_id,
@@ -1020,8 +993,6 @@ class ContactManager(BaseContactManager):
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
         is_system: Optional[bool] = None,
-        custom_key: Optional[str] = None,
-        custom_hash: Optional[str] = None,
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         destination: Optional[str] = None,
@@ -1067,8 +1038,6 @@ class ContactManager(BaseContactManager):
             Override the contact‑specific response policy. Omit to leave unchanged.
         is_system : bool | None
             System-contact flag. Omit to leave unchanged.
-        custom_key / custom_hash : str | None
-            Deployment-defined contact identity fields. Optional.
         destination : str | None, default None
             Which root holds the contact you are updating. Only the personal
             root exists: pass ``"personal"`` or leave it ``None``.
@@ -1112,8 +1081,6 @@ class ContactManager(BaseContactManager):
             should_respond=should_respond,
             response_policy=response_policy,
             is_system=is_system,
-            custom_key=custom_key,
-            custom_hash=custom_hash,
             user_id=user_id,
             agent_id=agent_id,
             _log_id=_log_id,
@@ -1350,262 +1317,3 @@ class ContactManager(BaseContactManager):
         ):
             return ("required", {"ask": current_tools["ask"]})
         return ("auto", current_tools)
-
-    def _meta_context_for_destination(self, destination: str | None) -> str:
-        """Resolve a public destination into one concrete Contacts/Meta context."""
-        root_context = ContextRegistry.write_root(
-            self,
-            CONTACTS_META_TABLE,
-            destination=destination,
-        )
-        return f"{root_context.strip('/')}/{CONTACTS_META_TABLE}"
-
-    @contextmanager
-    def _temporary_contact_context(self, attr_name: str, context: str):
-        """Temporarily bind an existing storage method to a resolved context."""
-        with self._destination_context_lock:
-            original = getattr(self, attr_name)
-            was_write_scoped = self._destination_write_scoped
-            setattr(self, attr_name, context)
-            self._destination_write_scoped = True
-            try:
-                yield
-            finally:
-                setattr(self, attr_name, original)
-                self._destination_write_scoped = was_write_scoped
-
-    def _sync_destination_contexts(
-        self,
-        destination: str | None,
-    ) -> tuple[str, str, bool]:
-        """Return destination-scoped contacts context, meta context, and personal flag."""
-        data_context = self._contact_context_for_destination(destination)
-        meta_context = self._meta_context_for_destination(destination)
-        return data_context, meta_context, destination in (None, "personal")
-
-    def _get_stored_custom_contacts_hash(self) -> str:
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                return logs[0].entries.get("custom_contacts_hash", "") or ""
-        except Exception as exc:
-            logger.warning("Failed to read custom contacts hash: %s", exc)
-        return ""
-
-    def _store_custom_contacts_hash(self, hash_value: str) -> None:
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                db.update_logs(
-                    context=self._meta_ctx,
-                    logs=[logs[0].id],
-                    entries={"custom_contacts_hash": hash_value},
-                    overwrite=True,
-                )
-            else:
-                unity_create_logs(
-                    context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_contacts_hash": hash_value}],
-                    stamp_authoring=True,
-                )
-        except Exception as exc:
-            logger.warning("Failed to store custom contacts hash: %s", exc)
-
-    def _delete_custom_contact_by_key(self, custom_key: str) -> bool:
-        logs = db.get_logs(
-            context=self._ctx,
-            filter=f"custom_key == '{custom_key}' and custom_hash != None",
-            limit=1,
-        )
-        if not logs:
-            return False
-        db.delete_logs(context=self._ctx, logs=[logs[0].id])
-        return True
-
-    def _update_custom_contact(
-        self,
-        contact_id: int,
-        data: Dict[str, Any],
-    ) -> None:
-        log_ids = db.get_logs(
-            context=self._ctx,
-            filter=f"contact_id == {int(contact_id)}",
-            limit=1,
-            return_ids_only=True,
-        )
-        if not log_ids:
-            raise ValueError(
-                f"No contact found with contact_id {contact_id} to update.",
-            )
-        update_data = strip_authoring_assistant_id(
-            {k: v for k, v in data.items() if k != "contact_id"},
-        )
-        db.update_logs(
-            context=self._ctx,
-            logs=[log_ids[0]],
-            entries=update_data,
-            overwrite=True,
-        )
-
-    def _insert_custom_contact(self, data: Dict[str, Any]) -> int:
-        insert_data = {k: v for k, v in data.items() if k != "contact_id"}
-        if insert_data.get("response_policy") is None:
-            insert_data["response_policy"] = self.DEFAULT_RESPONSE_POLICY
-        insert_data.setdefault("is_system", False)
-        result = unity_create_logs(
-            context=self._ctx,
-            entries=[insert_data],
-            stamp_authoring=True,
-        )
-        if isinstance(result, list) and len(result) > 0:
-            log = result[0]
-            if hasattr(log, "entries"):
-                return log.entries.get("contact_id", -1)
-        elif isinstance(result, dict):
-            log_ids = result.get("log_event_ids", [])
-            if log_ids:
-                logs = db.get_logs(
-                    context=self._ctx,
-                    filter=f"id == {log_ids[0]}",
-                    limit=1,
-                )
-                if logs and hasattr(logs[0], "entries"):
-                    return logs[0].entries.get("contact_id")
-        return -1
-
-    def sync_custom_contacts(
-        self,
-        *,
-        source_contacts: Optional[Dict[str, Dict[str, Any]]] = None,
-        destination: str | None = None,
-    ) -> bool:
-        """Ensure custom contact rows match source ``contacts.jsonl`` definitions."""
-        try:
-            contacts_context, meta_context, is_personal = (
-                self._sync_destination_contexts(destination)
-            )
-        except ToolErrorException as exc:
-            logger.warning(
-                "Skipping custom contacts sync for destination %r: %s",
-                destination,
-                exc.payload,
-            )
-            return False
-
-        with (
-            exclusive_sync_lease(f"{meta_context}:custom_sync"),
-            self._temporary_contact_context("_ctx", contacts_context),
-            self._temporary_contact_context("_meta_ctx", meta_context),
-        ):
-            source_contacts = source_contacts or {}
-
-            def _mark_synced() -> None:
-                if is_personal:
-                    self._custom_contacts_synced = True
-                else:
-                    self._custom_contacts_synced_contexts.add(contacts_context)
-
-            return run_custom_sync(
-                adapter=_ContactSyncAdapter(self),
-                source=source_contacts,
-                expected_hash=compute_custom_contacts_hash(
-                    source_contacts=source_contacts,
-                ),
-                stored_hash=self._get_stored_custom_contacts_hash(),
-                already_synced=(
-                    self._custom_contacts_synced
-                    if is_personal
-                    else contacts_context in self._custom_contacts_synced_contexts
-                ),
-                mark_synced=_mark_synced,
-                store_hash=self._store_custom_contacts_hash,
-            )
-
-    def sync_custom(
-        self,
-        *,
-        source_contacts: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> bool:
-        """Sync custom contacts from pre-collected sources across destinations."""
-        if source_contacts is None:
-            source_contacts = {}
-
-        by_destination: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        for custom_key, source_data in source_contacts.items():
-            destination = source_data.get("destination") or "personal"
-            by_destination.setdefault(destination, {})[custom_key] = source_data
-
-        changed = False
-        for destination, group in by_destination.items():
-            destination_arg = None if destination == "personal" else destination
-            changed |= self.sync_custom_contacts(
-                source_contacts=group,
-                destination=destination_arg,
-            )
-        return changed
-
-
-class _ContactSyncAdapter(CustomSyncAdapter):
-    """Storage mechanics for the custom contacts reconcile."""
-
-    kind = "contacts"
-
-    def __init__(self, manager: ContactManager) -> None:
-        self._manager = manager
-
-    def live_rows(self) -> List[Dict[str, Any]]:
-        logs = db.get_logs(
-            context=self._manager._ctx,
-            filter="custom_hash != None",
-            exclude_fields=list_private_fields(self._manager._ctx),
-        )
-        return [dict(lg.entries or {}) for lg in logs]
-
-    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
-        fields.pop("destination", None)
-        return fields
-
-    def insert(self, key: str, fields: Dict[str, Any]) -> None:
-        self._manager._insert_custom_contact(fields)
-
-    def update(
-        self,
-        key: str,
-        live_row: Dict[str, Any],
-        fields: Dict[str, Any],
-    ) -> None:
-        self._manager._update_custom_contact(
-            contact_id=live_row["contact_id"],
-            data=fields,
-        )
-
-    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_contact_by_key(key)
-
-    def find_collision(
-        self,
-        key: str,
-        fields: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
-        existing = db.get_logs(
-            context=self._manager._ctx,
-            filter=f"custom_key == '{key}'",
-            limit=1,
-        )
-        if not existing:
-            return None
-        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
-
-    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        db.delete_logs(
-            context=self._manager._ctx,
-            logs=[live_row["_log_id"]],
-        )

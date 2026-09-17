@@ -6,7 +6,6 @@ from typing import Dict, Callable, List, Union
 from .types.contact import Contact
 from ..common.prompt_helpers import (
     sig_dict,
-    now,
     tool_name as _shared_tool_name,
     require_tools as _shared_require_tools,
     # New standardized composer utilities

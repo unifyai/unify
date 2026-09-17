@@ -22,7 +22,6 @@ from unify.conversation_manager.cm_types import Medium
 from ..common.prompt_helpers import (
     clarification_guidance,
     sig_dict,
-    now,
     tool_name as _shared_tool_name,
     require_tools as _shared_require_tools,
     # New standardized composer utilities

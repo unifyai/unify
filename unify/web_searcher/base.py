@@ -51,8 +51,7 @@ class BaseWebSearcher(BaseStateManager, metaclass=SingletonABCMeta):
 
         NOT intended for
         ----------------
-        - Accessing gated or authenticated websites (use Tavily + SecretManager +
-          ComputerPrimitives directly via code-first plans for those)
+        - Accessing gated or authenticated websites
         - Complex multi-step browser automation or "doing work" in a browser
         - Scraping behind login walls or paywalls
 

@@ -2420,12 +2420,7 @@ def _synthesize_python_call(
             impl = func_data.get("implementation")
             if impl and isinstance(impl, str) and impl.strip():
                 is_async = "async def" in impl
-                # Strip @custom_function decorators (not available in sandbox).
-                from unify.function_manager.function_manager import (
-                    _strip_custom_function_decorators,
-                )
-
-                preamble = _strip_custom_function_decorators(impl) + "\n\n"
+                preamble = impl + "\n\n"
             elif func_data.get("is_primitive"):
                 is_async = True
 

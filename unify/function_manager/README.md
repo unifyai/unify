@@ -14,7 +14,7 @@ Functions are stored in two dedicated Unify contexts to ensure stable IDs:
 | Context | Purpose | ID Assignment |
 |---------|---------|---------------|
 | `Functions/Primitives` | System primitives | Explicit stable IDs (code-defined) |
-| `Functions/Compositional` | User-specific functions | Auto-incrementing (backend-managed) |
+| `Functions/Compositional` | User-specific functions | Auto-incrementing (store-managed) |
 
 This separation guarantees:
 - Primitive IDs are consistent across all users
@@ -52,35 +52,13 @@ async def update_contacts_and_search():
 |----------|---------|---------|
 | `primitives.contacts` | ContactManager | `ask`, `update` |
 | `primitives.transcripts` | TranscriptManager | `ask` |
-| `primitives.tasks` | TaskScheduler | `ask`, `update`, `execute`, `get_run_event_children`, `get_run_event` |
+| `primitives.data` | DataManager | `filter`, `search`, `reduce`, `join`, `insert`, `update`, `delete`, `vectorize`, `plot`, ... |
+| `primitives.ingestion` | IngestionManager | `submit`, `get_status`, `get_logs`, `wait`, `retry`, `cancel`, `pause`, `resume`, `reconcile`, ... |
+| `primitives.files` | FileManager | `exists`, `list`, `parse`, `ask`, `describe`, ... |
 | `primitives.secrets` | SecretManager | `ask`, `update` |
 | `primitives.web` | WebSearcher | `ask` |
-| `primitives.computer` | ComputerPrimitives | `navigate`, `act`, `observe`, `query`, `reason` |
 
 Knowledge and Guidance are **not** primitives. They are typed catalogues exposed as top-level Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`).
-
----
-
-## The `computer_primitives` Object
-
-When executed via an Actor, `computer_primitives` provides web and desktop control:
-
-```python
-async def browse_and_extract():
-    await computer_primitives.navigate("https://example.com")
-    content = await computer_primitives.observe()
-    answer = await computer_primitives.query("What is the main heading?")
-    return answer
-```
-
-### Key Difference from `primitives.computer`
-
-| Object | When Available | Use Case |
-|--------|----------------|----------|
-| `primitives.computer` | Always (sandbox) | Direct access, no caching/logging |
-| `computer_primitives` | Actor execution only | Proxied with caching, logging, instrumentation |
-
-In practice, use `computer_primitives` when your function runs via an Actor – it provides idempotency caching, action logging, and integration with the Actor's execution runtime.
 
 ---
 
@@ -97,155 +75,9 @@ This ensures primitives stay in sync with the codebase while avoiding unnecessar
 
 ---
 
-## Custom Functions & Venvs (Source-Defined)
-
-The `custom/` folder enables **forward-deployed engineers** to add client-specific compositional functions and virtual environments directly in source code, which are automatically synchronized to the database.
-
-### Why Use This?
-
-When deploying client-specific branches:
-- No need to inject function strings or venv configs via SQL or API calls
-- Everything is version-controlled alongside the codebase
-- Changes are automatically detected and synced via hash comparison
-- Easy to audit, review, and distill back into main
-
-### Folder Structure
-
-```
-unity/function_manager/custom/
-├── __init__.py           # @custom_function decorator (don't modify)
-├── functions/            # Custom compositional functions
-│   ├── __init__.py
-│   ├── example.py
-│   └── acme_workflows.py
-└── venvs/                # Custom virtual environments
-    ├── __init__.py
-    ├── example_minimal.toml
-    └── acme_ml.toml
-```
-
-### Quick Start
-
-**Step 1: Create a custom venv** (if needed)
-
-```toml
-# custom/venvs/acme_ml.toml
-[project]
-name = "acme-ml"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "torch>=2.0.0",
-    "transformers>=4.30.0",
-]
-```
-
-**Step 2: Create custom functions**
-
-```python
-# custom/functions/acme_workflows.py
-from unity.function_manager.custom import custom_function
-
-@custom_function()
-async def acme_data_export(format: str = "csv") -> str:
-    """Export ACME's proprietary data."""
-    data = await primitives.data.filter(
-        context="Knowledge",
-        filter="'ACME' in title or 'ACME' in content",
-    )
-    return f"Exported to /exports/acme.{format}"
-
-
-@custom_function(venv_name="acme_ml", verify=False)
-async def acme_ml_inference(input_data: dict) -> dict:
-    """Run inference in ACME's ML environment."""
-    import torch  # Available in acme_ml venv
-    return {"prediction": "result"}
-
-
-@custom_function(auto_sync=False)
-async def draft_function():
-    """Work-in-progress - NOT synced."""
-    pass
-```
-
-**Step 3: Sync to database**
-
-```python
-fm = FunctionManager()
-fm.sync_custom()  # Syncs venvs first, then functions
-```
-
-### Decorator Options
-
-```python
-@custom_function(
-    venv_name="acme_ml",         # Reference to custom/venvs/<name>.toml
-    venv_id=1,                   # Direct venv ID (prefer venv_name for custom venvs)
-    precondition={"url": "..."}, # Required state before execution
-    auto_sync=False,             # Exclude from sync entirely
-)
-```
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `venv_name` | `Optional[str]` | `None` | Name of custom venv (filename without .toml) |
-| `venv_id` | `Optional[int]` | `None` | Direct venv ID (for non-custom venvs) |
-| `precondition` | `Optional[dict]` | `None` | Required state before function can run |
-| `auto_sync` | `bool` | `True` | Set to `False` to exclude from auto-sync |
-
-Whether a function is *trusted* (`Function.verify`) is never authored: it is derived from the verification ledger (see below), and a synced source change puts the function back on the ramp.
-
-**Note:** When `venv_name` is set, it takes precedence over `venv_id`. The name is resolved to an actual `venv_id` during sync.
-
-### Sync Behavior
-
-| Entity | Scenario | Behavior |
-|--------|----------|----------|
-| **Venvs** | New `.toml` in source | Inserted with auto-assigned `venv_id` |
-| **Venvs** | `.toml` changed | Updated in-place (preserves `venv_id`) |
-| **Venvs** | `.toml` removed from source | Deleted from database |
-| **Functions** | New function in source | Inserted with auto-assigned `function_id` |
-| **Functions** | Function changed | Updated in-place (preserves `function_id`) |
-| **Functions** | Function removed from source | Deleted from database |
-| **Both** | User-added with same name | Overwritten by source version |
-| **Both** | `auto_sync=False` / `_` prefix | Excluded from sync entirely |
-
-### How Sync Works
-
-```python
-fm.sync_custom()  # Recommended: syncs both in correct order
-# OR
-fm.sync_custom_venvs()     # Step 1: returns {name: venv_id} mapping
-fm.sync_custom_functions() # Step 2: uses mapping to resolve venv_name
-```
-
-1. **Venvs synced first** – so `venv_name` can be resolved to `venv_id`
-2. **Aggregate hash compared** – if unchanged, sync is skipped (fast path)
-3. **Per-item hashes compared** – only changed items are updated
-4. **IDs preserved** – updates never change `function_id` or `venv_id`
-5. **Deletions applied** – items removed from source are deleted from DB
-
-### File Organization
-
-| Location | Purpose | Naming |
-|----------|---------|--------|
-| `custom/functions/*.py` | Python files with `@custom_function` decorated functions | Files starting with `_` are ignored |
-| `custom/venvs/*.toml` | pyproject.toml content for venvs | Filename (without `.toml`) becomes the venv name |
-
-### Explicit Sync (No Auto-Sync)
-
-Syncing is **explicit** – call `fm.sync_custom()` when you want to sync. This is deliberate:
-- Engineers control when sync happens
-- No surprises during development
-- Can test changes before syncing
-
----
-
 ## Writing Compositional Functions
 
 Compositional functions are stored with their full source code. They may be created by:
-- **Source-defined** via the `custom/` folder (see above)
 - The Actor generating and saving a function during execution
 - Pre-provisioning functions for a specific user/client
 - Direct API calls to `add_functions()`

@@ -113,7 +113,6 @@ class BaseActor(ABC):
         self.knowledge_manager = (
             knowledge_manager or ManagerRegistry.get_knowledge_manager()
         )
-        self._computer_primitives = None
 
     def _setup_environments(
         self,

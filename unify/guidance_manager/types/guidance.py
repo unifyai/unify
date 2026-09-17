@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from pydantic import Field, field_validator, model_validator
 
@@ -55,21 +55,6 @@ class Guidance(AuthoredRow):
         description=(
             "True for read-only platform builtin guidance from the global "
             "catalogue; False for tenant-authored entries."
-        ),
-    )
-
-    custom_key: Optional[str] = Field(
-        None,
-        description=(
-            "Stable source-defined key for sync identity. "
-            "None for user-added entries."
-        ),
-    )
-    custom_hash: Optional[str] = Field(
-        None,
-        description=(
-            "Hash of source-defined custom guidance for sync detection. "
-            "None for user-added entries or builtins."
         ),
     )
 
