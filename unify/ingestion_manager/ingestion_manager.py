@@ -2,7 +2,7 @@
 
 Storage mirrors the other catalogue managers: runs and their events are rows in
 contexts this manager declares, and all row I/O goes through DataManager so
-destination routing and retry behaviour are inherited rather than reimplemented.
+retry behaviour is inherited rather than reimplemented.
 
 Two things here are load-bearing.
 
@@ -280,7 +280,7 @@ class IngestionManager(BaseIngestionManager):
 
         return ManagerRegistry.get_file_manager()
 
-    def _destinations_for(self, request: IngestionRequest) -> List[str]:
+    def _target_contexts_for(self, request: IngestionRequest) -> List[str]:
         """Every context path this request will try to create.
 
         A table target names one path outright. A collection derives one per
@@ -293,21 +293,13 @@ class IngestionManager(BaseIngestionManager):
             names.append(str(target.context))
         elif getattr(target, "kind", "") == "collection" and target.name:
             names.append(str(target.name))
-        # The run's own bookkeeping contexts are created by the same rule, and a
-        # bad ``destination`` would fail there first with a less obvious message.
-        names.append(self._write_table(RUNS_TABLE, request.destination))
-        names.append(self._write_table(EVENTS_TABLE, request.destination))
+        # The run's own bookkeeping contexts are created by the same rule.
+        names.append(self._table(RUNS_TABLE))
+        names.append(self._table(EVENTS_TABLE))
         return names
 
-    def _write_table(self, table: str, destination: Optional[str]) -> str:
-        root = ContextRegistry.write_root(self, table, destination=destination)
-        return f"{root.strip('/')}/{table}"
-
-    def _read_tables(self, table: str) -> List[str]:
-        return [
-            f"{root.strip('/')}/{table}"
-            for root in ContextRegistry.read_roots(self, table)
-        ]
+    def _table(self, table: str) -> str:
+        return ContextRegistry.get_context(self, table)
 
     def _find_run(self, run_id: str) -> tuple[Optional[Dict[str, Any]], str]:
         """Locate a run by its id or its key, and the context holding it."""
@@ -316,22 +308,21 @@ class IngestionManager(BaseIngestionManager):
             # also keeps the value out of the filter expressions below.
             return None, ""
         dm = self._get_dm()
-        for context in self._read_tables(RUNS_TABLE):
-            # Accepts either identifier: the actor holds whichever `submit` handed
-            # back, and making it guess which one this expects would be a trap.
-            for expression in (f"run_key == '{run_id}'", f"run_id == {run_id}"):
-                if expression.startswith("run_id ==") and not str(run_id).isdigit():
-                    continue
-                rows = dm.filter(context, filter=expression, limit=1)
-                if rows:
-                    return rows[0], context
+        context = self._table(RUNS_TABLE)
+        # Accepts either identifier: the actor holds whichever `submit` handed
+        # back, and making it guess which one this expects would be a trap.
+        for expression in (f"run_key == '{run_id}'", f"run_id == {run_id}"):
+            if expression.startswith("run_id ==") and not str(run_id).isdigit():
+                continue
+            rows = dm.filter(context, filter=expression, limit=1)
+            if rows:
+                return rows[0], context
         return None, ""
 
     def _record_event(
         self,
         run_key: str,
         *,
-        destination: Optional[str],
         stage: Optional[str] = None,
         level: str = "info",
         message: str = "",
@@ -358,7 +349,7 @@ class IngestionManager(BaseIngestionManager):
             declared_rows=declared_rows,
         )
         self._get_dm().insert_rows(
-            self._write_table(EVENTS_TABLE, destination),
+            self._table(EVENTS_TABLE),
             [row.model_dump(exclude_none=True)],
         )
 
@@ -380,7 +371,6 @@ class IngestionManager(BaseIngestionManager):
         *,
         embed: Optional[EmbedSpec] = None,
         post_ingest: Optional[PostIngestConfig] = None,
-        destination: Optional[str] = None,
     ) -> IngestionRun:
         # Validation happens by constructing the request: the impossible
         # source/target pairing and every unsafe name are rejected here, before a
@@ -390,20 +380,19 @@ class IngestionManager(BaseIngestionManager):
             target=target,
             embed=embed,
             post_ingest=post_ingest,
-            destination=destination,
         )
 
-        # Every destination this run will create, checked against the store's
-        # own naming rule before anything is recorded, so an unacceptable name
-        # is refused at the call that named it.
-        assert_all_valid(self._destinations_for(request), what="destination")
+        # Every context this run will create, checked against the store's own
+        # naming rule before anything is recorded, so an unacceptable name is
+        # refused at the call that named it.
+        assert_all_valid(self._target_contexts_for(request))
 
         # Counted before anything runs, so the run row carries a measurement.
         # A stored table is counted by one aggregate rather than by reading it.
         declared = self._count_source(request)
 
         key = _run_key()
-        runs_context = self._write_table(RUNS_TABLE, destination)
+        runs_context = self._table(RUNS_TABLE)
         # Staged before the run row so the row can point at it. The request may
         # carry a large rows payload, and a row holding that payload is both a
         # write the backend can reject and a read that costs more than it answers.
@@ -527,9 +516,6 @@ class IngestionManager(BaseIngestionManager):
         verb that requested it already wrote the state, and overwriting a
         terminal ``cancelled`` with ``succeeded`` would erase what happened.
         """
-        destination = request.destination
-        control = self._control(run_key)
-
         with self._pod_work("ingestion_inline", run_key):
             self._execute_guarded(run_key, runs_context, request, declared)
 
@@ -540,7 +526,6 @@ class IngestionManager(BaseIngestionManager):
         request: IngestionRequest,
         declared: Optional[int],
     ) -> None:
-        destination = request.destination
         control = self._control(run_key)
 
         try:
@@ -556,7 +541,6 @@ class IngestionManager(BaseIngestionManager):
             )
             self._record_event(
                 run_key,
-                destination=destination,
                 stage="ingest",
                 state="running",
                 total=declared,
@@ -589,7 +573,6 @@ class IngestionManager(BaseIngestionManager):
                 # far the work got before it stopped.
                 self._record_event(
                     run_key,
-                    destination=destination,
                     stage="ingest",
                     state="cancelled",
                     message="Stopped at a chunk boundary; committed work kept.",
@@ -600,7 +583,6 @@ class IngestionManager(BaseIngestionManager):
                 # `pause()` wrote the state; resume continues from the mark.
                 self._record_event(
                     run_key,
-                    destination=destination,
                     stage="ingest",
                     state="paused",
                     message="Paused at a checkpoint; resume() continues from it.",
@@ -617,7 +599,6 @@ class IngestionManager(BaseIngestionManager):
                 )
                 self._record_event(
                     run_key,
-                    destination=destination,
                     stage="ingest",
                     level="error",
                     state="failed",
@@ -651,7 +632,6 @@ class IngestionManager(BaseIngestionManager):
                 logger.exception("Ingestion run %s failed", run_key)
                 self._record_event(
                     run_key,
-                    destination=destination,
                     stage="ingest",
                     level="error",
                     state="failed",
@@ -666,7 +646,6 @@ class IngestionManager(BaseIngestionManager):
 
             self._record_event(
                 run_key,
-                destination=destination,
                 stage="ingest",
                 state="succeeded",
                 done=rows,
@@ -733,7 +712,7 @@ class IngestionManager(BaseIngestionManager):
         """One unit of engine work, carrying the target's declared identity.
 
         ``unique_keys`` and ``fields`` come from the target because they are
-        statements about the *destination table*, not about any one batch: the
+        statements about the *target table*, not about any one batch: the
         keys are what make a re-run an upsert instead of an append.
         """
         target = request.target
@@ -779,7 +758,6 @@ class IngestionManager(BaseIngestionManager):
             unit = by_table.get(table_id)
             self._record_event(
                 run_key,
-                destination=request.destination,
                 stage="ingest",
                 state="running",
                 done=done,
@@ -794,7 +772,6 @@ class IngestionManager(BaseIngestionManager):
         return engine.run(
             work,
             dm=self._get_dm(),
-            destination=request.destination,
             source_path=run_key,
             # Checked between chunks. Cancel abandons the rest; pause surrenders
             # at the checkpoint so resume() re-does at most one chunk.
@@ -826,7 +803,6 @@ class IngestionManager(BaseIngestionManager):
                 "No files matched this source; nothing was stored.",
             )
 
-        destination = request.destination
         if request.target.kind == "table":
             return self._files_into_table(
                 run_key,
@@ -855,7 +831,6 @@ class IngestionManager(BaseIngestionManager):
         result = self._get_fm().ingest_files(
             list(paths),
             config=config,
-            destination=destination,
         )
 
         contexts: List[str] = []
@@ -867,7 +842,6 @@ class IngestionManager(BaseIngestionManager):
                 failures.append(f"{path}: {entry.error or 'failed'}")
                 self._record_event(
                     run_key,
-                    destination=destination,
                     stage="parse",
                     level="error",
                     message=f"{path}: {entry.error or 'failed'}",
@@ -883,7 +857,6 @@ class IngestionManager(BaseIngestionManager):
                 rows += table.row_count
             self._record_event(
                 run_key,
-                destination=destination,
                 stage="ingest",
                 state="running",
                 done=succeeded,
@@ -929,7 +902,6 @@ class IngestionManager(BaseIngestionManager):
         from unify.file_manager.file_parsers.file_parser import FileParser
         from unify.file_manager.file_parsers.types.contracts import FileParseRequest
 
-        destination = request.destination
         parser = FileParser()
         work: List[TableWork] = []
         parsed = 0
@@ -947,7 +919,6 @@ class IngestionManager(BaseIngestionManager):
                 failures.append(f"{path}: {result.error or 'parse failed'}")
                 self._record_event(
                     run_key,
-                    destination=destination,
                     stage="parse",
                     level="error",
                     message=f"{path}: {result.error or 'parse failed'}",
@@ -956,7 +927,6 @@ class IngestionManager(BaseIngestionManager):
             parsed += 1
             self._record_event(
                 run_key,
-                destination=destination,
                 stage="parse",
                 state="running",
                 done=parsed,
@@ -1173,7 +1143,7 @@ class IngestionManager(BaseIngestionManager):
         The stage counters say two of fifteen files parsed; they never said
         which two. Everything needed to answer that is already written -- the
         staged request names the files, and per-file events carry state, rows
-        and destination -- so this reads rather than measures.
+        and context -- so this reads rather than measures.
 
         A file with no event yet is genuinely queued and unclaimed: the same
         process writes those events, so their absence is evidence. Unclaimed
@@ -1316,21 +1286,21 @@ class IngestionManager(BaseIngestionManager):
         dm = self._get_dm()
         page = self._settings.EVENTS_PAGE_SIZE
         events: List[Dict[str, Any]] = []
-        for context in self._read_tables(EVENTS_TABLE):
-            offset = 0
-            while True:
-                batch = dm.filter(
-                    context,
-                    filter=f"run_key == '{run_key}'",
-                    limit=page,
-                    offset=offset,
-                )
-                if not batch:
-                    break
-                events.extend(batch)
-                offset += len(batch)
-                if len(batch) < page:
-                    break
+        context = self._table(EVENTS_TABLE)
+        offset = 0
+        while True:
+            batch = dm.filter(
+                context,
+                filter=f"run_key == '{run_key}'",
+                limit=page,
+                offset=offset,
+            )
+            if not batch:
+                break
+            events.extend(batch)
+            offset += len(batch)
+            if len(batch) < page:
+                break
         return sorted(events, key=lambda event: event.get("at") or "")
 
     @functools.wraps(BaseIngestionManager.get_logs, updated=())
@@ -1383,15 +1353,11 @@ class IngestionManager(BaseIngestionManager):
         limit: int = 50,
     ) -> List[IngestionSummary]:
         dm = self._get_dm()
-        rows: List[Dict[str, Any]] = []
-        for runs_context in self._read_tables(RUNS_TABLE):
-            rows.extend(
-                dm.filter(
-                    runs_context,
-                    filter=f"state == '{state}'" if state else None,
-                    limit=min(limit, self._settings.EVENTS_PAGE_SIZE),
-                ),
-            )
+        rows = dm.filter(
+            self._table(RUNS_TABLE),
+            filter=f"state == '{state}'" if state else None,
+            limit=min(limit, self._settings.EVENTS_PAGE_SIZE),
+        )
         if context:
             rows = [row for row in rows if context in (row.get("contexts") or [])]
         rows.sort(key=lambda row: row.get("created_at") or "", reverse=True)
@@ -1505,7 +1471,6 @@ class IngestionManager(BaseIngestionManager):
         aimed = f" for {len(targeted)} file(s)" if targeted else ""
         self._record_event(
             row["run_key"],
-            destination=request.destination,
             stage="ingest",
             message=f"Retrying ({only}){aimed}.",
             state="queued",
@@ -1618,7 +1583,6 @@ class IngestionManager(BaseIngestionManager):
         self._update_run(row["run_key"], runs_context, {"state": "queued"})
         self._record_event(
             row["run_key"],
-            destination=request.destination,
             message="Resuming from the last checkpoint.",
             state="queued",
         )
@@ -1662,7 +1626,6 @@ class IngestionManager(BaseIngestionManager):
         self._update_run(row["run_key"], runs_context, updates)
         self._record_event(
             row["run_key"],
-            destination=request.destination,
             message=message,
             state=state,
         )

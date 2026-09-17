@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import FrozenSet, List, Dict, Optional, Any, Tuple
 import functools
-import inspect
 import logging
 
 from unify import db
@@ -43,9 +42,6 @@ logger = logging.getLogger(__name__)
 # caller's context window; list reads return a preview and the full text is
 # fetched per entry via ``get_knowledge``.
 KNOWLEDGE_PREVIEW_CHARS = 2000
-KNOWLEDGE_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where this knowledge claim lives. Only the personal root exists: pass
-    ``"personal"`` or leave it ``None``."""
 
 _ACTIVE_STATUS_FILTER = "status == 'active'"
 
@@ -109,23 +105,18 @@ class KnowledgeManager(BaseKnowledgeManager):
 
         self._provision_storage()
 
-    def _knowledge_context_for_root(self, root_context: str) -> str:
-        return f"{root_context.strip('/')}/{KNOWLEDGE_TABLE}"
-
-    def _knowledge_context_for_destination(self, destination: str | None) -> str:
-        root_context = ContextRegistry.write_root(
-            self,
-            KNOWLEDGE_TABLE,
-            destination=destination,
-        )
-        return self._knowledge_context_for_root(root_context)
-
-    def _read_knowledge_contexts(self) -> list[str]:
-        return list(
-            dict.fromkeys(
-                self._knowledge_context_for_root(root)
-                for root in ContextRegistry.read_roots(self, KNOWLEDGE_TABLE)
-            ),
+    def _read_spec(
+        self,
+        *,
+        row_filter: Optional[str] = None,
+        allowed_fields: Optional[List[str]] = None,
+    ) -> FederatedSearchContext:
+        """Return the read spec for the Knowledge ledger."""
+        return FederatedSearchContext(
+            context=self._ctx,
+            source=self._ctx,
+            row_filter=row_filter,
+            allowed_fields=allowed_fields,
         )
 
     # -- Scope / exclusion properties ----------------------------------------
@@ -189,10 +180,7 @@ class KnowledgeManager(BaseKnowledgeManager):
 
     def _raise_if_builtin(self, knowledge_id: int, action: str) -> None:
         rows = federated_filter(
-            [
-                FederatedSearchContext(context=context, source=context)
-                for context in self._read_knowledge_contexts()
-            ],
+            [self._read_spec()],
             filter=f"knowledge_id == {int(knowledge_id)} and is_builtin == True",
             limit=1,
             annotate=False,
@@ -218,10 +206,7 @@ class KnowledgeManager(BaseKnowledgeManager):
 
     def _num_items(self) -> int:
         return federated_count(
-            [
-                FederatedSearchContext(context=context, source=context)
-                for context in self._read_knowledge_contexts()
-            ],
+            [self._read_spec()],
             key="knowledge_id",
             filter=self._scoped_filter(None),
         )
@@ -299,14 +284,9 @@ class KnowledgeManager(BaseKnowledgeManager):
             kwargs["knowledge_id"] = knowledge_id
         return Knowledge(**kwargs)
 
-    def _resolve_log_id(
-        self,
-        *,
-        knowledge_id: int,
-        context: str,
-    ) -> int:
+    def _resolve_log_id(self, *, knowledge_id: int) -> int:
         ids = db.get_logs(
-            context=context,
+            context=self._ctx,
             filter=f"knowledge_id == {int(knowledge_id)}",
             limit=2,
             return_ids_only=True,
@@ -335,7 +315,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         observed_at: Optional[datetime] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-        destination: str | None = None,
     ) -> ToolOutcome:
         if not title or not content:
             raise ValueError("Both title and content are required.")
@@ -350,23 +329,16 @@ class KnowledgeManager(BaseKnowledgeManager):
             valid_from=valid_from,
             valid_until=valid_until,
         )
-        try:
-            context = self._knowledge_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
         payload = claim.to_post_json()
         log = unity_log(
-            context=context,
+            context=self._ctx,
             **payload,
             new=True,
             mutable=True,
             stamp_authoring=True,
         )
-        knowledge_id = assigned_row_id(log, "knowledge_id", context=context)
-        self.reconcile_sources(
-            knowledge_ids=[knowledge_id],
-            destination=destination,
-        )
+        knowledge_id = assigned_row_id(log, "knowledge_id", context=self._ctx)
+        self.reconcile_sources(knowledge_ids=[knowledge_id])
         return {
             "outcome": "knowledge created successfully",
             "details": {"knowledge_id": knowledge_id},
@@ -386,7 +358,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         observed_at: Optional[datetime] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-        destination: str | None = None,
     ) -> ToolOutcome:
         updates: Dict[str, Any] = {}
         if title is not None:
@@ -425,22 +396,15 @@ class KnowledgeManager(BaseKnowledgeManager):
             confidence=confidence,
         )
 
-        try:
-            context = self._knowledge_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(knowledge_id, "updated")
-        log_id = self._resolve_log_id(knowledge_id=knowledge_id, context=context)
+        log_id = self._resolve_log_id(knowledge_id=knowledge_id)
         db.update_logs(
             logs=[log_id],
-            context=context,
+            context=self._ctx,
             entries=updates,
             overwrite=True,
         )
-        self.reconcile_sources(
-            knowledge_ids=[knowledge_id],
-            destination=destination,
-        )
+        self.reconcile_sources(knowledge_ids=[knowledge_id])
         return {
             "outcome": "knowledge updated",
             "details": {"knowledge_id": knowledge_id},
@@ -451,12 +415,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_id: int,
-        destination: str | None = None,
     ) -> ToolOutcome:
-        try:
-            context = self._knowledge_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(knowledge_id, "deleted")
         mark_knowledge_stale_for_deleted_sources(
             reasons=[
@@ -467,8 +426,8 @@ class KnowledgeManager(BaseKnowledgeManager):
                 ),
             ],
         )
-        log_id = self._resolve_log_id(knowledge_id=knowledge_id, context=context)
-        db.delete_logs(context=context, logs=log_id)
+        log_id = self._resolve_log_id(knowledge_id=knowledge_id)
+        db.delete_logs(context=self._ctx, logs=log_id)
         return {
             "outcome": "knowledge deleted",
             "details": {"knowledge_id": knowledge_id},
@@ -479,17 +438,12 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_id: int,
-        destination: str | None = None,
     ) -> ToolOutcome:
-        try:
-            context = self._knowledge_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(knowledge_id, "invalidated")
-        log_id = self._resolve_log_id(knowledge_id=knowledge_id, context=context)
+        log_id = self._resolve_log_id(knowledge_id=knowledge_id)
         db.update_logs(
             logs=[log_id],
-            context=context,
+            context=self._ctx,
             entries={"status": KnowledgeStatus.invalidated.value},
             overwrite=True,
         )
@@ -513,18 +467,9 @@ class KnowledgeManager(BaseKnowledgeManager):
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
         new_knowledge_id: Optional[int] = None,
-        destination: str | None = None,
     ) -> ToolOutcome:
-        try:
-            context = self._knowledge_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
-
         self._raise_if_builtin(old_knowledge_id, "superseded")
-        old_log_id = self._resolve_log_id(
-            knowledge_id=old_knowledge_id,
-            context=context,
-        )
+        old_log_id = self._resolve_log_id(knowledge_id=old_knowledge_id)
 
         if new_knowledge_id is None:
             if not title or not content:
@@ -546,47 +491,45 @@ class KnowledgeManager(BaseKnowledgeManager):
             )
             payload = claim.to_post_json()
             log = unity_log(
-                context=context,
+                context=self._ctx,
                 **payload,
                 new=True,
                 mutable=True,
                 stamp_authoring=True,
             )
-            new_knowledge_id = assigned_row_id(log, "knowledge_id", context=context)
-        else:
-            new_log_id = self._resolve_log_id(
-                knowledge_id=new_knowledge_id,
-                context=context,
+            new_knowledge_id = assigned_row_id(
+                log,
+                "knowledge_id",
+                context=self._ctx,
             )
+        else:
+            new_log_id = self._resolve_log_id(knowledge_id=new_knowledge_id)
             existing = db.get_logs(
-                context=context,
+                context=self._ctx,
                 filter=f"knowledge_id == {int(new_knowledge_id)}",
                 limit=1,
-                exclude_fields=list_private_fields(context),
+                exclude_fields=list_private_fields(self._ctx),
             )
             supersedes = list(existing[0].entries.get("supersedes_ids") or [])
             if int(old_knowledge_id) not in supersedes:
                 supersedes.append(int(old_knowledge_id))
             db.update_logs(
                 logs=[new_log_id],
-                context=context,
+                context=self._ctx,
                 entries={"supersedes_ids": supersedes},
                 overwrite=True,
             )
 
         db.update_logs(
             logs=[old_log_id],
-            context=context,
+            context=self._ctx,
             entries={
                 "status": KnowledgeStatus.superseded.value,
                 "superseded_by_id": int(new_knowledge_id),
             },
             overwrite=True,
         )
-        self.reconcile_sources(
-            knowledge_ids=[int(new_knowledge_id)],
-            destination=destination,
-        )
+        self.reconcile_sources(knowledge_ids=[int(new_knowledge_id)])
         return {
             "outcome": "knowledge superseded",
             "details": {
@@ -600,34 +543,32 @@ class KnowledgeManager(BaseKnowledgeManager):
         try:
             from ..file_manager.managers.file_manager import FileManager
 
-            roots = list(ContextRegistry.read_roots(FileManager, FILE_RECORDS_TABLE))
+            prefix = ContextRegistry.get_context(FileManager, FILE_RECORDS_TABLE)
         except Exception:
             return True
-        for root in roots:
-            prefix = f"{root.strip('/')}/{FILE_RECORDS_TABLE}"
+        try:
+            children = db.get_contexts(prefix=prefix)
+            contexts = (
+                list(children.keys())
+                if isinstance(children, dict)
+                else list(children or [])
+            )
+        except Exception:
+            contexts = []
+        if not contexts:
+            contexts = [prefix]
+        for child_ctx in contexts:
             try:
-                children = db.get_contexts(prefix=prefix)
-                contexts = (
-                    list(children.keys())
-                    if isinstance(children, dict)
-                    else list(children or [])
+                rows = db.get_logs(
+                    context=child_ctx,
+                    filter=f"file_id == {int(file_id)}",
+                    limit=1,
+                    return_ids_only=True,
                 )
+                if rows:
+                    return True
             except Exception:
-                contexts = []
-            if not contexts:
-                contexts = [prefix]
-            for child_ctx in contexts:
-                try:
-                    rows = db.get_logs(
-                        context=child_ctx,
-                        filter=f"file_id == {int(file_id)}",
-                        limit=1,
-                        return_ids_only=True,
-                    )
-                    if rows:
-                        return True
-                except Exception:
-                    continue
+                continue
         return False
 
     def _contact_id_exists(self, contact_id: int) -> bool:
@@ -635,23 +576,19 @@ class KnowledgeManager(BaseKnowledgeManager):
         try:
             from ..contact_manager.contact_manager import ContactManager
 
-            roots = ContextRegistry.read_roots(ContactManager, CONTACTS_TABLE)
+            context = ContextRegistry.get_context(ContactManager, CONTACTS_TABLE)
         except Exception:
             return True
-        for root in roots:
-            context = f"{root.strip('/')}/{CONTACTS_TABLE}"
-            try:
-                rows = db.get_logs(
-                    context=context,
-                    filter=f"contact_id == {int(contact_id)}",
-                    limit=1,
-                    return_ids_only=True,
-                )
-            except Exception:
-                continue
-            if rows:
-                return True
-        return False
+        try:
+            rows = db.get_logs(
+                context=context,
+                filter=f"contact_id == {int(contact_id)}",
+                limit=1,
+                return_ids_only=True,
+            )
+        except Exception:
+            return False
+        return bool(rows)
 
     @staticmethod
     def _data_context_exists(context: str) -> bool:
@@ -672,10 +609,7 @@ class KnowledgeManager(BaseKnowledgeManager):
 
     def _knowledge_id_exists(self, knowledge_id: int) -> bool:
         rows = federated_filter(
-            [
-                FederatedSearchContext(context=context, source=context)
-                for context in self._read_knowledge_contexts()
-            ],
+            [self._read_spec()],
             filter=f"knowledge_id == {int(knowledge_id)}",
             limit=1,
             annotate=False,
@@ -758,17 +692,16 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_ids: Optional[List[int]],
-        context: str,
     ) -> list[Knowledge]:
         if knowledge_ids:
             filt = " or ".join(f"knowledge_id == {int(kid)}" for kid in knowledge_ids)
         else:
             filt = _ACTIVE_STATUS_FILTER
         rows = db.get_logs(
-            context=context,
+            context=self._ctx,
             filter=filt,
             limit=1000,
-            exclude_fields=list_private_fields(context),
+            exclude_fields=list_private_fields(self._ctx),
         )
         return [Knowledge(**row.entries) for row in rows]
 
@@ -777,26 +710,18 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         knowledge_ids: List[int],
         reasons: List[StaleReason],
-        destination: str | None = None,
     ) -> None:
         """Append deduplicated link debt to claims before dependency deletion."""
-        context = self._knowledge_context_for_destination(destination)
-        for claim in self._claims_for_reconcile(
-            knowledge_ids=knowledge_ids,
-            context=context,
-        ):
+        for claim in self._claims_for_reconcile(knowledge_ids=knowledge_ids):
             merged = merge_stale_reasons(claim.stale_reasons, *reasons)
             if [stale_reason_key(r) for r in merged] == [
                 stale_reason_key(r) for r in claim.stale_reasons
             ]:
                 continue
-            log_id = self._resolve_log_id(
-                knowledge_id=claim.knowledge_id,
-                context=context,
-            )
+            log_id = self._resolve_log_id(knowledge_id=claim.knowledge_id)
             db.update_logs(
                 logs=[log_id],
-                context=context,
+                context=self._ctx,
                 entries={
                     "stale_reasons": [r.model_dump(mode="json") for r in merged],
                 },
@@ -808,7 +733,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         knowledge_ids: List[int],
         reason: StaleReason | dict,
-        destination: str | None = None,
     ) -> None:
         """Snapshot source-link debt before an external dependency is deleted."""
         stale_reason = (
@@ -819,7 +743,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         self._append_stale_reasons(
             knowledge_ids=knowledge_ids,
             reasons=[stale_reason],
-            destination=destination,
         )
 
     @functools.wraps(BaseKnowledgeManager.reconcile_sources, updated=())
@@ -827,16 +750,8 @@ class KnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_ids: Optional[List[int]] = None,
-        destination: str | None = None,
     ) -> ToolOutcome:
-        try:
-            context = self._knowledge_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
-        claims = self._claims_for_reconcile(
-            knowledge_ids=knowledge_ids,
-            context=context,
-        )
+        claims = self._claims_for_reconcile(knowledge_ids=knowledge_ids)
         stale_knowledge_ids: list[int] = []
         for claim in claims:
             declared_identities = {
@@ -859,13 +774,10 @@ class KnowledgeManager(BaseKnowledgeManager):
                 r.model_dump(mode="json") for r in claim.stale_reasons
             ]:
                 continue
-            log_id = self._resolve_log_id(
-                knowledge_id=claim.knowledge_id,
-                context=context,
-            )
+            log_id = self._resolve_log_id(knowledge_id=claim.knowledge_id)
             db.update_logs(
                 logs=[log_id],
-                context=context,
+                context=self._ctx,
                 entries={
                     "stale_reasons": [r.model_dump(mode="json") for r in refreshed],
                 },
@@ -888,16 +800,12 @@ class KnowledgeManager(BaseKnowledgeManager):
         references: Optional[Dict[str, str]] = None,
         k: int = 10,
     ) -> List[Knowledge]:
-        allowed_fields = list(self._BUILTIN_FIELDS)
         rows = federated_ranked_search(
             [
-                FederatedSearchContext(
-                    context=context,
-                    source=context,
+                self._read_spec(
                     row_filter=self._scoped_filter(None),
-                    allowed_fields=allowed_fields,
-                )
-                for context in self._read_knowledge_contexts()
+                    allowed_fields=list(self._BUILTIN_FIELDS),
+                ),
             ],
             references,
             limit=k,
@@ -914,17 +822,9 @@ class KnowledgeManager(BaseKnowledgeManager):
         offset: int = 0,
         limit: int = 100,
     ) -> List[Knowledge]:
-        from_fields = list(self._BUILTIN_FIELDS)
         try:
             rows = federated_filter(
-                [
-                    FederatedSearchContext(
-                        context=context,
-                        source=context,
-                        allowed_fields=from_fields,
-                    )
-                    for context in self._read_knowledge_contexts()
-                ],
+                [self._read_spec(allowed_fields=list(self._BUILTIN_FIELDS))],
                 filter=self._scoped_filter(normalize_filter_expr(filter)),
                 offset=offset,
                 limit=limit,
@@ -940,16 +840,8 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         knowledge_id: int,
     ) -> Knowledge:
-        from_fields = list(self._BUILTIN_FIELDS)
         rows = federated_filter(
-            [
-                FederatedSearchContext(
-                    context=context,
-                    source=context,
-                    allowed_fields=from_fields,
-                )
-                for context in self._read_knowledge_contexts()
-            ],
+            [self._read_spec(allowed_fields=list(self._BUILTIN_FIELDS))],
             filter=self._scoped_filter(
                 f"knowledge_id == {int(knowledge_id)}",
                 default_active=False,
@@ -960,38 +852,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         if not rows:
             raise ValueError(f"No knowledge found with knowledge_id {knowledge_id}.")
         return Knowledge(**rows[0])
-
-    # ------------------------------------------------------------------ #
-    #  Custom Knowledge Sync                                             #
-    # ------------------------------------------------------------------ #
-
-
-def _append_destination_guidance(method_name: str) -> None:
-    method = getattr(KnowledgeManager, method_name)
-    method.__doc__ = f"{method.__doc__ or ''}\n\n{KNOWLEDGE_DESTINATION_GUIDANCE}"
-    signature = inspect.signature(method)
-    if "destination" not in signature.parameters:
-        parameters = list(signature.parameters.values())
-        parameters.append(
-            inspect.Parameter(
-                "destination",
-                inspect.Parameter.KEYWORD_ONLY,
-                default=None,
-                annotation=str | None,
-            ),
-        )
-        method.__signature__ = signature.replace(parameters=parameters)  # type: ignore[attr-defined]
-
-
-for _destination_method in (
-    "add_knowledge",
-    "update_knowledge",
-    "delete_knowledge",
-    "invalidate_knowledge",
-    "supersede_knowledge",
-    "reconcile_sources",
-):
-    _append_destination_guidance(_destination_method)
 
 
 def _source_ref_matches_reason(ref: SourceRef, reason: StaleReason) -> bool:
@@ -1027,8 +887,8 @@ def mark_knowledge_stale_for_deleted_sources(
     """Snapshot Knowledge link debt before a cited dependency is deleted.
 
     Callers must invoke this *before* the store's deletion cascade (or
-    context deletion) removes identity fields from ``source_refs``. Scans every
-    Knowledge root and appends structured ``stale_reasons`` on matching
+    context deletion) removes identity fields from ``source_refs``. Scans the
+    Knowledge ledger and appends structured ``stale_reasons`` on matching
     claims. Never invents new provenance links.
     """
     if not reasons:
@@ -1041,48 +901,45 @@ def mark_knowledge_stale_for_deleted_sources(
         )
         for reason in reasons
     ]
-    for root in ContextRegistry.read_roots(KnowledgeManager, KNOWLEDGE_TABLE):
-        context = f"{root.strip('/')}/{KNOWLEDGE_TABLE}"
-        private = list_private_fields(context)
-        for reason in stale_reasons:
-            filt = _orchestra_filter_for_reason(reason)
-            logs = []
-            if filt is not None:
-                try:
-                    logs = db.get_logs(
-                        context=context,
-                        filter=filt,
-                        exclude_fields=private,
-                    )
-                except Exception:
-                    logs = []
-            if not logs:
-                try:
-                    logs = db.get_logs(
-                        context=context,
-                        filter=_ACTIVE_STATUS_FILTER,
-                        limit=1000,
-                        exclude_fields=private,
-                    )
-                except Exception:
-                    continue
-            for log in logs:
-                refs = coerce_source_refs(log.entries.get("source_refs") or [])
-                if not any(_source_ref_matches_reason(ref, reason) for ref in refs):
-                    continue
-                existing = coerce_stale_reasons(log.entries.get("stale_reasons"))
-                merged = merge_stale_reasons(existing, reason)
-                if [stale_reason_key(r) for r in merged] == [
-                    stale_reason_key(r) for r in existing
-                ]:
-                    continue
-                db.update_logs(
+    context = ContextRegistry.get_context(KnowledgeManager, KNOWLEDGE_TABLE)
+    private = list_private_fields(context)
+    for reason in stale_reasons:
+        filt = _orchestra_filter_for_reason(reason)
+        logs = []
+        if filt is not None:
+            try:
+                logs = db.get_logs(
                     context=context,
-                    logs=[log.id],
-                    entries={
-                        "stale_reasons": [
-                            item.model_dump(mode="json") for item in merged
-                        ],
-                    },
-                    overwrite=True,
+                    filter=filt,
+                    exclude_fields=private,
                 )
+            except Exception:
+                logs = []
+        if not logs:
+            try:
+                logs = db.get_logs(
+                    context=context,
+                    filter=_ACTIVE_STATUS_FILTER,
+                    limit=1000,
+                    exclude_fields=private,
+                )
+            except Exception:
+                continue
+        for log in logs:
+            refs = coerce_source_refs(log.entries.get("source_refs") or [])
+            if not any(_source_ref_matches_reason(ref, reason) for ref in refs):
+                continue
+            existing = coerce_stale_reasons(log.entries.get("stale_reasons"))
+            merged = merge_stale_reasons(existing, reason)
+            if [stale_reason_key(r) for r in merged] == [
+                stale_reason_key(r) for r in existing
+            ]:
+                continue
+            db.update_logs(
+                context=context,
+                logs=[log.id],
+                entries={
+                    "stale_reasons": [item.model_dump(mode="json") for item in merged],
+                },
+                overwrite=True,
+            )

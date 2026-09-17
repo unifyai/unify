@@ -3,7 +3,6 @@ import asyncio
 import builtins
 import concurrent.futures
 import dataclasses
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
@@ -170,28 +169,10 @@ def strip_ledger_internals(
     ]
 
 
-# Sentinel: omit ``destination`` to federate; pass ``None``/``"personal"`` to scope.
-_DESTINATION_UNSET = object()
-FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where this composed function (or set of functions) lives. Only the
-    personal root exists: pass ``"personal"`` or leave it ``None``."""
-FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where the virtual env definition lives. Only the personal root exists:
-    pass ``"personal"`` or leave it ``None``."""
+def _compositional_context() -> str:
+    """The compositional functions context of the active session."""
 
-
-def _compositional_contexts() -> list[str]:
-    """Every compositional functions context readable from here."""
-
-    from unify.common.context_registry import ContextRegistry
-
-    return [
-        f"{root.strip('/')}/{FUNCTIONS_COMPOSITIONAL_TABLE}"
-        for root in ContextRegistry.read_roots(
-            FunctionManager,
-            FUNCTIONS_COMPOSITIONAL_TABLE,
-        )
-    ]
+    return ContextRegistry.get_context(FunctionManager, FUNCTIONS_COMPOSITIONAL_TABLE)
 
 
 def function_id_resolves(function_id: int) -> bool:
@@ -208,14 +189,13 @@ def function_id_resolves(function_id: int) -> bool:
     and callers reading this as "gone" would act on it.
     """
 
-    for context in _compositional_contexts():
-        if db.get_logs(
-            context=context,
+    return bool(
+        db.get_logs(
+            context=_compositional_context(),
             filter=f"function_id == {int(function_id)}",
             limit=1,
-        ):
-            return True
-    return False
+        ),
+    )
 
 
 def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
@@ -228,18 +208,18 @@ def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
 
     if not function_ids:
         return []
+    context = _compositional_context()
     deleted: list[int] = []
-    for context in _compositional_contexts():
-        for function_id in function_ids:
-            logs = db.get_logs(
-                context=context,
-                filter=f"function_id == {int(function_id)}",
-                limit=1,
-            )
-            if not logs:
-                continue
-            db.delete_logs(context=context, logs=[logs[0].id])
-            deleted.append(int(function_id))
+    for function_id in function_ids:
+        logs = db.get_logs(
+            context=context,
+            filter=f"function_id == {int(function_id)}",
+            limit=1,
+        )
+        if not logs:
+            continue
+        db.delete_logs(context=context, logs=[logs[0].id])
+        deleted.append(int(function_id))
     return deleted
 
 
@@ -1915,9 +1895,6 @@ class FunctionManager(BaseFunctionManager):
             FUNCTIONS_VERIFICATIONS_TABLE,
         )
 
-        self._destination_context_lock = threading.RLock()
-        self._destination_write_scoped = False
-
         # ------------------------------------------------------------------ #
         #  LocalFileManager reference (for VM sync manager access)           #
         # ------------------------------------------------------------------ #
@@ -2073,59 +2050,6 @@ class FunctionManager(BaseFunctionManager):
                 raise
             rows.extend(lg.entries for lg in logs)
         return rows
-
-    def _function_context_for_root(self, root_context: str, table_name: str) -> str:
-        """Return a concrete Functions context under a registry root."""
-        return f"{root_context.strip('/')}/{table_name}"
-
-    def _function_context_for_destination(
-        self,
-        table_name: str,
-        *,
-        destination: str | None,
-    ) -> str:
-        """Resolve a public destination into one concrete Functions context."""
-        root_context = ContextRegistry.write_root(
-            self,
-            table_name,
-            destination=destination,
-        )
-        return self._function_context_for_root(root_context, table_name)
-
-    def _read_function_contexts(self, table_name: str) -> list[str]:
-        """Return personal-first concrete contexts for a Functions table."""
-        return list(
-            dict.fromkeys(
-                self._function_context_for_root(root, table_name)
-                for root in ContextRegistry.read_roots(self, table_name)
-            ),
-        )
-
-    def _read_compositional_contexts(self) -> list[str]:
-        """Return function contexts, narrowed during destination-scoped writes."""
-        if self._destination_write_scoped:
-            return [self._compositional_ctx]
-        return self._read_function_contexts(FUNCTIONS_COMPOSITIONAL_TABLE)
-
-    def _read_venv_contexts(self) -> list[str]:
-        """Return venv contexts, narrowed during destination-scoped writes."""
-        if self._destination_write_scoped:
-            return [self._venvs_ctx]
-        return self._read_function_contexts(FUNCTIONS_VENVS_TABLE)
-
-    @contextmanager
-    def _temporary_function_context(self, attr_name: str, context: str):
-        """Temporarily bind an existing storage method to a resolved context."""
-        with self._destination_context_lock:
-            original = getattr(self, attr_name)
-            was_write_scoped = self._destination_write_scoped
-            setattr(self, attr_name, context)
-            self._destination_write_scoped = True
-            try:
-                yield
-            finally:
-                setattr(self, attr_name, original)
-                self._destination_write_scoped = was_write_scoped
 
     @property
     def _dangerous_builtins(self) -> Set[str]:
@@ -4269,18 +4193,12 @@ class FunctionManager(BaseFunctionManager):
                 _time.sleep(delay)
             try:
                 _q_t0 = _time.perf_counter()
-                logs = []
-                for context in self._read_compositional_contexts():
-                    logs.extend(
-                        db.get_logs(
-                            context=context,
-                            filter=normalized,
-                            limit=1,
-                            exclude_fields=list_private_fields(context),
-                        ),
-                    )
-                    if logs:
-                        break
+                logs = db.get_logs(
+                    context=self._compositional_ctx,
+                    filter=normalized,
+                    limit=1,
+                    exclude_fields=list_private_fields(self._compositional_ctx),
+                )
                 _q_ms = (_time.perf_counter() - _q_t0) * 1000
                 if logs:
                     logger.debug(
@@ -4289,7 +4207,7 @@ class FunctionManager(BaseFunctionManager):
                     )
                     return self._hydrate_verification_fields(
                         [logs[0].entries],
-                        default_context=context,
+                        default_context=self._compositional_ctx,
                     )[0]
                 logger.debug(
                     f"⏱️ [FM._get_function_data_by_name] miss (attempt={attempt}, "
@@ -4729,25 +4647,24 @@ class FunctionManager(BaseFunctionManager):
         """
 
         mapping: Dict[str, int] = {}
-        for context in self._read_compositional_contexts():
-            try:
-                logs = db.get_logs(
-                    context=context,
-                    from_fields=["name", "function_id"],
-                )
-            except Exception:
-                continue
-            for lg in logs:
-                entries = lg.entries or {}
-                name = entries.get("name")
-                function_id = entries.get("function_id")
-                if (
-                    isinstance(name, str)
-                    and name
-                    and function_id is not None
-                    and name not in mapping
-                ):
-                    mapping[name] = int(function_id)
+        try:
+            logs = db.get_logs(
+                context=self._compositional_ctx,
+                from_fields=["name", "function_id"],
+            )
+        except Exception:
+            logs = []
+        for lg in logs:
+            entries = lg.entries or {}
+            name = entries.get("name")
+            function_id = entries.get("function_id")
+            if (
+                isinstance(name, str)
+                and name
+                and function_id is not None
+                and name not in mapping
+            ):
+                mapping[name] = int(function_id)
 
         if self._include_primitives:
             for ent in self._primitive_logs():
@@ -4777,22 +4694,17 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        compositional_rows: List[Dict[str, Any]] = []
-        for context in self._read_compositional_contexts():
-            context_rows = [
+        compositional_rows = self._hydrate_verification_fields(
+            [
                 lg.entries
                 for lg in db.get_logs(
-                    context=context,
+                    context=self._compositional_ctx,
                     filter=self._scoped_filter(None),
-                    exclude_fields=list_private_fields(context),
+                    exclude_fields=list_private_fields(self._compositional_ctx),
                 )
-            ]
-            compositional_rows.extend(
-                self._hydrate_verification_fields(
-                    context_rows,
-                    default_context=context,
-                ),
-            )
+            ],
+            default_context=self._compositional_ctx,
+        )
 
         primitive_rows: List[Dict[str, Any]] = []
         if self._include_primitives:
@@ -4861,18 +4773,12 @@ class FunctionManager(BaseFunctionManager):
     @functools.wraps(BaseFunctionManager.get_precondition, updated=())
     def get_precondition(self, *, function_name: str) -> Optional[Dict[str, Any]]:
         # Check compositional first, then optionally primitives.
-        logs = []
-        for context in self._read_compositional_contexts():
-            logs.extend(
-                db.get_logs(
-                    context=context,
-                    filter=self._scoped_filter(f"name == '{function_name}'"),
-                    limit=1,
-                    exclude_fields=list_private_fields(context),
-                ),
-            )
-            if logs:
-                break
+        logs = db.get_logs(
+            context=self._compositional_ctx,
+            filter=self._scoped_filter(f"name == '{function_name}'"),
+            limit=1,
+            exclude_fields=list_private_fields(self._compositional_ctx),
+        )
         if not logs and self._include_primitives:
             primitive_rows = self._primitive_logs(
                 extra_filter=f"name == '{function_name}'",
@@ -4977,39 +4883,36 @@ class FunctionManager(BaseFunctionManager):
             return
         from ..guidance_manager.guidance_manager import GUIDANCE_TABLE, GuidanceManager
 
-        for root in ContextRegistry.read_roots(GuidanceManager, GUIDANCE_TABLE):
-            context = f"{root.strip('/')}/{GUIDANCE_TABLE}"
-            for function_id, name in deleted_functions:
-                logs = db.get_logs(
-                    context=context,
-                    filter=f"{int(function_id)} in function_ids",
-                    exclude_fields=list_private_fields(context),
+        context = ContextRegistry.get_context(GuidanceManager, GUIDANCE_TABLE)
+        for function_id, name in deleted_functions:
+            logs = db.get_logs(
+                context=context,
+                filter=f"{int(function_id)} in function_ids",
+                exclude_fields=list_private_fields(context),
+            )
+            for log in logs:
+                existing = coerce_stale_reasons(
+                    log.entries.get("stale_reasons"),
                 )
-                for log in logs:
-                    existing = coerce_stale_reasons(
-                        log.entries.get("stale_reasons"),
-                    )
-                    merged = merge_stale_reasons(
-                        existing,
-                        StaleReason(
-                            dep_kind="function",
-                            id=int(function_id),
-                            name=name,
-                            message=(
-                                f"missing function_id={int(function_id)} name={name}"
-                            ),
-                        ),
-                    )
-                    db.update_logs(
-                        context=context,
-                        logs=[log.id],
-                        entries={
-                            "stale_reasons": [
-                                reason.model_dump(mode="json") for reason in merged
-                            ],
-                        },
-                        overwrite=True,
-                    )
+                merged = merge_stale_reasons(
+                    existing,
+                    StaleReason(
+                        dep_kind="function",
+                        id=int(function_id),
+                        name=name,
+                        message=f"missing function_id={int(function_id)} name={name}",
+                    ),
+                )
+                db.update_logs(
+                    context=context,
+                    logs=[log.id],
+                    entries={
+                        "stale_reasons": [
+                            reason.model_dump(mode="json") for reason in merged
+                        ],
+                    },
+                    overwrite=True,
+                )
 
     # 3. Deletion ------------------------------------------------------- #
 
@@ -5237,43 +5140,6 @@ class FunctionManager(BaseFunctionManager):
         offset: int = 0,
         limit: int = 100,
         include_implementations: bool = True,
-        destination: Optional[str] = _DESTINATION_UNSET,  # type: ignore[assignment]
-        _return_callable: bool = False,
-        _namespace: Optional[Dict[str, Any]] = None,
-        _also_return_metadata: bool = False,
-    ) -> List[Dict[str, Any]]:
-        if destination is not _DESTINATION_UNSET:
-            context = self._function_context_for_destination(
-                FUNCTIONS_COMPOSITIONAL_TABLE,
-                destination=destination,
-            )
-            with self._temporary_function_context("_compositional_ctx", context):
-                return self._filter_functions_impl(
-                    filter=filter,
-                    offset=offset,
-                    limit=limit,
-                    include_implementations=include_implementations,
-                    _return_callable=_return_callable,
-                    _namespace=_namespace,
-                    _also_return_metadata=_also_return_metadata,
-                )
-        return self._filter_functions_impl(
-            filter=filter,
-            offset=offset,
-            limit=limit,
-            include_implementations=include_implementations,
-            _return_callable=_return_callable,
-            _namespace=_namespace,
-            _also_return_metadata=_also_return_metadata,
-        )
-
-    def _filter_functions_impl(
-        self,
-        *,
-        filter: Optional[str] = None,
-        offset: int = 0,
-        limit: int = 100,
-        include_implementations: bool = True,
         _return_callable: bool = False,
         _namespace: Optional[Dict[str, Any]] = None,
         _also_return_metadata: bool = False,
@@ -5287,11 +5153,10 @@ class FunctionManager(BaseFunctionManager):
         caller_filter = normalize_filter_expr(filter)
         contexts = [
             FederatedSearchContext(
-                context=context,
+                context=self._compositional_ctx,
                 source="compositional",
                 row_filter=self._scoped_filter(None),
-            )
-            for context in self._read_compositional_contexts()
+            ),
         ]
 
         if self._include_primitives:
@@ -5412,12 +5277,11 @@ class FunctionManager(BaseFunctionManager):
 
         contexts = [
             FederatedSearchContext(
-                context=context,
+                context=self._compositional_ctx,
                 source="compositional",
                 row_filter=self._scoped_filter(None),
                 allowed_fields=allowed_fields,
-            )
-            for context in self._read_compositional_contexts()
+            ),
         ]
 
         if self._include_primitives:
@@ -5738,23 +5602,13 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             Dict with venv_id and venv content, or None if not found.
         """
-        for context in self._read_venv_contexts():
-            logs = (
-                self._safe_get_venv_logs(
-                    filter=f"venv_id == {venv_id}",
-                    limit=1,
-                    exclude_fields=list_private_fields(context),
-                )
-                if context == self._venvs_ctx
-                else db.get_logs(
-                    context=context,
-                    filter=f"venv_id == {venv_id}",
-                    limit=1,
-                    exclude_fields=list_private_fields(context),
-                )
-            )
-            if logs:
-                return logs[0].entries
+        logs = self._safe_get_venv_logs(
+            filter=f"venv_id == {venv_id}",
+            limit=1,
+            exclude_fields=list_private_fields(self._venvs_ctx),
+        )
+        if logs:
+            return logs[0].entries
         return None
 
     def list_venvs(self) -> List[Dict[str, Any]]:
@@ -5764,21 +5618,10 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             List of dicts, each with venv_id and venv content.
         """
-        logs = []
-        for context in self._read_venv_contexts():
-            logs.extend(
-                (
-                    self._safe_get_venv_logs(
-                        exclude_fields=list_private_fields(context),
-                        from_fields=None,
-                    )
-                    if context == self._venvs_ctx
-                    else db.get_logs(
-                        context=context,
-                        exclude_fields=list_private_fields(context),
-                    )
-                ),
-            )
+        logs = self._safe_get_venv_logs(
+            exclude_fields=list_private_fields(self._venvs_ctx),
+            from_fields=None,
+        )
         return [lg.entries for lg in logs]
 
     def delete_venv(self, *, venv_id: int) -> bool:
@@ -7632,96 +7475,3 @@ class FunctionManager(BaseFunctionManager):
                 # Ensure process is terminated
                 if process.returncode is None:
                     await self._terminate_process_group(process, use_process_group)
-
-
-def _wrap_compositional_write(method_name: str) -> None:
-    original = getattr(FunctionManager, method_name)
-
-    @functools.wraps(original)
-    def wrapped(
-        self: FunctionManager,
-        *args: Any,
-        destination: str | None = None,
-        **kwargs: Any,
-    ):
-        try:
-            context = self._function_context_for_destination(
-                FUNCTIONS_COMPOSITIONAL_TABLE,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return exc.payload
-        with self._temporary_function_context("_compositional_ctx", context):
-            return original(self, *args, **kwargs)
-
-    wrapped.__doc__ = (
-        f"{original.__doc__ or ''}\n\n{FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE}"
-    )
-    wrapped.__signature__ = _signature_with_destination(original)  # type: ignore[attr-defined]
-    setattr(FunctionManager, method_name, wrapped)
-
-
-def _wrap_venv_write(method_name: str) -> None:
-    original = getattr(FunctionManager, method_name)
-
-    @functools.wraps(original)
-    def wrapped(
-        self: FunctionManager,
-        *args: Any,
-        destination: str | None = None,
-        **kwargs: Any,
-    ):
-        try:
-            context = self._function_context_for_destination(
-                FUNCTIONS_VENVS_TABLE,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return exc.payload
-        with self._temporary_function_context("_venvs_ctx", context):
-            return original(self, *args, **kwargs)
-
-    wrapped.__doc__ = (
-        f"{original.__doc__ or ''}\n\n{FUNCTIONS_VENV_DESTINATION_GUIDANCE}"
-    )
-    wrapped.__signature__ = _signature_with_destination(original)  # type: ignore[attr-defined]
-    setattr(FunctionManager, method_name, wrapped)
-
-
-def _signature_with_destination(method: Callable[..., Any]) -> inspect.Signature:
-    # follow_wrapped=False: the concrete methods carry @functools.wraps(Base...),
-    # and following the chain would resolve to the abstract signature, silently
-    # dropping concrete-only parameters (e.g. add_functions' ``overwrite``) from
-    # the LLM-visible tool schema.
-    signature = inspect.signature(method, follow_wrapped=False)
-    if "destination" in signature.parameters:
-        return signature
-    parameters = list(signature.parameters.values())
-    destination_param = inspect.Parameter(
-        "destination",
-        inspect.Parameter.KEYWORD_ONLY,
-        default=None,
-        annotation=str | None,
-    )
-    insert_at = len(parameters)
-    for index, parameter in enumerate(parameters):
-        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
-            insert_at = index
-            break
-    parameters.insert(insert_at, destination_param)
-    return signature.replace(parameters=parameters)
-
-
-for _method_name in (
-    "add_functions",
-    "delete_function",
-    "set_function_venv",
-):
-    _wrap_compositional_write(_method_name)
-
-for _method_name in (
-    "add_venv",
-    "delete_venv",
-    "update_venv",
-):
-    _wrap_venv_write(_method_name)

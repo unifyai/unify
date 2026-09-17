@@ -190,3 +190,34 @@ def test_filter_by_nested_metadata():
     assert ex.exchange_id == ex_nested
     assert ex.metadata.get("thread", {}).get("id") == "T-123"
     assert "vip" in (ex.metadata.get("thread", {}).get("tags") or [])
+
+
+@_handle_project
+def test_metadata_lookup_finds_the_exchange_for_a_late_artifact():
+    """A session artifact that lands later has to find its exchange by metadata."""
+    tm = TranscriptManager()
+
+    room_name = "unity_meet_room"
+    exchange_id, _ = tm.log_first_message_in_new_exchange(
+        {
+            "medium": "unify_message",
+            "sender_id": 0,
+            "receiver_ids": [1],
+            "timestamp": datetime.now(UTC),
+            "content": "call transcript",
+        },
+        exchange_initial_metadata={"room_name": room_name},
+    )
+
+    assert tm.resolve_exchange_id_by_metadata("room_name", room_name) == exchange_id
+    assert tm.resolve_exchange_id_by_metadata("room_name", "no such room") is None
+
+    recording_url = f"https://example.com/{room_name}.mp4"
+    tm.update_exchange_metadata(exchange_id, {"recording_url": recording_url})
+
+    [row] = db.get_logs(
+        context=tm._exchanges_ctx,
+        filter=f"exchange_id == {exchange_id}",
+        limit=1,
+    )
+    assert row.entries["metadata"]["recording_url"] == recording_url

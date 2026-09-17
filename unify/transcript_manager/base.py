@@ -116,7 +116,6 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
             List[Union[Dict[str, Any], Message]],
         ],
         synchronous: bool = False,
-        destination: Optional[str] = None,
     ) -> List[Message]:
         """
         Insert one or more transcript messages.
@@ -185,8 +184,6 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         message_id: int,
         images: list[dict],
-        *,
-        destination: Optional[str] = None,
     ) -> None:
         """
         Attach or replace the images on an already-logged transcript message.
@@ -205,56 +202,36 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         message_id: int,
         reactions: list[dict],
-        *,
-        destination: Optional[str] = None,
     ) -> None:
         """Attach or replace emoji reactions on an already-logged transcript message."""
         raise NotImplementedError
 
-    def get_message_by_id(
-        self,
-        message_id: int,
-        *,
-        destination: Optional[str] = None,
-    ) -> dict | None:
+    def get_message_by_id(self, message_id: int) -> dict | None:
         """Return the stored transcript row entries for a message_id."""
         raise NotImplementedError
 
     def resolve_message_id_by_provider_sid(
         self,
         provider_message_sid: str,
-        *,
-        destination: Optional[str] = None,
     ) -> int | None:
         """Look up a transcript message_id by provider_message_sid metadata."""
         raise NotImplementedError
 
-    def resolve_exchange_id_by_metadata(
-        self,
-        key: str,
-        value: str,
-    ) -> tuple[int, Optional[str]] | None:
-        """Return the exchange whose ``metadata[key]`` equals ``value``, if any.
-
-        Yields ``(exchange_id, destination)``: ids are root-local, so a caller
-        that writes back has to name the root the match came from.
-        """
+    def resolve_exchange_id_by_metadata(self, key: str, value: str) -> int | None:
+        """Return the id of the exchange whose ``metadata[key]`` equals ``value``, if any."""
         raise NotImplementedError
 
     def update_exchange_metadata(
         self,
         exchange_id: int,
         metadata: Dict[str, Any],
-        *,
-        destination: Optional[str] = None,
     ) -> Exchange:
         """
         Merge ``metadata`` into the specified exchange and return the updated Exchange.
 
         Keys absent from ``metadata`` retain their stored values; the exchange
-        accumulates metadata from independent writers across a session.
-        ``destination`` must name the root the exchange was authored in; a
-        write that cannot find its exchange there raises.
+        accumulates metadata from independent writers across a session. A write
+        that cannot find its exchange raises.
         """
         raise NotImplementedError
 
@@ -263,7 +240,6 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         message: Union[Dict[str, Any], Message],
         *,
         exchange_initial_metadata: Optional[Dict[str, Any]] = None,
-        destination: Optional[str] = None,
     ) -> tuple[int, int]:
         """
         Log the first message of a new exchange and set initial exchange metadata.

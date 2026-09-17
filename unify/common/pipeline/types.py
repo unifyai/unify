@@ -117,7 +117,7 @@ class TableMeta(BaseModel):
     The table's *rows* live out-of-band behind a handle in
     ``IngestPlan.table_inputs[table_id]``.  ``TableMeta`` is only the
     structural + contextual info the ingest worker needs to provision the
-    destination context and resolve embed columns / descriptions.
+    target context and resolve embed columns / descriptions.
 
     The optional config fields (``description`` through ``post_ingest``)
     are populated at dispatch time from ``PipelineConfig`` and threaded
@@ -227,11 +227,6 @@ class FmBinding(IngestBinding):
 
     fm_alias: str = "Local"
     logical_path: str
-    # Ownership root the files land under, same vocabulary as ``DmBinding``:
-    # ``None``/``"personal"`` for the dispatching assistant's own root, the
-    # only root there is. Present on both bindings so a caller asking for one
-    # does not silently get the other's scope.
-    destination: str | None = None
 
 
 class DmBinding(IngestBinding):
@@ -241,22 +236,13 @@ class DmBinding(IngestBinding):
     specific context while still authenticating as a concrete
     assistant. No ``FileRecords`` entry is created in this mode.
 
-    ``target_context`` and ``destination`` are two orthogonal axes:
-
-    * ``target_context`` is *which* context/table path the data lands in
-      (e.g. ``"HomeIQ/WirralHousing/v2_2/Purchasing/PurchaseOrderLines"``).
-    * ``destination`` is *which root/scope* that path is rooted under.
-      ``None`` (or ``"personal"``) routes to the dispatching assistant's
-      personal ``Data`` root (``{user}/{assistant}/Data/<target_context>``),
-      the only root there is.
-
-    ``destination`` matches the ``personal`` vocabulary used everywhere else
-    a root is named.
+    ``target_context`` is the context/table path the data lands in under
+    the session's ``Data`` root (e.g.
+    ``"HomeIQ/WirralHousing/v2_2/Purchasing/PurchaseOrderLines"``).
     """
 
     target_context: str
     create_table_prefix: str = ""
-    destination: str | None = None
 
 
 # ---------------------------------------------------------------------------

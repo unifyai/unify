@@ -49,8 +49,10 @@ def num_messages(self) -> int:
     """Return the total number of messages in transcripts."""
     return federated_count(
         [
-            FederatedSearchContext(context=context, source=context)
-            for context in self._read_transcript_contexts()
+            FederatedSearchContext(
+                context=self._transcripts_ctx,
+                source=self._transcripts_ctx,
+            ),
         ],
         key="message_id",
     )

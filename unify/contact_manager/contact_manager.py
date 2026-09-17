@@ -54,7 +54,6 @@ from .ops import (
     merge_contacts as _op_merge,
 )
 from ..common.federated_search import (
-    CONTEXT_FIELD,
     FederatedSearchContext,
     SortSpec,
     federated_count,
@@ -167,40 +166,6 @@ class ContactManager(BaseContactManager):
 
         # Ensure assistant self and boss contacts exist and are up to date.
         self._sync_required_contacts()
-
-    def _contact_context_from_root(self, root_context: str) -> str:
-        """Return the concrete Contacts context under one registry root."""
-
-        return f"{root_context.strip('/')}/Contacts"
-
-    def _contact_context_for_destination(self, destination: str | None) -> str:
-        """Resolve a public write destination into a concrete Contacts context."""
-
-        root_context = ContextRegistry.write_root(
-            self,
-            "Contacts",
-            destination=destination,
-        )
-        return self._contact_context_from_root(root_context)
-
-    def _read_contact_contexts(self) -> list[str]:
-        """Return ordered concrete Contacts contexts visible to this assistant."""
-
-        try:
-            root_contexts = ContextRegistry.read_roots(self, "Contacts")
-            contexts = [self._contact_context_from_root(root) for root in root_contexts]
-        except RuntimeError as exc:
-            if "no base context available" not in str(exc):
-                raise
-            contexts = [self._ctx]
-        return list(dict.fromkeys(contexts))
-
-    def _data_store_for_context(self, context: str):
-        """Return the per-root local cache for a concrete Contacts context."""
-
-        if context == self._ctx:
-            return self._data_store
-        return DataStore.for_context(context, key_fields=("contact_id",))
 
     def _pack_contacts(self, contacts: list[Contact]) -> Dict[str, Any]:
         """Return the standard ContactManager tool payload for contact rows."""
@@ -502,56 +467,44 @@ class ContactManager(BaseContactManager):
 
         results: Dict[int, Dict[str, Any]] = {}
         remaining = list(dict.fromkeys(ids))
+        store = self._data_store
 
-        for context in self._read_contact_contexts():
-            if not remaining:
-                break
-            store = self._data_store_for_context(context)
-
-            misses: List[int] = []
-            if search_local_storage:
-                for cid in remaining:
-                    try:
-                        row = store[cid]
-                    except KeyError:
-                        misses.append(cid)
-                    else:
-                        results[cid] = {k: v for k, v in row.items() if k in requested}
-            else:
-                misses = list(remaining)
-
-            found_ids = set(results).intersection(remaining)
-            remaining = [cid for cid in remaining if cid not in found_ids]
-            if not remaining:
-                break
-
-            if misses:
-                if len(misses) == 1:
-                    filt = f"contact_id == {misses[0]}"
+        misses: List[int] = []
+        if search_local_storage:
+            for cid in remaining:
+                try:
+                    row = store[cid]
+                except KeyError:
+                    misses.append(cid)
                 else:
-                    filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
-                rows = db.get_logs(
-                    context=context,
-                    filter=filt,
-                    limit=len(misses),
-                    from_fields=list(allowed),
-                )
-                for lg in rows:
-                    try:
-                        backend_row = lg.entries
-                        cid_val = int(backend_row.get("contact_id"))
-                    except Exception:
-                        continue
-                    if cid_val not in remaining:
-                        continue
-                    try:
-                        store.put(backend_row)
-                    except Exception:
-                        pass
-                    results[cid_val] = {k: backend_row.get(k) for k in requested}
+                    results[cid] = {k: v for k, v in row.items() if k in requested}
+        else:
+            misses = list(remaining)
 
-                found_ids = set(results).intersection(remaining)
-                remaining = [cid for cid in remaining if cid not in found_ids]
+        if misses:
+            if len(misses) == 1:
+                filt = f"contact_id == {misses[0]}"
+            else:
+                filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
+            rows = db.get_logs(
+                context=self._ctx,
+                filter=filt,
+                limit=len(misses),
+                from_fields=list(allowed),
+            )
+            for lg in rows:
+                try:
+                    backend_row = lg.entries
+                    cid_val = int(backend_row.get("contact_id"))
+                except Exception:
+                    continue
+                if cid_val not in remaining:
+                    continue
+                try:
+                    store.put(backend_row)
+                except Exception:
+                    pass
+                results[cid_val] = {k: backend_row.get(k) for k in requested}
 
         return results
 
@@ -649,11 +602,10 @@ class ContactManager(BaseContactManager):
             key_filter = filter.get(key) if isinstance(filter, dict) else filter
             contexts = [
                 FederatedSearchContext(
-                    context=context,
-                    source=context,
+                    context=self._ctx,
+                    source=self._ctx,
                     allowed_fields=[key, *group_fields],
-                )
-                for context in self._read_contact_contexts()
+                ),
             ]
             result_by_key[key] = federated_reduce(
                 contexts,
@@ -746,11 +698,10 @@ class ContactManager(BaseContactManager):
 
         contexts = [
             FederatedSearchContext(
-                context=context,
-                source=context,
+                context=self._ctx,
+                source=self._ctx,
                 allowed_fields=from_fields,
-            )
-            for context in self._read_contact_contexts()
+            ),
         ]
         try:
             # Sort server-side by contact_id so the documented creation-order
@@ -772,9 +723,9 @@ class ContactManager(BaseContactManager):
                 for key, value in annotated.items()
                 if not key.startswith("_federated_")
             }
-            # Write-through to the local DataStore mirror for the source root.
+            # Write-through to the local DataStore mirror.
             try:
-                self._data_store_for_context(annotated[CONTEXT_FIELD]).put(row)
+                self._data_store.put(row)
             except Exception:
                 pass
             rows.append(row)
@@ -829,12 +780,11 @@ class ContactManager(BaseContactManager):
         )
         contexts = [
             FederatedSearchContext(
-                context=context,
-                source=context,
+                context=self._ctx,
+                source=self._ctx,
                 row_filter=system_filter,
                 allowed_fields=allowed_fields,
-            )
-            for context in self._read_contact_contexts()
+            ),
         ]
         rows = federated_ranked_search(
             contexts,
@@ -845,17 +795,15 @@ class ContactManager(BaseContactManager):
 
         visible_contacts: list[Contact] = []
         for row in rows:
-            source_context = row.get(CONTEXT_FIELD)
             clean = {
                 key: value
                 for key, value in row.items()
                 if not key.startswith("_federated_")
             }
-            if source_context:
-                try:
-                    self._data_store_for_context(source_context).put(clean)
-                except Exception:
-                    pass
+            try:
+                self._data_store.put(clean)
+            except Exception:
+                pass
             visible_contacts.append(Contact(**clean))
         return self._pack_contacts(visible_contacts)
 
@@ -877,9 +825,6 @@ class ContactManager(BaseContactManager):
         should_respond: bool = True,
         response_policy: Optional[str] = None,
         is_system: bool = False,
-        user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        destination: Optional[str] = None,
         _contact_id: Optional[int] = None,
     ) -> ToolOutcome:
         """
@@ -924,9 +869,6 @@ class ContactManager(BaseContactManager):
             contact. When omitted, a safe default policy is automatically applied.
         is_system : bool, default False
             Mark as a system contact (assistant/user/org member). Optional.
-        destination : str | None, default None
-            Where to file this contact. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -942,16 +884,12 @@ class ContactManager(BaseContactManager):
 
         Behaviour and Edge Cases
         ------------------------
-        - New regular contacts receive the next available id in the destination root.
-          System contacts are provisioned separately from resolved session ids.
+        - New regular contacts receive the next available id. System contacts are
+          provisioned separately from resolved session ids.
         - ``response_policy`` defaults to a conservative policy that avoids sharing sensitive
           information when not explicitly provided.
         - Unspecified fields remain ``None`` and can be populated later via ``update_contact``.
         """
-        try:
-            context = self._contact_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
         return _op_create(
             self,
             first_name=first_name,
@@ -968,11 +906,7 @@ class ContactManager(BaseContactManager):
             should_respond=should_respond,
             response_policy=response_policy,
             is_system=is_system,
-            user_id=user_id,
-            agent_id=agent_id,
             contact_id=_contact_id,
-            context=context,
-            data_store=self._data_store_for_context(context),
         )
 
     def update_contact(
@@ -993,9 +927,6 @@ class ContactManager(BaseContactManager):
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
         is_system: Optional[bool] = None,
-        user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        destination: Optional[str] = None,
         _log_id: Optional[int] = None,
     ) -> ToolOutcome:
         """
@@ -1038,9 +969,6 @@ class ContactManager(BaseContactManager):
             Override the contact‑specific response policy. Omit to leave unchanged.
         is_system : bool | None
             System-contact flag. Omit to leave unchanged.
-        destination : str | None, default None
-            Which root holds the contact you are updating. Only the personal
-            root exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1060,10 +988,6 @@ class ContactManager(BaseContactManager):
         - This operation overwrites the stored values for the selected fields.
         - ``contact_id`` itself cannot be changed.
         """
-        try:
-            context = self._contact_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
         return _op_update(
             self,
             contact_id=contact_id,
@@ -1081,18 +1005,13 @@ class ContactManager(BaseContactManager):
             should_respond=should_respond,
             response_policy=response_policy,
             is_system=is_system,
-            user_id=user_id,
-            agent_id=agent_id,
             _log_id=_log_id,
-            context=context,
-            data_store=self._data_store_for_context(context),
         )
 
     def _delete_contact(
         self,
         *,
         contact_id: int,
-        destination: Optional[str] = None,
         _log_id: Optional[int] = None,
     ) -> ToolOutcome:
         """
@@ -1102,9 +1021,6 @@ class ContactManager(BaseContactManager):
         ----------
         contact_id : int
             The identifier of the contact to remove. Must refer to a non‑system contact.
-        destination : str | None, default None
-            Which copy of the contact to remove. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1124,18 +1040,11 @@ class ContactManager(BaseContactManager):
         - This operation cannot be undone. Consider ``_merge_contacts`` to consolidate records
           without losing history.
         """
-        try:
-            context = self._contact_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
-        outcome = _op_delete(
+        return _op_delete(
             self,
             contact_id=contact_id,
             _log_id=_log_id,
-            context=context,
-            data_store=self._data_store_for_context(context),
         )
-        return outcome
 
     def _merge_contacts(
         self,
@@ -1143,7 +1052,6 @@ class ContactManager(BaseContactManager):
         contact_id_1: int,
         contact_id_2: int,
         overrides: Optional[Dict[str, int]] = None,
-        destination: Optional[str] = None,
     ) -> ToolOutcome:
         """
         Merge two contacts into a single consolidated record.
@@ -1168,9 +1076,6 @@ class ContactManager(BaseContactManager):
 
             If not provided, the first non‑``None`` value in the order ``contact_id_1`` → ``contact_id_2`` is used for each column.
             The special key ``"contact_id"`` can be provided to explicitly choose which id to keep; the other contact will be deleted.
-        destination : str | None, default None
-            Which root the merge operates within. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1191,17 +1096,11 @@ class ContactManager(BaseContactManager):
         - After the merge, transcript messages that referenced the deleted contact will have
           their ``contact_id`` updated to the kept id for consistency.
         """
-        try:
-            context = self._contact_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
         return _op_merge(
             self,
             contact_id_1=contact_id_1,
             contact_id_2=contact_id_2,
             overrides=overrides,
-            context=context,
-            data_store=self._data_store_for_context(context),
         )
 
     def warm_embeddings(self) -> None:
@@ -1230,10 +1129,7 @@ class ContactManager(BaseContactManager):
             The total number of contacts.
         """
         return federated_count(
-            [
-                FederatedSearchContext(context=context, source=context)
-                for context in self._read_contact_contexts()
-            ],
+            [FederatedSearchContext(context=self._ctx, source=self._ctx)],
             key="contact_id",
         )
 

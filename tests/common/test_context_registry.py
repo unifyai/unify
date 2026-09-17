@@ -3,12 +3,7 @@ from unittest.mock import patch
 import pytest
 from unify.db import CONTEXT_READ, CONTEXT_WRITE
 
-from unify.common.context_registry import (
-    PERSONAL_ROOT_IDENTITY,
-    ContextRegistry,
-    TableContext,
-)
-from unify.common.tool_outcome import ToolErrorException
+from unify.common.context_registry import ContextRegistry, TableContext
 from unify.session_details import SESSION_DETAILS
 
 
@@ -70,51 +65,9 @@ def provision():
         yield create_context
 
 
-@pytest.mark.parametrize("destination", [None, "personal", ""])
-def test_write_root_resolves_to_the_session_root(destination, provision):
-    assert (
-        ContextRegistry.write_root(
-            RegistryExampleManager,
-            "Contacts",
-            destination=destination,
-        )
-        == "user123/42"
-    )
-
-
-@pytest.mark.parametrize("destination", ["team:7", "shared", 7])
-def test_invalid_destination_raises_structured_error(destination):
-    with pytest.raises(ToolErrorException) as exc_info:
-        ContextRegistry.write_root(
-            RegistryExampleManager,
-            "Contacts",
-            destination=destination,
-        )
-
-    assert exc_info.value.payload["error_kind"] == "invalid_destination"
-    assert exc_info.value.payload["details"]["destination"] == destination
-    assert ContextRegistry._registry == {}
-
-
 @pytest.mark.parametrize("table_name", _ALL_TABLES)
-def test_read_roots_is_the_single_session_root(table_name: str, provision):
-    assert ContextRegistry.read_roots(RegistryExampleManager, table_name) == [
-        "user123/42",
-    ]
-
-
-def test_resolve_root_does_not_provision(provision):
-    manager_name, root_identity, root_context = ContextRegistry.resolve_root(
-        RegistryExampleManager,
-        "Knowledge",
-        destination=None,
-    )
-
-    assert manager_name == "RegistryExampleManager"
-    assert root_identity == PERSONAL_ROOT_IDENTITY
-    assert root_context == "user123/42"
-    provision.assert_not_called()
-    assert ContextRegistry._registry == {}
+def test_root_is_the_session_root(table_name: str, provision):
+    assert ContextRegistry.root(RegistryExampleManager, table_name) == "user123/42"
 
 
 def test_get_context_returns_the_fully_qualified_table(provision):
@@ -129,16 +82,14 @@ def test_get_context_returns_the_fully_qualified_table(provision):
 
 
 def test_lazy_provisioning_is_cached_per_table(provision):
-    ContextRegistry.write_root(RegistryExampleManager, "Contacts")
-    ContextRegistry.write_root(RegistryExampleManager, "Contacts")
+    ContextRegistry.root(RegistryExampleManager, "Contacts")
+    ContextRegistry.root(RegistryExampleManager, "Contacts")
     ContextRegistry.get_context(RegistryExampleManager, "Contacts")
 
     provision.assert_called_once()
     assert provision.call_args.args[0] == "user123/42/Contacts"
     assert (
-        ContextRegistry._registry[
-            ("RegistryExampleManager", "Contacts", PERSONAL_ROOT_IDENTITY)
-        ]
+        ContextRegistry._registry[("RegistryExampleManager", "Contacts")]
         == "user123/42/Contacts"
     )
 

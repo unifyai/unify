@@ -17,7 +17,7 @@ def _manager_stub(*, include_primitives: bool = True) -> FunctionManager:
     fm._registry = SimpleNamespace(
         primitive_row_filter=lambda _scope: "primitive_class == 'Primitives'",
     )
-    fm._read_compositional_contexts = lambda: ["Functions/Compositional"]
+    fm._compositional_ctx = "Functions/Compositional"
     return fm
 
 

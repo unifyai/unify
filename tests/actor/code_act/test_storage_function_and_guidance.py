@@ -73,7 +73,7 @@ class _TrackingGuidanceManager:
         """Delete a guidance entry by ID."""
         return {"deleted": True}
 
-    def reconcile_dependencies(self, *, guidance_ids=None, destination=None):
+    def reconcile_dependencies(self, *, guidance_ids=None):
         """Refresh structured link debt for related functions."""
         return {"outcome": "checked", "details": {"guidance_ids": guidance_ids or []}}
 

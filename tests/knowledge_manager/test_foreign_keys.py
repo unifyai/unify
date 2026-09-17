@@ -96,8 +96,8 @@ def test_mark_knowledge_stale_for_deleted_sources_appends_debt(monkeypatch):
 
     monkeypatch.setattr(
         km_mod.ContextRegistry,
-        "read_roots",
-        staticmethod(lambda *_a, **_k: ["Assistants/1"]),
+        "get_context",
+        staticmethod(lambda *_a, **_k: "Assistants/1/Knowledge"),
     )
     monkeypatch.setattr(km_mod, "list_private_fields", lambda *_a, **_k: [])
     monkeypatch.setattr(

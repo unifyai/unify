@@ -406,8 +406,6 @@ class SimulatedFileManager(BaseFileManager):
     def ingest_files(
         self,
         filenames,
-        *,
-        destination: str | None = None,
         **options,
     ) -> "IngestPipelineResult":
         """
@@ -724,7 +722,6 @@ class SimulatedFileManager(BaseFileManager):
         *,
         file_id_or_path: Union[str, int],
         new_name: str,
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """Simulate renaming a file."""
         # Resolve file_id_or_path to filename
@@ -756,7 +753,6 @@ class SimulatedFileManager(BaseFileManager):
         *,
         file_id_or_path: Union[str, int],
         new_parent_path: str,
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """Simulate moving a file."""
         # Resolve file_id_or_path to filename
@@ -810,7 +806,6 @@ class SimulatedFileManager(BaseFileManager):
         self,
         *,
         file_path: str,
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """Simulate a sync operation (no-op with a plausible summary)."""
         exists = file_path in self._files
@@ -861,7 +856,6 @@ class SimulatedFileManager(BaseFileManager):
         self,
         *,
         file_id_or_path: Union[str, int],
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """Simulate deleting a file record."""
         # Resolve file_id_or_path to filename
@@ -940,7 +934,7 @@ class SimulatedFileManager(BaseFileManager):
         )
 
     @functools.wraps(BaseFileManager.clear, updated=())
-    def clear(self, *, destination: str | None = None) -> None:  # type: ignore[override]
+    def clear(self) -> None:  # type: ignore[override]
         """Re-initialise the simulated manager and reset stateful LLM."""
         type(self).__init__(
             self,

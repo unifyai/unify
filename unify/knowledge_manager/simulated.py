@@ -99,7 +99,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         observed_at: Optional[datetime] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         kid = self._next_id
         self._next_id += 1
@@ -115,7 +114,7 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
             valid_from=valid_from,
             valid_until=valid_until,
         )
-        self.reconcile_sources(knowledge_ids=[kid], destination=destination)
+        self.reconcile_sources(knowledge_ids=[kid])
         return {
             "outcome": "knowledge created successfully",
             "details": {"knowledge_id": kid},
@@ -135,7 +134,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         observed_at: Optional[datetime] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         existing = self._entries.get(knowledge_id)
         if existing is None:
@@ -165,10 +163,7 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         if not updates:
             raise ValueError("At least one field must be provided for an update.")
         self._entries[knowledge_id] = existing.model_copy(update=updates)
-        self.reconcile_sources(
-            knowledge_ids=[knowledge_id],
-            destination=destination,
-        )
+        self.reconcile_sources(knowledge_ids=[knowledge_id])
         return {
             "outcome": "knowledge updated",
             "details": {"knowledge_id": knowledge_id},
@@ -179,7 +174,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_id: int,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         if knowledge_id not in self._entries:
             raise ValueError(
@@ -211,7 +205,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_id: int,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         existing = self._entries.get(knowledge_id)
         if existing is None:
@@ -241,7 +234,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
         new_knowledge_id: Optional[int] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         old = self._entries.get(old_knowledge_id)
         if old is None:
@@ -300,7 +292,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         *,
         knowledge_ids: List[int],
         reasons: List[StaleReason],
-        destination: str | None = None,
     ) -> None:
         """Append deduplicated link debt to claims before dependency deletion."""
         for knowledge_id in knowledge_ids:
@@ -317,7 +308,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         *,
         knowledge_ids: List[int],
         reason: StaleReason | dict,
-        destination: str | None = None,
     ) -> None:
         """Snapshot source-link debt before an external dependency is deleted."""
         stale_reason = (
@@ -328,7 +318,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         self._append_stale_reasons(
             knowledge_ids=knowledge_ids,
             reasons=[stale_reason],
-            destination=destination,
         )
 
     @staticmethod
@@ -359,7 +348,6 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         self,
         *,
         knowledge_ids: Optional[List[int]] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         targets = (
             [self._entries[i] for i in knowledge_ids if i in self._entries]

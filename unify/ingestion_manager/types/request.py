@@ -210,7 +210,7 @@ class CollectionTarget(BaseModel):
     Prefer it over one ``TableTarget`` per file whenever the files are a set.
     ``TableTarget`` names a single context, so N tables means N runs, and that
     trades away the single run id that makes the batch observable -- per-file
-    state, rows and destinations all live on one status
+    state, rows and contexts all live on one status
     (``status.files``) when the batch is one run. The file pipeline
     writes the parsed content and each extracted table beneath the collection,
     and the run reports the exact context paths it produced, so a later query
@@ -310,13 +310,6 @@ class IngestionRequest(BaseModel):
     post_ingest: Optional[PostIngestConfig] = Field(
         default=None,
         description="Derived columns computed once the rows are in.",
-    )
-    destination: Optional[str] = Field(
-        default=None,
-        description=(
-            "Ownership root. Only the personal root exists: pass 'personal' or "
-            "leave it unset."
-        ),
     )
 
     @field_validator("target")

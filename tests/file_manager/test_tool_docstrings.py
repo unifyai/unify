@@ -29,7 +29,9 @@ def test_all_ask_tools_have_sufficient_docstrings(file_manager):
         ), f"Docstring for tool '{name}' is too short (len={len(doc)})"
 
 
-def test_file_write_tools_expose_destination_guidance():
+def test_file_write_tools_take_no_root_selector():
+    import inspect
+
     from unify.file_manager.managers.base import BaseFileManager
 
     for method_name in (
@@ -40,10 +42,12 @@ def test_file_write_tools_expose_destination_guidance():
         "clear",
         "sync",
     ):
-        doc = (getattr(BaseFileManager, method_name).__doc__ or "").strip()
+        method = getattr(BaseFileManager, method_name)
+        doc = (method.__doc__ or "").strip()
 
-        assert "destination : str | None" in doc
-        assert '"personal"' in doc
+        assert "destination" not in inspect.signature(method).parameters
+        assert "destination :" not in doc
+        assert "personal root" not in doc
 
 
 def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:

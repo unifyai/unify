@@ -22,22 +22,14 @@ if TYPE_CHECKING:
     from ..transcript_manager.base import BaseTranscriptManager
     from ..knowledge_manager.base import BaseKnowledgeManager
 
-# Fields MemoryManager refuses to expose to the contact-update LLM. The
-# platform identity ids are set by system provisioning, never by the LLM.
-_CONTACT_TOOL_LLM_EXCLUDE = frozenset({"user_id", "agent_id"})
 
-
-def _llm_visible_contact_signature(
-    source: Callable[..., Any],
-    *,
-    exclude: frozenset[str] = _CONTACT_TOOL_LLM_EXCLUDE,
-) -> inspect.Signature:
+def _llm_visible_contact_signature(source: Callable[..., Any]) -> inspect.Signature:
     """Closed tool signature for LLM schemas.
 
     Unwraps monkeypatch/wraps spies to the real ContactManager method, then
     drops ``**kwargs`` / ``*args`` so ``method_to_schema`` does not advertise
     ``additionalProperties: true`` (OpenAI ignores freeform extras on empty
-    ``properties``). Also drops names in *exclude* (e.g. ``user_id``).
+    ``properties``).
     """
     unwrapped = inspect.unwrap(getattr(source, "__func__", source))
     sig = inspect.signature(unwrapped)
@@ -45,7 +37,6 @@ def _llm_visible_contact_signature(
         p
         for p in sig.parameters.values()
         if p.name != "self"
-        and p.name not in exclude
         and p.kind
         not in (
             inspect.Parameter.VAR_POSITIONAL,
@@ -61,11 +52,9 @@ def _llm_visible_contact_signature(
 def _pin_contact_tool_schema(
     wrapper: Callable[..., Any],
     source: Callable[..., Any],
-    *,
-    exclude: frozenset[str] = _CONTACT_TOOL_LLM_EXCLUDE,
 ) -> None:
     """Pin *wrapper*'s ``__signature__`` / annotations for closed LLM schemas."""
-    pinned = _llm_visible_contact_signature(source, exclude=exclude)
+    pinned = _llm_visible_contact_signature(source)
     wrapper.__signature__ = pinned  # type: ignore[attr-defined]
     ann = {
         name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any)

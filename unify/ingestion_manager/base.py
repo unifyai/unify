@@ -79,7 +79,6 @@ class BaseIngestionManager(ABC):
         *,
         embed: Optional[EmbedSpec] = None,
         post_ingest: Optional[PostIngestConfig] = None,
-        destination: Optional[str] = None,
     ) -> IngestionRun:
         """Start storing data, and return a handle without waiting for it.
 
@@ -109,9 +108,6 @@ class BaseIngestionManager(ABC):
             for rows and for file content.
         post_ingest : PostIngestConfig | None
             Derived columns computed once the data is stored.
-        destination : str | None
-            Ownership root. Only the personal root exists: pass
-            ``"personal"`` or leave it ``None``.
 
         Returns
         -------

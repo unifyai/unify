@@ -490,7 +490,6 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
             List[Union[Dict[str, Any], Message]],
         ],
         synchronous: bool = False,
-        destination: str | None = None,
     ) -> List[Message]:
         """
         Simulated message logging: validates inputs, assigns ids, and stores in-memory.
@@ -501,7 +500,6 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
             {
                 "count": (len(messages) if isinstance(messages, list) else 1),
                 "synchronous": synchronous,
-                "destination": destination,
             },
         )
 
@@ -790,26 +788,20 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
         self,
         key: str,
         value: str,
-    ) -> tuple[int, str | None] | None:
-        """Simulated metadata-keyed exchange lookup over the in-memory store.
-
-        The in-memory store is a single root, so the destination is always
-        personal.
-        """
+    ) -> int | None:
+        """Simulated metadata-keyed exchange lookup over the in-memory store."""
         needle = str(value or "").strip()
         if not needle:
             return None
         for exchange_id, exchange in self._sim_exchanges.items():
             if str((exchange.metadata or {}).get(key, "")) == needle:
-                return int(exchange_id), None
+                return int(exchange_id)
         return None
 
     def update_exchange_metadata(
         self,
         exchange_id: int,
         metadata: Dict[str, Any],
-        *,
-        destination: str | None = None,
     ) -> Exchange:
         """
         Simulated merge of exchange metadata into the in-memory store.
@@ -856,7 +848,6 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
         message: Union[Dict[str, Any], Message],
         *,
         exchange_initial_metadata: Optional[Dict[str, Any]] = None,
-        destination: str | None = None,
     ) -> tuple[int, int]:
         """
         Start a new exchange, assign a fresh id, log the first message, and upsert metadata.
@@ -888,11 +879,7 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
         # Log first message
         payload["exchange_id"] = new_exid
         # Let log_messages validate and store
-        logged_msgs = self.log_messages(
-            payload,
-            synchronous=True,
-            destination=destination,
-        )
+        logged_msgs = self.log_messages(payload, synchronous=True)
         tm_message_id = logged_msgs[0].message_id if logged_msgs else -1
         if sched:
             label, cid, t0 = sched

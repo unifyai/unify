@@ -923,9 +923,6 @@ class SimulatedContactManager(BaseContactManager):
         should_respond: bool = True,
         response_policy: Optional[str] = None,
         is_system: bool = False,
-        user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        destination: Optional[str] = None,
         _contact_id: Optional[int] = None,
     ) -> "ToolOutcome":
         """
@@ -958,11 +955,6 @@ class SimulatedContactManager(BaseContactManager):
             "response_policy": response_policy,
             "is_system": is_system,
         }
-        if user_id is not None:
-            contact["user_id"] = user_id
-        if agent_id is not None:
-            contact["agent_id"] = agent_id
-
         # Store in internal contacts dict
         self._contacts[contact_id] = contact
 
@@ -991,8 +983,6 @@ class SimulatedContactManager(BaseContactManager):
         rolling_summary: Optional[str] = None,
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
-        user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ) -> "ToolOutcome":
         """
         Update one or more fields of an existing contact in the internal store.
@@ -1025,8 +1015,6 @@ class SimulatedContactManager(BaseContactManager):
                             "rolling_summary": rolling_summary,
                             "should_respond": should_respond,
                             "response_policy": response_policy,
-                            "user_id": user_id,
-                            "agent_id": agent_id,
                         }.items()
                         if v is not None
                     ],
@@ -1061,8 +1049,6 @@ class SimulatedContactManager(BaseContactManager):
                 "rolling_summary": rolling_summary,
                 "should_respond": should_respond,
                 "response_policy": response_policy,
-                "user_id": user_id,
-                "agent_id": agent_id,
             }.items()
             if v is not None
         }

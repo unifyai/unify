@@ -253,7 +253,6 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         *,
         guidance_ids: Optional[List[int]] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Refresh structured link debt for related functions.
 
@@ -266,8 +265,6 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         ----------
         guidance_ids : list[int] | None
             Optional subset to audit; when omitted, checks all stored guidance.
-        destination : str | None
-            Destination scope for reads and stale-reason writes.
 
         Returns
         -------

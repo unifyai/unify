@@ -183,11 +183,10 @@ def filter_messages(
     rows = federated_filter(
         [
             FederatedSearchContext(
-                context=context,
-                source=context,
+                context=self._transcripts_ctx,
+                source=self._transcripts_ctx,
                 allowed_fields=list(Message.model_fields.keys()),
-            )
-            for context in self._read_transcript_contexts()
+            ),
         ],
         filter=normalize_filter_expr(filter),
         sorting=[SortSpec("timestamp", direction="descending")],
@@ -210,11 +209,10 @@ def search_messages(
         rows = federated_filter(
             [
                 FederatedSearchContext(
-                    context=context,
-                    source=context,
+                    context=self._transcripts_ctx,
+                    source=self._transcripts_ctx,
                     allowed_fields=list(Message.model_fields.keys()),
-                )
-                for context in self._read_transcript_contexts()
+                ),
             ],
             sorting=[SortSpec("timestamp", direction="descending")],
             limit=k,
@@ -223,7 +221,7 @@ def search_messages(
         results = [Message(**row) for row in rows]
         return format_contacts_and_messages(self, results)
 
-    transcript_contexts = self._read_transcript_contexts()
+    transcript_contexts = [self._transcripts_ctx]
     terms_by_context: list[
         tuple[str, list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]
     ] = []

@@ -209,20 +209,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
     # Use fetched timezone if available, fallback to UTC
     base_fields["timezone"] = user_info.get("timezone") or "UTC"
 
-    # The platform user_id, which maps contact_id -> user_id. Added for cost
-    # attribution, but room routing now depends on it too: a Unify room's
-    # members arrive as platform user ids, and the only way back to a contact
-    # is this field.
-    from ..session_details import SESSION_DETAILS
-
-    session_user_id = (
-        SESSION_DETAILS.user.id
-        if SESSION_DETAILS.is_initialized and SESSION_DETAILS.user.id
-        else None
-    )
-    if session_user_id:
-        base_fields["user_id"] = session_user_id
-
     if user_log is not None:
         try:
             entries = user_log.entries
@@ -233,23 +219,9 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
             needs_timezone = fetched_tz and entries.get("timezone") != fetched_tz
             needs_bio = fetched_bio and entries.get("bio") != fetched_bio
             needs_phone = fetched_phone and entries.get("phone_number") != fetched_phone
-            # Backfilled, not just set on insert. A boss contact provisioned
-            # before the session carried a user id keeps a null one forever
-            # otherwise: this sync runs on every boot and would walk past the
-            # empty field each time, which is why the gap stayed invisible
-            # until a room send tried to resolve members by user id.
-            needs_user_id = bool(session_user_id) and (
-                entries.get("user_id") != session_user_id
-            )
             needs_is_system = entries.get("is_system") is not True
 
-            if (
-                needs_timezone
-                or needs_bio
-                or needs_phone
-                or needs_is_system
-                or needs_user_id
-            ):
+            if needs_timezone or needs_bio or needs_phone or needs_is_system:
                 update_kwargs: Dict[str, Any] = {
                     "contact_id": resolved_contact_id,
                     "_log_id": user_log.id,
@@ -262,8 +234,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                     update_kwargs["phone_number"] = fetched_phone
                 if needs_is_system:
                     update_kwargs["is_system"] = True
-                if needs_user_id:
-                    update_kwargs["user_id"] = session_user_id
                 self.update_contact(**partition_update_kwargs(update_kwargs))
             else:
                 # Warm local cache when no change needed

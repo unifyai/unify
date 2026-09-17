@@ -288,7 +288,6 @@ def test_constructor_annotation_is_set_and_not_persisted():
     h = ImageHandle(
         manager=im,
         image=Image(**row),
-        context=im._ctx,
         annotation="ctor-note",
     )
 
@@ -357,7 +356,6 @@ async def test_wait_for_annotation_immediate_via_constructor():
     h = ImageHandle(
         manager=im,
         image=Image(**row),
-        context=im._ctx,
         annotation="ready-now",
     )
 

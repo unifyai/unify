@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import inspect
+
 from unify.data_manager.base import BaseDataManager
 
 
-def test_data_write_tools_expose_destination_guidance():
+def test_data_write_tools_take_no_root_selector():
     for method_name in (
         "create_table",
         "delete_table",
@@ -20,8 +22,9 @@ def test_data_write_tools_expose_destination_guidance():
         "ensure_vector_column",
         "vectorize_rows",
     ):
-        doc = (getattr(BaseDataManager, method_name).__doc__ or "").strip()
+        method = getattr(BaseDataManager, method_name)
+        doc = (method.__doc__ or "").strip()
 
-        assert "destination : str | None" in doc
-        assert "personal" in doc
-        assert "team:" not in doc
+        assert "destination" not in inspect.signature(method).parameters
+        assert "destination :" not in doc
+        assert "personal root" not in doc

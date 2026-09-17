@@ -1,8 +1,8 @@
 """Shape tests for GuidanceManager federated reads.
 
-Verify that search / filter / _num_items fan out over the per-assistant
-Guidance contexts plus the global builtins catalogue (public-read project),
-with scoping and field projections applied per source.
+Verify that search / filter / _num_items read the assistant's own Guidance
+table plus the global builtins catalogue (public-read project), with scoping
+and field projections applied per source.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ def _manager_stub() -> GuidanceManager:
     gm._filter_scope = None
     gm._exclude_ids = None
     gm._BUILTIN_FIELDS = tuple(Guidance.model_fields.keys())
-    gm._read_guidance_contexts = lambda: ["tests/x/y/Guidance"]
+    gm._ctx = "tests/x/y/Guidance"
     return gm
 
 

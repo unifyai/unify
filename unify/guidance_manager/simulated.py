@@ -157,7 +157,6 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
         self,
         *,
         guidance_ids: Optional[List[int]] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         selected = [
             entry

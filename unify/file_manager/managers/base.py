@@ -152,8 +152,6 @@ class BaseFileManager(BaseStateManager):
     def ingest_files(
         self,
         file_paths: Union[str, List[str]],
-        *,
-        destination: str | None = None,
         **options: Any,
     ) -> "IngestPipelineResult":
         """
@@ -168,9 +166,6 @@ class BaseFileManager(BaseStateManager):
         ----------
         file_paths : str | list[str]
             Single file path or a list of file paths to process.
-        destination : str | None, default None
-            Where the file's metadata row lives. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1262,7 +1257,6 @@ class BaseFileManager(BaseStateManager):
         *,
         file_id_or_path: Union[str, int],
         new_name: str,
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Rename a file in the underlying filesystem and update index/context metadata.
@@ -1279,9 +1273,6 @@ class BaseFileManager(BaseStateManager):
         new_name : str
             New filename (not full path). Must include the file extension.
             Example: "report_2024.pdf", not "/new/path/report.pdf"
-        destination : str | None, default None
-            Which FileRecords root contains the file. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1334,7 +1325,6 @@ class BaseFileManager(BaseStateManager):
         *,
         file_id_or_path: Union[str, int],
         new_parent_path: str,
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Move a file to a different directory and update index/context metadata.
@@ -1351,9 +1341,6 @@ class BaseFileManager(BaseStateManager):
         new_parent_path : str
             Destination directory path. Must be an absolute path to an existing
             directory. Example: "/new/destination/folder"
-        destination : str | None, default None
-            Which FileRecords root contains the file. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1405,7 +1392,6 @@ class BaseFileManager(BaseStateManager):
         self,
         *,
         file_id_or_path: Union[str, int],
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Delete a file from the filesystem and purge all related index data.
@@ -1419,9 +1405,6 @@ class BaseFileManager(BaseStateManager):
         file_id_or_path : str | int
             Either the file_id (int) from FileRecords, or the fully-qualified
             file_path (str) as stored in the index. Use absolute paths for reliability.
-        destination : str | None, default None
-            Which FileRecords and Files roots contain the file. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1523,7 +1506,7 @@ class BaseFileManager(BaseStateManager):
         """
 
     @abstractmethod
-    def clear(self, *, destination: str | None = None) -> None:
+    def clear(self) -> None:
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
@@ -1534,7 +1517,6 @@ class BaseFileManager(BaseStateManager):
         self,
         *,
         file_path: str,
-        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Synchronize a previously ingested file with the underlying filesystem.
@@ -1549,9 +1531,6 @@ class BaseFileManager(BaseStateManager):
         file_path : str
             The file identifier/path as used in FileRecords.file_path.
             Use absolute paths for reliability.
-        destination : str | None, default None
-            Which FileRecords and Files roots contain the file. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1686,12 +1665,5 @@ class BaseFileManager(BaseStateManager):
         """
 
 
-# Attach centralised destructive-action guidance plus file routing semantics.
-BaseFileManager.clear.__doc__ = CLEAR_METHOD_DOCSTRING + """
-
-    Parameters
-    ----------
-    destination : str | None, default None
-        Which FileRecords and Files roots to clear. Only the personal root
-        exists: pass ``"personal"`` or leave it ``None``.
-    """
+# Attach the centralised destructive-action guidance.
+BaseFileManager.clear.__doc__ = CLEAR_METHOD_DOCSTRING

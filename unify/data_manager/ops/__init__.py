@@ -30,7 +30,6 @@ from unify.data_manager.ops.mutation_ops import (
 from unify.data_manager.ops.join_ops import (
     join_tables_impl,
     filter_join_impl,
-    reduce_join_impl,
     search_join_impl,
     filter_multi_join_impl,
     search_multi_join_impl,
@@ -55,7 +54,6 @@ __all__ = [
     # Join operations
     "join_tables_impl",
     "filter_join_impl",
-    "reduce_join_impl",
     "search_join_impl",
     "filter_multi_join_impl",
     "search_multi_join_impl",

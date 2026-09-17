@@ -72,7 +72,7 @@ The control flow is code, so it does the same thing every time. The model is inv
 
 To be fair to it: progressive disclosure is the correct instinct, and we do the same thing — search first, load bodies on demand. Some of these agents also close the write loop, nudging the model to save a skill after a task goes well, and that instinct is right too. The disagreement isn't about whether agents should learn from their own work. It's about the shape of what's learned. A folder of prose with code tucked inside optimises for shipping packs of instructions to an agent. A graph of functions and guidance optimises for an agent building its own library as it goes.
 
-Folders do share better — a directory zips and installs anywhere, and there are real registries built on that. Our stores are database-backed and scoped instead, shared through team roots rather than downloads. I'll take that trade, but it is one.
+Folders do share better — a directory zips and installs anywhere, and there are real registries built on that. Our stores are database-backed instead: rows in one local SQLite file, with nothing to zip or download. I'll take that trade, but it is one.
 
 I wonder whether the folder designs converge here anyway. The moment you want one rule shared across five skills, or a script findable without its wrapper, you start building an index over the folders — and the index *is* the two libraries. The folder is just packaging.
 

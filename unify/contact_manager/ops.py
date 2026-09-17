@@ -32,11 +32,6 @@ _NAMED_CREATE_FIELDS = frozenset(
         "should_respond",
         "response_policy",
         "is_system",
-        "user_id",
-        "agent_id",
-        "destination",
-        "context",
-        "data_store",
         "_contact_id",
     },
 )
@@ -57,11 +52,6 @@ _NAMED_UPDATE_FIELDS = frozenset(
         "should_respond",
         "response_policy",
         "is_system",
-        "user_id",
-        "agent_id",
-        "destination",
-        "context",
-        "data_store",
         "_log_id",
         "_contact_id",
     },
@@ -112,9 +102,6 @@ def _maybe_sync_timezone_to_backend(
     self,
     contact_id: int,
     timezone: str,
-    *,
-    context: str | None = None,
-    data_store: Any = None,
 ) -> None:
     """
     Fire-and-forget sync of timezone to the session record for system contacts.
@@ -134,8 +121,8 @@ def _maybe_sync_timezone_to_backend(
         sync_assistant_timezone(assistant_id, timezone)
         return
 
-    store = data_store or self._data_store
-    context_name = context or self._ctx
+    store = self._data_store
+    context_name = self._ctx
 
     # User or other system contact - need email and is_system check
     try:
@@ -163,9 +150,6 @@ def _maybe_sync_bio_to_backend(
     self,
     contact_id: int,
     bio: str,
-    *,
-    context: str | None = None,
-    data_store: Any = None,
 ) -> None:
     """
     Fire-and-forget sync of bio to backend for system contacts.
@@ -185,8 +169,8 @@ def _maybe_sync_bio_to_backend(
         sync_assistant_about(assistant_id, bio)
         return
 
-    store = data_store or self._data_store
-    context_name = context or self._ctx
+    store = self._data_store
+    context_name = self._ctx
 
     # User or other system contact - need email and is_system check
     try:
@@ -251,14 +235,10 @@ def create_contact(
     should_respond: bool = True,
     response_policy: Optional[str] = None,
     is_system: bool = False,
-    user_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
     contact_id: Optional[int] = None,
-    context: str | None = None,
-    data_store: Any = None,
 ) -> ToolOutcome:
-    context_name = context or self._ctx
-    store = data_store or self._data_store
+    context_name = self._ctx
+    store = self._data_store
 
     contact_details = {
         "first_name": first_name,
@@ -276,10 +256,6 @@ def create_contact(
         "response_policy": response_policy,
         "is_system": is_system,
     }
-    if user_id is not None:
-        contact_details["user_id"] = user_id
-    if agent_id is not None:
-        contact_details["agent_id"] = agent_id
     if contact_id is not None:
         contact_details["contact_id"] = contact_id
     if contact_details["response_policy"] is None:
@@ -342,14 +318,10 @@ def update_contact(
     should_respond: Optional[bool] = None,
     response_policy: Optional[str] = None,
     is_system: Optional[bool] = None,
-    user_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
     _log_id: Optional[int] = None,
-    context: str | None = None,
-    data_store: Any = None,
 ) -> ToolOutcome:
-    context_name = context or self._ctx
-    store = data_store or self._data_store
+    context_name = self._ctx
+    store = self._data_store
 
     contact_details = {
         "first_name": first_name,
@@ -366,8 +338,6 @@ def update_contact(
         "should_respond": should_respond,
         "response_policy": response_policy,
         "is_system": is_system,
-        "user_id": user_id,
-        "agent_id": agent_id,
     }
 
     updates_dict = strip_authoring_assistant_id(
@@ -442,8 +412,6 @@ def update_contact(
                 self,
                 contact_id,
                 timezone,
-                context=context_name,
-                data_store=store,
             )
         except Exception:
             pass
@@ -453,8 +421,6 @@ def update_contact(
                 self,
                 contact_id,
                 bio,
-                context=context_name,
-                data_store=store,
             )
         except Exception:
             pass
@@ -472,11 +438,9 @@ def delete_contact(
     *,
     contact_id: int,
     _log_id: Optional[int] = None,
-    context: str | None = None,
-    data_store: Any = None,
 ) -> ToolOutcome:
-    context_name = context or self._ctx
-    store = data_store or self._data_store
+    context_name = self._ctx
+    store = self._data_store
     from ..session_details import SESSION_DETAILS
 
     protected_contact_ids = {
@@ -506,11 +470,11 @@ def delete_contact(
                 f"Cannot delete system contact with id {contact_id}. "
                 "System contacts include the assistant, primary user, and org members.",
             )
-        if context_name == self._ctx and contact_id in protected_contact_ids:
+        if contact_id in protected_contact_ids:
             raise RuntimeError("Cannot delete assistant self or boss system contacts.")
         resolved_id = row.id
     else:
-        if context_name == self._ctx and contact_id in protected_contact_ids:
+        if contact_id in protected_contact_ids:
             raise RuntimeError("Cannot delete assistant self or boss system contacts.")
         resolved_id = _log_id
 
@@ -547,11 +511,9 @@ def merge_contacts(
     contact_id_1: int,
     contact_id_2: int,
     overrides: Optional[Dict[str, int]] = None,
-    context: str | None = None,
-    data_store: Any = None,
 ) -> ToolOutcome:
-    context_name = context or self._ctx
-    store = data_store or self._data_store
+    context_name = self._ctx
+    store = self._data_store
     if contact_id_1 == contact_id_2:
         raise ValueError("contact_id_1 and contact_id_2 must be distinct.")
     if overrides is not None and any(v not in (1, 2) for v in overrides.values()):
@@ -629,8 +591,6 @@ def merge_contacts(
             self,
             contact_id=keep_id,
             _log_id=kept_log_id,
-            context=context_name,
-            data_store=store,
             **{
                 k: builtin_updates.get(k)
                 for k in self._BUILTIN_FIELDS
@@ -667,8 +627,6 @@ def merge_contacts(
         self,
         contact_id=delete_id,
         _log_id=delete_log_id,
-        context=context_name,
-        data_store=store,
     )
 
     return {

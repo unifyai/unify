@@ -39,9 +39,6 @@ def _assert_closed_contact_schema(schema: dict, *, expected_props: set[str]) -> 
     assert expected_props <= set(
         props,
     ), f"missing properties {expected_props - set(props)}; have {sorted(props)}"
-    # Platform identity ids are set by system provisioning, never by the LLM.
-    assert "user_id" not in props
-    assert "agent_id" not in props
     assert "kwargs" not in props
 
 
@@ -65,13 +62,11 @@ def test_build_contact_tools_schemas_are_closed():
     )
 
 
-def test_llm_visible_signature_strips_varkw_and_platform_ids():
+def test_llm_visible_signature_strips_varkw():
     sig = _llm_visible_contact_signature(ContactManager._create_contact)
     names = set(sig.parameters)
-    assert {"first_name", "destination"} <= names
+    assert {"first_name", "surname"} <= names
     assert "kwargs" not in names
-    assert "user_id" not in names
-    assert "agent_id" not in names
     assert not any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
     )

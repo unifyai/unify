@@ -267,7 +267,6 @@ class BaseFunctionManager(BaseStateManager):
         offset: int = 0,
         limit: int = 100,
         include_implementations: bool = True,
-        destination: Optional[str] = ...,  # type: ignore[assignment]
         _return_callable: bool = False,
         _namespace: Optional[Dict[str, Any]] = None,
         _also_return_metadata: bool = False,
@@ -300,9 +299,6 @@ class BaseFunctionManager(BaseStateManager):
             When ``True``, results include the full source code in the
             ``implementation`` field. When ``False``, implementations are
             omitted to reduce payload size.
-        destination : str | None, optional
-            Which Compositional root to read. Only the personal root exists:
-            pass ``"personal"`` or leave it ``None``.
         _return_callable : bool, default ``False``
             When ``True``, return Python callables instead of metadata dicts.
             Implementations SHOULD inject the resulting callables (and any of their

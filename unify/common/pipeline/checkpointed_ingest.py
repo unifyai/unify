@@ -212,7 +212,6 @@ class CheckpointedIngest:
         work: List[TableWork],
         *,
         dm: Any,
-        destination: Optional[str] = None,
         source_path: str = "",
         instrumentation: Optional[PipelineInstrumentation] = None,
         is_cancelled: Optional[CancellationCheck] = None,
@@ -246,7 +245,6 @@ class CheckpointedIngest:
             self._work_item(
                 entry,
                 dm=dm,
-                destination=destination,
             )
             for entry in work
         ]
@@ -309,7 +307,6 @@ class CheckpointedIngest:
         entry: TableWork,
         *,
         dm: Any,
-        destination: Optional[str],
     ) -> ArtifactWorkItem:
         checkpoint = self._store.read_checkpoint(self._job_id, entry.table_id)
         skip_rows = checkpoint.rows_committed if checkpoint else 0
@@ -342,7 +339,6 @@ class CheckpointedIngest:
             payload={
                 "entry": entry,
                 "dm": dm,
-                "destination": destination,
                 "fields": fields,
                 "skip_rows": skip_rows,
                 "initial_chunks": initial_chunks,
@@ -472,7 +468,6 @@ class CheckpointedIngest:
             embed_columns=entry.embed_columns,
             embed_strategy=entry.embed_strategy,
             post_ingest=entry.post_ingest,
-            destination=payload["destination"],
             skip_rows=payload["skip_rows"],
             # Passed so the insert path can refuse a total that disagrees with
             # what the source declared, rather than leaving the shortfall for the

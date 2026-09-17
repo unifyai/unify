@@ -108,7 +108,6 @@ class BaseDataManager(BaseStateManager):
         fields: Optional[Dict[str, Any]] = None,
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
-        destination: str | None = None,
     ) -> str:
         """
         Create a new table context in Unify.
@@ -164,10 +163,6 @@ class BaseDataManager(BaseStateManager):
 
             Example: ``{"row_id": None}`` → row_id auto-increments globally
             Example: ``{"attempt": "job_id"}`` → attempt auto-increments per job_id
-
-        destination : str | None, default ``None``
-            Where this data table lives. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -492,7 +487,6 @@ class BaseDataManager(BaseStateManager):
         context: str,
         *,
         dangerous_ok: bool = False,
-        destination: str | None = None,
     ) -> None:
         """
         Delete a table context and all its data.
@@ -508,10 +502,6 @@ class BaseDataManager(BaseStateManager):
         dangerous_ok : bool, default ``False``
             Safety flag that MUST be set to ``True`` to confirm the deletion.
             This prevents accidental data loss.
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Raises
         ------
@@ -548,8 +538,6 @@ class BaseDataManager(BaseStateManager):
         self,
         old_context: str,
         new_context: str,
-        *,
-        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Rename a table context.
@@ -565,10 +553,6 @@ class BaseDataManager(BaseStateManager):
 
         new_context : str
             New full context path for the table.
-
-        destination : str | None, default ``None``
-            Which Data root contains the source and destination tables. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -617,7 +601,6 @@ class BaseDataManager(BaseStateManager):
         column_name: str,
         column_type: str,
         mutable: bool = True,
-        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Add a new column to a table.
@@ -642,10 +625,6 @@ class BaseDataManager(BaseStateManager):
         mutable : bool, default ``True``
             Whether the column values can be updated after creation.
             Set to ``False`` for immutable audit columns.
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -696,7 +675,6 @@ class BaseDataManager(BaseStateManager):
         context: str,
         *,
         column_name: str,
-        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Remove a column from a table.
@@ -710,10 +688,6 @@ class BaseDataManager(BaseStateManager):
 
         column_name : str
             Name of the column to delete.
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -757,7 +731,6 @@ class BaseDataManager(BaseStateManager):
         *,
         old_name: str,
         new_name: str,
-        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Rename a column in a table.
@@ -773,10 +746,6 @@ class BaseDataManager(BaseStateManager):
         new_name : str
             New name for the column. Must be a valid identifier.
             The name ``id`` is reserved and cannot be used.
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -822,7 +791,6 @@ class BaseDataManager(BaseStateManager):
         *,
         column_name: str,
         equation: str,
-        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Create a computed column based on an equation.
@@ -848,10 +816,6 @@ class BaseDataManager(BaseStateManager):
             - ``"{price} * {quantity}"`` - multiplication
             - ``"{first_name} + ' ' + {last_name}"`` - string concatenation
             - ``"({score1} + {score2}) / 2"`` - average
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1372,7 +1336,6 @@ class BaseDataManager(BaseStateManager):
         mode: str = "inner",
         left_where: Optional[str] = None,
         right_where: Optional[str] = None,
-        destination: str | None = None,
     ) -> str:
         """
         Join two tables and write results to a destination table.
@@ -1429,10 +1392,6 @@ class BaseDataManager(BaseStateManager):
             Optional filter expression applied to right table BEFORE joining.
             Uses column names without table prefix.
             Example: ``"created_at >= '2024-01-01'"``
-
-        destination : str | None, default ``None``
-            Which Data root should receive ``dest_table``. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2084,7 +2043,6 @@ class BaseDataManager(BaseStateManager):
         rows: List[Dict[str, Any]],
         *,
         on_duplicate: Optional[str] = None,
-        destination: str | None = None,
     ) -> List[int]:
         """
         Insert rows into a table via bulk create (prefer batches over
@@ -2117,10 +2075,6 @@ class BaseDataManager(BaseStateManager):
             successful log ids (prefer this over download-or-per-row retry
             loops). ``"error"`` / ``None`` keep the store's reject-on-collision
             default.
-
-        destination : str | None, default ``None``
-            Where Data-owned rows should be stored. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2177,7 +2131,6 @@ class BaseDataManager(BaseStateManager):
         filter: Optional[str] = None,
         log_ids: Optional[List[int]] = None,
         overwrite: bool = False,
-        destination: str | None = None,
     ) -> int:
         """
         Update rows matching a filter and/or by log ids (in-place; ids stay
@@ -2211,10 +2164,6 @@ class BaseDataManager(BaseStateManager):
             Only applies when updating purely by ``log_ids`` (no filter).
             When ``True``, the store overwrites the given fields. When
             ``False``, it merges them into what is already set.
-
-        destination : str | None, default ``None``
-            Which Data root contains the rows. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2300,7 +2249,6 @@ class BaseDataManager(BaseStateManager):
         expect: Dict[str, Any],
         updates: Dict[str, Any],
         limit: int = 1,
-        destination: str | None = None,
     ) -> List[Dict[str, Any]]:
         """
         Atomically claim rows via compare-and-set (race-safe under concurrency).
@@ -2325,10 +2273,6 @@ class BaseDataManager(BaseStateManager):
             Fields merged into each claimed row.
         limit : int, default ``1``
             Maximum number of rows to claim.
-        destination : str | None, default ``None``
-            Which Data root contains the rows (same semantics as
-            ``update_rows``). Only the personal root exists: pass
-            ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2355,7 +2299,6 @@ class BaseDataManager(BaseStateManager):
         filter: Optional[str] = None,
         log_ids: Optional[List[int]] = None,
         dangerous_ok: bool = False,
-        destination: str | None = None,
     ) -> int:
         """
         Delete rows matching a filter or by specific log IDs.
@@ -2377,10 +2320,6 @@ class BaseDataManager(BaseStateManager):
 
         dangerous_ok : bool, default ``False``
             Safety flag that MUST be set to ``True`` to confirm deletion.
-
-        destination : str | None, default ``None``
-            Which Data root contains the rows. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2447,7 +2386,6 @@ class BaseDataManager(BaseStateManager):
         on_task_complete: Optional[Callable] = None,
         coerce_types: bool = True,
         skip_rows: int = 0,
-        destination: str | None = None,
         expected_total_rows: Optional[int] = None,
         private_ingest_key_column: str = "",
         private_ingest_key_prefix: str = "",
@@ -2536,10 +2474,6 @@ class BaseDataManager(BaseStateManager):
         infer_untyped_fields : bool, default ``False``
             When ``True``, Unify infers types for fields not declared in
             *fields*.
-
-        destination : str | None, default ``None``
-            Where Data-owned rows should be stored. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         execution : IngestExecutionConfig | None, default ``None``
             Advanced pipeline knobs (max_workers, retries, backoff,
@@ -2685,7 +2619,6 @@ class BaseDataManager(BaseStateManager):
         source_column: str,
         target_column: Optional[str] = None,
         async_embeddings: bool = False,
-        destination: str | None = None,
     ) -> str:
         """
         Ensure an embedding column exists for a source column.
@@ -2719,10 +2652,6 @@ class BaseDataManager(BaseStateManager):
             Bulk ingestion pipelines (``DataManager.ingest``,
             ``FileManager`` parsing) set this to ``True`` internally because
             throughput matters more than immediate availability.
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2759,7 +2688,6 @@ class BaseDataManager(BaseStateManager):
         row_ids: Optional[List[int]] = None,
         batch_size: int = 100,
         async_embeddings: bool = False,
-        destination: str | None = None,
     ) -> int:
         """
         Generate embeddings for rows.
@@ -2790,10 +2718,6 @@ class BaseDataManager(BaseStateManager):
             When ``True``, the backend computes embeddings asynchronously and
             the call returns immediately.  See ``ensure_vector_column`` for
             the full trade-off discussion.
-
-        destination : str | None, default ``None``
-            Which Data root contains the table. Only the personal root
-            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------

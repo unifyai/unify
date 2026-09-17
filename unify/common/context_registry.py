@@ -8,13 +8,8 @@ from unify import db
 from unify.common.authorship import SHARED_SCOPED_TABLES, fields_with_authoring
 from unify.common.context_store import create_context_checked
 from unify.common.state_managers import BaseStateManager
-from unify.common.tool_outcome import ToolError, ToolErrorException
 
 _log = logging.getLogger(__name__)
-
-PERSONAL_ROOT_IDENTITY: Final[str] = "Personal"
-PERSONAL_DESTINATION: Final[str] = "personal"
-INVALID_DESTINATION_ERROR: Final[str] = "invalid_destination"
 
 _SHARED_SCOPED_TABLES: Final[frozenset[str]] = SHARED_SCOPED_TABLES
 
@@ -38,7 +33,7 @@ class ContextRegistry:
     """
 
     _setup_complete = False
-    _registry: Dict[tuple[str, str, str], str] = {}
+    _registry: Dict[tuple[str, str], str] = {}
     _base_context: Optional[str] = None
 
     @staticmethod
@@ -71,7 +66,7 @@ class ContextRegistry:
         return False
 
     @classmethod
-    def _personal_root(cls, manager_name: str, table_name: str) -> str:
+    def _session_root(cls, manager_name: str, table_name: str) -> str:
         base = cls._base_context
         if not base:
             try:
@@ -100,36 +95,6 @@ class ContextRegistry:
         if not base_context:
             return
         cls._base_context = base_context
-
-    @classmethod
-    def _invalid_destination(
-        cls,
-        table_name: str,
-        destination: object,
-        message: str,
-    ) -> ToolErrorException:
-        payload: ToolError = {
-            "error_kind": INVALID_DESTINATION_ERROR,
-            "message": message,
-            "details": {"destination": destination, "table_name": table_name},
-        }
-        return ToolErrorException(payload)
-
-    @classmethod
-    def canonical_destination(cls, destination: object) -> None:
-        """Validate a public destination label; only the personal root exists."""
-        if destination is None:
-            return None
-        if not isinstance(destination, str) or destination.strip() not in (
-            "",
-            PERSONAL_DESTINATION,
-        ):
-            raise cls._invalid_destination(
-                "",
-                destination,
-                "Destination must be 'personal'.",
-            )
-        return None
 
     @classmethod
     def _get_contexts_for_manager(
@@ -227,7 +192,7 @@ class ContextRegistry:
         if table.fields:
             db.create_fields(fields=table.fields, context=target_name)
 
-        cls._registry[(manager_name, table.name, PERSONAL_ROOT_IDENTITY)] = target_name
+        cls._registry[(manager_name, table.name)] = target_name
         return target_name
 
     @classmethod
@@ -267,7 +232,7 @@ class ContextRegistry:
         root_context: str,
     ) -> str:
         manager_name = cls._get_manager_name(manager)
-        key = (manager_name, table_name, PERSONAL_ROOT_IDENTITY)
+        key = (manager_name, table_name)
         target_name = cls._registry.get(key)
         if target_name is not None:
             return target_name
@@ -276,50 +241,21 @@ class ContextRegistry:
         return cls._create_context_wrapper(manager_name, contexts[table_name])
 
     @classmethod
-    def write_root(
+    def root(
         cls,
         manager: Union[BaseStateManager, Type[BaseStateManager]],
         table_name: str,
-        *,
-        destination: str | None = None,
     ) -> str:
-        """Resolve and provision the root a write should target."""
-        _manager_name, _identity, root_context = cls.resolve_root(
-            manager,
-            table_name,
-            destination=destination,
-        )
-        cls._ensure_context(manager, table_name, root_context)
-        return root_context
+        """Provision *table_name* for *manager* and return the session root.
 
-    @classmethod
-    def resolve_root(
-        cls,
-        manager: Union[BaseStateManager, Type[BaseStateManager]],
-        table_name: str,
-        *,
-        destination: str | None = None,
-    ) -> tuple[str, str, str]:
-        """Resolve a destination without provisioning contexts."""
-        cls.canonical_destination(destination)
+        Every manager's tables live under the one active root
+        (``{user}/{assistant}``); callers that address sub-tables compose
+        ``f"{root}/{table}"`` from it.
+        """
         manager_name = cls._get_manager_name(manager)
-        return (
-            manager_name,
-            PERSONAL_ROOT_IDENTITY,
-            cls._personal_root(manager_name, table_name),
-        )
-
-    @classmethod
-    def read_roots(
-        cls,
-        manager: Union[BaseStateManager, Type[BaseStateManager]],
-        table_name: str,
-    ) -> list[str]:
-        """Resolve and provision the ordered roots a read should fan out across."""
-        manager_name = cls._get_manager_name(manager)
-        root = cls._personal_root(manager_name, table_name)
+        root = cls._session_root(manager_name, table_name)
         cls._ensure_context(manager, table_name, root)
-        return [root]
+        return root
 
     @classmethod
     def get_context(
@@ -332,7 +268,7 @@ class ContextRegistry:
         return cls._ensure_context(
             manager,
             ctx_name,
-            cls._personal_root(manager_name, ctx_name),
+            cls._session_root(manager_name, ctx_name),
         )
 
     @classmethod

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from unify.data_manager.base import BaseDataManager
 from unify.data_manager.types.table import TableDescription
@@ -37,6 +37,7 @@ from unify.data_manager.ops.table_ops import (
 from unify.data_manager.ops.query_ops import (
     filter_impl,
     search_impl,
+    reduce_impl,
 )
 from unify.data_manager.ops.mutation_ops import (
     insert_rows_impl,
@@ -54,32 +55,19 @@ from unify.data_manager.ops.join_ops import (
     search_multi_join_impl,
 )
 from unify.common.embed_utils import ensure_vector_column as _ensure_vector_column
-from unify.common.federated_search import (
-    FederatedSearchContext,
-    SortSpec,
-    default_ranked_fetcher,
-    federated_filter,
-    federated_ranked_search,
-    federated_reduce,
-    reduce_grouped_rows,
-    reduce_rows,
-)
-from unify.common.embed_utils import list_private_fields
-from unify.common.filter_utils import normalize_filter_expr
+from unify.common.federated_search import reduce_grouped_rows, reduce_rows
 from unify.common.join_utils import rewrite_join_paths
 from unify.data_manager.ops.ingest_ops import run_ingest
 from unify.common.context_registry import (
     ContextRegistry,
     TableContext,
 )
-from unify.common.tool_outcome import ToolErrorException
 
 logger = logging.getLogger(__name__)
 
 
-# Known absolute prefixes that indicate a path should not be resolved
+# Short-form roots of other managers' contexts, used as supplied.
 _ABSOLUTE_PREFIXES = (
-    "Data/",
     "Files/",
     "FileRecords/",
     "Contacts",
@@ -140,49 +128,12 @@ class DataManager(BaseDataManager):
                 auto_counting = {"row_id": None}
         return unique_keys, auto_counting
 
-    def _resolve_context(self, context: str) -> str:
-        """
-        Resolve a context path, handling relative and absolute paths.
-
-        Parameters
-        ----------
-        context : str
-            Context path. Can be:
-            - Relative: "projects/housing" → resolved to "{base_ctx}/projects/housing"
-            - Short-form absolute: "Data/examplehousing/arrears", "Contacts" → used as-is
-            - Fully-qualified: "org123/42/Contacts", "org123/42/Data/foo" → as-is
-
-        Returns
-        -------
-        str
-            Fully resolved context path.
-        """
-        context = context.lstrip("/")
-        if not context:
-            raise ValueError("Empty context path")
-
-        # Short-form absolute: starts with a known context root name
-        if any(context.startswith(p) for p in _ABSOLUTE_PREFIXES):
-            return context
-
-        # Fully-qualified: shares the org/assistant scope with our base context.
-        # _base_ctx = "org/42/Data" → scope = "org/42/" →
-        # "org/42/Contacts" is recognised as already-qualified.
-        if self._base_ctx and "/" in self._base_ctx:
-            scope = self._base_ctx.rsplit("/", 1)[0] + "/"
-            if context.startswith(scope):
-                return context
-
-        # Relative path: prepend base context
-        return f"{self._base_ctx}/{context}" if self._base_ctx else context
-
-    def _data_root_from_registry_root(self, root_context: str) -> str:
-        """Return the concrete Data namespace for a registry root."""
-
-        return f"{root_context.strip('/')}/Data"
-
     def _data_context_suffix(self, context: str) -> str | None:
-        """Return a Data-relative suffix when a context belongs to DataManager."""
+        """Return the Data-relative suffix of *context*.
+
+        ``None`` means the context belongs to another manager and is used
+        as supplied.
+        """
 
         context = context.lstrip("/")
         if not context:
@@ -193,273 +144,91 @@ class DataManager(BaseDataManager):
         if context.startswith("Data/"):
             return context[len("Data/") :]
 
-        base = (self._base_ctx or "").strip("/")
-        if base:
-            if context == base:
-                return ""
-            if context.startswith(base + "/"):
-                return context[len(base) + 1 :]
+        base = self._base_ctx
+        if context == base:
+            return ""
+        if context.startswith(base + "/"):
+            return context[len(base) + 1 :]
 
         if any(context.startswith(p) for p in _ABSOLUTE_PREFIXES):
             return None
 
-        if base and "/" in base:
-            scope = base.rsplit("/", 1)[0] + "/"
-            if context.startswith(scope):
-                return None
+        scope = base.rsplit("/", 1)[0] + "/"
+        if context.startswith(scope):
+            return None
 
         return context
 
-    def _context_under_data_root(self, root_context: str, suffix: str) -> str:
-        data_root = self._data_root_from_registry_root(root_context)
-        return f"{data_root}/{suffix}" if suffix else data_root
+    def _resolve_context(self, context: str) -> str:
+        """
+        Resolve a context path to its fully-qualified form.
 
-    def _is_exact_data_context(self, context: str) -> bool:
-        """Return whether a Data context should be read exactly as supplied."""
+        Parameters
+        ----------
+        context : str
+            Context path. Can be:
+            - Relative: "projects/housing" → "{base_ctx}/projects/housing"
+            - Data short-form: "Data/housing/arrears" → "{base_ctx}/housing/arrears"
+            - Foreign short-form: "Contacts", "Files/x" → used as-is
+            - Fully-qualified: "{root}/Contacts", "{base_ctx}/foo" → used as-is
 
-        context = context.lstrip("/")
-        base = (self._base_ctx or "").strip("/")
-        return bool(base and (context == base or context.startswith(base + "/")))
-
-    def _resolve_context_for_write(
-        self,
-        context: str,
-        *,
-        destination: str | None = None,
-    ) -> str:
-        """Resolve a write target, routing Data-owned contexts when requested."""
-
+        Returns
+        -------
+        str
+            Fully resolved context path.
+        """
         suffix = self._data_context_suffix(context)
         if suffix is None:
-            if destination is None:
-                return self._resolve_context(context)
-            raise ContextRegistry._invalid_destination(
-                "Data",
-                destination,
-                "Destination can only be used with Data-owned contexts.",
-            )
+            return context.lstrip("/")
+        return f"{self._base_ctx}/{suffix}" if suffix else self._base_ctx
 
-        root_context = ContextRegistry.write_root(
-            self,
-            "Data",
-            destination=destination,
-        )
-        return self._context_under_data_root(root_context, suffix)
-
-    def _resolve_contexts_for_read(self, context: str) -> list[str]:
-        """Return ordered readable contexts for Data-owned reads."""
-
-        suffix = self._data_context_suffix(context)
-        if suffix is None or self._is_exact_data_context(context):
-            return [self._resolve_context(context)]
-
-        try:
-            root_contexts = ContextRegistry.read_roots(self, "Data")
-        except RuntimeError as exc:
-            if "no base context available" not in str(exc):
-                raise
-            return [self._resolve_context(context)]
-        contexts = [
-            self._context_under_data_root(root, suffix) for root in root_contexts
-        ]
-        return list(dict.fromkeys(contexts))
-
-    def _first_successful_read_context(self, context: str) -> str:
-        """Return the first readable context that exists for metadata operations."""
-
-        last_error: Exception | None = None
-        for resolved in self._resolve_contexts_for_read(context):
-            try:
-                get_table_impl(resolved)
-                return resolved
-            except Exception as exc:
-                last_error = exc
-        if last_error:
-            raise last_error
-        return self._resolve_context(context)
-
-    def _resolve_join_context_groups(self, tables: list[str]) -> list[list[str]]:
-        """Resolve table names into root-aligned context groups for join reads."""
-
-        context_options = [self._resolve_contexts_for_read(table) for table in tables]
-        group_count = max(len(options) for options in context_options)
-        if group_count == 1:
-            return [[options[0] for options in context_options]]
-
-        groups: list[list[str]] = []
-        for index in range(group_count):
-            group: list[str] = []
-            for options in context_options:
-                if len(options) == 1:
-                    group.append(options[0])
-                elif len(options) == group_count:
-                    group.append(options[index])
-                else:
-                    raise RuntimeError("Mismatched Data read roots for join inputs.")
-            groups.append(group)
-        return groups
-
-    def _rewrite_join_inputs(
-        self,
-        tables: list[str],
-        resolved_tables: list[str],
-        join_expr: str,
-        select: Dict[str, str],
-    ) -> tuple[str, Dict[str, str]]:
-        """Rewrite a join expression and selected columns for one root group."""
-
-        return rewrite_join_paths(tables, resolved_tables, join_expr, select)
-
-    def _collect_join_rows(
-        self,
-        *,
-        tables: list[str],
-        join_expr: str,
-        select: Dict[str, str],
-        mode: str,
-        left_where: Optional[str],
-        right_where: Optional[str],
-        result_where: Optional[str],
-        limit: int | None,
-    ) -> list[dict[str, Any]]:
-        """Collect joined rows from every readable root group."""
-
-        rows: list[dict[str, Any]] = []
-        last_error: Exception | None = None
-        for resolved_tables in self._resolve_join_context_groups(tables):
-            rewritten_expr, rewritten_select = self._rewrite_join_inputs(
-                tables,
-                resolved_tables,
-                join_expr,
-                select,
-            )
-            try:
-                offset = 0
-                context_rows: list[dict[str, Any]] = []
-                while True:
-                    page_limit = (
-                        1000 if limit is None else min(1000, limit - len(context_rows))
-                    )
-                    if page_limit <= 0:
-                        break
-                    page = filter_join_impl(
-                        tables=resolved_tables,
-                        join_expr=rewritten_expr,
-                        select=rewritten_select,
-                        mode=mode,
-                        left_where=left_where,
-                        right_where=right_where,
-                        result_where=result_where,
-                        result_limit=page_limit,
-                        result_offset=offset,
-                    )
-                    context_rows.extend(page)
-                    if len(page) < page_limit or (
-                        limit is not None and len(context_rows) >= limit
-                    ):
-                        break
-                    offset += page_limit
-                rows.extend(context_rows)
-            except Exception as exc:
-                last_error = exc
-                continue
-        if not rows and last_error is not None:
-            raise last_error
-        return rows
-
-    def _multi_join_table_names(self, joins: List[Dict[str, Any]]) -> list[str]:
-        """Return stable table references used by a multi-join plan."""
-
-        table_names: list[str] = []
-        for step in joins:
-            raw_tables = step.get("tables")
-            raw_tables = [raw_tables] if isinstance(raw_tables, str) else raw_tables
-            if not isinstance(raw_tables, list):
-                continue
-            for table in raw_tables:
-                if table in {"$prev", "__prev__", "_"}:
-                    continue
-                if isinstance(table, str) and table not in table_names:
-                    table_names.append(table)
-        return table_names
-
-    def _multi_join_context_resolvers(
+    def _resolve_multi_join(
         self,
         joins: List[Dict[str, Any]],
-    ) -> list[Callable[[str], str]]:
-        """Return root-aligned context resolvers for multi-join reads."""
-
-        table_names = self._multi_join_table_names(joins)
-        if not table_names:
-            return [self._first_successful_read_context]
-
-        groups = self._resolve_join_context_groups(table_names)
-        resolvers = []
-        for resolved_group in groups:
-            table_map = dict(zip(table_names, resolved_group))
-
-            def resolve(table_name: str, table_map: dict[str, str] = table_map) -> str:
-                return table_map.get(table_name) or self._first_successful_read_context(
-                    table_name,
-                )
-
-            resolvers.append(resolve)
-        return resolvers
-
-    def _rewrite_multi_join_for_resolver(
-        self,
-        joins: List[Dict[str, Any]],
-        resolver: Callable[[str], str],
     ) -> List[Dict[str, Any]]:
-        """Rewrite multi-join table references for one readable root."""
+        """Rewrite multi-join table references to fully-qualified contexts."""
 
-        rewritten_joins: list[dict[str, Any]] = []
+        resolved_joins: list[dict[str, Any]] = []
         for step in joins:
-            rewritten_step = step.copy()
-            raw_tables = rewritten_step.get("tables")
+            resolved_step = step.copy()
+            raw_tables = resolved_step.get("tables")
             raw_tables = [raw_tables] if isinstance(raw_tables, str) else raw_tables
             if not isinstance(raw_tables, list):
-                rewritten_joins.append(rewritten_step)
+                resolved_joins.append(resolved_step)
                 continue
 
             originals: list[str] = []
             resolved: list[str] = []
-            rewritten_tables: list[str] = []
+            resolved_tables: list[str] = []
             for table in raw_tables:
                 if table in {"$prev", "__prev__", "_"} or not isinstance(table, str):
-                    rewritten_tables.append(table)
+                    resolved_tables.append(table)
                     continue
-                resolved_table = resolver(table)
+                resolved_table = self._resolve_context(table)
                 originals.append(table)
                 resolved.append(resolved_table)
-                rewritten_tables.append(resolved_table)
+                resolved_tables.append(resolved_table)
 
-            rewritten_step["tables"] = rewritten_tables
-            join_expr = rewritten_step.get("join_expr")
-            select = rewritten_step.get("select")
+            resolved_step["tables"] = resolved_tables
+            join_expr = resolved_step.get("join_expr")
+            select = resolved_step.get("select")
             if isinstance(join_expr, str) and isinstance(select, dict):
-                rewritten_expr, rewritten_select = rewrite_join_paths(
+                resolved_expr, resolved_select = rewrite_join_paths(
                     originals,
                     resolved,
                     join_expr,
                     select,
                 )
-                rewritten_step["join_expr"] = rewritten_expr
-                rewritten_step["select"] = rewritten_select
+                resolved_step["join_expr"] = resolved_expr
+                resolved_step["select"] = resolved_select
             for where_key in ("left_where", "right_where"):
-                where_expr = rewritten_step.get(where_key)
+                where_expr = resolved_step.get(where_key)
                 if isinstance(where_expr, str):
                     for original, resolved_table in zip(originals, resolved):
                         where_expr = where_expr.replace(original, resolved_table)
-                    rewritten_step[where_key] = where_expr
-            rewritten_joins.append(rewritten_step)
-        return rewritten_joins
-
-    @staticmethod
-    def _tool_error(exc: ToolErrorException) -> Dict[str, Any]:
-        """Return the structured tool-error payload carried by *exc*."""
-
-        return dict(exc.payload)
+                    resolved_step[where_key] = where_expr
+            resolved_joins.append(resolved_step)
+        return resolved_joins
 
     # ──────────────────────────────────────────────────────────────────────────
     # Table Management
@@ -474,15 +243,8 @@ class DataManager(BaseDataManager):
         fields: Optional[Dict[str, Any]] = None,
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
-        destination: str | None = None,
     ) -> str:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         unique_keys, auto_counting = self._resolve_unique_keys_and_auto_counting(
             resolved,
             unique_keys,
@@ -498,17 +260,17 @@ class DataManager(BaseDataManager):
 
     @functools.wraps(BaseDataManager.describe_table, updated=())
     def describe_table(self, context: str) -> TableDescription:
-        resolved = self._first_successful_read_context(context)
+        resolved = self._resolve_context(context)
         return describe_table_impl(resolved)
 
     @functools.wraps(BaseDataManager.get_columns, updated=())
     def get_columns(self, table: str) -> Dict[str, Any]:
-        resolved = self._first_successful_read_context(table)
+        resolved = self._resolve_context(table)
         return get_columns_impl(resolved)
 
     @functools.wraps(BaseDataManager.get_table, updated=())
     def get_table(self, context: str) -> Dict[str, Any]:
-        resolved = self._first_successful_read_context(context)
+        resolved = self._resolve_context(context)
         return get_table_impl(resolved)
 
     @functools.wraps(BaseDataManager.list_tables, updated=())
@@ -518,27 +280,10 @@ class DataManager(BaseDataManager):
         prefix: Optional[str] = None,
         include_column_info: bool = True,
     ) -> Union[List[str], Dict[str, Any]]:
-        resolved_prefixes = (
-            self._resolve_contexts_for_read(prefix) if prefix else [None]
+        return list_tables_impl(
+            prefix=self._resolve_context(prefix) if prefix else None,
+            include_column_info=include_column_info,
         )
-        merged: Union[List[str], Dict[str, Any]]
-        merged = {} if include_column_info else []
-        for resolved_prefix in resolved_prefixes:
-            result = list_tables_impl(
-                prefix=resolved_prefix,
-                include_column_info=include_column_info,
-            )
-            if include_column_info:
-                assert isinstance(merged, dict)
-                if isinstance(result, dict):
-                    merged.update(result)
-            else:
-                assert isinstance(merged, list)
-                if isinstance(result, list):
-                    merged.extend(result)
-        if isinstance(merged, list):
-            return sorted(dict.fromkeys(merged))
-        return merged
 
     @functools.wraps(BaseDataManager.delete_table, updated=())
     def delete_table(
@@ -546,15 +291,8 @@ class DataManager(BaseDataManager):
         context: str,
         *,
         dangerous_ok: bool = False,
-        destination: str | None = None,
     ) -> None:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         delete_table_impl(resolved, dangerous_ok=dangerous_ok)
 
     @functools.wraps(BaseDataManager.rename_table, updated=())
@@ -562,20 +300,9 @@ class DataManager(BaseDataManager):
         self,
         old_context: str,
         new_context: str,
-        *,
-        destination: str | None = None,
     ) -> Dict[str, str]:
-        try:
-            resolved_old = self._resolve_context_for_write(
-                old_context,
-                destination=destination,
-            )
-            resolved_new = self._resolve_context_for_write(
-                new_context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved_old = self._resolve_context(old_context)
+        resolved_new = self._resolve_context(new_context)
         return rename_table_impl(resolved_old, resolved_new)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -590,15 +317,8 @@ class DataManager(BaseDataManager):
         column_name: str,
         column_type: str,
         mutable: bool = True,
-        destination: str | None = None,
     ) -> Dict[str, str]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return create_column_impl(
             resolved,
             column_name=column_name,
@@ -612,15 +332,8 @@ class DataManager(BaseDataManager):
         context: str,
         *,
         column_name: str,
-        destination: str | None = None,
     ) -> Dict[str, str]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return delete_column_impl(resolved, column_name=column_name)
 
     @functools.wraps(BaseDataManager.rename_column, updated=())
@@ -630,15 +343,8 @@ class DataManager(BaseDataManager):
         *,
         old_name: str,
         new_name: str,
-        destination: str | None = None,
     ) -> Dict[str, str]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return rename_column_impl(resolved, old_name=old_name, new_name=new_name)
 
     @functools.wraps(BaseDataManager.create_derived_column, updated=())
@@ -648,15 +354,8 @@ class DataManager(BaseDataManager):
         *,
         column_name: str,
         equation: str,
-        destination: str | None = None,
     ) -> Dict[str, str]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return create_derived_column_impl(
             resolved,
             column_name=column_name,
@@ -684,59 +383,17 @@ class DataManager(BaseDataManager):
     ) -> Union[List[Dict[str, Any]], List[int]]:
         if return_ids_only and include_ids:
             raise ValueError("return_ids_only and include_ids are mutually exclusive")
-        resolved_contexts = self._resolve_contexts_for_read(context)
-        if include_ids and len(resolved_contexts) != 1:
-            raise ValueError(
-                "include_ids requires a single resolved context; "
-                "pass a fully-qualified path rather than a federated name",
-            )
-        if len(resolved_contexts) == 1 or return_ids_only:
-            return filter_impl(
-                resolved_contexts[0],
-                filter=filter,
-                columns=columns,
-                exclude_columns=exclude_columns,
-                limit=limit,
-                offset=offset,
-                order_by=order_by,
-                descending=descending,
-                return_ids_only=return_ids_only,
-                include_ids=include_ids,
-            )
-
-        sorting = None
-        if order_by:
-            sorting = [
-                SortSpec(
-                    order_by,
-                    direction="descending" if descending else "ascending",
-                ),
-            ]
-
-        def _excluded(resolved: str) -> Optional[List[str]]:
-            # Mirror filter_impl: auto-hide private fields unless the caller
-            # picked columns or supplied an explicit exclusion list.
-            if exclude_columns is not None:
-                return exclude_columns
-            if columns is None:
-                return list_private_fields(resolved)
-            return None
-
-        return federated_filter(
-            [
-                FederatedSearchContext(
-                    context=resolved,
-                    source=resolved,
-                    allowed_fields=columns,
-                    excluded_fields=_excluded(resolved),
-                )
-                for resolved in resolved_contexts
-            ],
-            filter=normalize_filter_expr(filter),
-            sorting=sorting,
-            offset=offset,
+        return filter_impl(
+            self._resolve_context(context),
+            filter=filter,
+            columns=columns,
+            exclude_columns=exclude_columns,
             limit=limit,
-            annotate=False,
+            offset=offset,
+            order_by=order_by,
+            descending=descending,
+            return_ids_only=return_ids_only,
+            include_ids=include_ids,
         )
 
     @functools.wraps(BaseDataManager.search, updated=())
@@ -749,47 +406,13 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         columns: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        resolved_contexts = self._resolve_contexts_for_read(context)
-        if len(resolved_contexts) == 1:
-            return search_impl(
-                resolved_contexts[0],
-                references=references,
-                k=k,
-                filter=filter,
-                columns=columns,
-            )
-
-        if k < 1 or k > 1000:
-            raise ValueError("k must be between 1 and 1000")
-
-        errors: list[Exception] = []
-
-        def fetcher(spec, refs, fetch_limit):
-            try:
-                return default_ranked_fetcher(spec, refs, fetch_limit)
-            except Exception as exc:
-                errors.append(exc)
-                return [], ""
-
-        rows = federated_ranked_search(
-            [
-                FederatedSearchContext(
-                    context=resolved,
-                    source=resolved,
-                    row_filter=normalize_filter_expr(filter),
-                    allowed_fields=columns,
-                )
-                for resolved in resolved_contexts
-            ],
-            references,
-            limit=k,
-            fetcher=fetcher,
-            backfill=True,
-            annotate=False,
+        return search_impl(
+            self._resolve_context(context),
+            references=references,
+            k=k,
+            filter=filter,
+            columns=columns,
         )
-        if not rows and errors:
-            raise errors[-1]
-        return rows
 
     @functools.wraps(BaseDataManager.reduce, updated=())
     def reduce(
@@ -801,14 +424,11 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         group_by: Optional[Union[str, List[str]]] = None,
     ) -> Any:
-        return federated_reduce(
-            [
-                FederatedSearchContext(context=resolved, source=resolved)
-                for resolved in self._resolve_contexts_for_read(context)
-            ],
+        return reduce_impl(
+            self._resolve_context(context),
             metric=metric,
             columns=columns,
-            filter=normalize_filter_expr(filter),
+            filter=filter,
             group_by=group_by,
         )
 
@@ -828,17 +448,10 @@ class DataManager(BaseDataManager):
         mode: str = "inner",
         left_where: Optional[str] = None,
         right_where: Optional[str] = None,
-        destination: str | None = None,
     ) -> str:
-        try:
-            resolved_dest = self._resolve_context_for_write(
-                dest_table,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
-        resolved_left = self._first_successful_read_context(left_table)
-        resolved_right = self._first_successful_read_context(right_table)
+        resolved_dest = self._resolve_context(dest_table)
+        resolved_left = self._resolve_context(left_table)
+        resolved_right = self._resolve_context(right_table)
         join_expr, select = rewrite_join_paths(
             [left_table, right_table],
             [resolved_left, resolved_right],
@@ -870,20 +483,26 @@ class DataManager(BaseDataManager):
         result_limit: int = 100,
         result_offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        # Resolve table contexts
         if isinstance(tables, str):
             tables = [tables]
-        rows = self._collect_join_rows(
-            tables=tables,
+        resolved_tables = [self._resolve_context(table) for table in tables]
+        join_expr, select = rewrite_join_paths(
+            tables,
+            resolved_tables,
+            join_expr,
+            select,
+        )
+        return filter_join_impl(
+            tables=resolved_tables,
             join_expr=join_expr,
             select=select,
             mode=mode,
             left_where=left_where,
             right_where=right_where,
             result_where=result_where,
-            limit=result_offset + result_limit,
+            result_limit=result_limit,
+            result_offset=result_offset,
         )
-        return rows[result_offset : result_offset + result_limit]
 
     @functools.wraps(BaseDataManager.reduce_join, updated=())
     def reduce_join(
@@ -902,16 +521,31 @@ class DataManager(BaseDataManager):
     ) -> Any:
         if isinstance(tables, str):
             tables = [tables]
-        rows = self._collect_join_rows(
-            tables=tables,
-            join_expr=join_expr,
-            select=select,
-            mode=mode,
-            left_where=left_where,
-            right_where=right_where,
-            result_where=result_where,
-            limit=None,
+        resolved_tables = [self._resolve_context(table) for table in tables]
+        join_expr, select = rewrite_join_paths(
+            tables,
+            resolved_tables,
+            join_expr,
+            select,
         )
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            page = filter_join_impl(
+                tables=resolved_tables,
+                join_expr=join_expr,
+                select=select,
+                mode=mode,
+                left_where=left_where,
+                right_where=right_where,
+                result_where=result_where,
+                result_limit=1000,
+                result_offset=offset,
+            )
+            rows.extend(page)
+            if len(page) < 1000:
+                break
+            offset += 1000
         if group_by is not None:
             return reduce_grouped_rows(
                 rows,
@@ -935,39 +569,27 @@ class DataManager(BaseDataManager):
         k: int = 10,
         filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        # Resolve table contexts
         if isinstance(tables, str):
             tables = [tables]
-        rows: list[dict[str, Any]] = []
-        last_error: Exception | None = None
-        for resolved_tables in self._resolve_join_context_groups(tables):
-            rewritten_expr, rewritten_select = self._rewrite_join_inputs(
-                tables,
-                resolved_tables,
-                join_expr,
-                select,
-            )
-            try:
-                rows.extend(
-                    search_join_impl(
-                        tables=resolved_tables,
-                        join_expr=rewritten_expr,
-                        select=rewritten_select,
-                        mode=mode,
-                        left_where=left_where,
-                        right_where=right_where,
-                        references=references,
-                        k=k,
-                        filter=filter,
-                        tmp_context_prefix=self._base_ctx,
-                    ),
-                )
-            except Exception as exc:
-                last_error = exc
-                continue
-        if not rows and last_error is not None:
-            raise last_error
-        return rows[:k]
+        resolved_tables = [self._resolve_context(table) for table in tables]
+        join_expr, select = rewrite_join_paths(
+            tables,
+            resolved_tables,
+            join_expr,
+            select,
+        )
+        return search_join_impl(
+            tables=resolved_tables,
+            join_expr=join_expr,
+            select=select,
+            mode=mode,
+            left_where=left_where,
+            right_where=right_where,
+            references=references,
+            k=k,
+            filter=filter,
+            tmp_context_prefix=self._base_ctx,
+        )
 
     @functools.wraps(BaseDataManager.filter_multi_join, updated=())
     def filter_multi_join(
@@ -978,28 +600,14 @@ class DataManager(BaseDataManager):
         result_limit: int = 100,
         result_offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        target_count = result_offset + result_limit
-        last_error: Exception | None = None
-        for resolver in self._multi_join_context_resolvers(joins):
-            resolved_joins = self._rewrite_multi_join_for_resolver(joins, resolver)
-            try:
-                rows.extend(
-                    filter_multi_join_impl(
-                        joins=resolved_joins,
-                        context_resolver=lambda table_name: table_name,
-                        result_where=result_where,
-                        result_limit=target_count,
-                        result_offset=0,
-                        tmp_context_prefix=self._base_ctx,
-                    ),
-                )
-            except Exception as exc:
-                last_error = exc
-                continue
-        if not rows and last_error is not None:
-            raise last_error
-        return rows[result_offset : result_offset + result_limit]
+        return filter_multi_join_impl(
+            joins=self._resolve_multi_join(joins),
+            context_resolver=lambda table_name: table_name,
+            result_where=result_where,
+            result_limit=result_limit,
+            result_offset=result_offset,
+            tmp_context_prefix=self._base_ctx,
+        )
 
     @functools.wraps(BaseDataManager.search_multi_join, updated=())
     def search_multi_join(
@@ -1010,27 +618,14 @@ class DataManager(BaseDataManager):
         k: int = 10,
         filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        last_error: Exception | None = None
-        for resolver in self._multi_join_context_resolvers(joins):
-            resolved_joins = self._rewrite_multi_join_for_resolver(joins, resolver)
-            try:
-                rows.extend(
-                    search_multi_join_impl(
-                        joins=resolved_joins,
-                        context_resolver=lambda table_name: table_name,
-                        references=references,
-                        k=k,
-                        filter=filter,
-                        tmp_context_prefix=self._base_ctx,
-                    ),
-                )
-            except Exception as exc:
-                last_error = exc
-                continue
-        if not rows and last_error is not None:
-            raise last_error
-        return rows[:k]
+        return search_multi_join_impl(
+            joins=self._resolve_multi_join(joins),
+            context_resolver=lambda table_name: table_name,
+            references=references,
+            k=k,
+            filter=filter,
+            tmp_context_prefix=self._base_ctx,
+        )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Mutation Operations
@@ -1043,15 +638,8 @@ class DataManager(BaseDataManager):
         rows: List[Dict[str, Any]],
         *,
         on_duplicate: Optional[str] = None,
-        destination: str | None = None,
     ) -> List[int]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return insert_rows_impl(
             resolved,
             rows,
@@ -1067,15 +655,8 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         log_ids: Optional[List[int]] = None,
         overwrite: bool = False,
-        destination: str | None = None,
     ) -> int:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return update_rows_impl(
             resolved,
             updates,
@@ -1093,12 +674,7 @@ class DataManager(BaseDataManager):
         overwrite: bool = True,
         context: Optional[str] = None,
     ) -> int:
-        resolved = None
-        if context is not None:
-            try:
-                resolved = self._resolve_context_for_write(context)
-            except ToolErrorException as exc:
-                return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = None if context is None else self._resolve_context(context)
         return update_by_ids_impl(
             log_ids,
             updates,
@@ -1114,15 +690,8 @@ class DataManager(BaseDataManager):
         expect: Dict[str, Any],
         updates: Dict[str, Any],
         limit: int = 1,
-        destination: str | None = None,
     ) -> List[Dict[str, Any]]:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return claim_impl(
             resolved,
             expect=expect,
@@ -1139,7 +708,6 @@ class DataManager(BaseDataManager):
         older_than_seconds: float,
         timestamp_field: str = "updated_at",
         limit: int = 100,
-        destination: str | None = None,
     ) -> List[Dict[str, Any]]:
         """Requeue rows whose claim lease has expired.
 
@@ -1151,13 +719,7 @@ class DataManager(BaseDataManager):
         so a live worker can never lose its row. Queues built on
         :meth:`claim` call this at poll time for crash recovery.
         """
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return reclaim_impl(
             resolved,
             claimed=claimed,
@@ -1175,15 +737,8 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         log_ids: Optional[List[int]] = None,
         dangerous_ok: bool = False,
-        destination: str | None = None,
     ) -> int:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         return delete_rows_impl(
             resolved,
             filter=filter,
@@ -1215,19 +770,12 @@ class DataManager(BaseDataManager):
         on_task_complete=None,
         coerce_types: bool = True,
         skip_rows: int = 0,
-        destination: str | None = None,
         expected_total_rows: int | None = None,
         private_ingest_key_column: str = "",
         private_ingest_key_prefix: str = "",
         before_insert_chunk=None,
     ) -> "IngestResult":
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         unique_keys, auto_counting = self._resolve_unique_keys_and_auto_counting(
             resolved,
             unique_keys,
@@ -1269,15 +817,8 @@ class DataManager(BaseDataManager):
         source_column: str,
         target_column: Optional[str] = None,
         async_embeddings: bool = False,
-        destination: str | None = None,
     ) -> str:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         target = target_column or f"_{source_column}_emb"
         _ensure_vector_column(
             context=resolved,
@@ -1299,15 +840,8 @@ class DataManager(BaseDataManager):
         row_ids: Optional[List[int]] = None,
         batch_size: int = 100,
         async_embeddings: bool = False,
-        destination: str | None = None,
     ) -> int:
-        try:
-            resolved = self._resolve_context_for_write(
-                context,
-                destination=destination,
-            )
-        except ToolErrorException as exc:
-            return self._tool_error(exc)  # type: ignore[return-value]
+        resolved = self._resolve_context(context)
         target = target_column or f"_{source_column}_emb"
         _ensure_vector_column(
             context=resolved,

@@ -181,15 +181,6 @@ class Contact(AuthoredRow):
         description="System contact (assistant, user, or org member). Cannot be deleted.",
     )
 
-    user_id: Optional[str] = Field(
-        default=None,
-        description="Platform user id for system contacts (cost attribution).",
-    )
-    agent_id: Optional[str] = Field(
-        default=None,
-        description="Platform assistant/agent id for teammate system contacts.",
-    )
-
     @model_validator(mode="before")
     @classmethod
     def _inject_sentinel(cls, data: dict) -> dict:

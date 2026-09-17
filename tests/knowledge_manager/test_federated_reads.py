@@ -1,4 +1,4 @@
-"""Shape tests for KnowledgeManager federated reads across destination roots."""
+"""Shape tests for KnowledgeManager reads over the Knowledge ledger."""
 
 from __future__ import annotations
 
@@ -11,14 +11,11 @@ def _manager_stub() -> KnowledgeManager:
     km._filter_scope = None
     km._exclude_ids = None
     km._BUILTIN_FIELDS = tuple(Knowledge.model_fields.keys())
-    km._read_knowledge_contexts = lambda: [
-        "tests/x/y/Knowledge",
-        "Teams/42/Knowledge",
-    ]
+    km._ctx = "tests/x/y/Knowledge"
     return km
 
 
-def test_search_fans_out_over_read_roots(monkeypatch):
+def test_search_reads_ledger_with_scope_and_active_filter(monkeypatch):
     km = _manager_stub()
     km._filter_scope = "title != 'hidden'"
     captured: dict = {}
@@ -38,23 +35,14 @@ def test_search_fans_out_over_read_roots(monkeypatch):
 
     assert captured["references"] == {"content": "warranty"}
     assert captured["limit"] == 4
-    contexts = captured["contexts"]
-    assert [(spec.context, spec.source) for spec in contexts] == [
-        ("tests/x/y/Knowledge", "tests/x/y/Knowledge"),
-        ("Teams/42/Knowledge", "Teams/42/Knowledge"),
-    ]
-    assert all(
-        spec.row_filter is not None and "title != 'hidden'" in spec.row_filter
-        for spec in contexts
-    )
-    assert all(
-        spec.row_filter is not None and "status == 'active'" in spec.row_filter
-        for spec in contexts
-    )
-    assert all("knowledge_id" in spec.allowed_fields for spec in contexts)
+    [spec] = captured["contexts"]
+    assert (spec.context, spec.source) == ("tests/x/y/Knowledge", "tests/x/y/Knowledge")
+    assert "title != 'hidden'" in spec.row_filter
+    assert "status == 'active'" in spec.row_filter
+    assert "knowledge_id" in spec.allowed_fields
 
 
-def test_filter_fans_out_over_read_roots(monkeypatch):
+def test_filter_reads_ledger_with_active_default(monkeypatch):
     km = _manager_stub()
     captured: dict = {}
 
@@ -74,7 +62,6 @@ def test_filter_fans_out_over_read_roots(monkeypatch):
     assert "status == 'active'" in captured["filter"]
     assert [(spec.context, spec.source) for spec in captured["contexts"]] == [
         ("tests/x/y/Knowledge", "tests/x/y/Knowledge"),
-        ("Teams/42/Knowledge", "Teams/42/Knowledge"),
     ]
 
 
@@ -106,7 +93,7 @@ def test_filter_normalizes_legacy_null_is_builtin(monkeypatch):
     assert rows[0].is_builtin is False
 
 
-def test_num_items_fans_out_and_applies_exclusion(monkeypatch):
+def test_num_items_applies_exclusion(monkeypatch):
     km = _manager_stub()
     km._exclude_ids = frozenset({7})
     captured: dict = {}
@@ -127,7 +114,6 @@ def test_num_items_fans_out_and_applies_exclusion(monkeypatch):
     assert "knowledge_id != 7" in captured["filter"]
     assert [(spec.context, spec.source) for spec in captured["contexts"]] == [
         ("tests/x/y/Knowledge", "tests/x/y/Knowledge"),
-        ("Teams/42/Knowledge", "Teams/42/Knowledge"),
     ]
 
 

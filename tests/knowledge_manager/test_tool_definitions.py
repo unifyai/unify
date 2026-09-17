@@ -70,9 +70,7 @@ def test_real_and_simulated_share_signatures():
             inspect.signature(getattr(BaseKnowledgeManager, name)).parameters,
         )
         assert sim_params == base_params, name
-        # KnowledgeManager may append destination guidance / signature on writes;
-        # parameter names must still cover the base contract.
-        assert set(base_params) <= set(real_params), name
+        assert real_params == base_params, name
 
 
 def test_scoped_filter_helpers_compose_status_scope_and_exclusions():

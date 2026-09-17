@@ -171,7 +171,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         observed_at: Optional[datetime] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Create a new typed knowledge claim in the ledger.
 
@@ -196,9 +195,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
             Optional confidence in [0, 1].
         observed_at / valid_from / valid_until : datetime | None
             Optional observation and validity window.
-        destination : str | None, default None
-            Where this claim lives. Only the personal root exists: pass
-            ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -238,7 +234,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         observed_at: Optional[datetime] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Update fields of an existing knowledge claim by id.
 
@@ -254,9 +249,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         title / content / kind / topics / source_refs / confidence /
         observed_at / valid_from / valid_until
             Fields to replace; omit to keep existing values.
-        destination : str | None, default None
-            Destination root for the write. Only the personal root exists:
-            pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -274,7 +266,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         *,
         knowledge_id: int,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Hard-delete a knowledge claim by id.
 
@@ -285,8 +276,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         ----------
         knowledge_id : int
             Identifier of the row to delete.
-        destination : str | None, default None
-            Destination scope for the write.
 
         Returns
         -------
@@ -300,7 +289,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         *,
         knowledge_id: int,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Mark a knowledge claim as invalidated without deleting it.
 
@@ -312,8 +300,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         ----------
         knowledge_id : int
             Identifier of the claim to invalidate.
-        destination : str | None, default None
-            Destination scope for the write.
 
         Returns
         -------
@@ -337,7 +323,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
         new_knowledge_id: Optional[int] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Replace an existing claim with a newer one, preserving lineage.
 
@@ -356,8 +341,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         new_knowledge_id : int | None
             Optional existing claim that should become the replacement instead
             of creating a new row.
-        destination : str | None, default None
-            Destination scope for the write.
 
         Returns
         -------
@@ -374,7 +357,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         *,
         knowledge_ids: Optional[List[int]] = None,
-        destination: str | None = None,
     ) -> "ToolOutcome":
         """Best-effort check that claim provenance still resolves.
 
@@ -388,8 +370,6 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         ----------
         knowledge_ids : list[int] | None
             Optional subset to check; when omitted, scans active claims.
-        destination : str | None, default None
-            Destination scope for reads and stale-reason writes.
 
         Returns
         -------

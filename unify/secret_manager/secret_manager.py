@@ -23,7 +23,7 @@ from ..settings import SETTINGS
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..events.event_bus import EVENT_BUS, Event
 from ..events.manager_event_logging import log_manager_call
-from ..common.tool_outcome import ToolError, ToolErrorException, ToolOutcome
+from ..common.tool_outcome import ToolOutcome
 from ..common.embed_utils import ensure_vector_column
 from ..common.context_store import TableStore
 from ..common.model_to_fields import model_to_fields
@@ -33,31 +33,23 @@ from .prompt_builders import build_ask_prompt, build_update_prompt
 from ..common.filter_utils import normalize_filter_expr
 from ..common.search_utils import is_plain_identifier
 from ..common.federated_search import (
-    SOURCE_FIELD,
     FederatedSearchContext,
     federated_filter,
     federated_ranked_search,
 )
-from ..common.context_registry import (
-    ContextRegistry,
-    PERSONAL_DESTINATION,
-    TableContext,
-)
+from ..common.context_registry import ContextRegistry, TableContext
 
 SECRETS_TABLE = "Secrets"  # pragma: allowlist secret
-DESTINATION_FILTER_PATTERN = (
-    r"destination\s*==\s*(?P<quote>['\"])(?P<destination>[^'\"]+)(?P=quote)"
-)
 
 
 class SecretManager(BaseSecretManager):
     """
     Manage credentials without exposing raw values to LLMs.
 
-    Every read and write targets the assistant's personal vault. Writes accept
-    a destination and persist to exactly one vault. Runtime credential lookups
-    also read exactly one vault; a missing credential in the requested
-    destination raises instead of falling back to another scope.
+    All credentials live in one vault, mirrored into the local ``.env`` file
+    so code executed by the assistant can read them from ``os.environ``.
+    Runtime credential lookups raise for unknown names rather than falling
+    back to any other source.
     """
 
     class Config:
@@ -132,88 +124,25 @@ class SecretManager(BaseSecretManager):
             description="Key-value secrets with descriptions and embeddings.",
             fields=model_to_fields(Secret),
         )
+        self._description_vector_ensured = False
 
     def warm_embeddings(self) -> None:
-        for context in self._read_secret_contexts():
-            self._ensure_description_vector(context)
+        self._ensure_description_vector()
 
-    def _secret_context_for_root(self, root_context: str) -> str:
-        """Return the concrete Secrets context under a registry root."""
-        return f"{root_context.strip('/')}/{SECRETS_TABLE}"
-
-    def _effective_destination(self, destination: str | None) -> str | None:
-        """Validate a public destination."""
-        return ContextRegistry.canonical_destination(destination)
-
-    def _secret_context_for_destination(self, destination: str | None) -> str:
-        """Resolve a public destination into one concrete Secrets context."""
-        destination = self._effective_destination(destination)
-        root_context = ContextRegistry.write_root(
-            self,
-            SECRETS_TABLE,
-            destination=destination,
-        )
-        return self._secret_context_for_root(root_context)
-
-    def _destination_for_context(self, context: str) -> str:
-        """Return the public destination label for a concrete Secrets context."""
-        return PERSONAL_DESTINATION
-
-    def _split_destination_filter(
-        self,
-        filter_expr: str | None,
-    ) -> tuple[str | None, set[str]]:
-        """Extract destination equality predicates from a public filter."""
-        if not filter_expr:
-            return filter_expr, set()
-
-        import re
-
-        destinations = {
-            match.group("destination")
-            for match in re.finditer(DESTINATION_FILTER_PATTERN, filter_expr)
-        }
-        if not destinations:
-            return filter_expr, set()
-
-        cleaned = re.sub(
-            rf"\s+and\s+{DESTINATION_FILTER_PATTERN}",
-            "",
-            filter_expr,
-        )
-        cleaned = re.sub(
-            rf"{DESTINATION_FILTER_PATTERN}\s+and\s+",
-            "",
-            cleaned,
-        )
-        cleaned = re.sub(DESTINATION_FILTER_PATTERN, "", cleaned).strip()
-        return cleaned or None, destinations
-
-    def _read_secret_contexts(self) -> list[str]:
-        """Return personal-first concrete Secrets contexts visible to the assistant."""
-        return list(
-            dict.fromkeys(
-                self._secret_context_for_root(root)
-                for root in ContextRegistry.read_roots(self, SECRETS_TABLE)
-            ),
-        )
-
-    def _is_personal_context(self, context: str) -> bool:
-        """Return whether a concrete Secrets context is the personal vault."""
-        return context == self._ctx
-
-    @functools.cache
-    def _ensure_description_vector(self, context: str) -> None:
-        """Ensure the description embedding exists for one Secrets context."""
+    def _ensure_description_vector(self) -> None:
+        """Ensure the description embedding exists on the Secrets table."""
+        if self._description_vector_ensured:
+            return
         try:
             ensure_vector_column(
-                context,
+                self._ctx,
                 embed_column="description_emb",
                 source_column="description",
                 derived_expr=None,
             )
         except Exception:
             pass
+        self._description_vector_ensured = True
 
     @functools.wraps(BaseSecretManager.clear, updated=())
     def clear(self) -> None:
@@ -398,28 +327,20 @@ class SecretManager(BaseSecretManager):
         self._env_merge_and_write(add_or_update=None, remove_keys=[name])
 
     # --------------------- Public API --------------------- #
-    async def from_placeholder(
-        self,
-        text: str,
-        *,
-        destination: str | None = None,
-    ) -> str:
+    async def from_placeholder(self, text: str) -> str:
         """Resolve ${name} placeholders in text to raw secret values (no LLM).
 
         Parameters
         ----------
         text : str
             Input string that may contain placeholders like "${api_key}".
-        destination : str | None, default None
-            Credential vault to read from. Only the personal vault exists:
-            pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
         str
             String with placeholders substituted with their secret values.
         """
-        return self._resolve_placeholders(text, destination=destination)
+        return self._resolve_placeholders(text)
 
     async def to_placeholder(self, text: str) -> str:
         """Convert secret values in text to placeholders.
@@ -435,27 +356,26 @@ class SecretManager(BaseSecretManager):
             The text with secret values converted to placeholders.
         """
         value_to_name: Dict[str, str] = {}
-        for context in self._read_secret_contexts():
-            try:
-                rows = db.get_logs(
-                    context=context,
-                    from_fields=["name", "value"],
-                )
-            except Exception:
-                rows = []
+        try:
+            rows = db.get_logs(
+                context=self._ctx,
+                from_fields=["name", "value"],
+            )
+        except Exception:
+            rows = []
 
-            for lg in rows:
-                try:
-                    nm = (lg.entries or {}).get("name")
-                    val = (lg.entries or {}).get("value")
-                    if isinstance(nm, str) and nm and isinstance(val, str) and val:
-                        if val in value_to_name:
-                            if nm < value_to_name[val]:
-                                value_to_name[val] = nm
-                        else:
+        for lg in rows:
+            try:
+                nm = (lg.entries or {}).get("name")
+                val = (lg.entries or {}).get("value")
+                if isinstance(nm, str) and nm and isinstance(val, str) and val:
+                    if val in value_to_name:
+                        if nm < value_to_name[val]:
                             value_to_name[val] = nm
-                except Exception:
-                    continue
+                    else:
+                        value_to_name[val] = nm
+            except Exception:
+                continue
 
         # Replace longer values first to avoid partial overlaps
         import re
@@ -674,56 +594,30 @@ class SecretManager(BaseSecretManager):
         return handle
 
     # --------------------- Tools (read-only) --------------------- #
-    def get_credential(
-        self,
-        integration: str,
-        *,
-        destination: str | None = None,
-    ) -> str:
-        """Return one raw credential from the vault named by destination.
+    def get_credential(self, integration: str) -> str:
+        """Return one raw credential by name.
 
         Parameters
         ----------
         integration : str
             Secret name to resolve.
-        destination : str | None, default None
-            Only the personal vault exists: pass ``"personal"`` or leave it
-            ``None``.
 
         Raises
         ------
         KeyError
-            If the credential is not stored in the resolved vault.
+            If no credential with that name is stored.
         """
-        context = self._secret_context_for_destination(destination)
         rows = db.get_logs(
-            context=context,
+            context=self._ctx,
             filter=f"name == {integration!r}",
             limit=1,
         )
-        if not rows:
-            resolved_destination = (
-                self._effective_destination(destination) or PERSONAL_DESTINATION
-            )
-            raise KeyError(
-                f"No credential named {integration!r} in {resolved_destination!r}.",
-            )
-        value = (rows[0].entries or {}).get("value")
+        value = (rows[0].entries or {}).get("value") if rows else None
         if not isinstance(value, str):
-            resolved_destination = (
-                self._effective_destination(destination) or PERSONAL_DESTINATION
-            )
-            raise KeyError(
-                f"No credential named {integration!r} in {resolved_destination!r}.",
-            )
+            raise KeyError(f"No credential named {integration!r}.")
         return value
 
-    def _resolve_placeholders(
-        self,
-        text: str,
-        *,
-        destination: str | None = None,
-    ) -> str:
+    def _resolve_placeholders(self, text: str) -> str:
         """Return a copy of text with ${name} placeholders replaced by values.
 
         This helper performs direct Unify reads and never emits logs/events.
@@ -734,7 +628,7 @@ class SecretManager(BaseSecretManager):
         def repl(match: "re.Match[str]") -> str:
             name = match.group(1)
             try:
-                return self.get_credential(name, destination=destination)
+                return self.get_credential(name)
             except KeyError:
                 pass
             return match.group(0)  # leave placeholder as-is when missing
@@ -824,35 +718,34 @@ class SecretManager(BaseSecretManager):
         # Sanitize references to avoid embedding sensitive fields like "value"
         safe_refs = self._sanitize_secret_references(references)
 
-        contexts: list[FederatedSearchContext] = []
-        for context in self._read_secret_contexts():
-            self._ensure_description_vector(context)
-            contexts.append(
-                FederatedSearchContext(
-                    context=context,
-                    source=self._destination_for_context(context),
-                    # Never return the secret value.
-                    allowed_fields=["secret_id", "name", "description"],
-                ),
-            )
+        self._ensure_description_vector()
         rows = federated_ranked_search(
-            contexts,
+            [self._redacted_search_context()],
             safe_refs,
             limit=k,
             backfill=True,
         )
-        return [
-            Secret(
-                secret_id=(
-                    int(r.get("secret_id")) if r.get("secret_id") is not None else -1
-                ),
-                name=r.get("name"),
-                value="",
-                description=r.get("description") or "",
-                destination=r.get(SOURCE_FIELD) or PERSONAL_DESTINATION,
-            )
-            for r in rows
-        ]
+        return [self._redacted_secret(row) for row in rows]
+
+    def _redacted_search_context(self) -> FederatedSearchContext:
+        """Return the Secrets table as a search context that never exposes values."""
+        return FederatedSearchContext(
+            context=self._ctx,
+            source=self._ctx,
+            allowed_fields=["secret_id", "name", "description"],
+        )
+
+    @staticmethod
+    def _redacted_secret(row: Dict[str, Any]) -> Secret:
+        """Build a Secret model from a search row with the value blanked."""
+        return Secret(
+            secret_id=(
+                int(row.get("secret_id")) if row.get("secret_id") is not None else -1
+            ),
+            name=row.get("name"),
+            value="",
+            description=row.get("description") or "",
+        )
 
     def _filter_secrets(
         self,
@@ -878,41 +771,13 @@ class SecretManager(BaseSecretManager):
         List[Secret]
             Matching Secret models with ``value`` redacted.
         """
-        normalized = normalize_filter_expr(filter)
-        normalized, destination_filter = self._split_destination_filter(normalized)
-        contexts = []
-        for context in self._read_secret_contexts():
-            destination = self._destination_for_context(context)
-            if destination_filter and destination not in destination_filter:
-                continue
-            contexts.append(
-                FederatedSearchContext(
-                    context=context,
-                    source=destination,
-                    # Never expose values in read tools.
-                    allowed_fields=["secret_id", "name", "description"],
-                ),
-            )
         rows = federated_filter(
-            contexts,
-            filter=normalized,
+            [self._redacted_search_context()],
+            filter=normalize_filter_expr(filter),
             offset=offset,
             limit=limit,
         )
-        return [
-            Secret(
-                secret_id=(
-                    int(row.get("secret_id"))
-                    if row.get("secret_id") is not None
-                    else -1
-                ),
-                name=row.get("name"),
-                value="",
-                description=row.get("description") or "",
-                destination=row.get(SOURCE_FIELD) or PERSONAL_DESTINATION,
-            )
-            for row in rows
-        ]
+        return [self._redacted_secret(row) for row in rows]
 
     def _list_secret_keys(self) -> List[str]:
         """Return all available secret names (keys) stored in Unify.
@@ -922,19 +787,15 @@ class SecretManager(BaseSecretManager):
         List[str]
             Sorted, unique list of secret names currently present in storage.
         """
-        names: set[str] = set()
-        for context in self._read_secret_contexts():
-            try:
-                rows = db.get_logs(
-                    context=context,
-                    from_fields=["name"],
-                )
-            except Exception:
-                rows = []
-            for lg in rows:
-                nm = (lg.entries or {}).get("name")
-                if isinstance(nm, str) and nm:
-                    names.add(nm)
+        try:
+            rows = db.get_logs(context=self._ctx, from_fields=["name"])
+        except Exception:
+            rows = []
+        names = {
+            nm
+            for lg in rows
+            if isinstance((nm := (lg.entries or {}).get("name")), str) and nm
+        }
         return sorted(names)
 
     # --------------------- Tools (mutations) --------------------- #
@@ -950,8 +811,7 @@ class SecretManager(BaseSecretManager):
         name: str,
         value: str,
         description: Optional[str] = None,
-        destination: str | None = None,
-    ) -> ToolOutcome | ToolError:
+    ) -> ToolOutcome:
         """Create and persist a new secret.
 
         Parameters
@@ -959,29 +819,21 @@ class SecretManager(BaseSecretManager):
         name : str
             Unique identifier for the secret. Used as the placeholder name.
         value : str
-            Raw secret value to store (never exposed to LLMs).
+            Raw secret value to store (never exposed to LLMs). Stored
+            credentials are mirrored into the local ``.env`` file.
         description : str | None, default None
             Optional human-readable description.
-        destination : str | None, default None
-            Where the credential is stored. Only the personal vault exists:
-            pass ``"personal"`` or leave it ``None``. Stored credentials are
-            mirrored into the local ``.env`` file.
 
         Returns
         -------
-        ToolOutcome | ToolError
-            A standard outcome dict, or a structured tool error for invalid
-            destinations.
+        ToolOutcome
+            A standard outcome dict naming the created secret.
         """
         assert name and value, "Both name and value are required."
-        try:
-            context = self._secret_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
 
         # Enforce uniqueness of name
         existing = db.get_logs(
-            context=context,
+            context=self._ctx,
             filter=f"name == {name!r}",
             limit=1,
             return_ids_only=True,
@@ -995,7 +847,7 @@ class SecretManager(BaseSecretManager):
             "description": description or "",
         }
         unity_log(
-            context=context,
+            context=self._ctx,
             **entries,
             new=True,
             mutable=True,
@@ -1003,8 +855,7 @@ class SecretManager(BaseSecretManager):
         )
 
         try:
-            if self._is_personal_context(context):
-                self._env_set(name, value)
+            self._env_set(name, value)
         except Exception:
             pass
         finally:
@@ -1018,8 +869,7 @@ class SecretManager(BaseSecretManager):
         name: str,
         value: Optional[str] = None,
         description: Optional[str] = None,
-        destination: str | None = None,
-    ) -> ToolOutcome | ToolError:
+    ) -> ToolOutcome:
         """Update fields of an existing secret.
 
         Parameters
@@ -1027,27 +877,19 @@ class SecretManager(BaseSecretManager):
         name : str
             Secret name to update.
         value : str | None, default None
-            New raw value (optional). When provided it overwrites the existing value.
+            New raw value (optional). When provided it overwrites the existing
+            value; pooled subprocesses pick up the new value on next invocation.
         description : str | None, default None
             New description (optional).
-        destination : str | None, default None
-            Which vault holds the credential. Only the personal vault exists:
-            pass ``"personal"`` or leave it ``None``. Pooled subprocesses pick
-            up the new value on next invocation.
 
         Returns
         -------
-        ToolOutcome | ToolError
-            Outcome dict or structured tool error for invalid destinations.
+        ToolOutcome
+            A standard outcome dict naming the updated secret.
         """
-        try:
-            context = self._secret_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
-
         # Find target log id
         ids = db.get_logs(
-            context=context,
+            context=self._ctx,
             filter=f"name == {name!r}",
             limit=2,
             return_ids_only=True,
@@ -1069,13 +911,13 @@ class SecretManager(BaseSecretManager):
 
         db.update_logs(
             logs=[log_id],
-            context=context,
+            context=self._ctx,
             entries=updates,
             overwrite=True,
         )
 
         try:
-            if value is not None and self._is_personal_context(context):
+            if value is not None:
                 self._env_set(name, value)
         except Exception:
             pass
@@ -1084,36 +926,23 @@ class SecretManager(BaseSecretManager):
 
         return {"outcome": "secret updated", "details": {"name": name}}
 
-    def _delete_secret(
-        self,
-        *,
-        name: str,
-        destination: str | None = None,
-    ) -> ToolOutcome | ToolError:
+    def _delete_secret(self, *, name: str) -> ToolOutcome:
         """Delete a secret by name.
 
         Parameters
         ----------
         name : str
-            The secret name to remove.
-        destination : str | None, default None
-            Which vault holds the credential. Only the personal vault exists:
-            pass ``"personal"`` or leave it ``None``. Removing a credential
-            breaks any function or integration that depends on it; do not
-            delete one unless the decision is to rotate or retire it.
+            The secret name to remove. Removing a credential breaks any
+            function or integration that depends on it; do not delete one
+            unless the decision is to rotate or retire it.
 
         Returns
         -------
-        ToolOutcome | ToolError
-            Outcome dict or structured tool error for invalid destinations.
+        ToolOutcome
+            A standard outcome dict naming the deleted secret.
         """
-        try:
-            context = self._secret_context_for_destination(destination)
-        except ToolErrorException as exc:
-            return exc.payload
-
         ids = db.get_logs(
-            context=context,
+            context=self._ctx,
             filter=f"name == {name!r}",
             limit=2,
             return_ids_only=True,
@@ -1122,10 +951,9 @@ class SecretManager(BaseSecretManager):
             raise ValueError(f"No secret found with name '{name}'.")
         if len(ids) > 1:
             raise RuntimeError(f"Multiple secrets found with name '{name}'.")
-        db.delete_logs(context=context, logs=ids[0])
+        db.delete_logs(context=self._ctx, logs=ids[0])
         try:
-            if self._is_personal_context(context):
-                self._env_remove(name)
+            self._env_remove(name)
         except Exception:
             pass
         finally:
