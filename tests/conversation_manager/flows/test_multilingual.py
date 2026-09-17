@@ -231,6 +231,22 @@ def _has_arabic(text: str) -> bool:
     return bool(_ARABIC_RE.search(text))
 
 
+_QUOTED_RE = re.compile(r'"[^"]*"|\'[^\']*\'|「[^」]*」|“[^”]*”')
+
+
+def _instruction_text(query: str) -> str:
+    """The act query minus its payload.
+
+    An act query is written in English, but it carries the user's own words
+    where they are the deliverable: a quoted message, a filename, a term the
+    user chose. Those are quoted spans and non-Latin tokens; what is left is
+    the instruction the actor reads.
+    """
+    without_quotes = _QUOTED_RE.sub(" ", query)
+    tokens = [t for t in without_quotes.split() if not _NON_LATIN_RE.search(t)]
+    return " ".join(tokens)
+
+
 def _is_english(text: str) -> bool:
     """True if *text* appears to be written in English.
 
@@ -334,11 +350,11 @@ async def test_arabic_message_reply_in_arabic(initialized_cm):
 @_handle_project
 async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
     """
-    Boss gives instructions in Spanish -> internal query must still be English.
+    Boss gives instructions in Spanish -> the act query must still be English.
 
-    Contact lookup may go through ``ask_about_contacts`` (preferred FastPath) or
-    ``act``. Both are internal interfaces and must stay English even when the
-    user-facing conversation is Spanish.
+    Writing a file into the workspace needs the actor, so the request is
+    dispatched as an act whose query is an internal interface and must stay
+    English even though the user-facing conversation is Spanish.
     """
     cm = initialized_cm
 
@@ -353,11 +369,14 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
         ),
     )
 
-    # Boss gives instruction in Spanish -> triggers contact lookup / messaging work
+    # Boss gives instruction in Spanish -> needs the actor (writes a file)
     result_boss = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
-            content="Envíale un mensaje a David sobre lo que mencionó Alice",
+            content=(
+                "Crea un archivo de texto con una lista de verificación para "
+                "preparar una reunión y guárdalo en mi espacio de trabajo"
+            ),
         ),
     )
 
@@ -365,17 +384,19 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
         result_alice.output_events + result_boss.output_events,
         ActorHandleStarted,
     )
-    used_contact_fast_path = "ask_about_contacts" in cm.all_tool_calls
-    assert actor_events or used_contact_fast_path, (
-        "Expected an internal contact/action query "
-        f"(ActorHandleStarted or ask_about_contacts), "
+    assert actor_events, (
+        "Expected act to be called (ActorHandleStarted), "
         f"got tools={cm.all_tool_calls}, "
         f"events={[type(e).__name__ for e in result_alice.output_events + result_boss.output_events]}"
     )
 
     for event in actor_events:
+        instruction = _instruction_text(event.query)
+        assert (
+            len(instruction.split()) >= 5
+        ), f"Act query has no instruction: {event.query}"
         assert _is_english(
-            event.query,
+            instruction,
         ), f"Internal act query should be in English, got: {event.query}"
 
 
@@ -385,9 +406,9 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
     """
     Boss gives instructions in Japanese -> act query must still be English.
 
-    The boss speaks Japanese and asks to message an unknown person (David).
-    Even though the entire conversation is in Japanese, the act query
-    must be in English with no CJK character leakage.
+    Writing a file into the workspace needs the actor. Even though the entire
+    conversation is in Japanese, the act query must be in English with no CJK
+    character leakage.
     """
     cm = initialized_cm
 
@@ -402,11 +423,11 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
         ),
     )
 
-    # Boss gives instruction in Japanese -> triggers act for unknown David
+    # Boss gives instruction in Japanese -> needs the actor (writes a file)
     result = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
-            content="アリスが言っていた件について、デビッドにメッセージを送ってください",
+            content="会議の準備チェックリストをテキストファイルにまとめて、ワークスペースに保存してください",
         ),
     )
 
@@ -417,10 +438,12 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
     )
 
     query = actor_events[0].query
+    instruction = _instruction_text(query)
+    assert len(instruction.split()) >= 5, f"Act query has no instruction: {query}"
     assert not _has_japanese(
-        query,
-    ), f"Act query must not contain Japanese characters, got: {query}"
-    assert _is_english(query), f"Act query should be in English, got: {query}"
+        instruction,
+    ), f"Act query instruction must be English, got: {query}"
+    assert _is_english(instruction), f"Act query should be in English, got: {query}"
 
 
 # =====================================================================

@@ -357,7 +357,11 @@ class ConversationManagerBrainActionTools:
         it, it will tell you, and you can then ask the user.
 
         Args:
-            query: Natural language request specifying what to do or find.
+            query: Natural language request specifying what to do or find,
+                written in English whatever language the conversation is
+                in; the actor works in English. Quote the user's own words
+                only where they are the payload (a name, an address, the
+                text of a message to send).
             requesting_contact_id: The contact_id of the person whose request or
                 needs this action serves.  For responses to a contact's message,
                 use that contact's ID.  For proactive actions benefiting a
