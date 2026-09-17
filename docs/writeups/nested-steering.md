@@ -77,11 +77,8 @@ It's also immediate. The inner loop runs with `interrupt_llm_with_interjections`
 
 The inner loop gets the mirror-image channel. An actor started with clarification enabled has `request_clarification(question)` in its tool surface. Calling it blocks that exact call site. The question travels up through the handle's clarification queue, the ConversationManager wakes and relays it to the user, and an `answer_clarification_*` tool appears for the pending question. When the answer comes back, it's routed down the same queues and the blocked call returns with the answer as its value.
 
-So "which of these two Alices did you mean?" doesn't kill the task. The task is suspended at precisely the point of ambiguity, and resumes from that point with the answer in hand.
+So "which of these two exports did you mean?" doesn't kill the task. The task is suspended at precisely the point of ambiguity, and resumes from that point with the answer in hand.
 
-<p align="center">
-  <img src="../../assets/demo-clarification-bubbling.png" alt="A clarification — 'which Sarah? two matches' — bubbling up from a nested ContactManager loop through the Actor and ConversationManager to the user, and the answer 'the one in Berlin' flowing back down the same path." width="720">
-</p>
 
 ## It nests
 

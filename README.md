@@ -11,11 +11,11 @@
 
 # unify
 
-**unify is the brain of an AI teammate that runs entirely on your machine: a persistent reasoning loop above a code-writing actor, typed memory in a local SQLite store, a skill library that grows from work that went well, and a steering protocol that reaches into any running operation. No backend, no accounts, no infra. One LLM key and `python -m unify`.**
+**unify is a self-improving agent harness that runs entirely on your machine: a persistent conversation loop above a code-writing actor, a skill library that grows from work that went well, a local SQLite store, and a steering protocol that reaches into any running operation. No backend, no accounts, no infra. One LLM key and `python -m unify`.**
 
 The shape is deliberately human-in-the-loop: an assistant that keeps moving while you steer it, not one that replaces the person steering.
 
-Every conversation is distilled into **typed, queryable memory** (contacts, knowledge, transcripts, files, each in its own table, not transcript soup or markdown files you maintain by hand), so the assistant knows what your weekend rewrite is for, which libraries you care about, and the regression you asked it to watch out for last Wednesday.
+The actor does everything in code: it writes one Python program per turn in a persistent sandbox, reads files where they are, delegates to nested actors, and calls stored functions it discovered first. What it keeps between sessions is not a transcript dump but **skills**: executable functions and the procedures for composing them.
 
 After a successful run it **promotes what worked into a personal skill library** (executable Python *plus* the procedural how-to prose to use it) that every future session consults before reaching for raw tools. A stored function is not *trusted* on day one: its side-effect class is read off its code, its contract is checked around every call, and any change to the code, its dependencies, its environment or its linked guidance puts it back at the start of that ramp.
 
@@ -25,7 +25,7 @@ After a successful run it **promotes what worked into a personal skill library**
 |---|---|---|---|
 | Persistent reasoning loop *above* the tool-caller | ✓ | no | no |
 | Mid-flight steering (pause / redirect / interject) | ✓ | abort + redeliver | text injection |
-| Typed memory tables (contacts, knowledge, transcripts) | ✓ | markdown / JSONL | markdown + SQLite |
+| Stored functions carry a verification ledger | ✓ | no | no |
 | Auto-grown skill library (executable code + prose) | ✓ | skills | skills |
 | Runs in one process on your machine | ✓ | gateway + agent runs | single loop |
 
@@ -52,9 +52,9 @@ Then start chatting:
 ```
 
 ```text
-> What did I leave half-finished on the indexer rewrite last week?
 > Here's the benchmark spreadsheet, which configs regressed?
-> Draft a note to Sarah with the numbers that changed.
+> Turn that regression check into something you can rerun next week.
+> Run it against ~/exports/run-42.csv and plot the deltas.
 ```
 
 Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the embeddings cache, the `workspace/` directory the actor reads and writes files in, and the runtime logs. Delete the directory and you have a fresh assistant. `/help` inside the chat lists the few slash commands (attach a file, quit); `unify --debug` streams the runtime logs to the terminal.
@@ -126,7 +126,6 @@ Assistant    ▸  Three tasks running at once.
 <table>
 <tr><td><b>Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running, including operations <i>nested inside other operations</i>, all the way down.</td></tr>
 <tr><td><b>Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow, not a chain of one-tool-at-a-time JSON decisions.</td></tr>
-<tr><td><b>Structured memory, not transcript soup</b></td><td>Contacts, knowledge, transcripts, and files live in typed, queryable tables, distilled from conversations every fifty messages, not piled into markdown.</td></tr>
 <tr><td><b>Learns reusable skills, and earns trust in them</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving. Stored functions carry a verification ledger: their side-effect class is read off the code, their contract is checked around every call, and any change to the code, its dependencies, its environment or its linked guidance puts them back on the ramp.</td></tr>
 <tr><td><b>Concurrent work, independently steerable</b></td><td>Multiple actions run at once: pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
 <tr><td><b>Local-first, fully open</b></td><td>Runtime, persistence and LLM client are MIT-licensed and run in one process on your laptop. The store is a SQLite file you can open with any tool.</td></tr>
@@ -136,7 +135,7 @@ Assistant    ▸  Three tasks running at once.
 
 ## How it works
 
-A persistent **interaction loop** (`ConversationManager`) stays present across the conversation and keeps thinking while work is in flight. When something needs deeper reasoning, it dispatches a **background reasoner** (`Actor`) that writes Python plans over a back office of typed state managers. Every operation returns a live, steerable handle, and those handles nest: a correction you make in chat propagates *down* through the dispatched action into whatever manager call is currently running.
+A persistent **interaction loop** (`ConversationManager`) stays present across the conversation and keeps thinking while work is in flight. When something needs deeper reasoning, it dispatches a **background reasoner** (`Actor`) that writes Python plans over two skill libraries. Every operation returns a live, steerable handle, and those handles nest: a correction you make in chat propagates *down* through the dispatched action into whatever manager call is currently running.
 
 This is the same **interaction loop / background reasoner** split [articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/): they put it *inside the model* (one model trained to interact natively); unify arrives at the same shape at the harness level.
 
@@ -351,7 +350,6 @@ See [tests/README.md](tests/README.md) for the full philosophy: responses are ca
 | `unify/db/expressions.py` | The row expression language behind every filter and sort |
 | `unify/function_manager/primitives/registry.py` | How primitives are assembled into the typed API surface |
 | `unify/events/event_bus.py` | Typed event backbone |
-| `unify/memory_manager/memory_manager.py` | Offline consolidation pipeline |
 
 ---
 
