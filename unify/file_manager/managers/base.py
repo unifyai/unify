@@ -1475,7 +1475,8 @@ class BaseFileManager(BaseStateManager):
         -------
         Use this method when the caller already knows which file is relevant
         and wants a focused analysis (e.g., summarise this PDF, extract a key
-        value from a document).
+        value from a document). A file that exists on disk but has not been
+        indexed yet is indexed first, so any readable path works.
 
         For image files (JPEG/PNG), the method bypasses the normal tool‑loop
         pipeline and instead sends the raw image to a vision‑capable model in a

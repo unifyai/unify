@@ -1722,9 +1722,12 @@ class FileManager(BaseFileManager):
                 _parent_chat_context=_parent_chat_context,
             )
 
-        # Check if file is indexed in Unify (not just filesystem existence)
-        # This allows asking about files that were ingested but may not exist on local FS
+        # The answer is read from the index, so a file that is on disk but
+        # not yet indexed is indexed first; a file that is neither is missing.
         storage = self.describe(file_path=file_path)
+        if not storage.indexed_exists and storage.filesystem_exists:
+            self.ingest_files(file_path)
+            storage = self.describe(file_path=file_path)
         if not storage.indexed_exists:
             raise FileNotFoundError(file_path)
         client = new_llm_client()

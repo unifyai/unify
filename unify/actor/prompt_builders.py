@@ -463,8 +463,10 @@ def _build_filesystem_context() -> str:
         - **Outbound**: save files for the user to `{resolved}/Outputs/` and
           include the full path in your final answer; once sent, the file is
           copied to `{resolved}/Attachments/` with a stable attachment ID.
-        - **Stay inside the workspace**: no unrelated system paths
-          (`/tmp`, `/var`).
+        - **Files elsewhere on this machine**: a path the user names outside
+          the workspace is theirs to give you; read it where it is. Write
+          your own outputs into the workspace, never into unrelated system
+          paths (`/tmp`, `/var`).
 
         **When to use the filesystem vs. primitives:** most tasks need no
         local files — the state manager primitives are the primary way to
