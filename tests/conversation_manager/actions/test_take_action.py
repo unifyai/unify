@@ -3,8 +3,8 @@ tests/conversation_manager/test_take_action.py
 ===================================================
 
 Tests that verify ConversationManager correctly delegates to ``act`` for
-requests that require the general-purpose Actor (knowledge, tasks, web
-search, guidance, files, combined/research).
+requests that require the general-purpose Actor (knowledge, web search,
+guidance, files, combined/research).
 
 Contact-specific routing (``ask_about_contacts``, ``update_contacts``) and
 transcript-specific routing (``query_past_transcripts``) are tested in their
@@ -21,10 +21,8 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
-    EmailReceived,
-    UnifyMessageReceived,
     ActorHandleStarted,
+    UnifyMessageReceived,
 )
 
 pytestmark = pytest.mark.eval
@@ -48,7 +46,7 @@ async def test_knowledge_query_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What are our office hours again?",
         ),
@@ -76,7 +74,7 @@ async def test_knowledge_about_product_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="A customer is asking about Tesla warranty. What do we have on file?",
         ),
@@ -104,7 +102,7 @@ async def test_store_knowledge_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Make a note that our refund window is 30 days for unopened items.",
         ),
@@ -114,95 +112,6 @@ async def test_store_knowledge_triggers_act(initialized_cm):
         result,
         ActorHandleStarted,
         "Storing knowledge should trigger act",
-        cm=cm,
-    )
-
-    # Efficiency assertions at end
-    assert_efficient(result, 3)
-
-
-# ---------------------------------------------------------------------------
-#  Task-related requests -> should trigger act
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_task_query_triggers_act(initialized_cm):
-    """
-    Boss asks about scheduled tasks -> should call act.
-
-    Natural scenario: Boss checking their schedule.
-    """
-    cm = initialized_cm
-
-    result = await cm.step_until_wait(
-        SMSReceived(
-            contact=BOSS,
-            content="What do I have on my plate today?",
-        ),
-    )
-
-    assert_act_triggered(
-        result,
-        ActorHandleStarted,
-        "Task query should trigger act",
-        cm=cm,
-    )
-
-    # Efficiency assertions at end
-    assert_efficient(result, 3)
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_create_task_triggers_act(initialized_cm):
-    """
-    Boss asks to schedule something -> should call act.
-
-    Natural scenario: Boss wants to create a reminder/task.
-    """
-    cm = initialized_cm
-
-    result = await cm.step_until_wait(
-        SMSReceived(
-            contact=BOSS,
-            content="Remind me to call Alice about the Q3 budget tomorrow at 09:00 UTC.",
-        ),
-    )
-
-    assert_act_triggered(
-        result,
-        ActorHandleStarted,
-        "Task creation should trigger act",
-        cm=cm,
-    )
-
-    # Efficiency assertions at end
-    assert_efficient(result, 3)
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_priority_task_query_triggers_act(initialized_cm):
-    """
-    Boss asks about high-priority items -> should call act.
-
-    Natural scenario: Boss wants to focus on urgent matters.
-    """
-    cm = initialized_cm
-
-    result = await cm.step_until_wait(
-        SMSReceived(
-            contact=BOSS,
-            content="What's the most urgent thing I need to deal with?",
-        ),
-    )
-
-    assert_act_triggered(
-        result,
-        ActorHandleStarted,
-        "Priority task query should trigger act",
         cm=cm,
     )
 
@@ -226,7 +135,7 @@ async def test_weather_query_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What's the weather like in Berlin today?",
         ),
@@ -254,7 +163,7 @@ async def test_news_query_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What's happening in the news today? Any major headlines?",
         ),
@@ -282,7 +191,7 @@ async def test_current_events_query_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Any notable AI announcements this week I should know about?",
         ),
@@ -315,7 +224,7 @@ async def test_guidance_query_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="We might have a security incident. What's the protocol?",
         ),
@@ -346,15 +255,9 @@ async def test_find_and_action_triggers_act(initialized_cm):
     Natural scenario: Boss wants information found and acted upon.
     """
     cm = initialized_cm
-    # Mark the file/VM environment ready so the brain doesn't defer with
-    # "files are still loading, I'll check once sync finishes" — that's
-    # the correct prod behavior but it suppresses act() dispatch, which
-    # the assertion below requires.
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Find Bob's latest invoice and let me know if it's been paid.",
         ),
@@ -382,7 +285,7 @@ async def test_research_request_triggers_act(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="I'm meeting with Contoso tomorrow. Can you pull together some background on them?",
         ),
@@ -406,78 +309,33 @@ async def test_research_request_triggers_act(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_email_summarize_attachment_triggers_act_with_filepath(initialized_cm):
-    """
-    Email with attachment + request to summarize -> act should include filepath.
-
-    Natural scenario: Boss receives a document via email and asks the assistant
-    to summarize it. The assistant should call `act` with the filepath of the
-    auto-downloaded attachment so the Actor can access and process the file.
-
-    The rendered email shows: "Attachments: quarterly_report.pdf (id: att-email-1, auto-downloaded to Attachments/att-email-1_quarterly_report.pdf)"
-    so the LLM should know the file location and include it in the act query.
-    """
-    cm = initialized_cm
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
-
-    result = await cm.step_until_wait(
-        EmailReceived(
-            contact=BOSS,
-            subject="Q3 Report",
-            body="Please summarize this PDF for me.",
-            email_id="test_summarize_attachment",
-            attachments=[{"id": "att-email-1", "filename": "quarterly_report.pdf"}],
-        ),
-    )
-
-    # First verify that act was triggered
-    assert_act_triggered(
-        result,
-        ActorHandleStarted,
-        "Summarize attachment request should trigger act",
-        cm=cm,
-    )
-
-    # Now verify the act query includes the filepath
-    actor_events = filter_events_by_type(result.output_events, ActorHandleStarted)
-    assert len(actor_events) >= 1, "Expected at least one ActorHandleStarted event"
-
-    # The query sent to act should include the attachment path
-    act_query = actor_events[0].query.lower()
-    assert "attachments" in act_query and "quarterly_report.pdf" in act_query, (
-        f"Expected act query to include filepath 'Attachments/att-email-1_quarterly_report.pdf', "
-        f"got query: {actor_events[0].query}"
-    )
-
-    # Efficiency assertions at end
-    assert_efficient(result, 3)
-
-
-@pytest.mark.asyncio
-@_handle_project
 async def test_unify_message_summarize_attachment_triggers_act_with_filepath(
     initialized_cm,
 ):
     """
     Unify message with attachment + request to summarize -> act should include filepath.
 
-    Natural scenario: Boss sends a document via Unify console and asks the assistant
-    to summarize it. The assistant should call `act` with the filepath of the
-    auto-downloaded attachment so the Actor can access and process the file.
+    Natural scenario: Boss sends a document through the chat and asks the
+    assistant to summarize it. The assistant should call `act` with the
+    attachment's filepath so the Actor can access and process the file.
 
-    The rendered message shows: "[Attachments: quarterly_report.pdf (id: att-1, auto-downloaded to Attachments/att-1_quarterly_report.pdf)]"
+    The rendered message shows: "[Attachments: quarterly_report.pdf (Attachments/att-1_quarterly_report.pdf)]"
     so the LLM should know the file location and include it in the act query.
     """
     cm = initialized_cm
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
             content="Please summarize this PDF for me.",
-            attachments=[{"id": "att-1", "filename": "quarterly_report.pdf"}],
+            attachments=[
+                {
+                    "filename": "quarterly_report.pdf",
+                    "filepath": "Attachments/att-1_quarterly_report.pdf",
+                    "content_type": "application/pdf",
+                    "size_bytes": 2048,
+                },
+            ],
         ),
     )
 

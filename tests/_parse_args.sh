@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Shared argument parsing for parallel test runners.
-#
-# This file is sourced by parallel_run.sh.
+# Argument parsing for parallel_run.sh.
 #
 # Usage:
 #   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -10,15 +8,12 @@
 #
 # After calling parse_test_args, these variables are populated:
 #   SERIAL, TIMEOUT, SESSION_TIMEOUT, NAME_PATTERN, EVAL_ONLY, SYMBOLIC_ONLY,
-#   DETERMINISTIC_ONLY,
-#   REPEAT_COUNT, OVERWRITE_SCENARIOS, MAX_JOBS, ENV_OVERRIDES[],
-#   TAGS[], PYTEST_EXTRA_ARGS[], PYTEST_COLLECTION_ARGS[],
+#   DETERMINISTIC_ONLY, REPEAT_COUNT, OVERWRITE_SCENARIOS, MAX_JOBS,
+#   ENV_OVERRIDES[], TAGS[], PYTEST_EXTRA_ARGS[], PYTEST_COLLECTION_ARGS[],
 #   POSITIONAL_ARGS[]
 #
 # Additional functions:
-#   resolve_test_paths REPO_ROOT   - Validates paths in POSITIONAL_ARGS, sets RESOLVED_TEST_PATHS[]
-#   reconstruct_parallel_run_args  - Rebuilds args as string (for CI passthrough)
-#   print_help                     - Prints usage (caller can override HELP_SCRIPT_NAME)
+#   print_help   - Prints usage (caller can override HELP_SCRIPT_NAME)
 
 # ---- Detect CPU cores for default MAX_JOBS ----
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -92,6 +87,13 @@ parse_test_args() {
           echo "Error: -e|--env requires KEY=VALUE argument (e.g., --env UNILLM_CACHE=false)." >&2
           return 2
         fi
+        ;;
+      --no-cache)
+        # Shorthand for --env UNILLM_CACHE=false: every LLM call goes to the
+        # provider, so use it to re-evaluate model behaviour, not to "fix" a
+        # failing cached test.
+        ENV_OVERRIDES+=( "UNILLM_CACHE=false" )
+        shift
         ;;
       --eval-only)
         EVAL_ONLY=1
@@ -211,72 +213,6 @@ parse_test_args() {
   return 0
 }
 
-# ---- Resolve and validate test paths ----
-# Takes repo root as argument, reads from POSITIONAL_ARGS, sets RESOLVED_TEST_PATHS.
-# Returns 0 on success, 1 if any path not found.
-resolve_test_paths() {
-  local repo_root="$1"
-  RESOLVED_TEST_PATHS=()
-
-  for path in "${POSITIONAL_ARGS[@]}"; do
-    if [[ -e "$repo_root/$path" ]]; then
-      RESOLVED_TEST_PATHS+=("$path")
-    elif [[ -e "$repo_root/tests/$path" ]]; then
-      RESOLVED_TEST_PATHS+=("tests/$path")
-    else
-      echo "Error: Path not found: $path" >&2
-      echo "  Also tried: tests/$path" >&2
-      echo "  (paths are relative to repo root: $repo_root)" >&2
-      return 1
-    fi
-  done
-
-  return 0
-}
-
-# ---- Reconstruct flags as a string ----
-# Used by parallel_cloud_run.sh to rebuild args for CI passthrough.
-# Does NOT include test paths (those are handled separately).
-# Optional argument: "include-env" to include --env flags in output.
-reconstruct_parallel_run_args() {
-  local include_env=0
-  [[ "${1:-}" == "include-env" ]] && include_env=1
-
-  local args=""
-
-  (( SERIAL )) && args="$args -s"
-  (( TIMEOUT > 0 )) && args="$args --timeout $TIMEOUT"
-  (( SESSION_TIMEOUT > 0 )) && args="$args --session-timeout $SESSION_TIMEOUT"
-  [[ -n "$NAME_PATTERN" ]] && args="$args -m $(printf '%q' "$NAME_PATTERN")"
-  (( EVAL_ONLY )) && args="$args --eval-only"
-  (( SYMBOLIC_ONLY )) && args="$args --symbolic-only"
-  (( DETERMINISTIC_ONLY )) && args="$args --deterministic-only"
-  (( REPEAT_COUNT > 1 )) && args="$args --repeat $REPEAT_COUNT"
-  (( OVERWRITE_SCENARIOS )) && args="$args --overwrite-scenarios"
-  # Note: MAX_JOBS is not passed to CI (CI has its own resource limits)
-
-  for tag in "${TAGS[@]}"; do
-    args="$args --tags $(printf '%q' "$tag")"
-  done
-
-  # Include --env flags if requested
-  if (( include_env )); then
-    for kv in "${ENV_OVERRIDES[@]}"; do
-      args="$args --env $(printf '%q' "$kv")"
-    done
-  fi
-
-  if (( ${#PYTEST_EXTRA_ARGS[@]} > 0 )); then
-    args="$args --"
-    for arg in "${PYTEST_EXTRA_ARGS[@]}"; do
-      args="$args $(printf '%q' "$arg")"
-    done
-  fi
-
-  # Trim leading space
-  echo "${args# }"
-}
-
 # ---- Print help text ----
 # Caller can set HELP_SCRIPT_NAME before calling to customize the script name shown.
 # Caller can set HELP_EXTRA_OPTIONS to add script-specific options to the help.
@@ -285,17 +221,21 @@ print_help() {
   cat << EOF
 Usage: $script_name [options] [targets...]
 
-Run pytest tests in parallel tmux sessions.
+Run pytest tests in parallel tmux sessions against the local SQLite store.
 Always blocks until all tests complete (or timeout).
+
+Each session gets its own store under logs/pytest/<run>/stores/ unless
+UNIFY_STORE_PATH is already set (environment, .env or --env), in which
+case every session shares that store.
 
 Options:
   -t, --timeout N      Abort the whole run if any sessions remain after N seconds
   --session-timeout N  Kill each tmux session's pytest if it exceeds N seconds
-                       (CI defaults to 1800 when unset; prevents one hang from
-                       burning the whole job budget)
+                       (UNIFY_TEST_SESSION_TIMEOUT supplies the default)
   -s, --serial         One session per file (default: one per test)
   -m, --match PATTERN  Filter files by glob pattern
   -e, --env KEY=VALUE  Set environment variable (repeatable)
+  --no-cache           Call the LLM provider for every request (--env UNILLM_CACHE=false)
   -j, --jobs N         Max concurrent sessions (default: CPU cores, currently $DETECTED_CPU_CORES)
   --eval-only          Run only @pytest.mark.eval tests
   --symbolic-only      Run only non-eval tests
@@ -314,7 +254,8 @@ Examples:
   $script_name -s tests/                # Serial mode (per-file)
   $script_name -j 8 tests/              # Limit to 8 concurrent
   $script_name --eval-only tests/       # Only eval tests
-  $script_name -e UNILLM_CACHE=false tests/
+  $script_name --no-cache tests/foo.py  # Fresh LLM inference
+  $script_name -e UNIFY_STORE_PATH=/tmp/shared.sqlite tests/  # One shared store
   $script_name tests/ -- -v --tb=short  # Pass args to pytest
   $script_name tests/ -- -k 'gpt-5'     # Filter by test name pattern
 EOF

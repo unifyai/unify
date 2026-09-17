@@ -170,10 +170,10 @@ class BaseActor(ABC):
 
         - **Retrieval**: Search contact records, query knowledge bases, look up past
           conversations, find calendar events, search the web, retrieve files
-        - **Action**: Send communications, update records, modify spreadsheets, control
-          the desktop/web interface, schedule tasks, create reminders
+        - **Action**: Update records, modify spreadsheets, store knowledge, write and
+          run functions
         - **Combined**: Find information and then act on it (e.g., "find David's email
-          and send him a meeting invite")
+          and add it to the attendees table")
 
         **When to use ``act``:**
 
@@ -192,8 +192,8 @@ class BaseActor(ABC):
 
         Args:
             request: Natural language request specifying what to do. Can be a question
-                ("What is David's email?"), a command ("Send an email to David"), or
-                a combination ("Find David's email and send him a reminder").
+                ("What is David's email?"), a command ("Update David's phone number"), or
+                a combination ("Find David's email and add him to the attendees table").
             guidelines: Optional meta-guidance on *how* to approach the task, as
                 opposed to *what* to do. Examples: "don't install new python packages",
                 "use sub-agents for solving this task", "prefer simple solutions over

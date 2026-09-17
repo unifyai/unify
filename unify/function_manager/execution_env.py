@@ -221,8 +221,8 @@ def create_execution_globals() -> Dict[str, Any]:
       under an already-running event loop (offline Jobs / actor sandboxes)
 
     All primitive imports and instantiations are lazy - only the primitives
-    actually used by a function are loaded. This means functions that don't
-    need computer use won't import web/desktop infrastructure.
+    actually used by a function are loaded, so a function pays only for the
+    managers it touches.
 
     Steerable Functions
     -------------------

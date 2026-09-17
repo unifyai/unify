@@ -59,7 +59,7 @@ def filter_impl(
         When True, returns only log IDs instead of full row data.
     include_ids : bool, default False
         When True (and ``return_ids_only`` is False), each row dict includes
-        ``_log_id`` with the Orchestra log id. Mutually exclusive with
+        ``_log_id`` with the store's row id. Mutually exclusive with
         ``return_ids_only``.
 
     Returns

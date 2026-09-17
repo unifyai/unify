@@ -58,8 +58,7 @@ def test_update_tools_docstrings():
         doc = (getattr(fn, "__doc__", None) or "").strip()
         schema = getattr(fn, "__annotations__", {})
         assert "destination" in schema
-        assert "team:<id>" in doc
-        assert "Accessible shared teams" in doc
+        assert '``"personal"``' in doc
 
 
 def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:

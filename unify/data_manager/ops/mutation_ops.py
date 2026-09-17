@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from unify import db
-from unify.db import StoreError
+from unify.db import DuplicateKey, StoreError
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.authorship import (
     is_shared_authored_context,
@@ -27,7 +27,6 @@ def insert_rows_impl(
     context: str,
     rows: List[Dict[str, Any]],
     *,
-    batched: bool = True,
     on_duplicate: Optional[str] = None,
     ignore_duplicate_composite_key_errors: bool = False,
 ) -> List[int]:
@@ -37,7 +36,7 @@ def insert_rows_impl(
     on the context), not at insert time.  Use ``create_table(unique_keys=…)``
     or ``ingest(unique_keys=…)`` to declare which columns form the natural
     key; the backend rejects duplicate keys server-side unless
-    ``on_duplicate="skip"`` asks Orchestra to insert only non-conflicting
+    ``on_duplicate="skip"`` asks the store to insert only non-conflicting
     rows.
 
     Parameters
@@ -46,13 +45,11 @@ def insert_rows_impl(
         Fully-qualified Unify context path.
     rows : list[dict[str, Any]]
         Row dictionaries to insert.
-    batched : bool, default True
-        When True, uses batched log creation for better performance.
     on_duplicate : str | None, default None
-        Forwarded to Orchestra ``create_logs``. ``"skip"`` inserts
+        Forwarded to the store's ``create_logs``. ``"skip"`` inserts
         non-conflicting rows and reports collisions in the response
         ``failed`` list (returned ids are successful inserts only).
-        ``"error"`` / ``None`` keep Orchestra's reject-on-collision default.
+        ``"error"`` / ``None`` keep the store's reject-on-collision default.
         Only applied on the batched path.
     ignore_duplicate_composite_key_errors : bool, default False
         Treat backend duplicate-key rejections as already-committed rows.
@@ -69,10 +66,9 @@ def insert_rows_impl(
         return []
 
     logger.debug(
-        "Inserting %d rows into %s (batched=%s, on_duplicate=%s)",
+        "Inserting %d rows into %s (on_duplicate=%s)",
         len(rows),
         context,
-        batched,
         on_duplicate,
     )
 
@@ -81,16 +77,12 @@ def insert_rows_impl(
             "context": context,
             "entries": rows,
             "stamp_authoring": is_shared_authored_context(context),
-            "batched": batched,
         }
         if on_duplicate is not None:
             create_kwargs["on_duplicate"] = on_duplicate
         result = unify_create_logs(**create_kwargs)
     except StoreError as exc:
-        if (
-            ignore_duplicate_composite_key_errors
-            and "Duplicate composite key already exists" in str(exc)
-        ):
+        if ignore_duplicate_composite_key_errors and isinstance(exc, DuplicateKey):
             logger.info(
                 "Treating duplicate composite key response as idempotent replay "
                 "for %d rows in %s",
@@ -116,7 +108,7 @@ def update_rows_impl(
     Implementation of update_rows operation.
 
     Updates rows matching a filter expression and/or specific log IDs.
-    Uses in-place Orchestra updates so log ids stay stable.
+    Updates rows in place so log ids stay stable.
 
     Parameters
     ----------
@@ -131,7 +123,7 @@ def update_rows_impl(
         those rows only.
     overwrite : bool, default False
         When False (default), merge ``updates`` into each row's existing
-        entries (filter path) or pass ``updates`` through with Orchestra's
+        entries (filter path) or pass ``updates`` through with the store's
         non-overwrite merge (log_ids path). When True, replace entries with
         ``updates`` for log_ids path; for filter path, still merge then
         write with overwrite=True so unspecified columns are preserved.
@@ -185,8 +177,8 @@ def update_rows_impl(
     if not log_ids_to_update:
         return 0
 
-    # Only the caller's columns are sent. Orchestra applies a partial JSONB
-    # merge, so unspecified columns are preserved server-side — round-tripping
+    # Only the caller's columns are sent. The store applies a partial
+    # merge, so unspecified columns are preserved — round-tripping
     # the whole row here would re-submit every immutable field the row carries
     # (auto-counted identity keys, authorship), and the backend rejects any
     # update naming an immutable field even when its value is unchanged.
@@ -227,7 +219,7 @@ def claim_impl(
     updates: Dict[str, Any],
     limit: int = 1,
 ) -> List[Dict[str, Any]]:
-    """Atomic compare-and-set claim (Orchestra POST /logs/claim)."""
+    """Atomic compare-and-set claim via the store's ``claim_logs``."""
     response = db.claim_logs(
         context=context,
         expect=expect,

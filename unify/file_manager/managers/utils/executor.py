@@ -790,9 +790,9 @@ def fm_process_plan(
 
     This is the worker-side sibling of :func:`fm_process_file`.  While the
     in-process path still calls ``adapt_parse_result_for_file_manager``
-    against a live ``FileParseResult``, the deployed parse worker has
+    against a live ``FileParseResult``, the parse worker has
     already done all semantic derivation and materialised the heavy
-    artifacts to GCS.  The ingest worker therefore receives an
+    artifacts to the artifact store.  The ingest worker therefore receives an
     ``IngestPlan`` whose content and table rows live behind handles, and
     drives the same shared ``ingest_artifacts`` fanout used in-process.
 

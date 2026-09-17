@@ -2,26 +2,28 @@
 
 ## Getting started
 
-Unify depends on two sibling repositories. Clone all three as siblings:
+Unify depends on one sibling repository, the LLM client `unillm`. Clone both as siblings:
 
 ```bash
 git clone https://github.com/unifyai/unify.git
-git clone https://github.com/unifyai/unisdk.git
 git clone https://github.com/unifyai/unillm.git
 
 cd unify
 pip install uv && uv sync --all-groups
+cp .env.example .env      # add one LLM provider key
 ```
 
-This installs Unify and its sibling dependencies (linked via `[tool.uv.sources]` in `pyproject.toml`).
+This installs Unify and `unillm` (linked via `[tool.uv.sources]` in `pyproject.toml`). Then chat with the assistant:
+
+```bash
+.venv/bin/python -m unify
+```
 
 ## Running tests
 
-Tests use real LLM calls with cached responses. After the first run, cached responses replay instantly.
+Tests use real LLM calls with cached responses. After the first run, cached responses replay instantly. Every test process gets its own SQLite store, so there is nothing to start first.
 
 ```bash
-source .venv/bin/activate
-
 # Run all tests
 tests/parallel_run.sh tests/
 
@@ -32,11 +34,11 @@ tests/parallel_run.sh tests/contact_manager/
 tests/parallel_run.sh tests/contact_manager/test_ask.py::test_name
 ```
 
-Tests require an Orchestra backend, selected via `ORCHESTRA_URL` in `.env`. Point it at the hosted backend (`https://api.unify.ai/v0`, with your `UNIFY_KEY`); a localhost URL instead makes the runner boot a local Orchestra from a sibling checkout, which is an internal development path. See [tests/README.md](tests/README.md) for the full testing philosophy.
+See [tests/README.md](tests/README.md) for the full testing philosophy.
 
 ## Code style
 
-We use `black` (pinned to a single version in `.pre-commit-config.yaml`) for formatting and `autoflake` for unused import removal, enforced by pre-commit hooks. Install the hooks once per checkout so they run automatically on every commit — CI runs the same pinned hooks:
+We use `black` (pinned in the `lint` dependency group) for formatting and `autoflake` for unused import removal, enforced by pre-commit hooks. Install the hooks once per checkout so they run automatically on every commit:
 
 ```bash
 ./scripts/install-git-hooks.sh   # or: pre-commit install
@@ -47,10 +49,6 @@ Run them manually any time:
 ```bash
 pre-commit run --all-files
 ```
-
-## CI on forks
-
-The full test suite requires org-level secrets (API keys, backend access). Fork PRs run lint checks only. A maintainer will trigger the full test suite on your PR after review.
 
 ## Pull requests
 
@@ -90,15 +88,12 @@ For PRs that touch a specific subsystem, the table below is a rough guide to who
 | Area | Reviewers (rough) |
 |---|---|
 | `unify/actor/` (CodeAct Actor) | @YushaArif99, @djl11 |
-| `unify/conversation_manager/` (slow + fast brain) | @djl11, @vedpatwardhan, @juliagsy |
-| `unify/task_scheduler/` | @djl11 |
+| `unify/conversation_manager/` (the interaction loop) | @djl11, @vedpatwardhan, @juliagsy |
+| `unify/db/` (the local store) | @djl11 |
 | `unify/contact_manager/`, `unify/knowledge_manager/`, `unify/transcript_manager/` | @djl11 |
 | `unify/file_manager/` (parsing) | @hmahmood24, @djl11 |
 | `unify/function_manager/`, `unify/web_searcher/` | @djl11, @YushaArif99, @juliagsy |
 | `unify/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
-| `unify/gateway/`, `unify/comms/` | @djl11 |
-| `agent-service/` (TypeScript browser-use service) | @juliagsy, @YushaArif99 |
-| `scripts/install.sh`, `scripts/local.sh` | @djl11 |
 | `tests/conftest.py`, `tests/parallel_run.sh` | @djl11, @CatB1t |
 
 ## Questions?

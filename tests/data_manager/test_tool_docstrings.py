@@ -23,9 +23,5 @@ def test_data_write_tools_expose_destination_guidance():
         doc = (getattr(BaseDataManager, method_name).__doc__ or "").strip()
 
         assert "destination : str | None" in doc
-        assert "Accessible" in doc
-        assert "shared" in doc
-        assert "teams" in doc
-        assert "team:<id>" in doc
         assert "personal" in doc
-        assert "request_clarification" in doc
+        assert "team:" not in doc

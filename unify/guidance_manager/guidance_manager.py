@@ -61,13 +61,8 @@ logger = logging.getLogger(__name__)
 # preview and the full text is fetched per entry via ``get_guidance``.
 GUIDANCE_PREVIEW_CHARS = 2000
 GUIDANCE_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where this guidance lives. Pass ``"personal"`` (the default) for private
-    working preferences and individual reminders. Pass ``"team:<id>"`` for
-    team-level guidance every member of the team should follow: shared
-    response style, team-wide do/don't rules, and operational SOPs the team
-    agrees on. See the *Accessible shared teams* block in your system prompt
-    for available teams and descriptions. Pick personal when in doubt; call
-    ``request_clarification`` when the right audience is unclear."""
+    Where this guidance lives. Only the personal root exists: pass
+    ``"personal"`` or leave it ``None``."""
 
 
 class GuidanceManager(BaseGuidanceManager):
@@ -1243,12 +1238,11 @@ class GuidanceManager(BaseGuidanceManager):
 
             # A caller that pre-built the name map (the deployment
             # reconcile) stays authoritative, including an empty map. A
-            # caller that didn't — a workflow install fanning out through
-            # the surface registry — gets names resolved against the
-            # functions actually readable right now, so a guidance row's
-            # ``function_names`` links survive regardless of who drove the
-            # sync. Without this, workflow guidance planted with every
-            # link silently dropped.
+            # caller that didn't — another source syncing its own guidance
+            # — gets names resolved against the functions actually readable
+            # right now, so a guidance row's ``function_names`` links survive
+            # regardless of who drove the sync. Without this, guidance from
+            # such a source landed with every link silently dropped.
             if function_name_to_id is None and any(
                 (row or {}).get("function_names") for row in source_guidance.values()
             ):

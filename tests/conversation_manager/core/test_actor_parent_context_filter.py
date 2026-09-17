@@ -7,19 +7,6 @@ from unify.conversation_manager.domains.brain_action_tools import (
 )
 
 
-def test_filter_cm_state_strips_onboarding_completion_tool_lines() -> None:
-    snapshot = {
-        "content": (
-            "[notification] integration_demo_chip_requested\n"
-            "After the brief, call set_onboarding_task_state(step_id, True).\n"
-            "Use connected app tools now."
-        ),
-    }
-    filtered = _filter_cm_state_for_actor(snapshot)
-    assert "set_onboarding_task_state" not in filtered["content"]
-    assert "Use connected app tools now." in filtered["content"]
-
-
 def test_filter_cm_state_strips_completed_action_steering_tools() -> None:
     snapshot = {
         "content": (
@@ -49,24 +36,35 @@ def test_filter_cm_state_strips_completed_action_steering_tools() -> None:
     assert "User: please continue" in content
 
 
-def test_filter_cm_state_strips_steering_tools_in_multimodal_parts() -> None:
+def test_filter_cm_state_strips_in_flight_actions_pane() -> None:
     snapshot = {
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    "<completed_actions>\n"
-                    "<steering_tools>\n"
-                    "  - ask_done_1: Ask about this completed action\n"
-                    "</steering_tools>\n"
-                    "</completed_actions>"
-                ),
-            },
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,abc"}},
-        ],
+        "role": "user",
+        "content": (
+            "<notifications>\n</notifications>\n\n"
+            "<in_flight_actions>\n"
+            "<action id='1' short_name='search_web' status='executing' type='act'>\n"
+            "<original_request>Search the web for X</original_request>\n"
+            "<steering_tools>\n"
+            "  - stop_search_web__1: Stop this task\n"
+            "</steering_tools>\n"
+            "</action>\n"
+            "</in_flight_actions>\n\n"
+            "<active_conversations>\n"
+            "User: please continue\n"
+            "</active_conversations>"
+        ),
+        "_cm_state_snapshot": True,
     }
     filtered = _filter_cm_state_for_actor(snapshot)
-    text_part = filtered["content"][0]
-    assert "<steering_tools>" not in text_part["text"]
-    assert "ask_done_1" not in text_part["text"]
-    assert filtered["content"][1]["type"] == "image_url"
+    content = filtered["content"]
+    assert "<in_flight_actions>" not in content
+    assert "stop_search_web__1" not in content
+    assert "<notifications>" in content
+    assert "User: please continue" in content
+    assert filtered["_cm_state_snapshot"] is True
+    assert snapshot["content"].startswith("<notifications>")
+
+
+def test_filter_cm_state_passes_empty_snapshot_through() -> None:
+    assert _filter_cm_state_for_actor({}) == {}
+    assert _filter_cm_state_for_actor({"content": ""}) == {"content": ""}

@@ -8,8 +8,7 @@ These tests verify that the ConversationManager maintains context across
 multiple user messages - i.e., the assistant can recall information from
 earlier turns in the conversation.
 
-Unlike test_comms.py (single-turn: one message in, one response out),
-these tests send multiple messages and verify the assistant reasons
+Unlike single-turn tests (one message in, one response out), these tests send multiple messages and verify the assistant reasons
 over the full conversation history.
 """
 
@@ -22,8 +21,6 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import TEST_CONTACTS
 from unify.conversation_manager.events import (
-    SMSReceived,
-    SMSSent,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
@@ -32,7 +29,7 @@ pytestmark = pytest.mark.eval
 
 
 # ---------------------------------------------------------------------------
-#  Multi-turn tests: UnifyMessage
+#  Multi-turn tests
 # ---------------------------------------------------------------------------
 
 
@@ -123,46 +120,4 @@ async def test_unify_message_three_turn_recall(initialized_cm):
         "Assistant should recall location from earlier turns",
         cm=cm,
         result=result3,
-    )
-
-
-# ---------------------------------------------------------------------------
-#  Multi-turn tests: SMS
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_sms_two_turn_recall(initialized_cm):
-    """
-    Two-turn SMS conversation: user gives info, then asks for recall.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
-    # Turn 1: User provides info
-    result1 = await cm.step_until_wait(
-        SMSReceived(
-            contact=contact,
-            content="Remember this code: DELTA-42. Acknowledge please.",
-        ),
-    )
-    msg1 = get_exactly_one(result1.output_events, SMSSent)
-    assert msg1.content
-
-    # Turn 2: User asks for recall
-    result2 = await cm.step_until_wait(
-        SMSReceived(
-            contact=contact,
-            content="What was the code I gave you?",
-        ),
-    )
-    msg2 = get_exactly_one(result2.output_events, SMSSent)
-
-    assert_content_contains(
-        msg2.content,
-        "DELTA-42",
-        "Assistant should recall code from previous turn",
-        cm=cm,
-        result=result2,
     )

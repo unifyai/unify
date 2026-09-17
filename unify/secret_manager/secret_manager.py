@@ -60,13 +60,12 @@ DESTINATION_FILTER_PATTERN = (
 
 class SecretManager(BaseSecretManager):
     """
-    Manage personal and shared credentials without exposing raw values to LLMs.
+    Manage credentials without exposing raw values to LLMs.
 
-    LLM-facing reads merge the assistant's personal vault with every reachable
-    shared team vault. Writes accept a destination and persist to exactly one
-    vault. Runtime credential lookups also read exactly one vault; a missing
-    credential in the requested destination raises instead of falling back to
-    another scope.
+    Every read and write targets the assistant's personal vault. Writes accept
+    a destination and persist to exactly one vault. Runtime credential lookups
+    also read exactly one vault; a missing credential in the requested
+    destination raises instead of falling back to another scope.
     """
 
     class Config:
@@ -162,9 +161,8 @@ class SecretManager(BaseSecretManager):
         return f"{root_context.strip('/')}/{SECRETS_TABLE}"
 
     def _effective_destination(self, destination: str | None) -> str | None:
-        """Resolve implicit task-scoped credential routing."""
-        raw_destination = destination or os.environ.get("TASK_DESTINATION")
-        return ContextRegistry.canonical_destination(raw_destination)
+        """Validate a public destination."""
+        return ContextRegistry.canonical_destination(destination)
 
     def _secret_context_for_destination(self, destination: str | None) -> str:
         """Resolve a public destination into one concrete Secrets context."""
@@ -317,11 +315,11 @@ class SecretManager(BaseSecretManager):
         return _os.path.join(get_local_root(), ".env")
 
     def _sync_dotenv(self) -> None:
-        """Fetch all secrets from the backend and merge into the local .env file.
+        """Fetch all secrets from the store and merge into the local .env file.
 
-        Ensures that secrets added externally (e.g. via the Console UI, which
-        writes directly to Orchestra) are available as environment variables
-        for code executed via ``os.environ``.
+        Ensures that secrets written to the store through any other path are
+        available as environment variables for code executed via
+        ``os.environ``.
         """
         try:
             rows = db.get_logs(context=self._ctx)
@@ -352,8 +350,6 @@ class SecretManager(BaseSecretManager):
         if not os.path.exists(path):
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("")
-
-        self.sync_assistant_secrets_if_stale(force=True, reason="secret_manager_init")
 
     @staticmethod
     def _parse_env_lines(lines: List[str]) -> Dict[str, int]:
@@ -434,8 +430,8 @@ class SecretManager(BaseSecretManager):
         text : str
             Input string that may contain placeholders like "${api_key}".
         destination : str | None, default None
-            Credential vault to read from. Defaults to the active task
-            destination when one is set, otherwise to the personal vault.
+            Credential vault to read from. Only the personal vault exists:
+            pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -511,8 +507,6 @@ class SecretManager(BaseSecretManager):
         _clarification_down_q: Optional[asyncio.Queue[str]] = None,
         _call_id: Optional[str] = None,
     ) -> SteerableToolHandle:
-        self.sync_assistant_secrets_if_stale(force=True, reason="secret_ask")
-
         # First, replace any known raw secret values with placeholders
         try:
             text = await self.to_placeholder(text)
@@ -712,8 +706,8 @@ class SecretManager(BaseSecretManager):
         integration : str
             Secret name to resolve.
         destination : str | None, default None
-            ``"personal"`` or ``"team:<id>"``. ``None`` inherits the active
-            task destination when one is set, otherwise personal.
+            Only the personal vault exists: pass ``"personal"`` or leave it
+            ``None``.
 
         Raises
         ------
@@ -892,7 +886,7 @@ class SecretManager(BaseSecretManager):
         ----------
         filter : str | None, default None
             A Python expression evaluated with column names in scope (e.g.,
-            ``"name == 'unify_key'"``). When None, returns all rows.
+            ``"name == 'openai_api_key'"``). When None, returns all rows.
         offset : int, default 0
             Zero-based index of the first result to include.
         limit : int, default 100
@@ -988,26 +982,9 @@ class SecretManager(BaseSecretManager):
         description : str | None, default None
             Optional human-readable description.
         destination : str | None, default None
-            Where the credential is stored. Pass ``"personal"`` (the default)
-            for credentials only you should use: your own personal API key,
-            your individual OAuth tokens, anything tied to your identity. Pass
-            ``"team:<id>"`` for a team service account or shared credential
-            that every member of the team should be able to use: the team
-            Slack bot token, the shared SendGrid API key, the team's
-            integration service account. Personal credentials never leak into
-            team memory; team credentials never leak into your local ``.env``
-            mirror. The set of available ``team:<id>`` values, each with a
-            name and a description naming the team / domain the credential
-            pool belongs to, is rendered in the *Accessible shared teams*
-            block of your system prompt; read that block before choosing.
-            The privacy floor: when in doubt between personal and a team,
-            pick personal, because sharing a credential is harder to undo than
-            re-sharing later. When confidence is low and the credential would
-            land in a team, call ``request_clarification`` instead of
-            guessing toward the wider audience.
-            When running inside a task, omitting this argument inherits the
-            task destination so task-owned credentials stay with the task's
-            vault.
+            Where the credential is stored. Only the personal vault exists:
+            pass ``"personal"`` or leave it ``None``. Stored credentials are
+            mirrored into the local ``.env`` file.
 
         Returns
         -------
@@ -1073,13 +1050,9 @@ class SecretManager(BaseSecretManager):
         description : str | None, default None
             New description (optional).
         destination : str | None, default None
-            Which copy of the credential to update. Defaults to ``"personal"``
-            (your private credential). Passing ``"team:<id>"`` rotates the
-            shared credential in that team and is visible to every member;
-            pooled subprocesses pick up the new value on next invocation. See
-            the *Accessible shared teams* block in your system prompt for
-            the available teams and their descriptions. Inside a task, an
-            omitted destination inherits the task destination.
+            Which vault holds the credential. Only the personal vault exists:
+            pass ``"personal"`` or leave it ``None``. Pooled subprocesses pick
+            up the new value on next invocation.
 
         Returns
         -------
@@ -1143,12 +1116,10 @@ class SecretManager(BaseSecretManager):
         name : str
             The secret name to remove.
         destination : str | None, default None
-            Which copy of the credential to remove. Defaults to ``"personal"``.
-            Passing ``"team:<id>"`` removes the shared credential from the
-            team for every member, breaking any team integration that depends
-            on it; do not delete a shared credential unless the team decision
-            is to rotate or retire the integration. See the *Accessible shared teams* block in your system prompt. Inside a task, an omitted
-            destination inherits the task destination.
+            Which vault holds the credential. Only the personal vault exists:
+            pass ``"personal"`` or leave it ``None``. Removing a credential
+            breaks any function or integration that depends on it; do not
+            delete one unless the decision is to rotate or retire it.
 
         Returns
         -------

@@ -347,60 +347,8 @@ def test_storage_check_prompt_live_session_framing():
     assert "## Latest Turn Response" in prompt
     assert "## Completed Trajectory" not in prompt
     assert "## Final Result" not in prompt
-    assert "## Recurring Deliverables Without A Task" in prompt
+    assert "## Recurring Deliverables" in prompt
     # Doctrine still precedes the volatile tail.
     assert prompt.index(_STORAGE_WHAT_CAN_BE_STORED[:40]) < prompt.index(
         "## Session Trajectory So Far",
     )
-
-
-def test_recurring_deliverable_doctrine_yields_to_task_entrypoint_review():
-    """A task-bound run reviews with its own entrypoint section; the
-    conversational recurring-deliverable doctrine stays out of that prompt.
-    A default (non-task) review includes it."""
-    trajectory = [{"role": "user", "content": "run the task"}]
-    review_ctx = MagicMock()
-    review_ctx.extensions = {
-        "task_entrypoint_review": {
-            "metadata": {"task_id": 7},
-            "attach_entrypoint": lambda **_: None,
-            "promote_task_offline": lambda: None,
-        },
-    }
-    with (
-        patch(
-            "unify.actor.code_act_actor._build_storage_tools",
-            return_value=({}, [], []),
-        ),
-        patch("unify.actor.code_act_actor.new_llm_client") as mock_client,
-        patch("unify.actor.code_act_actor.start_async_tool_loop"),
-    ):
-        _start_storage_check_loop(
-            trajectory=trajectory,
-            ask_tools={},
-            actor=_mock_actor(),
-            original_result="done",
-            post_run_review_context=review_ctx,
-        )
-        task_prompt = _built_system_prompt(mock_client)
-
-    assert "## Recurring Task Entrypoint Review" in task_prompt
-    assert "## Recurring Deliverables Without A Task" not in task_prompt
-
-    with (
-        patch(
-            "unify.actor.code_act_actor._build_storage_tools",
-            return_value=({}, [], []),
-        ),
-        patch("unify.actor.code_act_actor.new_llm_client") as mock_client,
-        patch("unify.actor.code_act_actor.start_async_tool_loop"),
-    ):
-        _start_storage_check_loop(
-            trajectory=trajectory,
-            ask_tools={},
-            actor=_mock_actor(),
-            original_result="done",
-        )
-        default_prompt = _built_system_prompt(mock_client)
-
-    assert "## Recurring Deliverables Without A Task" in default_prompt

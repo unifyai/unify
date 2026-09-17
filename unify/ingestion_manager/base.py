@@ -110,9 +110,8 @@ class BaseIngestionManager(ABC):
         post_ingest : PostIngestConfig | None
             Derived columns computed once the data is stored.
         destination : str | None
-            Ownership root: ``"personal"`` (the default) or ``"team:<id>"``. The
-            privacy floor is personal — when it is unclear whether something
-            belongs to a team, ask rather than widening the audience.
+            Ownership root. Only the personal root exists: pass
+            ``"personal"`` or leave it ``None``.
 
         Returns
         -------

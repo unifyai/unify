@@ -24,7 +24,7 @@ from tests.conversation_manager.cm_helpers import filter_events_by_type
 from tests.conversation_manager.conftest import BOSS
 from tests.helpers import _handle_project
 from unify.common.async_tool_loop import SteerableToolHandle
-from unify.conversation_manager.events import SMSReceived, SMSSent
+from unify.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
 
 pytestmark = pytest.mark.eval
 
@@ -116,9 +116,9 @@ async def test_contact_lookup_disambiguation_is_not_lossy_and_does_not_loop(
     try:
         _managers_utils.event_broker = cm.cm.event_broker
         result = await cm.step_until_wait(
-            SMSReceived(
+            UnifyMessageReceived(
                 contact=BOSS,
-                content="Text Bob asking if he's free today.",
+                content="Message Bob asking if he's free today.",
             ),
             max_steps=6,  # guard against infinite loops
         )
@@ -136,15 +136,15 @@ async def test_contact_lookup_disambiguation_is_not_lossy_and_does_not_loop(
         f"then ask user and wait. all_tool_calls={cm.all_tool_calls}"
     )
 
-    # We expect at least one SMS back to the boss/user.
-    boss_sms = [
+    # We expect at least one chat message back to the boss/user.
+    boss_messages = [
         e
-        for e in filter_events_by_type(result.output_events, SMSSent)
+        for e in filter_events_by_type(result.output_events, UnifyMessageSent)
         if e.contact.get("contact_id") == BOSS["contact_id"]
     ]
-    assert boss_sms, "Expected an SMSSent response to the boss/user"
+    assert boss_messages, "Expected a UnifyMessageSent response to the boss/user"
     combined = "\n".join(
-        (e.content or "").strip() for e in boss_sms if (e.content or "").strip()
+        (e.content or "").strip() for e in boss_messages if (e.content or "").strip()
     )
 
     # Non-lossy disambiguation: include at least two candidate identifiers.

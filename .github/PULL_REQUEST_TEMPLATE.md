@@ -20,7 +20,7 @@ PRs land on `staging`, not `main`. See CONTRIBUTING.md.
 - [ ] Refactor (no behavior change)
 - [ ] Breaking change (API or data-model change — Unify has zero-backward-compat policy, but please call it out)
 - [ ] Test-only (no source changes)
-- [ ] Docs / chore / CI
+- [ ] Docs / chore
 
 ## Areas touched
 
@@ -28,12 +28,12 @@ PRs land on `staging`, not `main`. See CONTRIBUTING.md.
 
 - [ ] Actor / CodeAct
 - [ ] ConversationManager / slow brain
-- [ ] A specific state manager (Contact / Knowledge / Task / Transcript / Guidance / Function / File / Image / Web / Secret / Blacklist / Data / Memory)
+- [ ] A specific state manager (Contact / Knowledge / Transcript / Guidance / Function / File / Ingestion / Image / Web / Secret / Data / Memory)
 - [ ] Async tool loop (`unify/common/_async_tool/`)
 - [ ] Event bus / observability
-- [ ] Gateway / external comms
+- [ ] The local store (`unify/db/`)
 - [ ] Tests / test infra (`tests/`, `conftest.py`, `parallel_run.sh`)
-- [ ] CI / build / packaging
+- [ ] Build / packaging
 
 ## Test plan
 

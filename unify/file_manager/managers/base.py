@@ -169,19 +169,8 @@ class BaseFileManager(BaseStateManager):
         file_paths : str | list[str]
             Single file path or a list of file paths to process.
         destination : str | None, default None
-            Where the file's metadata row lives. Pass ``"personal"`` (the
-            default) for personal screenshots, private working files, drafts,
-            and anything tied only to your individual working set. Pass
-            ``"team:<id>"`` for shared media artifacts the team needs:
-            operational reference documents, shared media assets, and
-            team-level deliverables. The blob remains in GCS regardless of
-            destination; only the metadata row's destination changes. Read the
-            *Accessible shared teams* block in your system prompt before
-            choosing. The privacy floor is personal: when confidence is low
-            and the file would land in a team, call ``request_clarification``
-            instead of guessing toward the wider audience.
-        **options : Any
-            Pipeline options (forwarded as-is).
+            Where the file's metadata row lives. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1291,13 +1280,8 @@ class BaseFileManager(BaseStateManager):
             New filename (not full path). Must include the file extension.
             Example: "report_2024.pdf", not "/new/path/report.pdf"
         destination : str | None, default None
-            Which FileRecords root contains the file. Pass ``"personal"``
-            (the default) for personal screenshots, private working files, and
-            drafts. Pass ``"team:<id>"`` for shared media artifacts the team
-            needs. Read the *Accessible shared teams* block before choosing;
-            when confidence is low and the file would land in a team, call
-            ``request_clarification`` instead of guessing toward the wider
-            audience.
+            Which FileRecords root contains the file. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1368,13 +1352,8 @@ class BaseFileManager(BaseStateManager):
             Destination directory path. Must be an absolute path to an existing
             directory. Example: "/new/destination/folder"
         destination : str | None, default None
-            Which FileRecords root contains the file. Pass ``"personal"``
-            (the default) for personal screenshots, private working files, and
-            drafts. Pass ``"team:<id>"`` for shared media artifacts the team
-            needs. Read the *Accessible shared teams* block before choosing;
-            when confidence is low and the file would land in a team, call
-            ``request_clarification`` instead of guessing toward the wider
-            audience.
+            Which FileRecords root contains the file. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1441,15 +1420,8 @@ class BaseFileManager(BaseStateManager):
             Either the file_id (int) from FileRecords, or the fully-qualified
             file_path (str) as stored in the index. Use absolute paths for reliability.
         destination : str | None, default None
-            Which FileRecords and Files roots contain the file. Pass
-            ``"personal"`` (the default) for personal screenshots, private
-            working files, and drafts. Pass ``"team:<id>"`` for shared media
-            artifacts the team needs. Deleting a shared file metadata row
-            changes what every member of that team can discover. Read the
-            *Accessible shared teams* block before choosing; when confidence
-            is low and the file would land in a team, call
-            ``request_clarification`` instead of guessing toward the wider
-            audience.
+            Which FileRecords and Files roots contain the file. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1578,13 +1550,8 @@ class BaseFileManager(BaseStateManager):
             The file identifier/path as used in FileRecords.file_path.
             Use absolute paths for reliability.
         destination : str | None, default None
-            Which FileRecords and Files roots contain the file. Pass
-            ``"personal"`` (the default) for personal screenshots, private
-            working files, and drafts. Pass ``"team:<id>"`` for shared media
-            artifacts the team needs. Read the *Accessible shared teams*
-            block before choosing; when confidence is low and the file would
-            land in a team, call ``request_clarification`` instead of guessing
-            toward the wider audience.
+            Which FileRecords and Files roots contain the file. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1725,11 +1692,6 @@ BaseFileManager.clear.__doc__ = CLEAR_METHOD_DOCSTRING + """
     Parameters
     ----------
     destination : str | None, default None
-        Which FileRecords and Files roots to clear. Pass ``"personal"`` (the
-        default) for personal screenshots, private working files, and drafts.
-        Pass ``"team:<id>"`` for shared media artifacts the team needs.
-        Clearing a team removes metadata visible to every member of that
-        team. Read the *Accessible shared teams* block before choosing; when
-        confidence is low and the file data would be cleared from a team, call
-        ``request_clarification`` instead of guessing toward the wider audience.
+        Which FileRecords and Files roots to clear. Only the personal root
+        exists: pass ``"personal"`` or leave it ``None``.
     """

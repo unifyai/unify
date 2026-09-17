@@ -125,7 +125,7 @@ class AttemptState(BaseModel):
     the lease behind the work is still being renewed, which is the only fact that
     distinguishes "working, be patient" from "dead, take it over".
 
-    Deliberately carries no worker or pod identity. ``attempt_id`` is an opaque
+    Deliberately carries no worker or process identity. ``attempt_id`` is an opaque
     handle the engine generates; naming the machine holding a lease would widen
     what a prompt injection can reach for no diagnostic gain, since the
     actionable question is only whether takeover is safe.
@@ -313,7 +313,7 @@ class IngestionRunRecord(AuthoredRow):
     # checkpoint against.
     declared_rows: Optional[int] = None
 
-    # Concrete context paths this run wrote. The reason a canvas can be built over
+    # Concrete context paths this run wrote. The reason a later query can read
     # ingested files without anyone hardcoding the storage layout: the run says
     # where its output went.
     contexts: List[str] = Field(default_factory=list)

@@ -641,6 +641,10 @@ class TranscriptManager(BaseTranscriptManager):
 
         return created_messages
 
+    @functools.wraps(BaseTranscriptManager.join_published, updated=())
+    def join_published(self) -> None:
+        """Messages are written synchronously, so there is nothing to drain."""
+
     @staticmethod
     def build_plain_transcript(
         messages: list[dict],
@@ -1095,12 +1099,12 @@ class TranscriptManager(BaseTranscriptManager):
         *,
         destination: str | None = None,
     ) -> int | None:
-        """Look up transcript message_id by unified chat-store message id.
+        """Look up transcript message_id by chat message id.
 
-        Mirrored Console chat rows carry ``metadata.chat_message_id`` — the
-        id of the message in Orchestra's unified chat store — so store-scoped
-        events (e.g. reactions) can be mapped back to this assistant's own
-        Transcripts mirror.
+        Transcript rows mirrored from the chat carry ``metadata.chat_message_id``
+        — the id of the message in the chat interface — so chat-scoped events
+        (e.g. reactions) can be mapped back to this assistant's own Transcripts
+        mirror.
         """
         try:
             context = self._transcripts_context_for_destination(destination)
@@ -1419,8 +1423,7 @@ class TranscriptManager(BaseTranscriptManager):
         not carry -- including the identifiers needed to resolve the exchange in
         the first place. Keys present in ``metadata`` win over stored values.
 
-        ``destination`` must name the root the exchange was authored in, which
-        for a shared assistant is a team root rather than the manager's home.
+        ``destination`` must name the root the exchange was authored in.
         A miss raises: the id is root-local, so a write that cannot find its
         exchange has been pointed at the wrong root, and inventing a row there
         would silently strand the metadata on an exchange nothing reads.

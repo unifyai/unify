@@ -171,7 +171,7 @@ def lower_to_ingest_plan(
     1. Build per-table ``TableInputHandle`` objects via the shared
        :func:`unify.common.pipeline.transport.build_table_handles` helper.
        When the store is provided, inline rows are materialised into
-       GCS-backed ``ObjectStoreArtifactHandle`` so the ingest worker
+       ``ObjectStoreArtifactHandle`` artifacts so the ingest worker
        streams rows out-of-band.
     2. Run ``lower_graph_to_content_rows`` against the document graph and
        materialise the resulting ``FileContentRow`` stream via

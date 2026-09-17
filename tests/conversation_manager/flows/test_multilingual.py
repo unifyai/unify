@@ -24,10 +24,6 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import TEST_CONTACTS, BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
-    SMSSent,
-    EmailReceived,
-    EmailSent,
     UnifyMessageReceived,
     UnifyMessageSent,
     ActorHandleStarted,
@@ -261,12 +257,12 @@ def _is_english(text: str) -> bool:
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_spanish_sms_reply_in_spanish(initialized_cm):
-    """Alice texts in Spanish -> assistant replies in Spanish."""
+async def test_spanish_message_reply_in_spanish(initialized_cm):
+    """Alice writes in Spanish -> assistant replies in Spanish."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "¡Hola! Muchas gracias por tu ayuda ayer, fue muy útil. "
@@ -275,37 +271,10 @@ async def test_spanish_sms_reply_in_spanish(initialized_cm):
         ),
     )
 
-    sms = get_exactly_one(result.output_events, SMSSent)
+    msg = get_exactly_one(result.output_events, UnifyMessageSent)
     assert _has_spanish(
-        sms.content,
-    ), f"Expected Spanish reply to Spanish-speaking Alice, got: {sms.content}"
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_french_email_reply_in_french(initialized_cm):
-    """Alice emails in French -> assistant replies in French."""
-    cm = initialized_cm
-
-    result = await cm.step_until_wait(
-        EmailReceived(
-            contact=ALICE,
-            subject="Remerciements",
-            body=(
-                "Bonjour,\n\n"
-                "Je voulais simplement vous remercier pour votre aide "
-                "la semaine dernière. Tout s'est très bien passé grâce "
-                "à vous.\n\n"
-                "Bonne journée !"
-            ),
-            email_id="french_email_1",
-        ),
-    )
-
-    email = get_exactly_one(result.output_events, EmailSent)
-    assert _has_french(
-        email.body,
-    ), f"Expected French reply to French-speaking Alice, got: {email.body}"
+        msg.content,
+    ), f"Expected Spanish reply to Spanish-speaking Alice, got: {msg.content}"
 
 
 @pytest.mark.asyncio
@@ -332,12 +301,12 @@ async def test_japanese_unify_message_reply_in_japanese(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_arabic_sms_reply_in_arabic(initialized_cm):
-    """Alice texts in Arabic -> reply contains Arabic script."""
+async def test_arabic_message_reply_in_arabic(initialized_cm):
+    """Alice writes in Arabic -> reply contains Arabic script."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "مرحبا! شكراً جزيلاً على مساعدتك بالأمس. "
@@ -346,10 +315,10 @@ async def test_arabic_sms_reply_in_arabic(initialized_cm):
         ),
     )
 
-    sms = get_exactly_one(result.output_events, SMSSent)
+    msg = get_exactly_one(result.output_events, UnifyMessageSent)
     assert _has_arabic(
-        sms.content,
-    ), f"Expected Arabic reply to Arabic-speaking Alice, got: {sms.content}"
+        msg.content,
+    ), f"Expected Arabic reply to Arabic-speaking Alice, got: {msg.content}"
 
 
 # =====================================================================
@@ -375,7 +344,7 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
 
     # Alice sends a Spanish informational message (no action required)
     result_alice = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "Hola, solo quería avisarte que David me pidió que te "
@@ -384,13 +353,11 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
         ),
     )
 
-    # Boss gives instruction in Spanish -> triggers contact lookup / email work
+    # Boss gives instruction in Spanish -> triggers contact lookup / messaging work
     result_boss = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content=(
-                "Envíale un correo electrónico a David sobre lo que " "mencionó Alice"
-            ),
+            content="Envíale un mensaje a David sobre lo que mencionó Alice",
         ),
     )
 
@@ -418,7 +385,7 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
     """
     Boss gives instructions in Japanese -> act query must still be English.
 
-    The boss speaks Japanese and asks to email an unknown person (David).
+    The boss speaks Japanese and asks to message an unknown person (David).
     Even though the entire conversation is in Japanese, the act query
     must be in English with no CJK character leakage.
     """
@@ -437,9 +404,9 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
 
     # Boss gives instruction in Japanese -> triggers act for unknown David
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content="アリスが言っていた件について、デビッドにメールを送ってください",
+            content="アリスが言っていた件について、デビッドにメッセージを送ってください",
         ),
     )
 
@@ -478,7 +445,7 @@ async def test_relay_to_bob_in_english_despite_spanish_source(initialized_cm):
 
     # Alice sends Spanish informational message (no action needed)
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "¡Hola! Solo quería contarte que la cena del viernes será "
@@ -491,7 +458,7 @@ async def test_relay_to_bob_in_english_despite_spanish_source(initialized_cm):
     # without mentioning the dinner — we don't want the model to pre-relay
     # Alice's info before the boss asks)
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOB,
             content="Hey, just checking in. Hope you're having a good day!",
         ),
@@ -499,20 +466,22 @@ async def test_relay_to_bob_in_english_despite_spanish_source(initialized_cm):
 
     # Boss asks to relay Alice's dinner info to Bob (explicit send instruction)
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content="Send Bob a text with what Alice said about the Friday dinner",
+            content="Send Bob a message with what Alice said about the Friday dinner",
         ),
     )
 
-    sms_events = filter_events_by_type(result.output_events, SMSSent)
-    bob_sms = [s for s in sms_events if s.contact["contact_id"] == BOB["contact_id"]]
-    assert len(bob_sms) >= 1, (
-        f"Expected SMS to Bob, got SMS to: "
-        f"{[s.contact['contact_id'] for s in sms_events]}"
+    sent_events = filter_events_by_type(result.output_events, UnifyMessageSent)
+    bob_messages = [
+        s for s in sent_events if s.contact["contact_id"] == BOB["contact_id"]
+    ]
+    assert len(bob_messages) >= 1, (
+        f"Expected a message to Bob, got messages to: "
+        f"{[s.contact['contact_id'] for s in sent_events]}"
     )
 
-    bob_msg = bob_sms[0].content
+    bob_msg = bob_messages[0].content
     assert _is_english(
         bob_msg,
     ), f"Message to English-speaking Bob should be in English, got: {bob_msg}"
@@ -531,7 +500,7 @@ async def test_boss_gets_english_summary_of_spanish_message(initialized_cm):
 
     # Alice sends Spanish informational message (no action needed)
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "Buenos días. Solo quería informarle que el informe trimestral "
@@ -542,20 +511,22 @@ async def test_boss_gets_english_summary_of_spanish_message(initialized_cm):
 
     # Boss asks about Alice's message
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What did Alice just say?",
         ),
     )
 
-    sms_events = filter_events_by_type(result.output_events, SMSSent)
-    boss_sms = [s for s in sms_events if s.contact["contact_id"] == BOSS["contact_id"]]
-    assert len(boss_sms) >= 1, (
-        f"Expected SMS reply to boss, got SMS to: "
-        f"{[s.contact['contact_id'] for s in sms_events]}"
+    sent_events = filter_events_by_type(result.output_events, UnifyMessageSent)
+    boss_messages = [
+        s for s in sent_events if s.contact["contact_id"] == BOSS["contact_id"]
+    ]
+    assert len(boss_messages) >= 1, (
+        f"Expected a reply to the boss, got messages to: "
+        f"{[s.contact['contact_id'] for s in sent_events]}"
     )
 
-    boss_msg = boss_sms[0].content
+    boss_msg = boss_messages[0].content
     assert _is_english(
         boss_msg,
     ), f"Summary for the boss should be in English, got: {boss_msg}"
@@ -567,7 +538,7 @@ async def test_relay_japanese_content_to_bob_in_english(initialized_cm):
     """
     Alice messages in Japanese, boss relays to Bob -> Bob receives English.
 
-    Non-Latin script makes language leakage especially visible. Bob's SMS
+    Non-Latin script makes language leakage especially visible. Bob's message
     must not contain any Japanese characters.
     """
     cm = initialized_cm
@@ -587,7 +558,7 @@ async def test_relay_japanese_content_to_bob_in_english(initialized_cm):
     # without mentioning the dinner — we don't want the model to pre-relay
     # Alice's info before the boss asks)
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOB,
             content="Hey, just wanted to say hi. Hope your week is going well!",
         ),
@@ -595,20 +566,22 @@ async def test_relay_japanese_content_to_bob_in_english(initialized_cm):
 
     # Boss relays (explicit send instruction)
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content="Send Bob a text with what Alice said about Friday dinner",
+            content="Send Bob a message with what Alice said about Friday dinner",
         ),
     )
 
-    sms_events = filter_events_by_type(result.output_events, SMSSent)
-    bob_sms = [s for s in sms_events if s.contact["contact_id"] == BOB["contact_id"]]
-    assert len(bob_sms) >= 1, (
-        f"Expected SMS to Bob, got SMS to: "
-        f"{[s.contact['contact_id'] for s in sms_events]}"
+    sent_events = filter_events_by_type(result.output_events, UnifyMessageSent)
+    bob_messages = [
+        s for s in sent_events if s.contact["contact_id"] == BOB["contact_id"]
+    ]
+    assert len(bob_messages) >= 1, (
+        f"Expected a message to Bob, got messages to: "
+        f"{[s.contact['contact_id'] for s in sent_events]}"
     )
 
-    bob_msg = bob_sms[0].content
+    bob_msg = bob_messages[0].content
     assert not _has_japanese(
         bob_msg,
     ), f"Message to Bob must not contain Japanese, got: {bob_msg}"
@@ -631,7 +604,7 @@ async def test_spanish_multi_turn_stays_spanish(initialized_cm):
 
     # Turn 1: simple greeting and thanks
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "¡Hola! Muchas gracias por todo tu trabajo. "
@@ -639,14 +612,14 @@ async def test_spanish_multi_turn_stays_spanish(initialized_cm):
             ),
         ),
     )
-    sms1 = get_exactly_one(result1.output_events, SMSSent)
+    msg1 = get_exactly_one(result1.output_events, UnifyMessageSent)
     assert _has_spanish(
-        sms1.content,
-    ), f"Turn-1 reply should be in Spanish, got: {sms1.content}"
+        msg1.content,
+    ), f"Turn-1 reply should be in Spanish, got: {msg1.content}"
 
     # Turn 2: follow-up thanks and well-wishing
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "¡Qué amable! También quería decirte que todo salió "
@@ -654,10 +627,10 @@ async def test_spanish_multi_turn_stays_spanish(initialized_cm):
             ),
         ),
     )
-    sms2 = get_exactly_one(result2.output_events, SMSSent)
+    msg2 = get_exactly_one(result2.output_events, UnifyMessageSent)
     assert _has_spanish(
-        sms2.content,
-    ), f"Turn-2 reply should be in Spanish, got: {sms2.content}"
+        msg2.content,
+    ), f"Turn-2 reply should be in Spanish, got: {msg2.content}"
 
 
 # =====================================================================
@@ -681,21 +654,21 @@ async def test_two_contacts_different_languages(initialized_cm):
 
     # Alice messages in Spanish (simple thanks — no action needed)
     result_a = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=ALICE,
             content=(
                 "¡Hola! Solo quería darte las gracias por tu ayuda. " "¡Fue genial!"
             ),
         ),
     )
-    alice_sms = get_exactly_one(result_a.output_events, SMSSent)
+    alice_msg = get_exactly_one(result_a.output_events, UnifyMessageSent)
     assert _has_spanish(
-        alice_sms.content,
-    ), f"Reply to Alice should be in Spanish, got: {alice_sms.content}"
+        alice_msg.content,
+    ), f"Reply to Alice should be in Spanish, got: {alice_msg.content}"
 
     # Bob messages in French (simple thanks — no action needed)
     result_b = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOB,
             content=(
                 "Bonjour ! Je voulais vous remercier pour votre aide. "
@@ -703,7 +676,7 @@ async def test_two_contacts_different_languages(initialized_cm):
             ),
         ),
     )
-    bob_sms = get_exactly_one(result_b.output_events, SMSSent)
+    bob_msg = get_exactly_one(result_b.output_events, UnifyMessageSent)
     assert _has_french(
-        bob_sms.content,
-    ), f"Reply to Bob should be in French, got: {bob_sms.content}"
+        bob_msg.content,
+    ), f"Reply to Bob should be in French, got: {bob_msg.content}"

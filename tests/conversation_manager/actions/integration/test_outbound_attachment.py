@@ -11,7 +11,6 @@ Validates the full production path:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -42,8 +41,6 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     - An LLM judge confirms the image contains a red square.
     """
     cm = initialized_cm_codeact
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
     local_root = Path(get_local_root())
 
     # Ensure Outputs exists even if the actor skips mkdir.
@@ -94,32 +91,16 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     generated_image_path = png_files[0]
 
     # ------------------------------------------------------------------
-    # Step 3: Inject actor result and run CM brain, capturing
-    #         send_unify_message calls to verify attachment_filepath
+    # Step 3: Inject actor result and run CM brain; the outbound message
+    #         should carry the generated file as a local attachment
     # ------------------------------------------------------------------
-    # Mock upload_unify_attachment to return a fake success result so the
-    # attachment flow completes without hitting real infrastructure.
-    fake_upload = AsyncMock(
-        return_value={
-            "id": "fake-attachment-id",
-            "filename": generated_image_path.name,
-            "gs_url": "gs://fake-bucket/fake-path",
-            "content_type": "image/png",
-            "size_bytes": generated_image_path.stat().st_size,
-        },
+    await inject_actor_result(
+        cm,
+        handle_id=handle_id,
+        result=final,
+        success=True,
     )
-
-    with patch(
-        "unify.comms.primitives.comms_utils.upload_unify_attachment",
-        fake_upload,
-    ):
-        await inject_actor_result(
-            cm,
-            handle_id=handle_id,
-            result=final,
-            success=True,
-        )
-        followup_events = await run_cm_until_wait(cm, max_steps=6)
+    followup_events = await run_cm_until_wait(cm, max_steps=6)
 
     # Check for UnifyMessageSent events with attachments
     msg_events = [e for e in followup_events if isinstance(e, UnifyMessageSent)]
@@ -131,7 +112,6 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     )
     assert (
         attachment_events
-        or fake_upload.called
         or generated_image_path.name.lower() in final.lower()
         or ".png" in final.lower()
         or any(
@@ -148,11 +128,10 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     if not attachment_events:
         return
 
-    # Verify upload was called when an attachment was sent
-    assert fake_upload.called, (
-        "Expected upload_unify_attachment to be called, meaning "
-        "send_unify_message received a valid attachment_filepath."
-    )
+    # A sent attachment resolves to a readable local file.
+    attachment = attachment_events[0].attachments[0]
+    assert attachment.get("filepath"), f"Attachment carries no filepath: {attachment}"
+    assert attachment.get("size_bytes", 0) > 0, f"Attachment is empty: {attachment}"
 
     # ------------------------------------------------------------------
     # Step 4: LLM judge — ask a vision model what's in the image

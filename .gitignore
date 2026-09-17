@@ -63,31 +63,16 @@ discord_messages.md
 .cursor/debug.log
 /.cursor/projects/
 /.cursor/plans/
-# ConversationManager sandbox persistent config (project-local)
-.cm_sandbox_config
 # Per-run parse/ingest progress events. The reporter auto-generates these
 # relative to the working directory when no path is configured, so a test run
 # started from the repo root drops them here.
 pipeline_progress_*.jsonl
 # Ignore log contents but keep the README and utility scripts
 logs/*
-deploy/logs/*
 !logs/README.md
-!logs/download_ci_logs.sh
-!logs/ci/
-logs/ci/*
-!logs/ci/.gitkeep
 .repairs_queries/
-# Self-hosted LiveKit Agents Playground (sandbox developer tooling)
-.livekit-playground/
 # Legacy rename leftovers (never re-track)
 droid/
 .cache.ndjson.idx
-# The benchmark suite moved to unifyai/colleague; only the pointer README is
-# tracked here. Local run data may still sit on disk for offline replay, and
-# some of it (agent CLI transcripts, resolved provider config) carries
-# plaintext API keys, so nothing under here is ever re-tracked.
-benchmarks/*/
-
 # Brand assets referenced by the README are tracked.
 !assets/brand/

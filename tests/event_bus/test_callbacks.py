@@ -526,10 +526,9 @@ async def test_time_across_sessions_with_filter() -> None:
 @_handle_project
 async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
     """register_callback must survive Orchestra 404s on freshly created contexts."""
-    from unittest.mock import MagicMock
 
     from unify import db
-    from unify.db import StoreError
+    from unify.db import NotFound
 
     bus = EventBus()
     triggered: list[int] = []
@@ -542,13 +541,10 @@ async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
     def flaky_get_logs(**kwargs):
         context = str(kwargs.get("context", ""))
         if "/Events/ToolLoop" in context or "/Events/_callbacks" in context:
-            resp = MagicMock()
-            resp.status_code = 404
-            resp.text = "Context not found"
-            raise StoreError("http://test", "GET", resp)
+            raise NotFound(f"Context {context} not found")
         return real_get_logs(**kwargs)
 
-    monkeypatch.setattr(unisdk, "get_logs", flaky_get_logs)
+    monkeypatch.setattr(db, "get_logs", flaky_get_logs)
 
     await bus.register_callback(
         event_type="ToolLoop",

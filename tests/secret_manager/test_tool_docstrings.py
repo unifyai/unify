@@ -131,16 +131,7 @@ def test_secret_write_tools_expose_destination_guidance():
         doc = (getattr(fn, "__doc__", None) or "").strip()
 
         assert "destination : str | None" in doc
-        assert "Accessible shared" in doc
-        assert "teams" in doc
-        assert "team:<id>" in doc
-        assert "personal" in doc
-
-    create_doc = (
-        getattr(_unwrap_callable(tools["create_secret"]), "__doc__", None) or ""
-    )
-    assert "sharing a credential is harder to undo" in create_doc
-    assert "request_clarification" in create_doc
+        assert '``"personal"``' in doc
 
 
 @_handle_project

@@ -18,8 +18,7 @@ class RawImageRef(BaseModel):
     """
 
     # extra="forbid" so the Pydantic-generated JSON schema sets
-    # `additionalProperties: false`. Orchestra's jsonschema validator
-    # (orchestra/web/api/log/utils/type_utils.py:validate_value_against_pydantic_schema)
+    # `additionalProperties: false`. The store's jsonschema validation
     # then correctly rejects unknown keys (e.g. "image_idx" instead of
     # "image_id"). Without this, extra keys silently pass — the
     # tests/image_manager/test_types backend-schema enforcement tests

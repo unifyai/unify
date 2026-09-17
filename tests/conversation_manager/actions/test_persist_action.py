@@ -56,7 +56,6 @@ def mock_cm():
     cm.request_llm_run = AsyncMock()
     cm.event_broker = MagicMock()
     cm.event_broker.publish = AsyncMock()
-    cm.call_manager = MagicMock()
     cm.suppress_duplicate_commissioning_tool.return_value = None
     return cm
 
@@ -64,12 +63,7 @@ def mock_cm():
 @pytest.fixture
 def brain_action_tools(mock_cm):
     """ConversationManagerBrainActionTools wired to the mock CM."""
-    with patch(
-        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-    ) as mock_broker:
-        mock_broker.return_value = MagicMock()
-        mock_broker.return_value.publish = AsyncMock()
-        yield ConversationManagerBrainActionTools(mock_cm)
+    return ConversationManagerBrainActionTools(mock_cm)
 
 
 def _make_fake_actor():
@@ -115,7 +109,7 @@ class TestActPersistParameter:
         mock_cm.actor = actor
 
         await brain_action_tools.act(
-            query="Guide onboarding",
+            query="Guide the walkthrough",
             requesting_contact_id=1,
             persist=True,
         )
@@ -243,7 +237,7 @@ class TestActorSessionResponseHandler:
     async def test_response_does_not_create_notification(self, mock_cm):
         """ActorSessionResponse records in handle_actions, no notification pushed."""
         mock_cm.in_flight_actions = {
-            1: {"query": "Onboarding session", "handle_actions": []},
+            1: {"query": "Walkthrough session", "handle_actions": []},
         }
         event = ActorSessionResponse(handle_id=1, content="Screen is ready. What next?")
 
@@ -255,7 +249,7 @@ class TestActorSessionResponseHandler:
     async def test_response_recorded_in_handle_actions(self, mock_cm):
         """ActorSessionResponse is recorded in handle_actions with awaiting_input status."""
         mock_cm.in_flight_actions = {
-            1: {"query": "Onboarding session", "handle_actions": []},
+            1: {"query": "Walkthrough session", "handle_actions": []},
         }
         event = ActorSessionResponse(handle_id=1, content="Ready for step 2")
 
@@ -309,24 +303,9 @@ class TestActorNotificationHandler:
         mock_cm.request_llm_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_notification_silent_in_voice_mode(self, mock_cm):
-        """In voice mode, ActorNotification records progress without waking the
-        slow brain — the fast brain receives progress via channel forwarding."""
-        mock_cm.mode = Mode.CALL
-        mock_cm.in_flight_actions = {
-            1: {"query": "Check something", "handle_actions": []},
-        }
-        event = ActorNotification(handle_id=1, response="Searching the web now.")
-
-        await EventHandler.handle_event(event, mock_cm)
-
-        mock_cm.request_llm_run.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_notification_silent_in_text_mode(self, mock_cm):
-        """In text mode, ActorNotification records progress without waking the
-        slow brain — it picks up accumulated progress on its next legitimate run."""
-        mock_cm.mode = Mode.TEXT
+    async def test_notification_records_without_waking_brain(self, mock_cm):
+        """ActorNotification records progress without waking the slow brain —
+        it picks up accumulated progress on its next legitimate run."""
         mock_cm.in_flight_actions = {
             1: {"query": "Check something", "handle_actions": []},
         }
@@ -354,7 +333,7 @@ class TestPersistentActionRendering:
         in_flight = {
             0: {
                 "handle": MagicMock(),
-                "query": "Guided onboarding",
+                "query": "Guided walkthrough",
                 "persist": True,
                 "handle_actions": [],
             },

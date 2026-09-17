@@ -2,11 +2,11 @@
 
 This module implements the stratified-sampling type determination and
 per-cell coercion pipeline that runs **before** rows are chunked and
-sent to Orchestra. The goal is to:
+written to the store. The goal is to:
 
 1. Determine the "best" column type from a representative sample
    (avoiding a full scan on very large datasets).
-2. Coerce non-conforming cell values to ``None`` so that Orchestra's
+2. Coerce non-conforming cell values to ``None`` so that the store's
    strict type enforcement never rejects individual rows.
 3. Always coerce empty strings ``""`` to ``None`` (universal rule).
 
@@ -223,7 +223,7 @@ def _build_validators() -> Dict[str, Any]:
 def coerce_value(value: Any, target_type: str) -> Any:
     """Return *value* unchanged if it conforms to *target_type*, else ``None``.
 
-    ``None`` input always passes through (NoneType is weak in Orchestra).
+    ``None`` input always passes through (``None`` is accepted by every column type).
     """
     if value is None:
         return None

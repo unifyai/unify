@@ -26,20 +26,19 @@ File-based span export:
     When UNIFY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
     by trace_id: {UNIFY_OTEL_LOG_DIR}/{trace_id}.jsonl
 
-    This enables full-stack trace correlation across processes. Orchestra
-    (running in a separate FastAPI process) receives the traceparent header
-    from Unify HTTP calls and can write its spans to the same directory.
+    This enables trace correlation across processes: any subprocess that
+    receives the traceparent header can write its spans to the same
+    directory.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from unify.settings import SETTINGS
 
@@ -218,9 +217,6 @@ logging.getLogger("RapidOCR").addFilter(
 _FILE_ONLY_LOGGERS = [
     logging.getLogger(name)
     for name in (
-        "livekit",
-        "livekit.agents",
-        "livekit.plugins",
         "PIL",
         "py.warnings",
     )
@@ -242,58 +238,10 @@ class _MemoryFileFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         mem = _get_memory_tag()
         base = super().format(record)
-        if record.name.startswith("livekit.plugins.elevenlabs"):
-            elevenlabs_extra = _format_elevenlabs_extra(record)
-            if elevenlabs_extra:
-                base = f"{base} {elevenlabs_extra}"
         if mem:
             # Insert memory tag after the log-level field
             return f"{base} {mem}"
         return base
-
-
-def _format_elevenlabs_extra(record: logging.LogRecord) -> str:
-    """Render ElevenLabs provider error metadata hidden in logging ``extra``."""
-
-    fields: dict[str, Any] = {}
-    for key in ("context_id", "error"):
-        value = getattr(record, key, None)
-        if value not in (None, ""):
-            fields[key] = value
-    data = getattr(record, "data", None)
-    if isinstance(data, dict):
-        safe_data = {
-            key: value
-            for key, value in data.items()
-            if key
-            not in {
-                "audio",
-                "alignment",
-                "normalizedAlignment",
-                "normalized_alignment",
-            }
-        }
-        if safe_data:
-            fields["data"] = safe_data
-    if not fields:
-        return ""
-    try:
-        return json.dumps({"elevenlabs": fields}, ensure_ascii=False, default=str)
-    except TypeError:
-        return f"elevenlabs={fields!r}"
-
-
-def _append_elevenlabs_extra(record: logging.LogRecord) -> bool:
-    """Attach ElevenLabs provider metadata before any handler formats the record."""
-
-    extra = _format_elevenlabs_extra(record)
-    if extra and extra not in str(record.msg):
-        record.msg = f"{record.getMessage()} {extra}"
-        record.args = ()
-    return True
-
-
-logging.getLogger("livekit.plugins.elevenlabs").addFilter(_append_elevenlabs_extra)
 
 
 def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:

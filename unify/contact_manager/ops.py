@@ -121,10 +121,10 @@ def _maybe_sync_timezone_to_backend(
     data_store: Any = None,
 ) -> None:
     """
-    Fire-and-forget sync of timezone to backend for system contacts.
+    Fire-and-forget sync of timezone to the session record for system contacts.
 
     - assistant self contact → sync to assistant
-    - boss or other system contact → sync to user via email
+    - boss or other system contact → sync to user
     """
     from .backend_sync import sync_assistant_timezone, sync_user_timezone
 
@@ -141,7 +141,7 @@ def _maybe_sync_timezone_to_backend(
     store = data_store or self._data_store
     context_name = context or self._ctx
 
-    # User or org member - need email and is_system check
+    # User or other system contact - need email and is_system check
     try:
         row = store.get(contact_id)
     except KeyError:
@@ -192,7 +192,7 @@ def _maybe_sync_bio_to_backend(
     store = data_store or self._data_store
     context_name = context or self._ctx
 
-    # User or org member - need email and is_system check
+    # User or other system contact - need email and is_system check
     try:
         row = store.get(contact_id)
     except KeyError:

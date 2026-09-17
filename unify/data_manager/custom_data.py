@@ -253,8 +253,8 @@ def compute_custom_data_hash(
     """Aggregate fingerprint of the tables a source declares and their rows.
 
     Covers the schema as well as the rows, because a table may legitimately
-    declare no rows at all — a workflow ships a table for its own job to
-    fill, and the install has to create it. Hashing rows alone made such a
+    declare no rows at all — a source may ship a table for later writes
+    to fill, and the sync has to create it. Hashing rows alone made such a
     source indistinguishable from an empty one, and both from the "never
     synced" sentinel, so the pass short-circuited and the table was never
     created.

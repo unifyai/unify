@@ -31,8 +31,7 @@ def instrument_basic_primitives_calls(primitives: Primitives) -> list[str]:
 
     For managers that are returned directly (not wrapped by
     ``_AsyncPrimitiveWrapper``), we must avoid mutating the singleton
-    because other code (e.g. ``TaskScheduler.__init__``) introspects
-    the manager's bound methods.  Instead, we insert a thin tracing
+    because other code introspects the manager's bound methods.  Instead, we insert a thin tracing
     proxy into the ``Primitives._managers`` cache so tracing is
     transparent to both the CodeActActor sandbox and the manager itself.
     """

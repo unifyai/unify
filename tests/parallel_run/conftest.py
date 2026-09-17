@@ -27,6 +27,9 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 # Kept outside fixtures/ so directory-discovery meta-tests do not spawn the
 # intentional hang session used only by --session-timeout coverage.
 HANG_FIXTURES_DIR = Path(__file__).parent / "hang_fixtures"
+# Likewise separate: fixtures that open their store and report their
+# environment, used only by the store-plumbing and --no-cache coverage.
+STORE_FIXTURES_DIR = Path(__file__).parent / "store_fixtures"
 PYTEST_LOGS_DIR = REPO_ROOT / "logs" / "pytest"
 
 
@@ -77,6 +80,7 @@ class RunResult:
     stderr: str
     sessions_created: List[str] = field(default_factory=list)
     log_files: List[Path] = field(default_factory=list)
+    log_dir: Optional[Path] = None  # logs/pytest/<subdir>/ for this run
     socket: str = ""  # The tmux socket used for this run
 
     @property
@@ -301,16 +305,14 @@ def _kill_tmux_server(socket: str) -> None:
 
 @pytest.fixture
 def clean_tmux_sessions():
-    """Fixture that provides socket-scoped cleanup for parallel test isolation.
+    """Anchor for socket-scoped cleanup.
 
-    Each ParallelRunner instance has its own unique socket (based on PID), so
-    cleanup is handled by ParallelRunner.cleanup() which only kills sessions
-    from its own socket. This fixture is now a no-op but kept for API compatibility.
-
-    Previously this fixture killed sessions across ALL sockets, which caused
-    cross-test interference when running in parallel with -t.
+    Each ParallelRunner instance has its own unique socket (based on PID), and
+    ParallelRunner.cleanup() kills only the sessions in that socket, so tests
+    running side by side never touch each other's servers. Killing across all
+    sockets here would reintroduce that interference, so this yields and does
+    nothing else.
     """
-    # No-op: cleanup is handled by ParallelRunner.cleanup() which is socket-scoped
     yield
 
 
@@ -321,6 +323,7 @@ class ParallelRunner:
         self.script_path = SCRIPT_PATH
         self.fixtures_dir = FIXTURES_DIR
         self.hang_fixtures_dir = HANG_FIXTURES_DIR
+        self.store_fixtures_dir = STORE_FIXTURES_DIR
         self.repo_root = REPO_ROOT
         self._created_sessions: List[tuple[str, str]] = []  # (socket, session_name)
         # Generate a unique socket name for this runner instance so all runs
@@ -361,10 +364,9 @@ class ParallelRunner:
         # Use a consistent socket name for all runs within this runner instance
         # This enables collision detection between sequential runs in the same test
         run_env["UNIFY_TEST_SOCKET"] = self._socket_name
-        # Skip the heavyweight shared project preparation for nested parallel_run.sh calls.
-        # The fixture tests don't need the real UnityTests project, and the outer test runner
-        # has already prepared it. This dramatically speeds up nested invocations.
-        run_env["UNIFY_SKIP_SHARED_PROJECT_PREP"] = "1"
+        # The outer pytest process owns a store of its own; the nested runner
+        # must hand each spawned session a fresh one rather than inherit it.
+        run_env.pop("UNIFY_STORE_PATH", None)
         if env:
             run_env.update(env)
 
@@ -497,27 +499,20 @@ class ParallelRunner:
                 no_progress_timeout=completion_timeout,
             )
 
-        # Parse log subdir from script output. The script's banner format
-        # has drifted: it used to print "📁 Test logs for THIS run:
-        # logs/pytest/{subdir}/" but now prints "📁 pytest logs:
-        # logs/pytest/{subdir}/" (the broader log block lists multiple
-        # categories: pytest logs, OTel traces, etc.). Accept both forms
-        # so old/new parallel_run.sh layouts both work.
+        # Parse the log subdir from the banner line
+        # "📁 pytest logs:  logs/pytest/{subdir}/".
         log_subdir = None
         log_subdir_match = re.search(
-            r"(?:Test logs for THIS run|pytest logs):\s*logs/pytest/([^/\s]+)/",
+            r"pytest logs:\s*logs/pytest/([^/\s]+)/",
             stdout,
         )
         if log_subdir_match:
             log_subdir = log_subdir_match.group(1)
 
-        # Find new log files in the parsed log directory. Filter out non-
-        # per-test files like duration_summary.txt — parallel_run.sh now
-        # writes that aggregated summary into the same dir as per-test
-        # logs, but tests asserting "log_files == N tests" only care about
-        # per-test outputs. Anything matching our session naming convention
-        # (no extra _aggregator suffixes) counts; everything else (summary
-        # files, stats, etc.) is excluded.
+        # Find new log files in the parsed log directory. parallel_run.sh
+        # writes the aggregated duration_summary.txt into the same dir as the
+        # per-test logs, and tests asserting "log_files == N tests" only care
+        # about per-test outputs, so summary files are excluded.
         _EXCLUDED_LOG_BASENAMES = frozenset(
             {
                 "duration_summary.txt",
@@ -526,14 +521,13 @@ class ParallelRunner:
             },
         )
         new_logs = []
-        if log_subdir:
-            logs_dir = PYTEST_LOGS_DIR / log_subdir
-            if logs_dir.exists():
-                new_logs = [
-                    p
-                    for p in logs_dir.glob("*.txt")
-                    if p.name not in _EXCLUDED_LOG_BASENAMES
-                ]
+        logs_dir = PYTEST_LOGS_DIR / log_subdir if log_subdir else None
+        if logs_dir and logs_dir.exists():
+            new_logs = [
+                p
+                for p in logs_dir.glob("*.txt")
+                if p.name not in _EXCLUDED_LOG_BASENAMES
+            ]
 
         return RunResult(
             exit_code=exit_code,
@@ -541,6 +535,7 @@ class ParallelRunner:
             stderr=stderr,
             sessions_created=new_sessions,
             log_files=new_logs,
+            log_dir=logs_dir,
             socket=socket_name,
         )
 
@@ -553,6 +548,34 @@ class ParallelRunner:
         """Get the path to a hang-only fixture relative to repo root."""
         path = self.hang_fixtures_dir.joinpath(*parts)
         return str(path.relative_to(self.repo_root))
+
+    def store_fixture_path(self, *parts: str) -> str:
+        """Get the path to a store-plumbing fixture relative to repo root."""
+        path = self.store_fixtures_dir.joinpath(*parts)
+        return str(path.relative_to(self.repo_root))
+
+    @staticmethod
+    def session_env_reports(
+        result: RunResult,
+        store: Optional[Path] = None,
+    ) -> List[dict]:
+        """Read the ``<store>.env.json`` snapshots the store fixtures write.
+
+        With ``store`` given, only that store's snapshot is read (the shared
+        store case); otherwise every snapshot under the run's ``stores/``
+        directory is returned.
+        """
+        import json
+
+        if store is not None:
+            candidates = [Path(f"{store}.env.json")]
+        elif result.log_dir is not None:
+            candidates = sorted((result.log_dir / "stores").glob("*.env.json"))
+        else:
+            candidates = []
+        return [
+            json.loads(p.read_text(encoding="utf-8")) for p in candidates if p.is_file()
+        ]
 
     def cleanup(self):
         """Kill all sessions created by this runner.

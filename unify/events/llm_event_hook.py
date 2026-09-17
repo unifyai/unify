@@ -61,12 +61,12 @@ def _llm_event_to_eventbus(event: "LLMEvent") -> None:
             request=event.request,
             response=event.response,
             provider_cost=event.provider_cost,
-            # Attributed user for per-member usage filtering in the console.
+            # Attributed user for per-user usage filtering.
             # _inject_private_fields sets _user_id to the supervisor; this
             # field records who actually triggered the call.
             _attributed_user_id=attributed_user_id,
             # Derived time columns for time-based aggregation
-            # All columns use formats that Orchestra infers as date/datetime types
+            # All columns use formats the store infers as date/datetime types
             time_minute=ts.replace(second=0, microsecond=0).isoformat(),
             time_hour=ts.replace(minute=0, second=0, microsecond=0).isoformat(),
             time_day=ts.strftime("%Y-%m-%d"),

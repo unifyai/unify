@@ -34,19 +34,6 @@ def test_resolve_runtime_context_root_falls_back_when_test_context_missing() -> 
     assert resolve_runtime_context_root(test=True) == expected
 
 
-def test_resolve_runtime_context_root_for_team_owned_assistants() -> None:
-    db.unset_context()
-    original_owner = SESSION_DETAILS.owner_team_id
-    original_agent = SESSION_DETAILS.assistant.agent_id
-    SESSION_DETAILS.owner_team_id = 5
-    SESSION_DETAILS.assistant.agent_id = 42
-    try:
-        assert resolve_runtime_context_root(test=False) == "Teams/5/Assistants/42"
-    finally:
-        SESSION_DETAILS.owner_team_id = original_owner
-        SESSION_DETAILS.assistant.agent_id = original_agent
-
-
 def test_bind_replaces_a_prebound_root_instead_of_joining(monkeypatch) -> None:
     """A resolved root is bound absolutely, never appended to the active one.
 
@@ -67,12 +54,12 @@ def test_bind_replaces_a_prebound_root_instead_of_joining(monkeypatch) -> None:
         skip_create=True,
     )
     try:
-        bind_runtime_context_root(skip_create=True, strict=True)
+        bind_runtime_context_root(strict=True)
         active = db.get_active_context()
         assert active["read"] == "default/0"
         assert active["write"] == "default/0"
         # Repeated binds are idempotent — no path growth.
-        bind_runtime_context_root(skip_create=True, strict=True)
+        bind_runtime_context_root(strict=True)
         assert db.get_active_context()["read"] == "default/0"
     finally:
         db.unset_context()
@@ -95,7 +82,7 @@ def test_bind_keeps_registry_base_and_active_context_coherent(monkeypatch) -> No
         skip_create=True,
     )
     try:
-        bind_runtime_context_root(skip_create=True, strict=True)
+        bind_runtime_context_root(strict=True)
         assert ContextRegistry._base_context == db.get_active_context()["read"]
     finally:
         db.unset_context()
@@ -115,7 +102,7 @@ def test_bind_honors_prebound_root_when_resolve_does(monkeypatch) -> None:
     original_base = ContextRegistry._base_context
     db.set_context(prebound, relative=False, skip_create=True)
     try:
-        bind_runtime_context_root(skip_create=True, strict=True)
+        bind_runtime_context_root(strict=True)
         assert db.get_active_context()["read"] == prebound
         assert ContextRegistry._base_context == prebound
     finally:

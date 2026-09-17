@@ -27,9 +27,9 @@ Unify's runtime has a [ConversationManager](https://github.com/unifyai/unify/blo
   </picture>
 </p>
 
-So when your message lands mid-task, it doesn't wait for the work and it doesn't interrupt it either. The conversation layer takes its own turn and makes a judgment call: answer directly, push a correction into the running task, ask the task how it's going, or say nothing at all. Saying nothing is a real option — the layer carries per-contact response policies and its prompt spends a surprising amount of ink on restraint. On a live call every turn is an explicit choice between SPEAK and WAIT.
+So when your message lands mid-task, it doesn't wait for the work and it doesn't interrupt it either. The conversation layer takes its own turn and makes a judgment call: answer directly, push a correction into the running task, ask the task how it's going, or say nothing at all. Saying nothing is a real option — the layer carries per-contact response policies and its prompt spends a surprising amount of ink on restraint. Every turn is an explicit choice between speaking and waiting.
 
-The same judgment applies in the other direction. Workers emit progress notifications as they run, but those don't go straight to you — they surface into the conversation layer's context, and it decides whether you'd want to hear about it now, later, or never. And because the layer is medium-agnostic, it's one presence across everything: the same brain, with the same memory of you, sees its active conversations across chat, email, SMS, WhatsApp, and live calls in a single view, and answers in whichever one you used.
+The same judgment applies in the other direction. Workers emit progress notifications as they run, but those don't go straight to you — they surface into the conversation layer's context, and it decides whether you'd want to hear about it now, later, or never. And because the layer sits above the workers rather than inside one of them, it is one presence with one memory of you, whatever the workers are doing.
 
 ## Thinking Machines drew the same picture
 
@@ -37,20 +37,13 @@ Last week Thinking Machines published [Interaction Models: A Scalable Approach t
 
 Their answer is a two-part system: a time-aware interaction model that maintains real-time presence, paired with an asynchronous background model that handles sustained reasoning and tool use. When deep work is needed, the interaction model delegates — sending, as they put it, "a rich context package — not a standalone query" — and then "remains present throughout — answering follow-ups, taking new input, holding the thread — and integrates background results into the conversation as they arrive."
 
-That is the conversation layer, stated as a research agenda. Presence and intelligence are different jobs on different clocks, so they get different loops with shared context. We've been running that split at the system level since the middle of last year: the ConversationManager is the interaction seat, the actors are the background model, `act(...)` hands over a filtered snapshot of the live conversation rather than a bare query, and results stream back for the conversation layer to weave in. On voice we even run the split twice — a fast brain handles turn-taking, fillers, and barge-in at sub-second latency while the slow brain composes what's actually worth saying.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/voice-dual-brain-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/voice-dual-brain-light.png" alt="Voice call architecture: a caller connects through a LiveKit room to the fast brain (STT, VAD, TTS, fast LLM, fillers and barge-in), which exchanges utterance events and notifications with the slow brain — the ConversationManager's persistent reasoning loop — over IPC." width="820">
-  </picture>
-</p>
+That is the conversation layer, stated as a research agenda. Presence and intelligence are different jobs on different clocks, so they get different loops with shared context. We've been running that split at the system level since the middle of last year: the ConversationManager is the interaction seat, the actors are the background model, `act(...)` hands over a filtered snapshot of the live conversation rather than a bare query, and results stream back for the conversation layer to weave in.
 
 ## The obvious objection
 
-Thinking Machines would push back on one thing: their post argues interactivity should live *in the model*, not in a harness, and cites the bitter lesson. We're a harness. I take the point seriously, and for the lowest level — turn detection, barge-in, knowing whether a speaker is yielding or just thinking — I think they're right, and I'd happily delete our voice-activity plumbing the day their model is an API.
+Thinking Machines would push back on one thing: their post argues interactivity should live *in the model*, not in a harness, and cites the bitter lesson. We're a harness. I take the point seriously, and for the lowest level — turn detection, knowing whether someone is done or just thinking — I think they're right.
 
-But look at their own system diagram: even with a natively interactive model, there are still two loops and a delegation seam between them. The seam is the architecture. Someone still has to wire the interaction seat to your channels, your memory, your team's permissions, and a fleet of long-running tasks it can steer. That's what our conversation layer is. When interaction models become available, they slot into that seat and make it much better — replacing the fast brain and a chunk of the turn machinery, inheriting all the plumbing. A framework where the conversation *is* the work loop has no seat to upgrade. The better models get at holding a thread, the more it costs to have fused the thread to the work.
+But look at their own system diagram: even with a natively interactive model, there are still two loops and a delegation seam between them. The seam is the architecture. Someone still has to wire the interaction seat to your memory and to the long-running work it can steer. That's what our conversation layer is. When interaction models become available, they slot into that seat and make it much better, inheriting all the plumbing. A framework where the conversation *is* the work loop has no seat to upgrade. The better models get at holding a thread, the more it costs to have fused the thread to the work.
 
 ## Where to look
 
@@ -58,6 +51,5 @@ All open at [github.com/unifyai/unify](https://github.com/unifyai/unify):
 
 - The conversation layer's loop and event handling: [`unify/conversation_manager/conversation_manager.py`](https://github.com/unifyai/unify/blob/main/unify/conversation_manager/conversation_manager.py)
 - `act`, `wait`, and the per-action steering tools: [`unify/conversation_manager/domains/brain_action_tools.py`](https://github.com/unifyai/unify/blob/main/unify/conversation_manager/domains/brain_action_tools.py)
-- The SPEAK/WAIT contract and response policies: [`unify/conversation_manager/prompt_builders.py`](https://github.com/unifyai/unify/blob/main/unify/conversation_manager/prompt_builders.py)
-- The medium abstraction: [`unify/conversation_manager/cm_types/medium.py`](https://github.com/unifyai/unify/blob/main/unify/conversation_manager/cm_types/medium.py)
-- The fast-brain voice script: [`unify/conversation_manager/medium_scripts/call.py`](https://github.com/unifyai/unify/blob/main/unify/conversation_manager/medium_scripts/call.py)
+- The speak/wait contract and response policies: [`unify/conversation_manager/prompt_builders.py`](https://github.com/unifyai/unify/blob/main/unify/conversation_manager/prompt_builders.py)
+- The terminal front end over the same event broker: [`unify/cli.py`](https://github.com/unifyai/unify/blob/main/unify/cli.py)

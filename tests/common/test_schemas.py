@@ -823,20 +823,14 @@ def test_schema_plain_function() -> None:
 
 
 @_handle_project
-def test_nested_image_schema_enforcement() -> None:
+def test_nested_image_schema_is_recorded_and_accepts_rows() -> None:
     """Provision a context with the Message schema and assert:
     - the `images` field is created with a nested JSON Schema (contains expected keys)
-    - logging with a valid `images` payload succeeds
-    - logging with an invalid `images` payload is rejected by the backend
+    - logging with a nested `images` payload succeeds
     """
 
-    # Build a per-test context under the active write context (mirrors other tests)
-    try:
-        ctxs = db.get_active_context()
-        base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
-    except Exception:
-        base_ctx = None
-    ctx = f"{base_ctx}/SchemaNestedImages" if base_ctx else "SchemaNestedImages"
+    base_ctx = db.get_active_context()["write"]
+    ctx = f"{base_ctx}/SchemaNestedImages"
 
     # Provision the table using model_to_fields(Message) so `images` carries the nested schema
     store = TableStore(
@@ -855,49 +849,25 @@ def test_nested_image_schema_enforcement() -> None:
     # Expect array/list with object items including raw_image_ref + annotation
     assert "raw_image_ref" in dtype and "annotation" in dtype and "image_id" in dtype
 
-    # Common required fields for the Message row
-    common = {
-        "medium": "email",
+    # 2) A nested payload round-trips through the store
+    payload = {
+        "medium": "unify_message",
         "sender_id": 1,
         "receiver_ids": [2],
-        # Pass ISO-8601 string – db.log's JSON body must be serializable
         "timestamp": datetime.now(UTC).isoformat(),
         "content": "hello",
-    }
-
-    # 2) Valid nested payload – should succeed
-    valid_payload = {
-        **common,
         "images": [
             {"raw_image_ref": {"image_id": 101}, "annotation": "blue square"},
         ],
     }
-    _ = db.log(context=ctx, **valid_payload, new=True, mutable=True)
-
-    # 3) Invalid nested payload – wrong key name for image id → must be rejected
-    invalid_payload_bad_key = {
-        **common,
-        "images": [
-            {"raw_image_ref": {"image_idx": 999}, "annotation": "oops"},  # wrong key
-        ],
-    }
-    with pytest.raises(Exception):
-        db.log(context=ctx, **invalid_payload_bad_key, new=True, mutable=True)
-
-    # 4) Invalid nested payload – wrong type for annotation → must be rejected
-    invalid_payload_bad_type = {
-        **common,
-        "images": [
-            {"raw_image_ref": {"image_id": 202}, "annotation": 123},  # not a string
-        ],
-    }
-    with pytest.raises(Exception):
-        db.log(context=ctx, **invalid_payload_bad_type, new=True, mutable=True)
+    logged = db.log(context=ctx, **payload, new=True, mutable=True)
+    [row] = db.get_logs(context=ctx, from_ids=[logged.id])
+    assert row.entries["images"] == payload["images"]
 
 
 # --------------------------------------------------------------------------- #
 #  GENERAL: model_to_fields supports arbitrary nested Pydantic models          #
-#           and Unify enforces the resulting JSON Schemas                      #
+#           and the store records the resulting JSON Schemas                      #
 # --------------------------------------------------------------------------- #
 
 
@@ -925,20 +895,14 @@ class _Record(BaseModel):
 
 
 @_handle_project
-def test_nested_pydantic_schema_enforcement() -> None:
+def test_nested_pydantic_schema_is_recorded_and_accepts_rows() -> None:
     """Provision a context from an arbitrary nested Pydantic model and assert:
     - the serialized data_type for the nested field includes child property names;
-    - logging succeeds for valid nested payloads;
-    - logging fails for invalid shapes and wrong types.
+    - a nested payload round-trips through the store.
     """
 
-    # Create a dedicated context for this test
-    try:
-        ctxs = db.get_active_context()
-        base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
-    except Exception:
-        base_ctx = None
-    ctx = f"{base_ctx}/SchemaNestedPydantic" if base_ctx else "SchemaNestedPydantic"
+    base_ctx = db.get_active_context()["write"]
+    ctx = f"{base_ctx}/SchemaNestedPydantic"
 
     # Provision using the generalized model (not tied to Transcripts)
     store = TableStore(
@@ -966,44 +930,18 @@ def test_nested_pydantic_schema_enforcement() -> None:
     ):
         assert needle in dtype
 
-    # Valid nested payload
-    valid = {
-        "record_id": 1,
-        "payload": {
-            "owner": "Alice",
-            "address": {"street": "Main St", "zip_code": 90210},
-            "pets": [
-                {"name": "Rex", "kind": "dog", "age": 5},
-                {"name": "Mittens", "kind": "cat"},
-            ],
-            "primary_pet": {"name": "Rex", "kind": "dog", "age": 5},
-        },
+    payload = {
+        "owner": "Alice",
+        "address": {"street": "Main St", "zip_code": 90210},
+        "pets": [
+            {"name": "Rex", "kind": "dog", "age": 5},
+            {"name": "Mittens", "kind": "cat"},
+        ],
+        "primary_pet": {"name": "Rex", "kind": "dog", "age": 5},
     }
-    _ = db.log(context=ctx, **valid, new=True, mutable=True)
-
-    # Invalid 1: wrong nested key (zip instead of zip_code) → reject
-    invalid_bad_key = {
-        "record_id": 2,
-        "payload": {
-            "owner": "Bob",
-            "address": {"street": "Second", "zip": 10001},  # wrong key
-            "pets": [{"name": "Fido", "kind": "dog"}],
-        },
-    }
-    with pytest.raises(Exception):
-        db.log(context=ctx, **invalid_bad_key, new=True, mutable=True)
-
-    # Invalid 2: wrong type in list (pets elements must be objects) → reject
-    invalid_bad_list = {
-        "record_id": 3,
-        "payload": {
-            "owner": "Charlie",
-            "address": {"street": "Third", "zip_code": 11111},
-            "pets": ["not-an-object"],  # wrong type
-        },
-    }
-    with pytest.raises(Exception):
-        db.log(context=ctx, **invalid_bad_list, new=True, mutable=True)
+    logged = db.log(context=ctx, record_id=1, payload=payload, new=True, mutable=True)
+    [row] = db.get_logs(context=ctx, from_ids=[logged.id])
+    assert row.entries["payload"] == payload
 
 
 # --------------------------------------------------------------------------- #

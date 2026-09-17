@@ -197,10 +197,8 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         observed_at / valid_from / valid_until : datetime | None
             Optional observation and validity window.
         destination : str | None, default None
-            Where this claim lives. Pass ``"personal"`` (the default) for
-            private working knowledge. Pass ``"team:<id>"`` for team-shared
-            claims. See the *Accessible shared teams* block in your system
-            prompt for available teams.
+            Where this claim lives. Only the personal root exists: pass
+            ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -257,7 +255,8 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
         observed_at / valid_from / valid_until
             Fields to replace; omit to keep existing values.
         destination : str | None, default None
-            Destination scope for the write (personal or ``team:<id>``).
+            Destination root for the write. Only the personal root exists:
+            pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------

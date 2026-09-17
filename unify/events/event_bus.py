@@ -325,12 +325,12 @@ class EventBus:
     # Monotonic timestamp of the most recent publish() call. Used by
     # ConversationManager's inactivity check to detect that internal work
     # (LLM calls, tool-loop turns, manager methods, …) is still happening
-    # even when no external pubsub messages are arriving.
+    # even when no external broker messages are arriving.
     #
     # Seeded at import rather than 0.0. `time.monotonic()` counts from *node*
     # boot on Linux, so a zero sentinel made "never published" read as the
-    # node's uptime: minutes on a fresh node (which spuriously protected a pod
-    # that had published nothing) and days on an old one.
+    # node's uptime: minutes on a fresh node (which spuriously protected a
+    # process that had published nothing) and days on an old one.
     last_publish_monotonic: float = time.monotonic()
 
     @classmethod
@@ -428,8 +428,8 @@ class EventBus:
         self._pending_writes: list[tuple[dict, str]] = []
 
         # Periodic flush: drains _pending_writes every few seconds so that
-        # Orchestra stays current for console REST queries while still
-        # batching writes for efficiency.
+        # the store stays current for readers while still batching writes
+        # for efficiency.
         self._FLUSH_INTERVAL_S = 5.0
         self._periodic_flush_task: Optional["asyncio.Task[None]"] = None
 
@@ -555,7 +555,7 @@ class EventBus:
         embedder that replaces its event loop mid-process (an in-process CM
         reboot) strands that task on the dead loop; without this check every
         later publish buffers into ``_pending_writes`` forever, no row
-        reaches Orchestra, and the next boot's hydration truthfully finds
+        reaches the store, and the next boot's hydration truthfully finds
         nothing to restore.
         """
         task = self._periodic_flush_task
@@ -644,13 +644,9 @@ class EventBus:
 
     @staticmethod
     def _is_missing_context_error(exc: BaseException) -> bool:
-        from unify.db import StoreError as _UnifyRequestError
+        from unify.db import NotFound
 
-        if isinstance(exc, _UnifyRequestError):
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            return status == 404
-        msg = str(exc).lower()
-        return "404" in msg or "not found" in msg
+        return isinstance(exc, NotFound)
 
     async def _get_logs_resilient(
         self,
@@ -660,8 +656,8 @@ class EventBus:
     ) -> list[Any]:
         """Fetch logs, tolerating missing contexts after ``create_context``.
 
-        Orchestra can briefly return 404 for a context that was just created.
-        A short retry window covers that window; persistent 404 means the
+        The store can briefly report a context missing right after it was
+        created. A short retry window covers that; a persistent miss means the
         context is empty, which callers treat as ``[]``.
         """
         last_exc: Exception | None = None
@@ -915,10 +911,10 @@ class EventBus:
         self._lazy_start_hydration_if_needed()
         self._ensure_periodic_flush_task()
         # Best-effort wait for hydration so row_id counters are initialised.
-        # If prefill failed (e.g. Orchestra 500s), degrade gracefully: assign
+        # If prefill failed (e.g. a store error), degrade gracefully: assign
         # row_ids from zero and keep routing events in-process.  Persistence
         # may produce duplicate row_ids in that edge case, but the alternative
-        # — permanently blocking publish() for the pod's lifetime — is far
+        # — permanently blocking publish() for the process's lifetime — is far
         # worse (it kills the @log_manager_call decorator path and prevents
         # the CodeActActor from ever executing).
         try:
@@ -1195,7 +1191,7 @@ class EventBus:
             context = self._specific_ctxs.get(etype)
             if context is None:
                 # A type with an in-memory deque but no registered backend
-                # context has nothing to fetch from Orchestra.
+                # context has nothing to fetch from the store.
                 return etype, []
 
             logs = await asyncio.to_thread(

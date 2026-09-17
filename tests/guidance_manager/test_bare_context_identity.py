@@ -1,8 +1,8 @@
 """Guidance writes must never yield rows without a ``guidance_id``.
 
 The Guidance context is provisioned with ``guidance_id`` auto-counting, but a
-row write that reaches the backend first auto-creates the context bare, and
-every row it then accepts has no identity — unreachable by
+context that was first created bare (no unique keys, no auto-counting) keeps
+that shape, and every row it then accepts has no identity — unreachable by
 ``get_guidance``/``update_guidance``/``delete_guidance`` and rendered as the
 ``-1`` sentinel by reads. These tests pin the two guards: provisioning
 refuses a bare context outright, and ``add_guidance`` fails loudly (removing
@@ -26,7 +26,8 @@ from unify.guidance_manager.guidance_manager import GuidanceManager
 def test_provisioning_refuses_bare_guidance_context():
     base = db.get_active_context()["write"]
 
-    # A write racing provisioning auto-creates the context bare.
+    # A context created ahead of provisioning, without identity, stays bare.
+    db.create_context(f"{base}/Guidance")
     db.log(
         context=f"{base}/Guidance",
         new=True,
@@ -49,7 +50,7 @@ def test_add_guidance_without_assigned_id_fails_loud(monkeypatch):
     deleted: list[dict] = []
     monkeypatch.setattr(gm_module, "unity_log", lambda **kwargs: fake_log)
     monkeypatch.setattr(
-        unisdk,
+        db,
         "delete_logs",
         lambda **kwargs: deleted.append(kwargs),
     )

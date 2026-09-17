@@ -57,9 +57,7 @@ body:
     multiple: true
     options:
     - CLI (`unify`)
-    - Voice (`unify --live-voice`)
     - Installer / setup (`scripts/install.sh`, `unify setup`, `unify doctor`)
-    - Local Orchestra (Docker / Postgres)
     - Tests (`tests/parallel_run.sh`)
     - A specific state manager (Contact / Knowledge / Task / Transcript / Guidance / Function / File / Image / Web / Secret / Blacklist / Data)
     - Actor / CodeAct execution
@@ -105,7 +103,7 @@ body:
   attributes:
     label: Additional logs / traceback
     description: |
-      Relevant log lines from `logs/unity/`, `logs/orchestra/`, or pytest output if applicable.
+      Relevant log lines from `~/.unify/logs/` or pytest output if applicable.
     render: shell
 
 - type: textarea

@@ -143,5 +143,5 @@ def coerce_source_refs(value) -> List[SourceRef]:
 
 
 def source_ref_to_dict(ref: SourceRef) -> dict:
-    """Serialize one SourceRef for Orchestra log payloads."""
+    """Serialize one SourceRef for a stored log payload."""
     return ref.model_dump(mode="json")

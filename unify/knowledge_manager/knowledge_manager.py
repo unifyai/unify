@@ -62,12 +62,8 @@ logger = logging.getLogger(__name__)
 # fetched per entry via ``get_knowledge``.
 KNOWLEDGE_PREVIEW_CHARS = 2000
 KNOWLEDGE_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where this knowledge claim lives. Pass ``"personal"`` (the default) for
-    private working knowledge. Pass ``"team:<id>"`` for team-level claims
-    every member of the team should share. See the *Accessible shared teams*
-    block in your system prompt for available teams and descriptions. Pick
-    personal when in doubt; call ``request_clarification`` when the right
-    audience is unclear."""
+    Where this knowledge claim lives. Only the personal root exists: pass
+    ``"personal"`` or leave it ``None``."""
 
 _ACTIVE_STATUS_FILTER = "status == 'active'"
 
@@ -1287,8 +1283,8 @@ def mark_knowledge_stale_for_deleted_sources(
 ) -> None:
     """Snapshot Knowledge link debt before a cited dependency is deleted.
 
-    Callers must invoke this *before* Orchestra FK CASCADE (or context
-    deletion) removes identity fields from ``source_refs``. Scans every
+    Callers must invoke this *before* the store's deletion cascade (or
+    context deletion) removes identity fields from ``source_refs``. Scans every
     Knowledge root and appends structured ``stale_reasons`` on matching
     claims. Never invents new provenance links.
     """

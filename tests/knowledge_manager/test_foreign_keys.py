@@ -101,7 +101,7 @@ def test_mark_knowledge_stale_for_deleted_sources_appends_debt(monkeypatch):
     )
     monkeypatch.setattr(km_mod, "list_private_fields", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        km_mod.unisdk,
+        km_mod.db,
         "get_logs",
         lambda **kwargs: [_Log(1, claim_entries)],
     )
@@ -109,7 +109,7 @@ def test_mark_knowledge_stale_for_deleted_sources_appends_debt(monkeypatch):
     def _update_logs(**kwargs):
         updates.append(kwargs)
 
-    monkeypatch.setattr(km_mod.unisdk, "update_logs", _update_logs)
+    monkeypatch.setattr(km_mod.db, "update_logs", _update_logs)
 
     km_mod.mark_knowledge_stale_for_deleted_sources(
         reasons=[

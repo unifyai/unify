@@ -180,7 +180,7 @@ def test_get_images_for_pending_prefers_cache_no_backend(monkeypatch):
         calls["count"] += 1
         return orig_get_logs(*args, **kwargs)
 
-    monkeypatch.setattr(unisdk, "get_logs", _wrapped_get_logs)
+    monkeypatch.setattr(db, "get_logs", _wrapped_get_logs)
 
     handles = im.get_images([h1.image_id, h2.image_id])
     assert [h.image_id for h in handles] == [h1.image_id, h2.image_id]

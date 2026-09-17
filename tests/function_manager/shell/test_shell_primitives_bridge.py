@@ -184,8 +184,10 @@ def mock_primitives():
             {"file_id": 2, "file_path": "/data/file2.txt"},
         ],
     )
-    primitives.tasks = MagicMock()
-    primitives.tasks.ask = AsyncMock(return_value=[{"id": 1, "name": "Task 1"}])
+    primitives.transcripts = MagicMock()
+    primitives.transcripts.ask = AsyncMock(
+        return_value=[{"id": 1, "summary": "Exchange 1"}],
+    )
     return primitives
 
 
@@ -550,8 +552,8 @@ async def test_primitive_returns_list(function_manager_factory, mock_primitives)
     fm = function_manager_factory()
 
     script = """#!/bin/sh
-result=$(unity-primitive tasks ask --text "list all")
-echo "Tasks: $result"
+result=$(unity-primitive transcripts ask --text "list all")
+echo "Exchanges: $result"
 """
 
     result = await fm.execute_shell_script(
@@ -562,7 +564,7 @@ echo "Tasks: $result"
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
     # The list should be JSON-serialized in stdout
-    assert "Task 1" in result["stdout"]
+    assert "Exchange 1" in result["stdout"]
 
 
 @_handle_project

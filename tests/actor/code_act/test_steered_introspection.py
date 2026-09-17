@@ -29,7 +29,6 @@ def simulated_managers(monkeypatch: pytest.MonkeyPatch):
 
     for name in (
         "CONTACT",
-        "TASK",
         "TRANSCRIPT",
         "KNOWLEDGE",
         "GUIDANCE",
@@ -38,7 +37,7 @@ def simulated_managers(monkeypatch: pytest.MonkeyPatch):
         "FILE",
         "DATA",
     ):
-        monkeypatch.setenv(f"UNITY_{name}_IMPL", "simulated")
+        monkeypatch.setenv(f"UNIFY_{name}_IMPL", "simulated")
         attr = name.lower()
         if hasattr(SETTINGS, attr):
             monkeypatch.setattr(
@@ -60,7 +59,7 @@ def _steered_environments():
     from unify.function_manager.primitives import Primitives, PrimitiveScope
 
     scope = PrimitiveScope(
-        scoped_managers=frozenset({"contacts", "data", "tasks"}),
+        scoped_managers=frozenset({"contacts", "data"}),
     )
     composite = _CompositeEnvironment(
         [StateManagerEnvironment(Primitives(primitive_scope=scope))],
@@ -76,7 +75,7 @@ _INTROSPECTION_CODE = textwrap.dedent(
     info = {}
     info["help_contacts_ask"] = pydoc.render_doc(primitives.contacts.ask)
     info["sig_data_filter"] = str(inspect.signature(primitives.data.filter))
-    info["dir_tasks"] = dir(primitives.tasks)
+    info["dir_contacts"] = dir(primitives.contacts)
     info["dir_data"] = dir(primitives.data)
     info
     """,
@@ -127,7 +126,7 @@ async def test_steered_sandbox_introspection_renders_real_docs(
     assert "context" in sig_filter and "filter" in sig_filter, sig_filter
 
     # dir(primitives.<manager>) lists the primitive method surface.
-    assert "ask" in info["dir_tasks"], info["dir_tasks"]
-    assert "update" in info["dir_tasks"], info["dir_tasks"]
+    assert "ask" in info["dir_contacts"], info["dir_contacts"]
+    assert "update" in info["dir_contacts"], info["dir_contacts"]
     assert "filter" in info["dir_data"], info["dir_data"]
     assert "reduce" in info["dir_data"], info["dir_data"]

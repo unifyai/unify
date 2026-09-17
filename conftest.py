@@ -18,6 +18,10 @@ except Exception:
 # ─────────────────────────────────────────────────────────────────────────────
 # Early Environment Setup (MUST be before any unify/unify imports)
 # ─────────────────────────────────────────────────────────────────────────────
+# Pytest establishes a per-test context root; ``SETTINGS.TEST`` is what makes
+# the runtime honour it instead of the session identity.
+os.environ.setdefault("TEST", "true")
+
 # Set UNILLM_CACHE_DIR to use the MAIN repo's cache, not the worktree's.
 # This ensures all worktrees share the same LLM cache (.cache.ndjson) for
 # consistent cache hits. This must happen before unillm is imported because

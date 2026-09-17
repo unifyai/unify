@@ -148,14 +148,14 @@ def test_provider_cleanup_marks_compositional_dependencies(monkeypatch):
     def get_logs(*, context, **kwargs):
         return [primitive] if context == "primitives" else [dependant]
 
-    monkeypatch.setattr(function_manager_module.unisdk, "get_logs", get_logs)
+    monkeypatch.setattr(function_manager_module.db, "get_logs", get_logs)
     monkeypatch.setattr(
-        function_manager_module.unisdk,
+        function_manager_module.db,
         "delete_logs",
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
-        function_manager_module.unisdk,
+        function_manager_module.db,
         "update_logs",
         lambda **kwargs: updates.append(kwargs),
     )

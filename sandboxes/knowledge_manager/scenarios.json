@@ -1,8 +1,0 @@
-{
-    "ev_knowledge": [
-      "us Please seed ~15 typed knowledge claims about electric vehicles. Cover companies (name, HQ, founded year), models (battery_kwh, warranty), markets, and regional sales for 2022–2024. Prefer kind=fact with a few kind=policy / kind=decision claims. Attach source_refs with kind=manual. Use search before add_knowledge to avoid duplicates."
-    ],
-    "ai_papers": [
-      "us Please seed ~20 typed knowledge claims about AI research papers from 2019–2024. Include titles, venues (NeurIPS/ICML/ICLR), method tags (diffusion, LLM, RLHF), and notable metrics. Prefer kind=fact and kind=insight. Attach source_refs with kind=manual. Use search before add_knowledge to avoid duplicates."
-    ]
-}

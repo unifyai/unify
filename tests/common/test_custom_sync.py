@@ -142,18 +142,18 @@ def test_adoption_wins_over_collision_and_insert():
 def test_derived_stale_forces_update_despite_matching_hash():
     class _DerivedAdapter(_RecordingAdapter):
         def derived_stale(self, key, live_row, fields):
-            return live_row.get("entrypoint") != fields.get("resolved_entrypoint")
+            return live_row.get("target") != fields.get("resolved_target")
 
     adapter = _DerivedAdapter(
         live=[
-            _row("dangling", "s", entrypoint=1),
-            _row("aligned", "s", entrypoint=2),
+            _row("dangling", "s", target=1),
+            _row("aligned", "s", target=2),
         ],
     )
     result = reconcile_custom_rows(
         source={
-            "dangling": _row("dangling", "s", resolved_entrypoint=29),
-            "aligned": _row("aligned", "s", resolved_entrypoint=2),
+            "dangling": _row("dangling", "s", resolved_target=29),
+            "aligned": _row("aligned", "s", resolved_target=2),
         },
         adapter=adapter,
     )

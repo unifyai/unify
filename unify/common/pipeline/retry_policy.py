@@ -128,7 +128,7 @@ def is_retryable_exception(exc: BaseException) -> bool:
 
     A refusal the caller caused will refuse identically every time. Retrying it
     is not merely wasted work: the message is never acked, so it is redelivered,
-    and one bad request can occupy a worker fleet indefinitely.
+    and one bad request can occupy the workers indefinitely.
     """
     # A live-attempt collision is neither a fault nor retryable work: another
     # attempt already holds the lease and is making progress. Retrying into it

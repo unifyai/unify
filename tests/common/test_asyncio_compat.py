@@ -18,7 +18,7 @@ def test_run_coro_sync_without_running_loop():
 
 def test_run_coro_sync_inside_running_loop():
     async def outer() -> int:
-        # Mirrors TaskScheduler offline_runner: sync helper under asyncio.run.
+        # A sync helper invoked from inside a running loop (asyncio.run).
         return run_coro_sync(lambda: _value(11))
 
     assert asyncio.run(outer()) == 11

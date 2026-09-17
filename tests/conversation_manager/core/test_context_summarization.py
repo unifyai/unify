@@ -9,21 +9,16 @@ This covers:
 2. The _preprocess_messages() state snapshot deduplication logic
 3. Chat history persistence via store_chat_history()
 
-Note: The SummarizeContext event handler is mocked in test mode (see main.py line 82),
-so we cannot test the actual handler behavior. Tests focus on:
-- The threshold triggering logic in _run_llm()
+Tests focus on:
 - The _preprocess_messages() deduplication logic
 - The store_chat_history() publication logic
+- Chat history growth across LLM runs
 """
 
 from __future__ import annotations
 
 import pytest
 
-from unify.conversation_manager.conversation_manager import (
-    ConversationManager,
-    _append_context_to_state_message,
-)
 from unify.conversation_manager.events import (
     StoreChatHistory,
     UnifyMessageReceived,
@@ -137,54 +132,6 @@ class TestPreprocessMessages:
 
         # Should keep system and state snapshot, skip the string
         assert len(result) == 2
-
-    def test_integration_sync_context_preserves_state_message_shape(
-        self,
-    ):
-        state_message = {
-            "role": "user",
-            "content": "<state>ready</state>",
-            "_cm_state_snapshot": True,
-        }
-
-        updated = _append_context_to_state_message(
-            state_message,
-            "<integration_tool_sync>\n- Gmail: syncing\n</integration_tool_sync>",
-        )
-        cm = object.__new__(ConversationManager)
-        result = cm._preprocess_messages([updated])
-
-        assert result == [updated]
-        assert all(isinstance(message, dict) for message in result)
-        assert all("role" in message for message in result)
-        assert result[0]["_cm_state_snapshot"] is True
-        assert "Gmail: syncing" in result[0]["content"]
-
-    def test_integration_sync_context_appends_to_multimodal_state_message(self):
-        state_message = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "<state>ready</state>"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/jpeg;base64,abc"},
-                },
-            ],
-            "_cm_state_snapshot": True,
-        }
-
-        updated = _append_context_to_state_message(
-            state_message,
-            "<integration_tool_sync>\n- Gmail: ready\n</integration_tool_sync>",
-        )
-
-        assert updated["role"] == "user"
-        assert updated["_cm_state_snapshot"] is True
-        assert updated["content"][:-1] == state_message["content"]
-        assert updated["content"][-1] == {
-            "type": "text",
-            "text": "\n\n<integration_tool_sync>\n- Gmail: ready\n</integration_tool_sync>",
-        }
 
 
 # =============================================================================

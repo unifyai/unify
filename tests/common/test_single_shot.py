@@ -18,7 +18,6 @@ from unify.common.single_shot import (
 )
 from unify.common.llm_client import new_llm_client
 from unify.logger import LOGGER
-from unify.settings import SETTINGS
 
 # --------------------------------------------------------------------------- #
 #  Test fixtures: response format models                                       #
@@ -278,8 +277,7 @@ async def test_single_shot_strips_tool_thoughts_before_execution():
 
 
 @pytest.mark.asyncio
-async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
-    monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
+async def test_debug_level_logs_single_shot_response_shape(caplog):
 
     async def fake_generate(**_kwargs):
         client.messages = [
@@ -300,7 +298,7 @@ async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
 
     client = SimpleNamespace(messages=[], generate=fake_generate)
     LOGGER.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="unify")
+    caplog.set_level(logging.DEBUG, logger="unify")
 
     try:
         await single_shot_tool_decision(

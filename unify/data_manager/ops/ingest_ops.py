@@ -1034,7 +1034,7 @@ def _inject_explicit_types(
     batch: List[Dict[str, Any]],
     column_types: Dict[str, str],
 ) -> None:
-    """Inject explicit_types into every row so Orchestra bypasses inference."""
+    """Inject explicit_types into every row so the store bypasses inference."""
     explicit_types = {col: {"type": col_type} for col, col_type in column_types.items()}
     for row in batch:
         row["explicit_types"] = explicit_types

@@ -65,7 +65,7 @@ class RowsSource(BaseModel):
 class FilesSource(BaseModel):
     """Specific files, by path.
 
-    Covers uploads, chat and email attachments, exports written to disk, and any
+    Covers uploads, chat attachments, exports written to disk, and any
     file already visible to the assistant. Parsing is handled by the file
     pipeline, which selects a backend per format -- documents (PDF, DOCX),
     tabular formats (CSV, XLSX) and the rest are each handled properly, so the
@@ -110,8 +110,8 @@ class TableSource(BaseModel):
     """Rows already stored in a context.
 
     For reshaping, narrowing or copying what is already there -- deriving a
-    smaller table a canvas can bind to cheaply, or re-keying an accumulated log
-    into a current-state view.
+    smaller table a later query can read cheaply, or re-keying an accumulated
+    log into a current-state view.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -147,9 +147,9 @@ _COLLECTION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
 class TableTarget(BaseModel):
     """One queryable table at a context path you choose.
 
-    Use this when the point is to *query columns*: filter, reduce, join, or bind a
-    canvas to it. The context path is explicit and stable, which is what makes it
-    bindable.
+    Use this when the point is to *query columns*: filter, reduce, or join. The
+    context path is explicit and stable, which is what makes it addressable from
+    later queries and functions.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -157,8 +157,8 @@ class TableTarget(BaseModel):
     kind: Literal["table"] = "table"
     context: str = Field(
         description=(
-            "Context path to write, e.g. 'Data/HubSpotDeals'. Stable and "
-            "explicit, so a canvas binding or a later query can name it."
+            "Context path to write, e.g. 'Data/Deals'. Stable and "
+            "explicit, so a later query or function can name it."
         ),
     )
     description: Optional[str] = Field(
@@ -213,8 +213,8 @@ class CollectionTarget(BaseModel):
     state, rows and destinations all live on one status
     (``status.files``) when the batch is one run. The file pipeline
     writes the parsed content and each extracted table beneath the collection,
-    and the run reports the exact context paths it produced, so a canvas can bind
-    to a table out of a spreadsheet without anyone hardcoding the layout.
+    and the run reports the exact context paths it produced, so a later query
+    can read a table out of a spreadsheet without anyone hardcoding the layout.
 
     Leaving ``name`` unset keeps each file in its own auto-assigned namespace,
     which is right for unrelated one-off files. Setting it groups a related set --
@@ -314,8 +314,8 @@ class IngestionRequest(BaseModel):
     destination: Optional[str] = Field(
         default=None,
         description=(
-            "Ownership root: 'personal' (the default) or 'team:<id>'. The privacy "
-            "floor is personal; ask rather than guess toward the wider audience."
+            "Ownership root. Only the personal root exists: pass 'personal' or "
+            "leave it unset."
         ),
     )
 

@@ -8,7 +8,6 @@ Phase 4: Integration testing across all managers with FK relationships
 ✓ Contact deletion cascade to transcripts
 ✓ Image deletion cascade to transcripts and guidance
 ✓ Function-Guidance bidirectional FK consistency
-✓ Function deletion cascade to tasks and guidance
 ✓ Complex multi-manager sequences
 ✓ Circular reference handling (Functions ↔ Guidance)
 ✓ Bulk operations with FK constraints
@@ -34,7 +33,7 @@ def test_delete_contact_transcripts_fk():
     """
     Test contact deletion effects on transcripts:
     - sender_id: SET NULL (message survives with null sender)
-    - receiver_ids: SET NULL (contact removed from arrays)
+    - receiver_ids[*]: SET NULL (the deleted contact is removed from the array)
     """
     cm = ContactManager()
     tm = TranscriptManager()
@@ -67,7 +66,7 @@ def test_delete_contact_transcripts_fk():
     # Alice sends to Bob
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": contact_map["Alice"],
             "receiver_ids": [contact_map["Bob"]],
             "content": "Alice to Bob",
@@ -78,7 +77,7 @@ def test_delete_contact_transcripts_fk():
     # Bob sends to Alice and Carol
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": contact_map["Bob"],
             "receiver_ids": [contact_map["Alice"], contact_map["Carol"]],
             "content": "Bob to Alice and Carol",
@@ -89,7 +88,7 @@ def test_delete_contact_transcripts_fk():
     # Carol sends to Alice and Bob
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": contact_map["Carol"],
             "receiver_ids": [contact_map["Alice"], contact_map["Bob"]],
             "content": "Carol to Alice and Bob",
@@ -109,7 +108,7 @@ def test_delete_contact_transcripts_fk():
 
     # Verify all 3 messages still exist (SET NULL on sender_id preserves messages)
     # Alice's message survives with null sender_id
-    # Bob's and Carol's messages survive with Alice replaced by None in receiver_ids (in-place)
+    # Bob's and Carol's messages survive with Alice removed from receiver_ids
     messages_after = db.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids", "content"],
@@ -125,23 +124,17 @@ def test_delete_contact_transcripts_fk():
     assert alice_msg.entries.get("sender_id") is None  # SET NULL
     assert contact_map["Bob"] in alice_msg.entries["receiver_ids"]
 
-    # Bob's message: Alice replaced with None in receiver_ids (in-place SET NULL)
+    # Bob's message: Alice removed from receiver_ids
     bob_msg = next(
         m for m in messages_after if m.entries["sender_id"] == contact_map["Bob"]
     )
-    bob_receivers = bob_msg.entries["receiver_ids"]
-    assert len(bob_receivers) == 2  # Array length unchanged
-    assert None in bob_receivers  # Alice replaced with None
-    assert contact_map["Carol"] in bob_receivers  # Carol preserved
+    assert bob_msg.entries["receiver_ids"] == [contact_map["Carol"]]
 
-    # Carol's message: Alice replaced with None in receiver_ids (in-place SET NULL)
+    # Carol's message: Alice removed from receiver_ids
     carol_msg = next(
         m for m in messages_after if m.entries["sender_id"] == contact_map["Carol"]
     )
-    carol_receivers = carol_msg.entries["receiver_ids"]
-    assert len(carol_receivers) == 2  # Array length unchanged
-    assert None in carol_receivers  # Alice replaced with None
-    assert contact_map["Bob"] in carol_receivers  # Bob preserved
+    assert carol_msg.entries["receiver_ids"] == [contact_map["Bob"]]
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +209,7 @@ def test_delete_image_nullifies_refs():
     # Use image in transcript
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Check this screenshot",
@@ -399,84 +392,6 @@ def test_function_guidance_bidirectional_cascade():
 
 
 # --------------------------------------------------------------------------- #
-#  Integration: Function Deletion Effects on Tasks and Guidance               #
-# --------------------------------------------------------------------------- #
-
-
-@_handle_project
-@pytest.mark.integration
-def test_delete_function_cascades_tasks_guidance():
-    """
-    Test that deleting a function:
-    - Sets task.entrypoint to null (SET NULL)
-    - Removes function_id from guidance.function_ids array (CASCADE)
-
-    FK Policies:
-    - Tasks.entrypoint → Functions.function_id: SET NULL
-    - Guidance.function_ids[*] → Functions.function_id: CASCADE
-    """
-    from unify.function_manager.function_manager import FunctionManager
-    from unify.task_scheduler.task_scheduler import TaskScheduler
-    from unify.guidance_manager.guidance_manager import GuidanceManager
-
-    fm = FunctionManager()
-    ts = TaskScheduler()
-    gm = GuidanceManager()
-
-    # Create function
-    src = "def worker():\n    return 'work'\n"
-    fm.add_functions(implementations=src)
-
-    funcs = db.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
-    func_id = int(funcs[0].entries["function_id"])
-
-    # Create task using this function
-    result = ts._create_task(
-        name="Work Task",
-        description="Task using function",
-        entrypoint=func_id,
-    )
-    task_id = result["details"]["task_id"]
-
-    # Create guidance referencing this function
-    gm.add_guidance(
-        title="Function Guide",
-        content="How to use worker()",
-        function_ids=[func_id],
-    )
-
-    # Verify references
-    task = db.get_logs(
-        context=ts._ctx,
-        filter=f"task_id == {task_id}",
-        from_fields=["entrypoint"],
-    )
-    assert task[0].entries["entrypoint"] == func_id
-
-    guidance = db.get_logs(context=gm._ctx, from_fields=["function_ids"])
-    assert func_id in guidance[0].entries["function_ids"]
-
-    # Delete the function
-    fm.delete_function(function_id=func_id)
-
-    # Verify task survives with null entrypoint (SET NULL behavior)
-    task_after = db.get_logs(
-        context=ts._ctx,
-        filter=f"task_id == {task_id}",
-        from_fields=["task_id", "entrypoint"],
-    )
-    assert len(task_after) == 1  # Task still exists
-    assert task_after[0].entries.get("entrypoint") is None  # SET NULL
-
-    # Verify function_id removed from guidance array (CASCADE behavior)
-    guidance_after = db.get_logs(context=gm._ctx, from_fields=["function_ids"])
-    assert func_id not in guidance_after[0].entries.get(
-        "function_ids",
-        [],
-    )  # CASCADE removed it
-
-
-# --------------------------------------------------------------------------- #
 #  Integration: Complex Multi-Manager Sequence                                #
 # --------------------------------------------------------------------------- #
 
@@ -486,7 +401,7 @@ def test_delete_function_cascades_tasks_guidance():
 def test_complex_fk_sequence():
     """
     Test complex sequence involving all managers with FK relationships:
-    - Contacts, Images, Functions, Guidance, Tasks, Transcripts
+    - Contacts, Images, Functions, Guidance, Transcripts
 
     FK Policies:
     - Transcripts.sender_id → Contacts: SET NULL
@@ -494,20 +409,17 @@ def test_complex_fk_sequence():
     - Transcripts.images[*].raw_image_ref.image_id → Images: SET NULL
     - Guidance.images[*].raw_image_ref.image_id → Images: SET NULL
     - Guidance.function_ids[*] → Functions: CASCADE
-    - Tasks.entrypoint → Functions: SET NULL
     """
     from unify.contact_manager.contact_manager import ContactManager
     from unify.image_manager.image_manager import ImageManager
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
-    from unify.task_scheduler.task_scheduler import TaskScheduler
     from unify.transcript_manager.transcript_manager import TranscriptManager
 
     cm = ContactManager()
     im = ImageManager()
     fm = FunctionManager()
     gm = GuidanceManager()
-    ts = TaskScheduler()
     tm = TranscriptManager()
 
     # Helper for creating valid test images
@@ -579,18 +491,10 @@ def test_complex_fk_sequence():
     guidance_list = db.get_logs(context=gm._ctx, from_fields=["guidance_id"])
     guidance_id = int(guidance_list[0].entries["guidance_id"])
 
-    # Step 5: Create task with function entrypoint
-    result = ts._create_task(
-        name="Process Task",
-        description="Processing task",
-        entrypoint=func_id,
-    )
-    task_id = result["details"]["task_id"]
-
-    # Step 6: Log message with image
+    # Step 5: Log message with image
     tm.log_first_message_in_new_exchange(
         {
-            "medium": "email",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Check the guide",
@@ -611,7 +515,7 @@ def test_complex_fk_sequence():
     assert bob_id in messages[0].entries["receiver_ids"]
     assert messages[0].entries["images"][0]["raw_image_ref"]["image_id"] == img2_id
 
-    # Step 7: Delete img1 (used in guidance) - SET NULL behavior
+    # Step 6: Delete img1 (used in guidance) - SET NULL behavior
     img1_logs = db.get_logs(
         context=im._ctx,
         filter=f"image_id == {img1_id}",
@@ -631,19 +535,8 @@ def test_complex_fk_sequence():
         guid_imgs[0]["raw_image_ref"]["image_id"] is None
     )  # image_id replaced with None
 
-    # Step 8: Delete function (used in task and guidance)
+    # Step 7: Delete function (used in guidance)
     fm.delete_function(function_id=func_id)
-
-    # Task: SET NULL behavior (entrypoint becomes null)
-    task_check = db.get_logs(
-        context=ts._ctx,
-        filter=f"task_id == {task_id}",
-        from_fields=[
-            "task_id",
-            "entrypoint",
-        ],  # Include task_id to avoid NULL-only field omission
-    )
-    assert task_check[0].entries.get("entrypoint") is None  # SET NULL
 
     # Guidance: CASCADE behavior (function_id removed from array)
     guidance_check2 = db.get_logs(
@@ -656,7 +549,7 @@ def test_complex_fk_sequence():
         [],
     )  # CASCADE removed it
 
-    # Step 9: Delete Alice - SET NULL behavior (message survives with null sender)
+    # Step 8: Delete Alice - SET NULL behavior (message survives with null sender)
     cm._delete_contact(contact_id=alice_id)
 
     messages_check = db.get_logs(
@@ -683,7 +576,7 @@ def test_bulk_delete_preserves_fk_integrity():
 
     FK Policies:
     - Transcripts.sender_id → Contacts: SET NULL
-    - Transcripts.receiver_ids[*] → Contacts: SET NULL (in-place replacement)
+    - Transcripts.receiver_ids[*] → Contacts: SET NULL (deleted contact removed)
     """
     cm = ContactManager()
     tm = TranscriptManager()
@@ -709,7 +602,7 @@ def test_bulk_delete_preserves_fk_integrity():
         for receiver_id in contact_ids[5:]:
             tm.log_first_message_in_new_exchange(
                 {
-                    "medium": "sms_message",
+                    "medium": "unify_message",
                     "sender_id": sender_id,
                     "receiver_ids": [receiver_id],
                     "content": f"Message from {sender_id} to {receiver_id}",
@@ -859,7 +752,7 @@ def test_delete_exchange_cascades_messages():
     # Log first message (creates exchange)
     exchange_id, _ = tm.log_first_message_in_new_exchange(
         {
-            "medium": "sms_message",
+            "medium": "unify_message",
             "sender_id": alice_id,
             "receiver_ids": [bob_id],
             "content": "Message 1",
@@ -879,7 +772,7 @@ def test_delete_exchange_cascades_messages():
     for i in range(2, 6):
         tm.log_messages(
             {
-                "medium": "sms_message",
+                "medium": "unify_message",
                 "sender_id": bob_id if i % 2 == 0 else alice_id,
                 "receiver_ids": [alice_id if i % 2 == 0 else bob_id],
                 "content": f"Message {i}",

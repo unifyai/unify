@@ -27,8 +27,8 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
     ActorHandleStarted,
+    UnifyMessageReceived,
 )
 
 # Actions stay in-flight indefinitely with steps=None, duration=None.
@@ -72,7 +72,7 @@ async def test_two_unrelated_requests_create_two_tasks(initialized_cm):
 
     # Step 1: First task - web search
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search the web for the latest news about climate change.",
         ),
@@ -83,7 +83,7 @@ async def test_two_unrelated_requests_create_two_tasks(initialized_cm):
 
     # Step 2: Second task - completely unrelated contact lookup
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Also, find Alice's phone number for me.",
         ),
@@ -115,7 +115,7 @@ async def test_parallel_searches_different_topics(initialized_cm):
 
     # Step 1: First search - web search
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search the web for information about renewable energy.",
         ),
@@ -124,7 +124,7 @@ async def test_parallel_searches_different_topics(initialized_cm):
 
     # Step 2: Explicitly request a NEW task (make it very clear)
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="I need a second thing: look up Bob's phone number in my contacts.",
         ),
@@ -160,7 +160,7 @@ async def test_also_search_creates_new_task_not_interject(initialized_cm):
 
     # Step 1: First task - web search
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search the web for information about electric vehicles.",
         ),
@@ -170,7 +170,7 @@ async def test_also_search_creates_new_task_not_interject(initialized_cm):
 
     # Step 2: Different task type - contact lookup (clearly not an interject)
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Also, I need you to find Sarah's email address in my contacts.",
         ),
@@ -205,7 +205,7 @@ async def test_add_detail_to_same_topic_interjects(initialized_cm):
 
     # Step 1: Initial search
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search the web for AI regulation news.",
         ),
@@ -215,7 +215,7 @@ async def test_add_detail_to_same_topic_interjects(initialized_cm):
 
     # Step 2: Add constraint to the SAME search
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="For that search, focus on European regulations specifically.",
         ),
@@ -256,7 +256,7 @@ async def test_two_tasks_stop_one_specifically(initialized_cm):
 
     # Step 1: First task - web search
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search the web for the latest stock market news.",
         ),
@@ -265,7 +265,7 @@ async def test_two_tasks_stop_one_specifically(initialized_cm):
 
     # Step 2: Second task - contact lookup
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Also find Bob's contact information.",
         ),
@@ -273,7 +273,7 @@ async def test_two_tasks_stop_one_specifically(initialized_cm):
 
     # Step 3: Stop the web search specifically
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Cancel the stock market search, I don't need that anymore.",
         ),
@@ -306,7 +306,7 @@ async def test_two_tasks_ask_about_one_specifically(initialized_cm):
 
     # Step 1: First task - transcript search
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search my past conversations for anything about the Henderson deal.",
         ),
@@ -315,7 +315,7 @@ async def test_two_tasks_ask_about_one_specifically(initialized_cm):
 
     # Step 2: Second task - web search
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Also search the web for Henderson Company's latest quarterly report.",
         ),
@@ -324,7 +324,7 @@ async def test_two_tasks_ask_about_one_specifically(initialized_cm):
     # Step 3: Ask about the transcript search specifically
     # Note: With async ask, this takes more steps because:
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="How's the search through my past conversations going?",
         ),
@@ -362,7 +362,7 @@ async def test_stop_task_then_start_new_unrelated(initialized_cm):
 
     # Step 1: First task
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search for information about project deadlines.",
         ),
@@ -371,7 +371,7 @@ async def test_stop_task_then_start_new_unrelated(initialized_cm):
 
     # Step 2: Cancel it
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Never mind, cancel that search.",
         ),
@@ -381,7 +381,7 @@ async def test_stop_task_then_start_new_unrelated(initialized_cm):
 
     # Step 3: Start new unrelated task
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Actually, look up the weather in Tokyo for next week.",
         ),
@@ -413,7 +413,7 @@ async def test_sequential_tasks_after_completion_context(initialized_cm):
 
     # Step 1: First task - NYC contacts
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Find all my contacts who are based in New York City.",
         ),
@@ -422,7 +422,7 @@ async def test_sequential_tasks_after_completion_context(initialized_cm):
 
     # Step 2: Small talk
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Thanks, that's helpful.",
         ),
@@ -432,7 +432,7 @@ async def test_sequential_tasks_after_completion_context(initialized_cm):
 
     # Step 3: New request - LA contacts (similar pattern but different query)
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Now find all my contacts in Los Angeles.",
         ),
@@ -470,7 +470,7 @@ async def test_interject_first_then_start_second(initialized_cm):
 
     # Step 1: First task
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search the web for Italian restaurant reviews in Rome for my upcoming summer trip.",
         ),
@@ -479,7 +479,7 @@ async def test_interject_first_then_start_second(initialized_cm):
 
     # Step 2: Interject to narrow
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="For those restaurants, focus on ones near the Colosseum.",
         ),
@@ -487,7 +487,7 @@ async def test_interject_first_then_start_second(initialized_cm):
 
     # Step 3: Start unrelated task
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="By the way, find Alice's email address.",
         ),
@@ -523,7 +523,7 @@ async def test_three_tasks_rapid_succession(initialized_cm):
 
     # Task 1: Weather
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What's the weather in London?",
         ),
@@ -532,7 +532,7 @@ async def test_three_tasks_rapid_succession(initialized_cm):
 
     # Task 2: Contacts
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Find Bob's phone number.",
         ),
@@ -540,7 +540,7 @@ async def test_three_tasks_rapid_succession(initialized_cm):
 
     # Task 3: Transcript
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search my messages for anything about the budget meeting.",
         ),
@@ -573,7 +573,7 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
 
     # Step 1: First task (transcript search reliably starts an in-flight actor handle)
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Search my transcripts for anything about competitor pricing information."
@@ -584,7 +584,7 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
 
     # Step 2: Pause it
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Hold on that search for a moment.",
         ),
@@ -592,7 +592,7 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
 
     # Step 3: Start different task
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="While that's on hold, find Sarah's contact info.",
         ),
@@ -600,7 +600,7 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
 
     # Step 4: Resume first task
     result4 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="OK, go ahead with that competitor pricing transcript search now.",
         ),

@@ -840,7 +840,7 @@ def join_query(
         offset=0 if metric else offset,
     )
     if not metric:
-        return {"logs": rows, "count": len(rows)}
+        return {"logs": [row["entries"] for row in rows], "count": len(rows)}
     from .engine import _group_label, _reduce
 
     if key is None:

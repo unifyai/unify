@@ -19,7 +19,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     verify_contact_in_db,
 )
-from unify.conversation_manager.events import SMSReceived
+from unify.conversation_manager.events import UnifyMessageReceived
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -34,7 +34,7 @@ async def test_contact_lookup_by_email_returns_phone(initialized_cm_codeact):
     result = await cm.step_until_wait(
         # Use an exact identifier (email) to avoid semantic search (which can require
         # embedding/derived-log infrastructure and be flaky in local test backends).
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What's the phone number for the contact with email alice@example.com?",
         ),
@@ -59,7 +59,7 @@ async def test_contact_create_persists_in_db(initialized_cm_codeact):
     email = f"jane.{uuid.uuid4().hex[:8]}@example.com"
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=f"Please save a new contact: Jane Doe, email {email}",
         ),

@@ -8,14 +8,12 @@ These are symbolic tests that verify rendering logic without invoking the LLM.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from unify.conversation_manager.domains.contact_index import (
     ContactIndex,
-    EmailMessage,
-    Message,
     UnifyMessage,
 )
 from unify.conversation_manager.domains.notifications import (
@@ -29,13 +27,16 @@ from unify.conversation_manager.domains.renderer import (
     NotificationElement,
     ActionElement,
     compute_snapshot_diff,
-    _get_assistant_email_role,
+    _get_current_time_in_timezone,
 )
 
 pytestmark = pytest.mark.no_unify_context
 
+
 # =============================================================================
 # Test Fixtures
+
+
 # =============================================================================
 
 
@@ -45,371 +46,15 @@ def renderer():
     return Renderer()
 
 
-@pytest.fixture
-def sample_received_email():
-    """Create a sample received email where assistant is in To."""
-    return EmailMessage(
-        name="Alice Smith",
-        subject="Project Update",
-        body="Here's the latest update on the project.",
-        email_id="CAKx7fQ_test@mail.gmail.com",
-        timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-        role="user",
-        attachments=[],
-        to=["assistant@unify.ai"],
-        cc=["bob@example.com"],
-        bcc=[],
-        contact_role="sender",
-    )
-
-
-@pytest.fixture
-def sample_sent_email():
-    """Create a sample sent email from the assistant."""
-    return EmailMessage(
-        name="You",
-        subject="Re: Project Update",
-        body="Thanks for the update!",
-        email_id="CAKx7fQ_test@mail.gmail.com",
-        timestamp=datetime(2025, 6, 13, 12, 5, 0, tzinfo=timezone.utc),
-        role="assistant",
-        attachments=[],
-        to=["alice@example.com"],
-        cc=["bob@example.com"],
-        bcc=[],
-        contact_role="to",
-    )
-
-
-# =============================================================================
-# Tests for _get_assistant_email_role
-# =============================================================================
-
-
-class TestGetAssistantEmailRole:
-    """Tests for the _get_assistant_email_role helper function."""
-
-    def test_assistant_is_direct_recipient_to(self, static_now):
-        """When assistant's email is in To field, returns 'direct recipient'."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="user",
-            to=["assistant@unify.ai", "other@example.com"],
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            result = _get_assistant_email_role(email)
-            assert result == "You were a direct recipient (To)"
-
-    def test_assistant_is_cc_recipient(self, static_now):
-        """When assistant's email is in Cc field, returns 'CC'd'."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="user",
-            to=["bob@example.com"],
-            cc=["assistant@unify.ai"],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            result = _get_assistant_email_role(email)
-            assert result == "You were CC'd"
-
-    def test_assistant_is_bcc_recipient(self, static_now):
-        """When assistant's email is in Bcc field, returns 'BCC'd'."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="user",
-            to=["bob@example.com"],
-            cc=[],
-            bcc=["assistant@unify.ai"],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            result = _get_assistant_email_role(email)
-            assert result == "You were BCC'd"
-
-    def test_assistant_sent_email(self, static_now):
-        """When assistant sent the email (role=assistant), returns 'sent'."""
-        email = EmailMessage(
-            name="You",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="assistant",
-            to=["alice@example.com"],
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            result = _get_assistant_email_role(email)
-            assert result == "You sent this email"
-
-    def test_assistant_not_in_email(self, static_now):
-        """When assistant's email is not in any field, returns None."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="user",
-            to=["bob@example.com"],
-            cc=["charlie@example.com"],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            result = _get_assistant_email_role(email)
-            assert result is None
-
-    def test_case_insensitive_email_matching(self, static_now):
-        """Email matching should be case-insensitive."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="user",
-            to=["ASSISTANT@UNIFY.AI"],  # Uppercase
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"  # Lowercase
-            result = _get_assistant_email_role(email)
-            assert result == "You were a direct recipient (To)"
-
-    def test_no_assistant_email_configured(self, static_now):
-        """When assistant email is not configured, returns None."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Test",
-            body="Test body",
-            email_id="test@mail.gmail.com",
-            timestamp=static_now,
-            role="user",
-            to=["assistant@unify.ai"],
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = None
-            result = _get_assistant_email_role(email)
-            assert result is None
-
-
-# =============================================================================
-# Tests for Renderer.render_message with email assistant role
-# =============================================================================
-
-
-class TestRendererEmailAssistantRole:
-    """Tests for email rendering with assistant role context."""
-
-    def test_render_email_shows_assistant_role_when_direct_recipient(self, renderer):
-        """Rendered email includes '[Your role: ...]' when assistant is To recipient."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="Important Update",
-            body="Please review this.",
-            email_id="test123@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            to=["assistant@unify.ai"],
-            cc=[],
-            bcc=[],
-            contact_role="sender",
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            # Use a timestamp before the message to mark it as NEW
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(email, last_snapshot)
-
-            # Should contain assistant role line
-            assert "[Your role: You were a direct recipient (To)]" in result
-            # Should also contain contact role line
-            assert "[Context: This contact SENT this email]" in result
-
-    def test_render_email_shows_assistant_role_when_sender(self, renderer):
-        """Rendered email includes '[Your role: You sent this email]' for outgoing."""
-        email = EmailMessage(
-            name="You",
-            subject="Re: Important Update",
-            body="Got it, thanks!",
-            email_id="test123@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 5, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["alice@example.com"],
-            cc=[],
-            bcc=[],
-            contact_role="to",
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(email, last_snapshot)
-
-            # Should contain assistant role line for sent email
-            assert "[Your role: You sent this email]" in result
-
-    def test_render_email_no_assistant_role_when_not_involved(self, renderer):
-        """Rendered email does not include assistant role when not in email."""
-        email = EmailMessage(
-            name="Alice Smith",
-            subject="FYI",
-            body="Forwarding this for reference.",
-            email_id="test456@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            to=["bob@example.com"],  # Not assistant
-            cc=["charlie@example.com"],  # Not assistant
-            bcc=[],
-            contact_role="sender",
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(email, last_snapshot)
-
-            # Should NOT contain assistant role line
-            assert "[Your role:" not in result
-            # But should still contain contact role line
-            assert "[Context: This contact SENT this email]" in result
-
-
-# =============================================================================
-# Tests for SMS/Simple Message Rendering
-# =============================================================================
-
-
-class TestRendererSimpleMessage:
-    """Tests for simple Message rendering (SMS, phone call utterances)."""
-
-    def test_render_incoming_sms_shows_contact_name(self, renderer):
-        """Incoming SMS shows contact's name."""
-        message = Message(
-            name="Alice Smith",
-            content="Hey, can you call me back?",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(message, last_snapshot)
-
-        assert "[Alice Smith @" in result
-        assert "Hey, can you call me back?" in result
-        assert "**NEW**" in result  # Message is newer than last_snapshot
-
-    def test_render_outgoing_sms_shows_you(self, renderer):
-        """Outgoing SMS shows 'You' as the sender."""
-        message = Message(
-            name="You",
-            content="Sure, I'll call you in 5 minutes.",
-            timestamp=datetime(2025, 6, 13, 12, 5, 0, tzinfo=timezone.utc),
-            role="assistant",
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(message, last_snapshot)
-
-        assert "[You @" in result
-        assert "Sure, I'll call you in 5 minutes." in result
-
-    def test_render_old_message_no_new_marker(self, renderer):
-        """Messages older than last_snapshot don't have **NEW** marker."""
-        message = Message(
-            name="Alice Smith",
-            content="Old message",
-            timestamp=datetime(2025, 6, 13, 10, 0, 0, tzinfo=timezone.utc),
-            role="user",
-        )
-        # last_snapshot is AFTER the message timestamp
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(message, last_snapshot)
-
-        assert "**NEW**" not in result
-        assert "[Alice Smith @" in result
-
-    def test_render_message_with_screenshots(self, renderer):
-        """Message with screenshots renders filepath references."""
-        message = Message(
-            name="Alice Smith",
-            content="Click the blue button",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            screenshots=[
-                "Screenshots/User/2025-06-13T12-00-00.000000.jpg",
-                "Screenshots/Assistant/2025-06-13T12-00-00.100000.jpg",
-            ],
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(message, last_snapshot)
-
-        assert "Click the blue button" in result
-        assert "[Screenshots:" in result
-        assert "Screenshots/User/2025-06-13T12-00-00.000000.jpg" in result
-        assert "Screenshots/Assistant/2025-06-13T12-00-00.100000.jpg" in result
-
-    def test_render_message_without_screenshots_has_no_tag(self, renderer):
-        """Message without screenshots has no [Screenshots:] block."""
-        message = Message(
-            name="Alice Smith",
-            content="Just a normal message",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(message, last_snapshot)
-
-        assert "Just a normal message" in result
-        assert "[Screenshots:" not in result
-
-
 # =============================================================================
 # Tests for UnifyMessage Rendering
+
+
 # =============================================================================
 
 
 class TestRendererUnifyMessage:
-    """Tests for UnifyMessage rendering (Unify console chat)."""
+    """Tests for UnifyMessage rendering (in-app chat)."""
 
     def test_render_incoming_unify_message_shows_contact_name(self, renderer):
         """Incoming UnifyMessage shows contact's name."""
@@ -442,193 +87,42 @@ class TestRendererUnifyMessage:
         assert "[You @" in result
         assert "Done, I've sent the report." in result
 
-    def test_render_incoming_unify_message_with_attachments(self, renderer):
-        """Incoming UnifyMessage attachments show as auto-downloaded."""
+    def test_render_unify_message_with_attachments(self, renderer):
+        """Attachments render as ``filename (filepath)`` so the Actor can open them."""
         message = UnifyMessage(
             name="Boss",
             content="Here's the document.",
             timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
             role="user",
             attachments=[
-                {"id": "att-1", "filename": "report.pdf"},
-                {"id": "att-2", "filename": "data.xlsx"},
+                {
+                    "filename": "report.pdf",
+                    "filepath": "Attachments/report.pdf",
+                    "content_type": "application/pdf",
+                    "size_bytes": 1024,
+                },
+                {
+                    "filename": "data.xlsx",
+                    "filepath": "Attachments/data.xlsx",
+                    "content_type": "application/vnd.ms-excel",
+                    "size_bytes": 2048,
+                },
             ],
         )
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
         result = renderer.render_message(message, last_snapshot)
 
         assert "Here's the document." in result
-        assert "[Attachments:" in result
         assert (
-            "report.pdf (id: att-1, auto-downloaded to Attachments/att-1_report.pdf)"
-            in result
+            "[Attachments: report.pdf (Attachments/report.pdf), "
+            "data.xlsx (Attachments/data.xlsx)]" in result
         )
-        assert (
-            "data.xlsx (id: att-2, auto-downloaded to Attachments/att-2_data.xlsx)"
-            in result
-        )
-
-    def test_render_outgoing_unify_message_with_attachments(self, renderer):
-        """Outgoing UnifyMessage attachments show as 'attached'."""
-        message = UnifyMessage(
-            name="You",
-            content="Here's the analysis.",
-            timestamp=datetime(2025, 6, 13, 12, 5, 0, tzinfo=timezone.utc),
-            role="assistant",
-            attachments=[{"id": "att-1", "filename": "analysis.pdf"}],
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(message, last_snapshot)
-
-        assert "Here's the analysis." in result
-        assert "[Attachments:" in result
-        assert "analysis.pdf (id: att-1, attached)" in result
-        # Should NOT say "auto-downloaded"
-        assert "auto-downloaded" not in result
-
-
-OWN_AGENT_ID = 8034
-
-
-class TestRendererRoomAddressing:
-    """A room message says who it named, from this assistant's point of view.
-
-    Every member assistant receives its own copy, so "was I asked, or was
-    someone else?" decides who answers. Both halves of that have gone wrong in
-    production: an assistant read its own name in a list as a teammate's and
-    stood down from a message aimed at it, and an empty mention list was
-    asserted as "nobody addressed" when it only meant the sender typed the "@"
-    by hand.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _own_identity(self):
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.agent_id = OWN_AGENT_ID
-            mock_session.assistant.email = ""
-            mock_session.is_private_coordinator = False
-            yield
-
-    def _room_message(self, mentions=None, **scope):
-        return UnifyMessage(
-            name="Boss",
-            content="can someone pull the numbers?",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            attachments=[],
-            mentions=mentions or [],
-            **scope,
-        )
-
-    def _render(self, renderer, message):
-        return renderer.render_message(
-            message,
-            datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
-        )
-
-    def _me(self, name="Lila Down"):
-        return {"kind": "assistant", "id": str(OWN_AGENT_ID), "name": name}
-
-    def test_being_addressed_is_reported_as_me_not_as_my_name(self, renderer):
-        """The regression: my own name in a list read as a teammate's."""
-        result = self._render(
-            renderer,
-            self._room_message(mentions=[self._me()], team_id=7),
-        )
-
-        assert "addressed to me;" in result
-        assert "Lila Down (not me)" not in result
-
-    def test_a_named_teammate_is_marked_as_not_me(self, renderer):
-        result = self._render(
-            renderer,
-            self._room_message(
-                mentions=[{"kind": "assistant", "id": "22", "name": "Ada"}],
-                team_id=7,
-            ),
-        )
-
-        assert "addressed to Ada (not me);" in result
-
-    def test_me_alongside_others_still_counts_as_me(self, renderer):
-        result = self._render(
-            renderer,
-            self._room_message(
-                mentions=[
-                    self._me(),
-                    {"kind": "human", "id": "u1", "name": "Bo"},
-                ],
-                group_id=9,
-            ),
-        )
-
-        assert "addressed to me and Bo;" in result
-
-    def test_identity_is_matched_on_id_not_display_name(self, renderer):
-        """Two teammates can share a name; only the id is identity."""
-        result = self._render(
-            renderer,
-            self._room_message(
-                mentions=[{"kind": "assistant", "id": "99", "name": "Lila Down"}],
-                team_id=7,
-            ),
-        )
-
-        assert "addressed to Lila Down (not me);" in result
-
-    def test_a_human_sharing_my_agent_id_is_not_me(self, renderer):
-        """Human and assistant ids live in different spaces and can collide."""
-        result = self._render(
-            renderer,
-            self._room_message(
-                mentions=[{"kind": "human", "id": str(OWN_AGENT_ID), "name": "Bo"}],
-                team_id=7,
-            ),
-        )
-
-        assert "addressed to Bo (not me);" in result
-
-    def test_no_mentions_says_nothing_rather_than_claiming_nobody(self, renderer):
-        """Empty also means "typed by hand", so it cannot assert a negative."""
-        result = self._render(renderer, self._room_message(team_id=7))
-
-        assert "addressed" not in result
-        assert 'team chat team_id="7"' in result
-
-    def test_a_malformed_mention_does_not_break_rendering(self, renderer):
-        """Mentions cross a wire; a nameless entry must not take the line down."""
-        result = self._render(
-            renderer,
-            self._room_message(
-                mentions=[{"kind": "assistant", "id": "22"}, "not-a-dict"],
-                team_id=7,
-            ),
-        )
-
-        assert "addressed" not in result
-        assert "can someone pull the numbers?" in result
-
-    def test_a_private_thread_gets_no_room_annotation(self, renderer):
-        """A 1:1 Console DM has one recipient, so there is nothing to arbitrate."""
-        result = self._render(
-            renderer,
-            self._room_message(mentions=[self._me()]),
-        )
-
-        assert "addressed to" not in result
-        assert "team chat" not in result
-
-    def test_the_reply_route_is_still_named(self, renderer):
-        """Addressing is added to the scope annotation, not instead of it."""
-        result = self._render(renderer, self._room_message(group_id=9))
-
-        assert "send_unify_message(group_id=9)" in result
 
 
 # =============================================================================
 # Tests for Incremental Diff
+
+
 # =============================================================================
 
 
@@ -738,9 +232,9 @@ class TestComputeSnapshotDiff:
             notifications=[
                 NotificationElement(
                     timestamp=ts1,
-                    content_hash=hash("Task started"),
+                    content_hash=hash("Action started"),
                     pinned=False,
-                    rendered="[Task Notification] Task started",
+                    rendered="[Action Notification] Action started",
                 ),
             ],
         )
@@ -749,23 +243,23 @@ class TestComputeSnapshotDiff:
             notifications=[
                 NotificationElement(
                     timestamp=ts1,
-                    content_hash=hash("Task started"),
+                    content_hash=hash("Action started"),
                     pinned=False,
-                    rendered="[Task Notification] Task started",
+                    rendered="[Action Notification] Action started",
                 ),
                 NotificationElement(
                     timestamp=ts2,
-                    content_hash=hash("Task completed"),
+                    content_hash=hash("Action completed"),
                     pinned=False,
-                    rendered="[Task Notification] Task completed",
+                    rendered="[Action Notification] Action completed",
                 ),
             ],
         )
 
         diff = compute_snapshot_diff(old_snapshot, new_snapshot)
         assert "<new_notifications>" in diff
-        assert "Task completed" in diff
-        assert "Task started" not in diff  # Old notification not in diff
+        assert "Action completed" in diff
+        assert "Action started" not in diff  # Old notification not in diff
 
     def test_diff_includes_action_state_changes(self):
         """Action state changes are included in <action_updates> section."""
@@ -921,106 +415,6 @@ class TestRenderStateWithTracking:
 
         assert result.full_render.split("\n\n")[-1] == f"Current time: {now()}."
 
-    def test_snapshot_has_no_console_pane_before_the_console_publishes(
-        self,
-        renderer,
-        contact_index,
-        notification_bar,
-    ):
-        """A session the Console never joined carries no console pane at all.
-
-        With no console knowledge in the system prompt there is nothing to
-        scope, so the pane is absent rather than rendered closed.
-        """
-        result = renderer.render_state(
-            contact_index,
-            notification_bar,
-            in_flight_actions={},
-            last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
-        )
-
-        assert "<console" not in result.full_render
-        assert result.full_render.split("\n\n")[-1].startswith("Current time:")
-
-    def test_snapshot_console_pane_lists_targets_while_the_console_is_open(
-        self,
-        renderer,
-        contact_index,
-        notification_bar,
-    ):
-        """An open console renders the open signal plus its drivable targets.
-
-        The pane sits second-to-last so presence churn re-tokenizes only the
-        snapshot tail; the clock pane stays last.
-        """
-        from unify.common.prompt_helpers import now
-
-        catalogue = "- `section:integrations` — Integrations"
-
-        result = renderer.render_state(
-            contact_index,
-            notification_bar,
-            in_flight_actions={},
-            last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
-            console_open=True,
-            console_action_catalogue=catalogue,
-        )
-
-        assert "<console status='open'>" in result.full_render
-        assert catalogue in result.full_render
-        assert result.full_render.endswith(f"</console>\n\nCurrent time: {now()}.")
-
-    def test_snapshot_console_pane_shrinks_to_a_closed_notice_when_shut(
-        self,
-        renderer,
-        contact_index,
-        notification_bar,
-    ):
-        """Once published, a shut console renders a one-line closed notice.
-
-        The catalogue disappears with the console — a target nobody can watch
-        being driven is not offered — but the pane itself stays so the model
-        knows `show_in_console` would error right now.
-        """
-        from unify.common.prompt_helpers import now
-
-        catalogue = "- `section:integrations` — Integrations"
-
-        result = renderer.render_state(
-            contact_index,
-            notification_bar,
-            in_flight_actions={},
-            last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
-            console_open=False,
-            console_action_catalogue=catalogue,
-        )
-
-        assert "<console status='closed'>" in result.full_render
-        assert catalogue not in result.full_render
-        assert result.full_render.endswith(f"</console>\n\nCurrent time: {now()}.")
-
-    def test_forwards_meet_screen_share_flag(
-        self,
-        renderer,
-        contact_index,
-        notification_bar,
-    ):
-        """render_state accepts and forwards meet_screen_share_active.
-
-        ConversationManager passes this kwarg on every snapshot; the meet
-        screenshare fix originally added it only to
-        render_meet_interaction_state, so every render_state call raised
-        TypeError and no slow-brain turn could render a prompt.
-        """
-        result = renderer.render_state(
-            contact_index,
-            notification_bar,
-            in_flight_actions={},
-            google_meet_active=True,
-            meet_screen_share_active=True,
-        )
-        assert "<meet_shared_screen status='live'>" in result.full_render
-
     def test_tracks_messages_in_conversation(
         self,
         renderer,
@@ -1028,14 +422,10 @@ class TestRenderStateWithTracking:
         notification_bar,
     ):
         """Messages in conversations are tracked with identity."""
-        from unify.conversation_manager.cm_types import Medium
-
-        # Add a message to the conversation
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
         contact_index.push_message(
             contact_id=1,
             sender_name="Alice",
-            thread_name=Medium.SMS_MESSAGE,
             message_content="Hello there!",
             timestamp=ts1,
             role="user",
@@ -1064,8 +454,6 @@ class TestRenderStateWithTracking:
         monkeypatch,
     ):
         """Active conversation rendering gets assistant timezone from common helper."""
-        from unify.conversation_manager.cm_types import Medium
-
         calls = []
 
         def fake_get_assistant_timezone():
@@ -1081,7 +469,6 @@ class TestRenderStateWithTracking:
         contact_index.push_message(
             contact_id=1,
             sender_name="Alice",
-            thread_name=Medium.SMS_MESSAGE,
             message_content="Hello there!",
             timestamp=ts1,
             role="user",
@@ -1113,25 +500,25 @@ class TestRenderStateWithTracking:
             recent_tool_executions=[
                 {
                     "generation": 2,
-                    "origin_event_name": "SMSSent",
-                    "tool_name": "create_team",
-                    "args_preview": '{"name":"Ops HQ"}',
-                    "result_preview": '{"team_id":11}',
+                    "origin_event_name": "UnifyMessageReceived",
+                    "tool_name": "ask_about_contacts",
+                    "args_preview": '{"query":"Who is Alice?"}',
+                    "result_preview": '{"answer":"Alice Smith"}',
                 },
             ],
             last_snapshot=last_snapshot,
         )
 
         assert "<recent_tool_executions>" in result.full_render
-        assert "tool=create_team" in result.full_render
-        assert "origin=SMSSent" in result.full_render
+        assert "tool=ask_about_contacts" in result.full_render
+        assert "origin=UnifyMessageReceived" in result.full_render
 
     def test_tracks_notifications(self, renderer, contact_index, notification_bar):
         """Notifications are tracked with identity."""
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
         notification_bar.notifications.append(
             Notification(
-                type="task",
+                type="action",
                 content="Action completed successfully",
                 timestamp=ts1,
                 pinned=False,
@@ -1188,15 +575,13 @@ class TestRenderStateWithTracking:
 
 # =============================================================================
 # Tests for Render Caps
+
+
 # =============================================================================
 
 
 class TestRenderCaps:
     """Tests verifying that all render caps are respected."""
-
-    @pytest.fixture
-    def renderer(self):
-        return Renderer()
 
     def test_pinned_notifications_capped(self, renderer):
         """Only the most recent max_pinned pinned notifications are rendered;
@@ -1213,7 +598,7 @@ class TestRenderCaps:
         # Add transient notifications (newer than last_snapshot)
         for i in range(3):
             bar.push_notif(
-                "Comms",
+                "Action",
                 f"transient_{i}",
                 datetime(2025, 6, 13, 12, 30, i, tzinfo=timezone.utc),
                 pinned=False,
@@ -1315,15 +700,13 @@ class TestRenderCaps:
 
 # =============================================================================
 # Tests for Completed Actions Rendering
+
+
 # =============================================================================
 
 
 class TestRenderCompletedActions:
     """Tests for render_completed_actions method."""
-
-    @pytest.fixture
-    def renderer(self):
-        return Renderer()
 
     def test_empty_completed_actions(self, renderer):
         """Empty completed_actions renders placeholder text."""
@@ -1363,47 +746,6 @@ class TestRenderCompletedActions:
         assert "pause_" not in result
         assert "resume_" not in result
         assert "interject_" not in result
-        # No task_description was set, so the tag must not appear at all.
-        assert "<task_description>" not in result
-
-    def test_completed_action_with_task_description_renders_both_tags(
-        self,
-        renderer,
-    ):
-        """A live task handle carrying task_description renders it alongside
-        original_request, so the brain sees the task's own authored
-        instructions (e.g. delivery intent) next to the result.
-        """
-        completed_actions = {
-            0: {
-                "handle": MagicMock(),
-                "query": "Provider event started task 101 (operation op-1).",
-                "action_type": "task",
-                "task_description": (
-                    "Deliver this summary unprompted to Yusha via task "
-                    "completion delivery."
-                ),
-                "handle_actions": [
-                    {
-                        "action_name": "act_completed",
-                        "query": "Done.",
-                        "success": True,
-                        "result": "Done.",
-                    },
-                ],
-            },
-        }
-
-        result = renderer.render_completed_actions(completed_actions)
-
-        assert (
-            "<original_request>Provider event started task 101 "
-            "(operation op-1).</original_request>" in result
-        )
-        assert (
-            "<task_description>Deliver this summary unprompted to Yusha via "
-            "task completion delivery.</task_description>" in result
-        )
 
     def test_multiple_completed_actions(self, renderer):
         """Multiple completed actions render correctly."""
@@ -1415,7 +757,7 @@ class TestRenderCompletedActions:
             },
             1: {
                 "handle": MagicMock(),
-                "query": "Create a task for follow-up",
+                "query": "Summarise the last conversation with Alice",
                 "handle_actions": [],
             },
         }
@@ -1427,21 +769,21 @@ class TestRenderCompletedActions:
         assert "id='0'" in result
         assert "id='1'" in result
         assert "Search for engineering contacts" in result
-        assert "Create a task for follow-up" in result
+        assert "Summarise the last conversation with Alice" in result
 
     def test_failed_completed_action_renders_error_state(self, renderer):
         """Failed actions render explicit failed status and error text."""
         completed_actions = {
             0: {
                 "handle": MagicMock(),
-                "query": "Run coordinator membership repair",
+                "query": "Merge the duplicate Alice contacts",
                 "action_type": "act",
                 "handle_actions": [
                     {
                         "action_name": "act_failed",
-                        "query": "Coordinator role required",
+                        "query": "Contact 7 not found",
                         "success": False,
-                        "error": "Coordinator role required",
+                        "error": "Contact 7 not found",
                     },
                 ],
             },
@@ -1450,16 +792,10 @@ class TestRenderCompletedActions:
         result = renderer.render_completed_actions(completed_actions)
 
         assert "status='failed'" in result
-        assert "<error>Coordinator role required</error>" in result
+        assert "<error>Contact 7 not found</error>" in result
 
-    def test_render_state_includes_completed_actions(
-        self,
-        renderer,
-    ):
+    def test_render_state_includes_completed_actions(self, renderer):
         """render_state includes completed_actions section."""
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-        from unify.conversation_manager.domains.notifications import NotificationBar
-
         contact_index = ContactIndex()
         notification_bar = NotificationBar()
         completed_actions = {
@@ -1484,135 +820,17 @@ class TestRenderCompletedActions:
 
 
 # =============================================================================
-# Tests for Participant Timezone Rendering
+# Tests for Timezone Rendering
+
+
 # =============================================================================
 
 
-class TestParticipantTimezones:
-    """Tests for participant timezone display in all message types."""
+class TestMessageTimezones:
+    """Tests for the timezone block rendered beneath chat messages."""
 
-    @pytest.fixture
-    def renderer(self):
-        return Renderer()
-
-    @pytest.fixture
-    def contact_index_with_timezones(self):
-        """Create a ContactIndex with contacts having different timezones."""
-        ci = ContactIndex()
-        ci._fallback_contacts = {
-            5: {
-                "contact_id": 5,
-                "first_name": "Alice",
-                "surname": "Smith",
-                "email_address": "alice@example.com",
-                "timezone": "America/New_York",
-            },
-            8: {
-                "contact_id": 8,
-                "first_name": "Bob",
-                "surname": "Jones",
-                "email_address": "bob@example.com",
-                "timezone": "America/Los_Angeles",
-            },
-            12: {
-                "contact_id": 12,
-                "first_name": "Carol",
-                "surname": "White",
-                "email_address": "carol@example.com",
-                "timezone": "Europe/London",
-            },
-            15: {
-                "contact_id": 15,
-                "first_name": "Dave",
-                "surname": "Brown",
-                "email_address": "dave@example.com",
-                "timezone": "Asia/Tokyo",
-            },
-            20: {
-                "contact_id": 20,
-                "first_name": "Eve",
-                "surname": "Green",
-                "email_address": "eve@example.com",
-                "timezone": None,  # No timezone set
-            },
-        }
-        return ci
-
-    # =========================================================================
-    # SMS Message Tests
-    # =========================================================================
-
-    def test_sms_shows_timezone_block_when_different(self, renderer):
-        """SMS message shows timezone block when contact and assistant have different timezones."""
-        sms = Message(
-            name="Alice Smith",
-            content="Hey, can you call me?",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(
-            sms,
-            last_snapshot,
-            contact_name="Alice Smith",
-            contact_timezone="America/Los_Angeles",
-            assistant_timezone="America/New_York",
-        )
-
-        # Should have [Now: ...] format with both timezones
-        assert "[Now:" in result
-        assert "You" in result
-        assert "Alice Smith" in result
-        assert "America/New_York" in result
-        assert "America/Los_Angeles" in result
-        assert "|" in result  # Different timezones separated by |
-
-    def test_sms_shows_grouped_timezone_when_same(self, renderer):
-        """SMS message shows grouped timezone when contact and assistant share timezone."""
-        sms = Message(
-            name="Alice Smith",
-            content="Hey, can you call me?",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(
-            sms,
-            last_snapshot,
-            contact_name="Alice Smith",
-            contact_timezone="America/New_York",
-            assistant_timezone="America/New_York",
-        )
-
-        # Should have [Now: You and Alice Smith ...] format (grouped)
-        assert "[Now:" in result
-        assert "You and Alice Smith" in result
-        assert "America/New_York" in result
-        # Should NOT have separator since same timezone
-        assert "|" not in result
-
-    def test_sms_no_timezone_block_without_params(self, renderer):
-        """SMS message without timezone params doesn't show timezone block."""
-        sms = Message(
-            name="Alice Smith",
-            content="Hey there!",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(sms, last_snapshot)
-
-        # Should NOT have timezone block
-        assert "[Now:" not in result
-
-    # =========================================================================
-    # UnifyMessage Tests
-    # =========================================================================
-
-    def test_unify_message_shows_timezone_block(self, renderer):
-        """UnifyMessage shows timezone block with contact and assistant timezones."""
-        from unify.conversation_manager.domains.contact_index import UnifyMessage
-
+    def test_unify_message_shows_timezone_block_when_different(self, renderer):
+        """Contact and assistant in different timezones render both, separated by |."""
         msg = UnifyMessage(
             name="Boss",
             content="Please send the report",
@@ -1634,244 +852,7 @@ class TestParticipantTimezones:
         assert "The Boss" in result
         assert "Europe/London" in result
         assert "America/New_York" in result
-
-    # =========================================================================
-    # Email Message Tests
-    # =========================================================================
-
-    def test_email_shows_assistant_and_recipients_timezones(
-        self,
-        renderer,
-        contact_index_with_timezones,
-    ):
-        """Email rendering includes assistant and all recipient timezones."""
-        email = EmailMessage(
-            name="You",
-            subject="Team Update",
-            body="Hello team!",
-            email_id="test123@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["alice@example.com"],  # America/New_York
-            cc=["carol@example.com"],  # Europe/London
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=contact_index_with_timezones,
-                assistant_timezone="America/New_York",
-            )
-
-        # Should have [Now: ...] format
-        assert "[Now:" in result
-        # Assistant and Alice share America/New_York
-        assert "America/New_York" in result
-        # Carol is in Europe/London
-        assert "Europe/London" in result
-
-    def test_email_groups_assistant_with_same_timezone_recipients(
-        self,
-        renderer,
-        contact_index_with_timezones,
-    ):
-        """When assistant and recipient share timezone, they're grouped together."""
-        email = EmailMessage(
-            name="You",
-            subject="Quick Note",
-            body="Hi Alice",
-            email_id="test456@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["alice@example.com"],  # America/New_York (same as assistant)
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=contact_index_with_timezones,
-                assistant_timezone="America/New_York",
-            )
-
-        # You and Alice should be grouped (same timezone)
-        assert "You and Alice Smith" in result
-        # Should not have separator
-        assert "|" not in result.split("[Now:")[1].split("]")[0]
-
-    def test_email_shows_multiple_timezones_with_separator(
-        self,
-        renderer,
-        contact_index_with_timezones,
-    ):
-        """Email with recipients in different timezones shows them separated by |."""
-        email = EmailMessage(
-            name="You",
-            subject="Global Update",
-            body="Hello everyone!",
-            email_id="test789@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["bob@example.com"],  # America/Los_Angeles
-            cc=["carol@example.com"],  # Europe/London
-            bcc=["dave@example.com"],  # Asia/Tokyo
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=contact_index_with_timezones,
-                assistant_timezone="America/New_York",
-            )
-
-        # All timezones should be present
-        assert "America/New_York" in result  # Assistant
-        assert "America/Los_Angeles" in result  # Bob
-        assert "Europe/London" in result  # Carol
-        assert "Asia/Tokyo" in result  # Dave
-        # Multiple separators for multiple timezone groups
-        assert result.count("|") >= 3
-
-    def test_email_shows_unknown_for_contacts_without_timezone(
-        self,
-        renderer,
-        contact_index_with_timezones,
-    ):
-        """Contacts without timezone are shown as unknown."""
-        email = EmailMessage(
-            name="You",
-            subject="Note",
-            body="Hi",
-            email_id="test000@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["eve@example.com"],  # No timezone set
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=contact_index_with_timezones,
-                assistant_timezone="America/New_York",
-            )
-
-        # Should show unknown timezone for Eve
-        assert "unknown timezone" in result.lower()
-        assert "Eve Green" in result
-
-    def test_email_no_timezone_block_without_contact_index(self, renderer):
-        """Email rendering without contact_index doesn't include timezone block."""
-        email = EmailMessage(
-            name="You",
-            subject="Test",
-            body="Hello",
-            email_id="test222@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["alice@example.com"],
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=None,  # No contact index
-            )
-
-        # Should NOT include timezone section
-        assert "[Now:" not in result
-
-    def test_email_no_timezone_block_for_empty_recipients(
-        self,
-        renderer,
-        contact_index_with_timezones,
-    ):
-        """Email with no recipients doesn't include timezone block."""
-        email = EmailMessage(
-            name="You",
-            subject="Draft",
-            body="Draft content",
-            email_id="test333@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=[],
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=contact_index_with_timezones,
-            )
-
-        # Should NOT include timezone section (no recipients)
-        assert "[Now:" not in result
-
-    def test_timezone_includes_current_time_format(
-        self,
-        renderer,
-        contact_index_with_timezones,
-    ):
-        """Timezone display includes current local time in standard format."""
-        email = EmailMessage(
-            name="You",
-            subject="Time Check",
-            body="What time is it there?",
-            email_id="test444@mail.gmail.com",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="assistant",
-            to=["bob@example.com"],  # Different timezone than assistant
-            cc=[],
-            bcc=[],
-        )
-        with patch(
-            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
-        ) as mock_session:
-            mock_session.assistant.email = "assistant@unify.ai"
-            last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-            result = renderer.render_message(
-                email,
-                last_snapshot,
-                contact_index=contact_index_with_timezones,
-                assistant_timezone="America/New_York",
-            )
-
-        # Should have format like "[Now: ... HH:MM AM/PM (timezone)]"
-        import re
-
-        # Match pattern like "12:30 PM (America/New_York)" or "1:30 AM (America/Los_Angeles)"
-        pattern = r"\d{1,2}:\d{2} [AP]M \(America/"
-        assert re.search(pattern, result), f"Time format not found in: {result}"
+        assert "|" in result
 
     def test_current_time_reads_the_freezable_clock(self):
         """The timezone block must go through ``prompt_helpers.now``.
@@ -1881,10 +862,6 @@ class TestParticipantTimezones:
         here puts the wall-clock minute into every prompt, which changes the
         LLM cache key on each run and makes cached flows miss.
         """
-        from unify.conversation_manager.domains.renderer import (
-            _get_current_time_in_timezone,
-        )
-
         # The autouse stub freezes now() at 2025-06-13 12:00 UTC.
         assert _get_current_time_in_timezone("UTC") == "12:00 PM"
         assert _get_current_time_in_timezone("America/New_York") == "8:00 AM"
@@ -1896,68 +873,5 @@ class TestParticipantTimezones:
         **NEW** markers order correctly; at minute precision that must still
         render one identical string, or a single prompt disagrees with itself.
         """
-        from unify.conversation_manager.domains.renderer import (
-            _get_current_time_in_timezone,
-        )
-
         rendered = {_get_current_time_in_timezone("Europe/London") for _ in range(5)}
         assert rendered == {"1:00 PM"}
-
-
-class TestCompletedTaskResponsePolicy:
-    """The author's delivery instruction has to reach the turn that can act on it."""
-
-    def test_response_policy_renders_beside_the_result(self, renderer):
-        """Without this the relay decision is taken with no statement of intent.
-
-        `response_policy` is written when the task is set up — "Deliver the
-        briefing as one chat message" — and used to be rendered only into the
-        actor's own request, which is the one place that cannot send chat. The
-        conversation turn that can send saw the result and nothing about what
-        was supposed to happen to it, and went both ways on identical inputs.
-        """
-        completed_actions = {
-            0: {
-                "handle": MagicMock(),
-                "query": "Scheduled task due now: 'Daily briefing' (task_id=1).",
-                "action_type": "task",
-                "task_description": "Compose and deliver the morning briefing.",
-                "response_policy": "Deliver the briefing as one chat message.",
-                "handle_actions": [
-                    {
-                        "action_name": "act_completed",
-                        "query": "## Today …",
-                        "success": True,
-                        "result": "## Today …",
-                    },
-                ],
-            },
-        }
-
-        result = renderer.render_completed_actions(completed_actions)
-
-        assert (
-            "<task_response_policy>Deliver the briefing as one chat message."
-            "</task_response_policy>" in result
-        )
-        assert "<result>## Today …</result>" in result
-
-    def test_absent_policy_renders_no_tag(self, renderer):
-        """An ordinary act carries no delivery contract and must not imply one."""
-        completed_actions = {
-            0: {
-                "handle": MagicMock(),
-                "query": "Look something up.",
-                "handle_actions": [
-                    {
-                        "action_name": "act_completed",
-                        "query": "Found it.",
-                        "success": True,
-                    },
-                ],
-            },
-        }
-
-        assert "<task_response_policy>" not in renderer.render_completed_actions(
-            completed_actions,
-        )

@@ -1,11 +1,11 @@
 """
-Integration tests for the real DataManager against the Unify backend.
+Integration tests for the real DataManager against the local store.
 
 These tests exercise the full DataManager public API (table CRUD, column ops,
-query/mutation/embedding/join operations) using the real backend,
+query/mutation/embedding/join operations) using the real store,
 following the same ``@_handle_project`` pattern as ContactManager's test_basic.py.
 
-Each test gets a fresh, isolated Unify context that is cleaned up after the test.
+Each test gets a fresh, isolated context that is cleaned up after the test.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from unify.db import StoreError
+from unify.db import DuplicateKey
 from unify.data_manager.data_manager import DataManager
 from unify.data_manager.types import TableDescription
 from unify.manager_registry import ManagerRegistry
@@ -387,7 +387,7 @@ def test_insert_with_unique_keys():
     )
 
     dm.insert_rows(path, [{"sku": "A1", "price": 10.0}])
-    with pytest.raises(StoreError, match="Duplicate composite key"):
+    with pytest.raises(DuplicateKey, match="sku"):
         dm.insert_rows(path, [{"sku": "A1", "price": 15.0}])
 
     rows = dm.filter(path)
@@ -704,23 +704,9 @@ def test_reduce_with_group_by():
 
     results = dm.reduce(path, metric="sum", columns="amount", group_by="category")
 
-    # reduce with group_by returns a dict keyed by group value, e.g.
-    # {"A": {"sum": 30.0, ...}, "B": {"sum": 50.0, ...}}
-    assert isinstance(results, dict)
-    assert "A" in results
-    assert "B" in results
-
-    # The backend may return "sum" or "shared_value" depending on group size;
-    # extract whichever is non-None.
-    def _get_metric(group_result: dict) -> float:
-        val = group_result.get("sum")
-        if val is None:
-            val = group_result.get("shared_value")
-        assert val is not None
-        return val
-
-    assert _get_metric(results["A"]) == 30.0
-    assert _get_metric(results["B"]) == 50.0
+    # A single column with group_by reduces to a dict keyed by group value,
+    # each leaf being the metric for that group: {"A": 30.0, "B": 50.0}.
+    assert results == {"A": 30.0, "B": 50.0}
 
 
 # ────────────────────────────────────────────────────────────────────────────

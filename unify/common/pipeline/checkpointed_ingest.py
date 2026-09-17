@@ -1,9 +1,10 @@
-"""Resumable table ingestion, shared by every tier that ingests.
+"""Resumable table ingestion, shared by every path that ingests.
 
-This is the one place rows are written. In-process execution and the worker fleet
-both call it, which is what makes the tier choice a question of latency rather
-than of guarantees: the artifacts, the leases, the checkpoints and the completion
-check are the same code, so a run interrupted anywhere resumes anywhere.
+This is the one place rows are written. Direct execution and queue workers
+both call it, which is what makes the execution path a question of latency
+rather than of guarantees: the artifacts, the leases, the checkpoints and the
+completion check are the same code, so a run interrupted anywhere resumes
+anywhere.
 
 Three invariants hold it together, and each exists because of a specific way
 ingestion goes wrong when it is interrupted:

@@ -47,7 +47,7 @@ class InMemoryPubSub:
 
     Usage:
         async with broker.pubsub() as pubsub:
-            await pubsub.psubscribe("app:comms:*")
+            await pubsub.psubscribe("app:actor:*")
             msg = await pubsub.get_message(timeout=1.0, ignore_subscribe_messages=True)
     """
 
@@ -206,7 +206,7 @@ class InMemoryEventBroker:
 
         # Subscribing
         async with broker.pubsub() as pubsub:
-            await pubsub.psubscribe("app:comms:*")
+            await pubsub.psubscribe("app:actor:*")
             while True:
                 msg = await pubsub.get_message(timeout=1.0)
                 if msg:

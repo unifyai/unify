@@ -94,7 +94,7 @@ def test_updates_transcripts():
     EX_ID = 12345  # unique exchange identifier
     tm.log_messages(
         Message(
-            medium="email",
+            medium="unify_message",
             sender_id=cid2,
             receiver_ids=[cid1],
             timestamp=datetime.now(timezone.utc),
@@ -102,7 +102,6 @@ def test_updates_transcripts():
             exchange_id=EX_ID,
         ),
     )
-    tm.join_published()
 
     # Sanity – cid2 should be present as sender before merge
     before = tm._filter_messages(

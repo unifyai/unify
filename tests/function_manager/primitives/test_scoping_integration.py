@@ -119,56 +119,29 @@ def test_state_manager_env_get_tools_respects_scope():
         ), f"Tool '{tool_name}' should not be exposed for files-only scope"
 
 
-def test_state_manager_env_exposes_comms_namespace_when_scoped():
-    """Comms-only scope should expose assistant-owned comms under `primitives.comms`."""
-    scope = PrimitiveScope.single("comms")
-    env = StateManagerEnvironment(Primitives(primitive_scope=scope))
-    tools = env.get_tools()
-
-    expected = {
-        "primitives.comms.send_sms",
-        "primitives.comms.send_whatsapp",
-        "primitives.comms.send_discord_message",
-        "primitives.comms.send_discord_channel_message",
-        "primitives.comms.send_unify_message",
-        "primitives.comms.send_api_response",
-        "primitives.comms.send_email",
-        "primitives.comms.make_call",
-        "primitives.comms.make_whatsapp_call",
-    }
-
-    assert expected.issubset(set(tools))
-    assert all(name.startswith("primitives.comms.") for name in tools)
-
-
-def test_state_manager_env_excludes_computer_primitives():
+def test_state_manager_env_excludes_actor_primitives():
     """StateManagerEnvironment respects the scope it is given.
 
-    When the scope excludes computer, no computer primitives appear.
-    When the scope includes computer, they flow through like any other manager.
+    When the scope excludes actor, no actor primitives appear.
+    When the scope includes actor, they flow through like any other manager.
     """
-    # Scope without computer → no computer primitives.
-    sm_only = frozenset(VALID_MANAGER_ALIASES - {"computer", "actor"})
+    # Scope without actor → no actor primitives.
+    sm_only = frozenset(VALID_MANAGER_ALIASES - {"actor"})
     scope = PrimitiveScope(scoped_managers=sm_only)
     env = StateManagerEnvironment(Primitives(primitive_scope=scope))
     tools = env.get_tools()
 
     for tool_name in tools:
         assert not tool_name.startswith(
-            "primitives.computer",
-        ), "ComputerPrimitives should not appear when excluded from scope"
-        assert not tool_name.startswith(
             "primitives.actor",
         ), "ActorPrimitives should not appear when excluded from scope"
 
-    # Scope with computer → computer primitives included.
+    # Scope with actor → actor primitives included.
     full_scope = PrimitiveScope.all_managers()
     full_env = StateManagerEnvironment(Primitives(primitive_scope=full_scope))
     full_tools = full_env.get_tools()
-    computer_tools = [t for t in full_tools if t.startswith("primitives.computer")]
-    assert (
-        len(computer_tools) > 0
-    ), "Computer primitives should appear when included in scope"
+    actor_tools = [t for t in full_tools if t.startswith("primitives.actor")]
+    assert len(actor_tools) > 0, "Actor primitives should appear when in scope"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -269,8 +242,8 @@ def test_state_manager_env_get_prompt_context_respects_scope():
     assert "#### `primitives.files`" not in context
 
     # Unscoped managers do not appear in the routing overview
-    assert "→ `primitives.tasks`" not in context
-    assert "#### `primitives.tasks`" not in context
+    assert "→ `primitives.web`" not in context
+    assert "#### `primitives.web`" not in context
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -141,6 +141,9 @@ from .custom_functions import (
 
 logger = logging.getLogger(__name__)
 
+# One lock per venv directory so concurrent ``prepare_venv`` calls serialise.
+_VENV_PREPARE_LOCKS: dict[str, asyncio.Lock] = {}
+
 FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
 FUNCTIONS_PRIMITIVES_TABLE = "Functions/Primitives"
@@ -181,21 +184,14 @@ def strip_ledger_internals(
     ]
 
 
-# Sentinel: omit ``destination`` to federate; pass ``None``/``"personal"``/``"team:<id>"`` to scope.
+# Sentinel: omit ``destination`` to federate; pass ``None``/``"personal"`` to scope.
 _DESTINATION_UNSET = object()
 FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where this composed function (or set of functions) lives. Pass
-    ``"personal"`` (the default) for one-off helper scripts and private
-    automations. Pass ``"team:<id>"`` for team automation every member of the
-    team members should be able to invoke. See the *Accessible shared teams* block in
-    your system prompt for available teams and descriptions. Pick personal
-    when in doubt; call ``request_clarification`` when the right audience is
-    unclear."""
+    Where this composed function (or set of functions) lives. Only the
+    personal root exists: pass ``"personal"`` or leave it ``None``."""
 FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
-    Where the virtual env definition lives. Pass ``"personal"`` (the default)
-    for envs only your private functions need. Pass ``"team:<id>"`` to share
-    the env with team-level functions in that team. See the Accessible shared teams
-    block in your system prompt; pick personal when in doubt."""
+    Where the virtual env definition lives. Only the personal root exists:
+    pass ``"personal"`` or leave it ``None``."""
 
 
 def _compositional_contexts() -> list[str]:
@@ -260,7 +256,7 @@ def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
     """Delete compositional functions by id, returning the ids actually removed.
 
     For a caller that has already decided which functions should go and needs
-    them gone -- an uninstall clearing what its workflow's runs distilled.
+    them gone -- a source being withdrawn clearing what its runs distilled.
     Deciding *which* is the caller's problem; this only carries it out.
     """
 
@@ -1942,7 +1938,7 @@ class FunctionManager(BaseFunctionManager):
                 name=FUNCTIONS_PRIMITIVES_TABLE,
                 description="System action primitives with stable explicit IDs.",
                 # Primitives share the `Function` model with Compositional, but
-                # are never Console-UI-editable (implementation lives in Python,
+                # are never user-editable in place (implementation lives in Python,
                 # not in stored rows), so the allowlisted ui_editable=True
                 # annotations on `Function` (name, docstring, etc.) are
                 # overridden to False here.
@@ -2461,8 +2457,8 @@ class FunctionManager(BaseFunctionManager):
         The read-modify-write can race a concurrent call and drop a count —
         acceptable for a log-saturating signal. Primitives are platform
         surface, not library memory, and are never traced. The owning
-        context comes from ``_federated_context`` (a team row's trace must
-        land on the team row — ``_context`` is never set; see the
+        context comes from ``_federated_context`` (a row's trace must land
+        on the root that holds the row — ``_context`` is never set; see the
         verification-fields callers that inherited that trap).
         """
         settings = self.activation_settings
@@ -3001,7 +2997,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._verifications_ctx,
             entries=[payload],
             stamp_authoring=False,
-            batched=False,
         )
         self.refresh_trust(int(row.function_id))
 
@@ -3370,7 +3365,7 @@ class FunctionManager(BaseFunctionManager):
         ``idempotent_effectful`` (mutates, but re-running with the same inputs
         converges to the same state: upsert by key, write a file at a path,
         set a field) < ``unsafe_effectful`` (mutates non-idempotently or
-        irreversibly: send, delete, pay, post, drive a desktop).
+        irreversibly: send, delete, pay, post).
 
         You may raise the class freely — do so whenever the docstring or the
         trajectory shows an effect the source alone does not reveal. You may
@@ -3756,7 +3751,6 @@ class FunctionManager(BaseFunctionManager):
                 context=self._primitives_ctx,
                 entries=entries,
                 stamp_authoring=True,
-                batched=True,
                 on_duplicate="skip",
             )
             written_ids = (
@@ -4135,11 +4129,9 @@ class FunctionManager(BaseFunctionManager):
                 :func:`collect_custom_venvs` or
                 :func:`collect_venvs_from_directories`).  If *None*,
                 an empty set is assumed (no custom venvs).
-            destination: Where the custom venv definitions live. Use
-                ``"personal"`` for private custom environments and
-                ``"team:<id>"`` for team-level environments shared by a
-                team. See the Accessible shared teams block in your system
-                prompt for available teams.
+            destination: Where the custom venv definitions live. Only the
+                personal root exists: pass ``"personal"`` or leave it
+                ``None``.
 
         Returns:
             Dict mapping venv name to venv_id.
@@ -4198,11 +4190,8 @@ class FunctionManager(BaseFunctionManager):
                 :func:`collect_custom_functions` or
                 :func:`collect_functions_from_directories`).  If *None*,
                 an empty set is assumed (no custom functions).
-            destination: Where the custom functions live. Use ``"personal"``
-                for private helper functions and ``"team:<id>"`` for
-                team-level functions every team member should be able to
-                invoke. See the Accessible shared teams block in your system
-                prompt for available teams.
+            destination: Where the custom functions live. Only the personal
+                root exists: pass ``"personal"`` or leave it ``None``.
 
         Returns:
             True if sync was performed, False if already up-to-date.
@@ -4598,7 +4587,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._compositional_ctx,
                     entries=entries_to_create,
                     stamp_authoring=True,
-                    batched=True,
                 )
             except Exception as e:
                 logger.error(
@@ -4797,7 +4785,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._compositional_ctx,
                     entries=entries_to_create,
                     stamp_authoring=True,
-                    batched=True,
                 )
             except Exception as e:
                 logger.error(
@@ -5337,15 +5324,15 @@ class FunctionManager(BaseFunctionManager):
     def list_function_name_to_ids(self) -> Dict[str, int]:
         """Return the authoritative ``{name: function_id}`` catalogue.
 
-        Used by deployment reconcile for guidance/task entrypoint resolution.
+        Used by deployment reconcile for guidance entrypoint resolution.
         Prefer this over :meth:`list_functions` when only ids are needed.
 
         Deployment references are resolved independently of the current
-        runtime's discovery surface. A headless runtime can legitimately hide
-        desktop- or integration-gated functions from actor discovery, but
-        their stored ids must still be available when reconciling tasks that
-        execute in a different environment. Therefore compositional rows are
-        read without ``filter_scope`` or environment exclusions here; ordinary
+        runtime's discovery surface. A runtime can legitimately hide
+        environment-gated functions from actor discovery, but their stored
+        ids must still be available when reconciling references authored
+        for a different environment. Therefore compositional rows are read
+        without ``filter_scope`` or environment exclusions here; ordinary
         list/filter/search operations remain scoped.
         """
 
@@ -5985,7 +5972,7 @@ class FunctionManager(BaseFunctionManager):
             raise ValueError("_namespace required when _return_callable=True")
 
         # Soft models sometimes call search with ``{}`` / empty query during
-        # discovery. Orchestra rejects embed(""), so fall back to a plain
+        # discovery. The store rejects embed(""), so fall back to a plain
         # catalogue sample instead of a vector sort.
         if not str(query or "").strip():
             return self.filter_functions(
@@ -6600,6 +6587,23 @@ class FunctionManager(BaseFunctionManager):
 
         venv_content = venv_data["venv"]
         venv_dir = self._get_venv_dir(venv_id)
+        # Concurrent first executions in one venv must not all run
+        # ``uv venv``: the second one fails on the directory the first created.
+        lock = _VENV_PREPARE_LOCKS.setdefault(str(venv_dir), asyncio.Lock())
+        async with lock:
+            return await self._prepare_venv_locked(
+                venv_id=venv_id,
+                venv_content=venv_content,
+                venv_dir=venv_dir,
+            )
+
+    async def _prepare_venv_locked(
+        self,
+        *,
+        venv_id: int,
+        venv_content: str,
+        venv_dir: Path,
+    ) -> Path:
         pyproject_path = venv_dir / "pyproject.toml"
         python_path = self._get_venv_python(venv_id)
         runner_path = self._get_venv_runner_path(venv_id)
@@ -6619,7 +6623,6 @@ class FunctionManager(BaseFunctionManager):
             venv_dir.mkdir(parents=True, exist_ok=True)
             pyproject_path.write_text(venv_content)
 
-            import asyncio
             import shutil as _shutil
             import sys as _sys
 

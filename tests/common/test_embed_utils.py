@@ -11,7 +11,7 @@ from unify.common import embed_utils
 
 @pytest.fixture
 def embed_mocks(monkeypatch: pytest.MonkeyPatch):
-    """Stub unisdk field/log APIs used by ensure_vector_column."""
+    """Stub store field/log APIs used by ensure_vector_column."""
     state: dict[str, Any] = {
         "fields": {},
         "missing_ids": [],
@@ -55,8 +55,8 @@ def embed_mocks(monkeypatch: pytest.MonkeyPatch):
         )
         state["fields"][key] = {"type": "vector"}
 
-    monkeypatch.setattr(embed_utils.unisdk, "get_fields", get_fields)
-    monkeypatch.setattr(embed_utils.unisdk, "get_logs", get_logs)
+    monkeypatch.setattr(embed_utils.db, "get_fields", get_fields)
+    monkeypatch.setattr(embed_utils.db, "get_logs", get_logs)
     monkeypatch.setattr(embed_utils, "ensure_derived_column", ensure_derived_column)
     return state
 

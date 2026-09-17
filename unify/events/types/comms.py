@@ -9,10 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CommsPayload(BaseModel):
-    """Payload for Comms events (phone calls, SMS, email, etc.).
+    """Payload for Comms events (chat messages and related deliveries).
 
-    Comms events have varied shapes depending on subtype (PhoneCallReceived,
-    SMSReceived, etc.). The payload_cls field on the Event identifies the
+    Comms events have varied shapes depending on subtype. The payload_cls
+    field on the Event identifies the
     specific subtype. This model captures common fields and allows extras.
     """
 

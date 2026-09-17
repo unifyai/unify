@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import pytest
-import time
-from unify import db
 from unify.contact_manager.contact_manager import ContactManager
-from unify.common.context_registry import ContextRegistry
 from unify.common.data_store import DataStore
 from unify.session_details import SESSION_DETAILS
 from tests.helpers import _handle_project
@@ -214,50 +211,3 @@ def test_get_info_cache_fallback():
     )
     assert info_multi[cid1] == {"surname": "Read"}
     assert info_multi[cid2] == {"surname": "Record"}
-
-
-@_handle_project
-def test_get_info_cache_fallback_reads_accessible_space_roots():
-    # Random team id is safe here: this test only drives programmatic manager
-    # methods, so the id never enters an LLM prompt and cannot break cache
-    # replay, while randomness isolates concurrent runs without cleanup.
-    team_id = int(time.time_ns() % 1_000_000_000)
-    SESSION_DETAILS.team_ids = [team_id]
-
-    try:
-        cm = ContactManager()
-        personal_ds = DataStore.for_context(cm._ctx, key_fields=("contact_id",))
-        shared_context = f"Teams/{team_id}/Contacts"
-        shared_ds = DataStore.for_context(shared_context, key_fields=("contact_id",))
-
-        personal_max_id = max(
-            contact.contact_id for contact in cm.filter_contacts(limit=1000)["contacts"]
-        )
-        for _ in range(personal_max_id + 2):
-            out = cm._create_contact(
-                first_name="Shared Info",
-                bio=f"team-info-marker-{team_id}",
-                destination=f"team:{team_id}",
-            )
-        cid = out["details"]["contact_id"]
-
-        personal_ds.clear()
-        shared_ds.clear()
-        info = cm.get_contact_info(
-            cid,
-            fields=["first_name", "bio"],
-            search_local_storage=True,
-        )
-        assert info == {
-            cid: {"first_name": "Shared Info", "bio": f"team-info-marker-{team_id}"},
-        }
-        assert shared_ds[cid]["first_name"] == "Shared Info"
-        with pytest.raises(KeyError):
-            personal_ds[cid]
-    finally:
-        try:
-            db.delete_context(f"Teams/{team_id}/Contacts")
-        except Exception:
-            pass
-        SESSION_DETAILS.team_ids = []
-        ContextRegistry.clear()

@@ -149,10 +149,10 @@ def build_ask_prompt(
    `{search_messages_fname}(references={{expr: 'kickoff call summary'}}, k=5)`
 
  ─ Filtering (exact/boolean; not semantic) ─
- • Most recent SMS from contact 7
-   `{filter_messages_fname}(filter="sender_id == 7 and medium == 'sms_message'", limit=1, offset=0)`
- • Last month's emails (if datetime comparisons are supported by your backend)
-   `{filter_messages_fname}(filter="medium == 'email' and timestamp >= '2024-01-01T00:00:00' and timestamp < '2024-02-01T00:00:00'", limit=100)`
+ • Most recent message from contact 7
+   `{filter_messages_fname}(filter="sender_id == 7", limit=1, offset=0)`
+ • Last month's messages
+   `{filter_messages_fname}(filter="timestamp >= '2024-01-01T00:00:00' and timestamp < '2024-02-01T00:00:00'", limit=100)`
 
  ─ Numeric aggregations ─
  • For numeric reduction metrics (count, sum, mean, min, max, median, mode, var, std) over numeric columns, use `{reduce_fname}` instead of filtering and computing in-memory.
@@ -341,7 +341,7 @@ def build_simulated_method_prompt(
             "When they ask to list or show multiple, return the requested number (or a small number if unspecified).\n\n"
             "For each message, include at minimum:\n"
             "- Timestamp (UTC ISO)\n"
-            "- Channel (e.g., Email, SMS, Call)\n"
+            "- Medium\n"
             "- Subject (if applicable)\n"
             "- Sender (name and role if known)\n"
             "- Recipients (list or 'N/A')\n"

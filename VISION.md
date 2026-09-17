@@ -20,7 +20,7 @@ A back-office runtime for an AI assistant, designed around two ideas:
 Most agent frameworks have a single loop: the model picks a tool, the tool
 runs, the result feeds the next decision. Unify puts a second, *persistent*
 loop above that — the `ConversationManager` — which stays present with the
-user across every medium, keeps thinking while dispatched work is in flight,
+user, keeps thinking while dispatched work is in flight,
 and supervises the inner tool-calling loop (the `Actor`) rather than running
 as that loop itself.
 
@@ -41,8 +41,8 @@ steering is a first-class signal, not an opportunistic abort.
 These two bets define everything else: the typed back office of state
 managers (one tool loop per manager, each returning a steerable handle); the
 CodeAct `Actor` that writes one Python plan per turn over typed
-`primitives.*`; the dual-brain split that lets a real-time voice agent
-coexist with a deliberate slow brain.
+`primitives.*`; the single SQLite file every manager reads and writes
+through.
 
 ---
 
@@ -55,11 +55,10 @@ can see the project's bet clearly.
 
 [OpenClaw](https://github.com/openclaw/openclaw) is excellent at this: many
 messaging platforms, a Gateway dispatcher tier that maps platform messages
-to agent runs, a wide plugin marketplace. Unify's gateway supports a
-smaller set of channels by design (chat, voice, video, SMS, email, phone)
-and the channel layer is intentionally thin because the project's
-investment is upstream — in the slow-brain / Actor / back-office tier
-above it.
+to agent runs, a wide plugin marketplace. Unify has exactly one channel,
+the in-app chat, by design: the project's investment is upstream — in
+the conversation-loop / Actor / back-office tier — and the chat is one
+client of an event broker any other front end can drive.
 
 If you want a personal-assistant **product** with broad channel coverage and
 a thriving plugin ecosystem, OpenClaw is the project we'd recommend.
@@ -97,14 +96,13 @@ fix is always to improve a prompt, a tool docstring, or a manager's
 public API — never to add a heuristic shortcut. This is a hard rule; PRs
 that pattern-match on user input get sent back.
 
-### Not configured via cron and webhook YAML
+### Not a scheduler
 
-Recurring schedules and event triggers are described to the agent in
-natural language and stored as `Task` rows; the in-process timer wheel
-fires them through the same `Actor` that handles live work. There is no
-separate cron daemon, no `triggers.yml`, no webhook configuration file.
-Inbound-event triggers (*"ping me whenever Alice emails about invoices"*)
-are matched on the comms event stream by the same machinery.
+The assistant is reactive. It acts on the messages it receives and on the
+work those messages start, and it keeps steering that work while it runs.
+There is no cron daemon, no timer wheel, no `triggers.yml` and no webhook
+configuration: anything that should happen later is something you ask for
+when later arrives.
 
 ### Not backward-compatible by default
 
@@ -112,41 +110,26 @@ Unify is a rapidly-evolving prototype. We break APIs freely and update
 all call sites in the same change. This will probably soften when there
 are downstream forks worth not breaking; today, it doesn't.
 
-### Not committed to its current LLM-client / Python-SDK / backend split
+### Not committed to its current LLM-client split
 
-Unify is the *cognitive core* — the brain. It currently depends on two
-sibling repos (`unisdk` for storage access, `unillm` for LLM inference)
-and the hosted Orchestra persistence backend. Those splits exist to keep
-concerns separate, not because the boundaries are sacred. If a
-better-shaped open-source LLM client or persistence layer arrives, Unify
-should adopt it.
+Unify is the *cognitive core* — the brain. It depends on one sibling repo
+(`unillm` for LLM inference) and owns its own SQLite store. That split
+exists to keep concerns separate, not because the boundary is sacred. If
+a better-shaped open-source LLM client arrives, Unify should adopt it.
 
 ---
 
-## What's open, what's not
+## What's open
 
-The local install is the full local runtime. The runtime itself, the LLM
-client (`unillm`), and the Python SDK (`unisdk`) are MIT-licensed and on
-GitHub. The persistence backend (Orchestra) is a hosted service the
-runtime talks to over `ORCHESTRA_URL`; it is not open source.
-
-The hosted product at [console.unify.ai](https://console.unify.ai) wraps
-Unify in a commercial UI: multi-tenant identity, hosted telephony, channel
-integrations, organisations, billing, deployment management, observability
-tiles.
-
-The `unify.deploy_runtime` Service Provider Interface is the boundary
-between the open runtime and the hosted scaffolding. Local installs use
-no-op implementations of every hook; the hosted product supplies its own.
-Forks of Unify can supply their own too — Kubernetes, Nomad, a custom
-orchestrator, whatever fits.
+All of it. The runtime and the LLM client (`unillm`) are MIT-licensed and
+on GitHub, and the whole assistant runs in one process against one
+SQLite file on your machine. There is no hosted component to depend on.
 
 ---
 
 ## How this document evolves
 
-This is a "where the project is aiming" document, not a roadmap. Roadmap-
-shaped changes (what's shipping next) go in [`CHANGELOG.md`](CHANGELOG.md).
+This is a "where the project is aiming" document, not a roadmap.
 Architectural choices (how the system is structured) live in
 [`ARCHITECTURE.md`](ARCHITECTURE.md). This file is for *the bet itself* —
 what Unify is and isn't trying to be — and changes only when one of those

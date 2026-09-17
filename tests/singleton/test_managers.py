@@ -10,7 +10,6 @@ from unify.contact_manager.contact_manager import ContactManager
 from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 from unify.memory_manager.memory_manager import MemoryManager
 from unify.transcript_manager.transcript_manager import TranscriptManager
-from unify.task_scheduler.task_scheduler import TaskScheduler
 
 # ---------------------------------------------------------------------------
 #  Helper – parameterisation over the concrete manager classes
@@ -20,7 +19,6 @@ MANAGER_CLASSES = [
     KnowledgeManager,
     MemoryManager,
     TranscriptManager,
-    TaskScheduler,
 ]
 
 
@@ -66,23 +64,19 @@ async def test_composition():
     contact_manager = memory_manager._contact_manager
     transcript_manager = memory_manager._transcript_manager
     knowledge_manager = memory_manager._knowledge_manager
-    task_scheduler = memory_manager._task_scheduler
 
     assert contact_manager is ContactManager()
     assert transcript_manager is TranscriptManager()
     assert knowledge_manager is KnowledgeManager()
-    assert task_scheduler is TaskScheduler()
 
     ManagerRegistry.clear()
 
     contact_manager = ContactManager()
     transcript_manager = TranscriptManager()
     knowledge_manager = KnowledgeManager()
-    task_scheduler = TaskScheduler()
 
     memory_manager = MemoryManager()
 
     assert contact_manager is memory_manager._contact_manager
     assert transcript_manager is memory_manager._transcript_manager
     assert knowledge_manager is memory_manager._knowledge_manager
-    assert task_scheduler is memory_manager._task_scheduler

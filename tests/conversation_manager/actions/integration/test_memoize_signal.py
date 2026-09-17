@@ -17,7 +17,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     get_actor_started_event,
 )
-from unify.conversation_manager.events import SMSReceived
+from unify.conversation_manager.events import UnifyMessageReceived
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -38,7 +38,7 @@ async def test_memoize_signal_triggers_interject(initialized_cm_codeact):
     cm = initialized_cm_codeact
 
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "I'm going to show you how to process a refund in our CRM. "
@@ -49,14 +49,14 @@ async def test_memoize_signal_triggers_interject(initialized_cm_codeact):
     actor_event = get_actor_started_event(result1)
 
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Now search the transcripts for any previous refund discussions with John.",
         ),
     )
 
     result3 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Perfect, remember this workflow for next time.",
         ),
@@ -91,7 +91,7 @@ async def test_save_workflow_signal_triggers_interject(initialized_cm_codeact):
     cm = initialized_cm_codeact
 
     result1 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Let me walk you through how we onboard a new vendor. "
@@ -102,7 +102,7 @@ async def test_save_workflow_signal_triggers_interject(initialized_cm_codeact):
     actor_event = get_actor_started_event(result1)
 
     result2 = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Great, save this. I want you to be able to do this on your own next time."

@@ -33,8 +33,6 @@ The script **always blocks** until all tests complete (or timeout), streaming pa
 | **Serial mode** (one session per file) | `tests/parallel_run.sh -s [path]` |
 | **With timeout** | `tests/parallel_run.sh --timeout 300 [path]` |
 
-**Note:** Do not use `parallel_cloud_run.sh` directly. For CI, use commit message tags (see `propose-ci-tests-for-commits.md`).
-
 - The script blocks until all tests complete, then reports success (exit 0), failure (exit 1), or timeout (exit 2).
 - `--timeout N` aborts if tests don't complete within N seconds.
 
@@ -104,12 +102,12 @@ logs/pytest/
 - The `pre-commit` tool is installed in the project `dev` dependencies.
 - **Execution**: Run via the python module to ensure path visibility:
   - `.venv/bin/python -m pre_commit run --all-files`
-- **When to run**: If you modify files and want to ensure they pass CI checks, run pre-commit *before* committing.
+- **When to run**: run pre-commit *before* committing so the hooks never surprise you.
 
 ## Dependencies
 - This project uses `uv` for dependency management.
 - Config file: `pyproject.toml`
 
 ## Edit Safety
-- **Protected Files**: Do not edit `uv.lock` or `package-lock.json` manually. Use the appropriate package manager commands.
+- **Protected Files**: Do not edit `uv.lock` manually. Use `uv` to change dependencies.
 - **Sensitive Files**: Do not output the contents of `.env` or `*.key` files to the chat.

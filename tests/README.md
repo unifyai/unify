@@ -1,6 +1,10 @@
 # Tests
 
-This directory contains the test suite for Unify.
+This directory contains the test suite for Unify. Everything runs locally:
+each pytest process opens its own SQLite store (`UNIFY_STORE_PATH`), seeds
+the builtin catalogues into it, and binds a fresh context per test. There
+is no backend to start, no credentials beyond an LLM provider key, and no
+shared state between sessions.
 
 ## Table of Contents
 
@@ -8,10 +12,9 @@ This directory contains the test suite for Unify.
 - [Tools at a Glance](#tools-at-a-glance)
 - [Test Philosophy](#test-philosophy-symbolic--eval-spectrum)
 - [Parallel Runner Reference](#parallel-runner-reference)
+- [Stores](#stores)
 - [Common Workflows](#common-workflows)
-- [Cloud Test Runs (GitHub Actions)](#cloud-test-runs-github-actions)
-- [Worktree Support](#worktree-support-cursor-background-agents)
-- [Project Cleanup](#project-cleanup)
+- [Worktree Support](#worktree-support)
 - [Troubleshooting](#troubleshooting)
 - [Requirements](#requirements)
 - [Environment Variable Propagation](#environment-variable-propagation)
@@ -28,18 +31,15 @@ tests/parallel_run.sh tests/
 # Run a specific folder
 tests/parallel_run.sh tests/contact_manager/
 
-# Run with a timeout (useful for CI)
+# Run with a whole-run timeout
 tests/parallel_run.sh --timeout 300 tests/
-
-# Run on CI instead (no local CPU load)
-git commit -m "Fix bug [run-tests]"
 ```
 
 **Optional shell aliases** (for convenience):
 
 ```bash
 # Add to ~/.zshrc for permanent aliases
-source /path/to/unity/tests/shell_init.zsh
+source /path/to/unify/tests/shell_init.zsh
 
 # Then use shorter commands
 parallel_run tests/
@@ -53,16 +53,14 @@ kill_failed
 
 | Command | Purpose |
 |---------|---------|
-| `parallel_run <tests>` | Run tests in parallel tmux sessions (local) |
-| `parallel_cloud_run.sh <tests>` | Run tests on GitHub Actions CI |
+| `parallel_run <tests>` | Run tests in parallel tmux sessions |
 | `watch_tests` | Monitor test progress in real-time |
 | `attach '<name>'` | Attach to a tmux session |
 | `list_runs` | List all active test runs across terminals |
 | `kill_failed` | Kill all failed sessions |
 | `kill_server` | Kill tmux server + purge orphaned processes |
 | `monitor_resources` | Launch resource monitoring dashboard |
-| `grid_search.sh` | Run tests across setting combinations |
-| `project_cleanup.sh` | Delete test projects from Unify backend |
+| `grid_search` | Run tests across setting combinations |
 
 All commands support `--help` for usage details.
 
@@ -80,16 +78,18 @@ Most tests sit somewhere between these extremes.
 
 ### Caching and Determinism
 
-When `UNILLM_CACHE="true"` locally, all LLM responses are cached:
+When `UNILLM_CACHE="true"` (the default), all LLM responses are cached:
 - **First run**: LLM executes normally; responses stored in `.cache.ndjson`
 - **Subsequent runs**: Cached responses replayed—no actual LLM calls
 
-Normal GitHub Actions test runs use `UNILLM_CACHE="read-only"` so cache misses fail instead of calling paid LLM APIs. Use the protected **LLM Cache Refresh** workflow for intentional cache writes or uncached eval sampling.
-
-Both test types become deterministic after caching. To re-evaluate LLM behavior locally:
+Both test types become deterministic after caching. To re-evaluate LLM behavior:
 ```bash
-parallel_run --env UNILLM_CACHE=false tests/contact_manager/test_ask.py
+parallel_run --no-cache tests/contact_manager/test_ask.py
 ```
+
+The cache is keyed on the exact LLM input, so a prompt or docstring change
+gets fresh inference on its own. Clearing the cache never fixes a failing
+test; it only re-runs the same decision.
 
 ### Marking Tests as Eval
 
@@ -119,12 +119,8 @@ answer itself, which is why it refuses a canonically-equivalent recording: a
 reworded tool description is an ordinary way to change what a model picks, so
 a canonical hit would score the trajectory from before the change.
 
-Neither marker implies the other, and they are applied independently today.
-
-**CI reads the absence of both as the deterministic tier**
-(`TRACKED_MARKERS` in `.github/scripts/discover_test_paths.py`), so an
-unmarked test is one you are asserting never reaches a model. `llm_call` was
-added long after `eval`, so if you find a model-reaching test carrying
+Neither marker implies the other. A test carrying neither is one you are
+asserting never reaches a model; if you find a model-reaching test with
 neither, that is a missing marker rather than a free test.
 
 ### Running by Category
@@ -146,39 +142,70 @@ parallel_run [options] <targets>
 
 # Targeting
 parallel_run tests/                              # Directory
-parallel_run tests/foo.py                   # File
-parallel_run tests/foo.py::test_bar         # Specific test
+parallel_run tests/foo.py                        # File
+parallel_run tests/foo.py::test_bar              # Specific test
 
 # Common flags
 parallel_run --timeout 300 tests/                # Abort after 5 minutes
+parallel_run --session-timeout 600 tests/        # Kill any one session after 10 minutes
 parallel_run -s tests/                           # Serial (per-file, not per-test)
 parallel_run -j 8 tests/                         # Limit to 8 concurrent
 parallel_run --eval-only tests/                  # Only eval tests
 parallel_run --symbolic-only tests/              # Only symbolic tests
 parallel_run --env KEY=VALUE tests/              # Set environment variable
+parallel_run --no-cache tests/                   # Fresh LLM inference
 parallel_run --repeat 5 tests/                   # Run each test 5 times
 parallel_run --overwrite-scenarios tests/        # Delete and recreate test scenarios
 
 # Pass extra args directly to pytest (after --)
 parallel_run tests/ -- -v --tb=short            # Verbose with short tracebacks
 parallel_run tests/ -- --pdb                    # Drop into debugger on failure
-parallel_run tests/ -- --lf                     # Re-run last failed tests
+parallel_run tests/ -- -k 'pattern'             # Filter by test name
 ```
 
 | Flag | Description |
 |------|-------------|
-| `-t`, `--timeout N` | Abort if tests don't complete within N seconds |
+| `-t`, `--timeout N` | Abort if tests don't complete within N seconds (exit 2) |
+| `--session-timeout N` | Kill each session's pytest after N seconds (`UNIFY_TEST_SESSION_TIMEOUT` sets the default) |
 | `-s`, `--serial` | One session per file (default: one per test) |
-| `-j N`, `--jobs N` | Limit concurrent sessions (default: 25) |
+| `-j N`, `--jobs N` | Limit concurrent sessions (default: CPU cores) |
+| `-m`, `--match PATTERN` | Filter files by glob pattern |
 | `--eval-only` | Only `@pytest.mark.eval` tests |
 | `--symbolic-only` | Only non-eval tests |
+| `--deterministic-only` | Only tests with no model in the loop |
 | `--env K=V` | Set environment variable (repeatable) |
+| `--no-cache` | Shorthand for `--env UNILLM_CACHE=false` |
 | `--repeat N` | Run each test N times |
 | `--tags TAG` | Tag runs for filtering |
 | `--overwrite-scenarios` | Delete and recreate test scenarios |
 | `--` | Pass remaining args to pytest |
 
-See [Parallel Runner Guide](docs/parallel-runner.md) for full documentation.
+Exit codes: `0` all passed, `1` something failed, `2` whole-run timeout.
+
+Each run writes to `logs/pytest/<YYYY-MM-DDTHH-MM-SS_socket>/`: one
+`<session>.txt` log per session, `duration_summary.txt` with the sorted
+duration/cache/cost table, and `stores/` (see below). The runner prints the
+directory at the start and end of every run.
+
+---
+
+## Stores
+
+Every session opens the SQLite store named by `UNIFY_STORE_PATH`. The runner
+gives each session its own file, `logs/pytest/<run>/stores/<session>.sqlite`,
+so sessions never share tables and each store stays on disk next to the
+session's log — open it with `sqlite3` to inspect what a test left behind.
+
+Set `UNIFY_STORE_PATH` yourself (in the environment, in `.env`, or via
+`--env`) and the runner honours it instead: every session then shares that
+one store, and nothing deletes it afterwards.
+
+```bash
+parallel_run --env UNIFY_STORE_PATH=/tmp/shared.sqlite tests/knowledge_manager/
+```
+
+A bare `pytest` invocation (no runner) gets a per-process store under the
+system temp directory, removed when the process exits.
 
 ---
 
@@ -206,6 +233,9 @@ attach 'f ❌ contact_manager-test_ask'
 # Or check the log file
 ls logs/pytest/*/             # Find the run directory
 cat logs/pytest/2025-12-05T14-30-22_unity_dev_ttys042/contact_manager-test_ask.txt
+
+# Query the store the session left behind
+sqlite3 logs/pytest/2025-12-05T14-30-22_unity_dev_ttys042/stores/contact_manager-test_ask.sqlite
 ```
 
 ### Clean up after tests
@@ -220,14 +250,11 @@ kill_server --global  # Kill ALL tmux servers
 ### Run with different settings
 
 ```bash
-# Disable caching for fresh local LLM calls
-parallel_run --env UNILLM_CACHE=false tests/contact_manager/test_ask.py
-
-# Use isolated projects per test
-parallel_run --env UNIFY_TESTS_RAND_PROJ=true tests
+# Fresh LLM calls
+parallel_run --no-cache tests/contact_manager/test_ask.py
 
 # Compare models (grid search)
-grid_search.sh --env UNIFY_MODEL="gpt-4o|claude-3" tests/
+grid_search --env UNIFY_MODEL="gpt-4o|claude-3" tests/
 ```
 
 ### Overwrite test scenarios
@@ -242,210 +269,33 @@ Use this when scenario seed data has changed (e.g., new contacts, updated transc
 
 ---
 
-## Cloud Test Runs (GitHub Actions)
-
-For surgical test runs without straining your local machine, use GitHub Actions:
-
-- **No local CPU load** — tests run on GitHub's infrastructure
-- **No rate limiting** — GitHub runners have excellent network connectivity
-- **Matrix expansion for targeted paths** — broad matrices are rejected unless explicitly confirmed
-- **Guarded `parallel_run.sh` support** — normal CI rejects cache overrides, repeats, and oversized matrices
-
-### Quick Cloud Run (`parallel_cloud_run.sh`)
-
-The fastest way to run CI tests on your current code—even uncommitted changes:
-
-```bash
-# Test current code state (handles uncommitted/unpushed automatically)
-parallel_cloud_run.sh tests/contact_manager
-
-# Run another targeted path
-parallel_cloud_run.sh tests/common/test_production_settings.py
-```
-
-The script automatically:
-1. Loads your `.env` file and passes it securely to CI (sensitive values masked in logs)
-2. Stashes uncommitted changes
-3. Pushes to a unique staging branch (`ci-staging-{user}-{datetime}`)
-4. Triggers the CI workflow and displays the direct run URL
-5. Restores your local state (staged/unstaged preserved)
-
-See [Cloud Runner Guide](docs/parallel-cloud-run.md) for details.
-
-### Triggering Tests
-
-Tests are **off by default** to avoid unnecessary CI costs. Trigger them explicitly:
-
-| Method | How to Trigger | What Runs |
-|--------|----------------|-----------|
-| **`parallel_cloud_run.sh`** | Run script locally | Current code state (auto-pushes staging branch) |
-| **`[run-tests]`** | Include in commit message or PR title | Rejected by the cost gate unless rerun manually with full-matrix confirmation |
-| **`[parallel_run.sh ...]`** | Include in commit message or PR title | Specified paths/args, if they stay within cost-policy limits |
-| **Manual** | GitHub Actions UI or `gh` CLI | Configurable via inputs |
-
-**Examples:**
-
-```bash
-# Run specific folder (single worker)
-git commit -m "Fix contact manager bug [parallel_run.sh tests/contact_manager]"
-
-# Run multiple folders (single worker, both run concurrently inside)
-git commit -m "Fix bugs [parallel_run.sh tests/contact_manager tests/transcript_manager]"
-
-# Run with extra args (single worker)
-git commit -m "Eval check [parallel_run.sh --eval-only tests/actor]"
-
-# Run specific test file
-git commit -m "Fix test [parallel_run.sh tests/actor/code_act.py]"
-
-# Regular commit (no tests)
-git commit -m "Update documentation"
-```
-
-The `[parallel_run.sh ...]` syntax accepts the same arguments as the local script—paths, flags, everything. Both `tests/foo` and `test_foo` work (paths are resolved relative to the `tests/` directory).
-
-### CLI Trigger (`gh`)
-
-The fastest way to trigger CI tests without commits or the web UI:
-
-```bash
-# Install GitHub CLI (one-time)
-brew install gh
-gh auth login
-
-# Run a targeted cached path
-gh workflow run tests.yml --repo unifyai/unity --ref main -f test_path=tests/contact_manager
-
-# Protected cache refresh / uncached eval path
-gh workflow run llm-cache-refresh.yml --repo unifyai/unity --ref main \
-  -f test_path=tests/contact_manager/test_ask.py \
-  -f cache_mode=write-misses \
-  -f confirm_llm_spend=LLM_SPEND_OK
-
-# Run specific folder
-gh workflow run tests.yml --repo unifyai/unity --ref main \
-  -f test_path="tests/actor"
-
-# Run with extra args
-gh workflow run tests.yml --repo unifyai/unity --ref main \
-  -f test_path="tests/actor" \
-  -f parallel_run_args="--eval-only"
-
-# Run on a different branch
-gh workflow run tests.yml --repo unifyai/unity --ref my-feature-branch \
-  -f test_path="tests/contact_manager"
-```
-
-**Available inputs:**
-
-| Flag | Description |
-|------|-------------|
-| `-f test_path="..."` | Path to test folder/file; `.` is rejected unless confirmed |
-| `-f confirm_full_matrix="FULL_MATRIX_OK"` | Allows `test_path="."` (full suite discovery) in normal cached CI |
-| `-f parallel_run_args="..."` | Extra args (see [Parallel Runner Reference](#parallel-runner-reference)) |
-| `-f timeout_minutes="N"` | Timeout in minutes (default: 120) |
-| `--ref <branch>` | Branch to run tests on |
-
-**Watch the run:**
-
-```bash
-gh run list --repo unifyai/unity --workflow tests.yml
-gh run watch --repo unifyai/unity <run-id>
-gh run view --repo unifyai/unity <run-id> --log
-```
-
-### Manual Workflow Dispatch (UI)
-
-For maximum control, use the GitHub Actions UI:
-
-1. Go to **Actions** → **"Tests"**
-2. Click **"Run workflow"** dropdown
-3. Select your branch and configure inputs
-
-| Input | Default | Description |
-|-------|---------|-------------|
-| `test_path` | `.` (all) | Path to test folder, file, or specific test |
-| `parallel_run_args` | *(empty)* | Extra args (see [Parallel Runner Reference](#parallel-runner-reference)) |
-| `timeout_minutes` | 120 | `parallel_run.sh` timeout (minutes) |
-
-### Accessing Test Logs
-
-After a CI run, logs are available in the GitHub Actions UI:
-
-| Artifact | Contents |
-|----------|----------|
-| `pytest-logs-{folder}` | Test output logs for each folder |
-| `llm-io-debug-{folder}` | LLM request/response traces for each folder |
-| `cache-diff-{run}-{folder}` | Cache delta files (used internally) |
-
-**Inline Failure Summaries**: Failed jobs display collapsible failure excerpts directly in the Summary page—no download required for quick triage.
-
----
-
-## Worktree Support (Cursor Background Agents)
+## Worktree Support
 
 All test commands **automatically detect the current git repository** and use that repo's scripts. This means:
 
-- ✅ Commands work correctly in **git worktrees** (e.g., Cursor Background Agents)
-- ✅ Tests run against the **current repo's code**, not a hardcoded path
-- ✅ Logs appear in the **current repo's** `logs/pytest/` directory
-- ✅ No manual path adjustments needed
-- ✅ **Concurrent worktree tests don't interfere** with each other's orchestra
+- Commands work correctly in **git worktrees**
+- Tests run against the **current repo's code**, not a hardcoded path
+- Logs and stores appear in the **current repo's** `logs/pytest/` directory
+- No manual path adjustments needed
 
 **How it works:** When you run `parallel_run`, the shell function checks `git rev-parse --show-toplevel` to find the current repo root, then uses that repo's `tests/parallel_run.sh`. If you're not in a git repo, it falls back to the originally configured path.
 
-**Orchestra and shared logs:** Since local orchestra is a shared server (one instance for all worktrees), its logs go to a single location. When running from a worktree, `parallel_run.sh` creates symlinks:
-- `logs/orchestra/` → main repo's `logs/orchestra/`
-- `logs/all/` → main repo's `logs/all/` (for OTEL trace correlation)
-
-This means concurrent tests from different worktrees can run without restarting orchestra, while still having all logs accessible from each worktree's `logs/` directory.
+Worktrees share the main repo's LLM cache (`UNILLM_CACHE_DIR` resolves to the main checkout), so cache hits carry across worktrees.
 
 ### Browsing All Worktree Logs from Main Repo
 
 When tests run from a worktree (via any method - `parallel_run`, direct `pytest`, etc.), **symlinks are automatically created** in the main repo's log directories pointing to each worktree's logs:
 
 ```
-/Users/you/unity/logs/pytest/
+/Users/you/unify/logs/pytest/
 ├── 2025-12-05T14-30-45_unity_dev_ttys042/   # main repo's own logs
-├── worktree-oty/  →  ~/.cursor/worktrees/unity/oty/logs/pytest/
-├── worktree-xyz/  →  ~/.cursor/worktrees/unity/xyz/logs/pytest/
-└── ...
-
-/Users/you/unity/logs/unillm/
-├── 2025-12-05T14-30-45_unity_dev_ttys042/    # main repo's logs (terminal A)
-├── worktree-oty/  →  ~/.cursor/worktrees/unity/oty/logs/unillm/
+├── worktree-oty/  →  ~/.cursor/worktrees/unify/oty/logs/pytest/
 └── ...
 ```
 
 This lets you browse **all logs from all worktrees** in one place (the main repo), while each worktree still maintains its own isolated log directories.
 
 **Note:** Symlinks are created by `conftest.py` during pytest session start, so they work regardless of how pytest was invoked.
-
----
-
-## Project Cleanup
-
-Delete test projects from the Unify backend:
-
-```bash
-# Preview what would be deleted
-project_cleanup.sh --dry-run
-
-# Delete all test projects
-project_cleanup.sh -y
-
-# Only delete random projects (keep shared UnityTests)
-project_cleanup.sh --random-only
-```
-
-| Option | Description |
-|--------|-------------|
-| `--dry-run` | Show matching projects without deleting |
-| `-y`, `--yes` | Skip confirmation prompt |
-| `--shared-only` | Only delete `UnityTests` |
-| `--random-only` | Only delete `UnityTests_*` |
-| `-s`, `--staging` | Use staging environment |
-| `-p`, `--production` | Use production environment |
 
 ---
 
@@ -458,15 +308,16 @@ project_cleanup.sh --random-only
 | "error connecting to ... (No such file or directory)" | Socket was deleted; re-run tests |
 | Tests not found | Check that path exists and isn't in `EXCLUDE_DIRS` |
 | Permission denied | `chmod +x tests/*.sh` |
+| `--session-timeout` has no effect on macOS | `brew install coreutils` (provides `timeout`) |
 
 ---
 
 ## Requirements
 
 - **tmux**: `brew install tmux`
-- **coreutils** (macOS): `brew install coreutils` — provides `timeout` for helper scripts
+- **coreutils** (macOS): `brew install coreutils` — provides `timeout` for the per-session hang guard and helper scripts
 - **Python virtualenv**: Repo-local `.venv/` (create/sync via `uv sync --all-groups`)
-- **Environment**: Optional `.env` file at repo root (`.env`) for `UNIFY_KEY`, etc.
+- **Environment**: Optional `.env` file at repo root for the LLM provider key and other settings
 
 ---
 
@@ -474,43 +325,21 @@ project_cleanup.sh --random-only
 
 Understanding how env vars flow from `.env` to your test process avoids subtle "variable is set but tests don't see it" bugs.
 
-### Local runs (`parallel_run.sh`)
-
 ```
-.env  ──(sourced)──>  parallel_run.sh  ──(inherited)──>  tmux session  ──>  pytest
+.env  ──(sourced)──>  parallel_run.sh  ──(inherited + re-exported)──>  tmux session  ──>  pytest
 ```
 
 1. `parallel_run.sh` sources the repo-root `.env` file (via `set -a; source .env; set +a`), exporting all variables into its own process.
-2. It starts the local orchestra server, which **inherits the full environment** (so orchestra sees everything from `.env`).
-3. It creates tmux sessions for each test. These sessions use `bash -c` (not `bash -lc`), so they **inherit the full environment** from `parallel_run.sh` — every variable from `.env` is available.
-4. Any `--env KEY=VALUE` flags are always passed through and override inherited values.
-5. **Blocklist**: In shared project mode, `UNIFY_TESTS_DELETE_PROJ_ON_START` and `UNIFY_TESTS_DELETE_PROJ_ON_EXIT` are explicitly unset in test sessions to prevent race conditions (multiple sessions trying to delete the same project). In random project mode, these are passed through safely.
-
-### CI runs (`parallel_cloud_run.sh` / commit triggers)
-
-```
-.env  ──(base64)──>  GitHub Actions  ──(decode to .env)──>  parallel_run.sh  ──(same as above)
-                     job-level env  ───────────────────────>  (merged into process)
-```
-
-1. `parallel_cloud_run.sh` base64-encodes your local `.env` and sends it as a workflow input.
-2. The CI runner decodes it back to `.env`, then `parallel_run.sh` sources it (same as local).
-3. CI also sets **job-level env vars** from GitHub secrets/repo variables (API keys, GCP config, etc.). These are always present regardless of `.env` content.
-4. LLM provider secrets in CI must contain budget-limited project/workspace keys. `OPENAI_CI_API_KEY` must belong to a dedicated CI OpenAI project, and `ANTHROPIC_CI_API_KEY` must belong to a dedicated CI Anthropic workspace.
-5. **Commit-triggered tests** (`[run-tests]` in commit message) do **not** send any `.env` — they rely entirely on the job-level env vars.
-
-Normal CI sets `UNILLM_CACHE=read-only`, rejects explicit cache overrides in `parallel_run_args`, and removes local LLM provider keys/cache settings from pasted `.env` content. Cache writes and uncached evals must use the protected **LLM Cache Refresh** workflow.
+2. It creates one tmux session per test. Sessions run `bash -c`, so they **inherit the full environment** from `parallel_run.sh` — every variable from `.env` is available.
+3. The variables the runner owns (`UNIFY_STORE_PATH`, `UNIFY_TEST_SOCKET`, `UNIFY_LOG_SUBDIR`, the OTel switches, and every `--env`) are re-exported **inside** the session command, after the shell's own init files have run, so a `~/.zshenv` that exports one of them cannot clobber the runner's value.
+4. `--env KEY=VALUE` flags override inherited values.
 
 ### pydantic-settings (Python side)
 
-Once inside a pytest process, `unity/settings.py` uses pydantic-settings with `env_file=".env"`. This reads the repo-root `.env` **again** at Python import time. So variables that aren't in the shell whitelist can still be picked up by the `SETTINGS` object — but only if the `.env` file exists in the working directory (which it does locally, but not on CI for commit-triggered runs).
+Once inside a pytest process, `unify/settings.py` uses pydantic-settings with `env_file=".env"`. This reads the repo-root `.env` **again** at Python import time, so a setting present only in `.env` is still picked up by the `SETTINGS` object.
 
 ---
 
 ## Detailed Documentation
 
-- **[Parallel Runner](docs/parallel-runner.md)** — Full guide to `parallel_run`, tmux isolation, flags, and troubleshooting
-- **[Cloud Runner](docs/parallel-cloud-run.md)** — Trigger CI tests on current code state (handles uncommitted changes)
-- **[Grid Search](docs/grid-search.md)** — Running tests across setting combinations for model comparisons and ablations
-- **[Resource Monitor](docs/resource-monitor.md)** — Dashboard for monitoring CPU, memory, network, and file descriptors
-- **[Logging & Data](docs/logging.md)** — Log directory structure, remote telemetry, and analyzing test data
+- **[Logging & Data](../logs/README.md)** — Log directory structure and analyzing test data

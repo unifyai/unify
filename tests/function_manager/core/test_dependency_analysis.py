@@ -144,19 +144,19 @@ async def main():
         )
         assert "primitives.contacts.ask" in deps
 
-    def test_computer_primitive_detected(self):
-        """Awaited primitives.computer.screenshot() is captured."""
+    def test_files_primitive_detected(self):
+        """Awaited primitives.files.describe() is captured."""
         source = """
 async def main():
-    img = await primitives.computer.screenshot()
-    return img
+    layout = await primitives.files.describe(file_path="report.pdf")
+    return layout
 """
         deps = collect_dependencies_from_source(
             source,
             set(),
             environment_namespaces=frozenset({"primitives"}),
         )
-        assert "primitives.computer.screenshot" in deps
+        assert "primitives.files.describe" in deps
 
     def test_actor_act_detected(self):
         """Awaited primitives.actor.act() is captured."""
@@ -215,7 +215,7 @@ async def main():
         source = """
 async def main():
     contacts = await primitives.contacts.ask("list all")
-    await primitives.tasks.update("create task")
+    await primitives.web.ask("latest headlines")
     handle = await primitives.actor.act("subtask")
     return contacts
 """
@@ -226,7 +226,7 @@ async def main():
         )
         assert deps == {
             "primitives.contacts.ask",
-            "primitives.tasks.update",
+            "primitives.web.ask",
             "primitives.actor.act",
         }
 

@@ -248,7 +248,7 @@ def _build_direct_specialist_tools_block() -> str:
 
 **Use these instead of `act` when the request is purely about one domain** — they skip the general-purpose routing layer: "What's Sarah's phone number?" / "List all contacts in the Berlin office" → `ask_about_contacts`; "Add a new contact for John Smith" / "Merge John and Jonathan's contact records" → `update_contacts`; "What did Bob say yesterday?" / "Summarise my conversation with David last week" → `query_past_transcripts`.
 
-**When to use `act` instead:** the request spans multiple domains (e.g. "find Sarah's email and send her the report", "check what Bob said and update his contact record"). The `act` pathway can also access contacts and transcripts — the direct tools are just the faster path for single-domain work.
+**When to use `act` instead:** the request spans multiple domains (e.g. "find Sarah's email and add it to the attendees table", "check what Bob said and update his contact record"). The `act` pathway can also access contacts and transcripts — the direct tools are just the faster path for single-domain work.
 
 **Don't ask before updating.** If the request involves storing, saving, or modifying something, go straight to the mutation tool (`update_contacts` or `act`) — do NOT first call a read tool to check existing records; the mutation pathways already check existing state before writing. Bundle the intent, including any "check if exists" logic, into a single call:
 - BAD: `ask_about_contacts("do we have Jane Doe?")` → then → `update_contacts("save Jane Doe's email")`

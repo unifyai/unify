@@ -101,7 +101,6 @@ _ABSOLUTE_PREFIXES = (
     "Data/",
     "Files/",
     "FileRecords/",
-    "Teams/",
     "Contacts",
     "Knowledge/",
     "Messages",
@@ -145,7 +144,7 @@ class DataManager(BaseDataManager):
         self._meta_ctx = ContextRegistry.get_context(self, DATA_META_TABLE)
         # (meta_context, managed_by) pairs whose custom data sync already
         # ran this process. Keyed by source, not a single flag: the
-        # deployment and each installed workflow reconcile disjoint row
+        # deployment and every other source reconcile disjoint row
         # sets, and one flag would let whichever synced first suppress the
         # others' passes entirely.
         self._custom_data_synced_sources: set[tuple[str, str]] = set()
@@ -1077,7 +1076,6 @@ class DataManager(BaseDataManager):
         context: str,
         rows: List[Dict[str, Any]],
         *,
-        batched: bool = True,
         on_duplicate: Optional[str] = None,
         destination: str | None = None,
     ) -> List[int]:
@@ -1091,7 +1089,6 @@ class DataManager(BaseDataManager):
         return insert_rows_impl(
             resolved,
             rows,
-            batched=batched,
             on_duplicate=on_duplicate,
         )
 
@@ -1445,8 +1442,8 @@ class DataManager(BaseDataManager):
 
         Rows live in many contexts and the context list comes from the
         source, so an empty source names no tables — which is exactly what
-        an uninstall sends. Without this record its prune would reach
-        nothing and the workflow's rows would outlive it.
+        a source that has been withdrawn sends. Without this record its
+        prune would reach nothing and its rows would outlive it.
         """
         field = stored_hash_field("custom_data_contexts", managed_by)
         try:
@@ -1642,7 +1639,7 @@ class DataManager(BaseDataManager):
     ) -> None:
         """Prune one managed row, scoped to the source that owns it.
 
-        Unscoped, a workflow's prune would delete the deployment's row of
+        Unscoped, another source's prune would delete the deployment's row of
         the same key from the same table — the two sources share the
         context and only ``managed_by`` tells them apart.
         """
@@ -1786,10 +1783,10 @@ class DataManager(BaseDataManager):
         """Sync custom data from pre-collected sources across destinations.
 
         Groups by the destination each table declares, so it never reaches
-        the engine for a destination the source does not mention. Workflow
-        installs drive ``sync_custom_data`` directly instead: an uninstall
-        passes an empty source, which resolves to zero destinations here
-        and would prune nothing.
+        the engine for a destination the source does not mention. Callers
+        withdrawing a source drive ``sync_custom_data`` directly instead: an
+        empty source resolves to zero destinations here and would prune
+        nothing.
         """
         if source_tables is None:
             source_tables = {}
@@ -1813,8 +1810,8 @@ class DataManager(BaseDataManager):
 class _DataRowSyncAdapter(CustomSyncAdapter):
     """Storage mechanics for one custom data table's row reconcile.
 
-    Scoped to one ``managed_by``: the deployment and every installed
-    workflow may seed rows into the same table, and the reconcile loop
+    Scoped to one ``managed_by``: the deployment and every other source
+    may seed rows into the same table, and the reconcile loop
     prunes every managed row whose key left the source. An unscoped read
     would hand one source its siblings' rows and delete them.
     """
@@ -1891,9 +1888,9 @@ class _DataRowSyncAdapter(CustomSyncAdapter):
 
         Deployment-only. The probe matches on the seed column alone, so
         any other source using it would claim a row the deployment (or a
-        sibling workflow) hand-seeded — restamping it and ping-ponging
-        ownership on every pass. A workflow inserts instead, and its row
-        is distinguishable by ``managed_by`` from the first write.
+        sibling source) hand-seeded — restamping it and ping-ponging
+        ownership on every pass. Other sources insert instead, and their rows
+        are distinguishable by ``managed_by`` from the first write.
         """
         if self.managed_by != MANAGED_BY_DEPLOYMENT:
             return None

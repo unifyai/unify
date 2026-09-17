@@ -12,7 +12,7 @@ handles are additionally persisted as durable artifacts (JSONL today,
 Parquet/Arrow later) and replaced with ``ObjectStoreArtifactHandle``.
 
 Both the FM adapter and the DM ingest script call this function so the
-transport logic is defined once.  A future GCS adapter only needs to
+transport logic is defined once.  Another storage adapter only needs to
 implement the same ``ArtifactStore`` protocol -- no changes here.
 """
 

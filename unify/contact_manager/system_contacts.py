@@ -289,9 +289,3 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
     except StoreError as e:
         if not _is_duplicate_contact_error(e):
             raise
-
-
-TEAMMATE_ASSISTANT_RESPONSE_POLICY = (
-    "Teammate in a shared team chat. Use normal judgement when deciding "
-    "whether their messages need a reply."
-)

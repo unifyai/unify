@@ -1002,9 +1002,8 @@ class ImageManager(BaseImageManager):
         Add new images. Each item may include ``timestamp``, ``caption``, ``data``,
         and ``filepath``.
 
-        ``destination`` controls where the image metadata row is stored. Omit it
-        or pass ``"personal"`` for the personal Images root; pass
-        ``"team:<id>"`` to write metadata into an accessible shared team. The
+        ``destination`` controls where the image metadata row is stored. Only
+        the personal Images root exists: omit it or pass ``"personal"``. The
         image blob is not re-keyed by destination.
 
         Extended support
@@ -1113,7 +1112,6 @@ class ImageManager(BaseImageManager):
             resp = unity_create_logs(
                 context=context,
                 entries=prepared,
-                batched=True,
             )
 
             # Helper: write-through to DataStore with a given row payload
@@ -1301,8 +1299,7 @@ class ImageManager(BaseImageManager):
         Update existing images. Each update dict must include ``image_id`` and may
         set ``timestamp``, ``caption``, ``data``, and/or ``filepath``.
         ``destination`` selects the Images root containing the metadata row.
-        Omit it or pass ``"personal"`` for personal metadata; pass
-        ``"team:<id>"`` for an accessible shared team copy.
+        Only the personal root exists: omit it or pass ``"personal"``.
         Returns updated ids.
         """
         try:

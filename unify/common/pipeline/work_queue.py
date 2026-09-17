@@ -25,7 +25,7 @@ __all__ = [
 CancellationCheck = Callable[[], bool]
 """Sync callback that returns ``True`` when the current job has been cancelled.
 
-Workers build a closure over the run-id and a cached GCS read, then
+Workers build a closure over the run-id and a cached artifact-store read, then
 thread it through long-running loops (``ingest_artifacts``,
 ``_make_checkpoint_callback``, ``fm_process_plan``) so cancellation is
 detected within ~60 s rather than only at the top of the handler.
@@ -113,7 +113,7 @@ class WorkQueue(Protocol):
 
         Workers invoke this periodically (via a lease-extender task)
         while processing long-running messages, so the queue backend
-        does not redeliver the message to a second pod mid-work.
+        does not redeliver the message to a second worker mid-work.
 
         The extension is measured from *now*, not from the existing
         deadline: calling ``extend_lease(receipt_id, 600)`` tells the
@@ -128,7 +128,7 @@ class WorkQueue(Protocol):
         """Release any external connections / background tasks.
 
         Workers call this during graceful shutdown (after the main
-        consumer loop has stopped) so that Pub/Sub gRPC channels,
+        consumer loop has stopped) so that queue connections,
         thread pools, and scheduled re-queues exit cleanly before the
         process terminates.  Implementations that hold no external
         resources may implement this as a no-op.

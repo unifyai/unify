@@ -21,8 +21,8 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
     ActorHandleStarted,
+    UnifyMessageReceived,
 )
 
 pytestmark = pytest.mark.eval
@@ -73,43 +73,14 @@ def _assert_transcript_query_triggered(
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_reply_to_old_email_requests_email_id(initialized_cm):
-    """Reply to an old email requires the email_id for threading.
-
-    The brain must call ``query_past_transcripts`` and specifically request
-    the ``email_id`` so that ``send_email`` can thread the reply correctly.
-    """
+async def test_past_message_routes_to_transcripts(initialized_cm):
+    """Asking about a past message should route to ``query_past_transcripts``."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content=(
-                "Reply to that email Alice sent me last month about the "
-                "quarterly report. Just say thanks and that I've reviewed it. "
-                "Make sure the reply is threaded on the original message."
-            ),
-        ),
-    )
-
-    _assert_transcript_query_triggered(
-        result,
-        expected_substrings=["email_id"],
-        cm=cm,
-    )
-    assert_efficient(result, 3)
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_past_sms_routes_to_transcripts(initialized_cm):
-    """Asking about a past SMS should route to ``query_past_transcripts``."""
-    cm = initialized_cm
-
-    result = await cm.step_until_wait(
-        SMSReceived(
-            contact=BOSS,
-            content="What did Bob text me about yesterday?",
+            content="What did Bob message me about yesterday?",
         ),
     )
 
@@ -123,14 +94,14 @@ async def test_past_sms_routes_to_transcripts(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_past_call_summary_routes_to_transcripts(initialized_cm):
-    """Asking for a call summary should route to ``query_past_transcripts``."""
+async def test_past_conversation_summary_routes_to_transcripts(initialized_cm):
+    """Asking for a conversation summary should route to ``query_past_transcripts``."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content="Can you summarise my last phone call with Charlie?",
+            content="Can you summarise my last conversation with Charlie?",
         ),
     )
 
@@ -144,14 +115,14 @@ async def test_past_call_summary_routes_to_transcripts(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_past_email_search_by_topic(initialized_cm):
-    """Searching for an email by topic should route to ``query_past_transcripts``."""
+async def test_past_conversation_search_by_topic(initialized_cm):
+    """Searching past conversations by topic should route to ``query_past_transcripts``."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content="Find the email thread about the budget proposal from last week.",
+            content="Find the conversation about the budget proposal from last week.",
         ),
     )
 

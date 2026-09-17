@@ -49,11 +49,16 @@ def _registered_tool_attributes() -> dict[str, str]:
 def test_registrations_were_found() -> None:
     """Guard the guard: a parser that finds nothing would pass vacuously.
 
-    A floor rather than an exact count -- the number moves with every tool
-    added, and only "did the parse work at all" needs asserting. Wrapped forms
-    such as ``self._with_doc_suffix(...)`` are deliberately not counted.
+    The tools registered once the managers are initialized are pinned by
+    name, so a parse that silently found nothing cannot pass.
     """
-    assert len(_registered_tool_attributes()) > 10
+    registered = _registered_tool_attributes()
+    assert {
+        "act",
+        "ask_about_contacts",
+        "update_contacts",
+        "query_past_transcripts",
+    } <= set(registered)
 
 
 def test_every_registered_tool_exists() -> None:
@@ -63,22 +68,3 @@ def test_every_registered_tool_exists() -> None:
         if not hasattr(ConversationManagerBrainActionTools, attr)
     }
     assert not missing, f"registered but not defined: {missing}"
-
-
-def test_meet_tools_are_wired() -> None:
-    """Regression: a cleanup once split registration from definition here.
-
-    The screenshare tools were removed in a contiguous cut that also swallowed
-    ``send_meet_chat`` sitting between them, while its registration survived --
-    so every slow-brain turn raised AttributeError in staging. The screenshare
-    pair is back, registered from the same block, so all three are pinned
-    together rather than leaving the same gap open next to them.
-    """
-    registered = _registered_tool_attributes()
-    for name in (
-        "send_meet_chat",
-        "start_meet_screenshare",
-        "stop_meet_screenshare",
-    ):
-        assert registered.get(name) == name, f"{name} is not registered"
-        assert hasattr(ConversationManagerBrainActionTools, name)

@@ -7,7 +7,7 @@ Tests for error handling and recovery in ConversationManager.
 This test file covers:
 1. Malformed events (invalid JSON, missing fields, unknown types)
 2. Event handler edge cases (unregistered handlers, missing contacts)
-3. State recovery scenarios (out-of-order events, duplicate events)
+3. State recovery scenarios (duplicate events, stray results)
 4. Graceful degradation when data is missing or invalid
 
 Most tests are marked as `symbolic` since they test deterministic error
@@ -22,16 +22,10 @@ from dataclasses import dataclass
 from tests.conversation_manager.conftest import TEST_CONTACTS
 from unify.conversation_manager.events import (
     Event,
-    SMSReceived,
-    EmailReceived,
-    PhoneCallReceived,
-    PhoneCallStarted,
-    PhoneCallEnded,
-    UnifyMeetEnded,
+    UnifyMessageReceived,
     Ping,
     ActorResult,
 )
-from unify.conversation_manager.cm_types import Medium
 
 pytestmark = pytest.mark.symbolic
 
@@ -57,7 +51,7 @@ class TestMalformedEvents:
 
     def test_from_json_missing_payload(self):
         """Event.from_json should raise on missing payload."""
-        data = json.dumps({"event_name": "SMSReceived"})
+        data = json.dumps({"event_name": "UnifyMessageReceived"})
         with pytest.raises(KeyError):
             Event.from_json(data)
 
@@ -85,10 +79,10 @@ class TestMalformedEvents:
 
     def test_from_json_missing_required_field(self, static_now):
         """Event.from_json should raise when required field is missing."""
-        # SMSReceived requires 'contact' and 'content'
+        # UnifyMessageReceived requires 'contact' and 'content'
         data = json.dumps(
             {
-                "event_name": "SMSReceived",
+                "event_name": "UnifyMessageReceived",
                 "payload": {"timestamp": static_now.isoformat()},
             },
         )
@@ -100,7 +94,7 @@ class TestMalformedEvents:
         contact = TEST_CONTACTS[1]
         data = json.dumps(
             {
-                "event_name": "SMSReceived",
+                "event_name": "UnifyMessageReceived",
                 "payload": {
                     "contact": contact,
                     "content": "test message",
@@ -112,7 +106,7 @@ class TestMalformedEvents:
         )
         # Should not raise - extra fields are filtered out
         event = Event.from_json(data)
-        assert isinstance(event, SMSReceived)
+        assert isinstance(event, UnifyMessageReceived)
         assert event.content == "test message"
         assert not hasattr(event, "extra_field_that_does_not_exist")
 
@@ -147,7 +141,7 @@ class TestEventHandlerEdgeCases:
 
     @pytest.mark.asyncio
     async def test_event_with_unknown_contact_id(self, initialized_cm):
-        """SMS from unknown contact_id should still be handled using event.contact fallback.
+        """A message from an unknown contact_id is handled via event.contact.
 
         This test verifies that the event handler processes the event correctly
         when the contact_id isn't found in ContactManager. The handler should
@@ -167,23 +161,19 @@ class TestEventHandlerEdgeCases:
             "phone_number": "+19999999999",
         }
 
-        event = SMSReceived(
+        event = UnifyMessageReceived(
             contact=unknown_contact,
             content="Hello from unknown contact",
         )
 
         # Call the event handler directly (without running LLM)
-        await EventHandler.handle_event(
-            event,
-            cm.cm,
-            is_voice_call=False,
-        )
+        await EventHandler.handle_event(event, cm.cm)
 
         # Verify the message was added to conversations using event.contact data
         assert 9999 in cm.contact_index.active_conversations
-        sms_thread = cm.contact_index.get_messages_for_contact(9999, Medium.SMS_MESSAGE)
-        assert len(sms_thread) >= 1
-        assert sms_thread[0].content == "Hello from unknown contact"
+        thread = cm.contact_index.get_messages_for_contact(9999)
+        assert len(thread) >= 1
+        assert thread[0].content == "Hello from unknown contact"
 
     @pytest.mark.asyncio
     async def test_ping_event_handler(self, initialized_cm):
@@ -207,50 +197,21 @@ class TestStateRecovery:
     """Tests for state recovery from abnormal event sequences."""
 
     @pytest.mark.asyncio
-    async def test_phone_call_ended_without_started(self, initialized_cm):
-        """PhoneCallEnded without PhoneCallStarted should not crash."""
+    async def test_duplicate_message_received(self, initialized_cm):
+        """Duplicate message events should be handled (added to thread twice)."""
         cm = initialized_cm
         contact = TEST_CONTACTS[1]
 
-        # End a call that was never started
-        result = await cm.step(PhoneCallEnded(contact=contact))
-
-        # Should not crash - guard in event handler protects against KeyError
-        assert result.llm_requested is True  # Handler requests LLM run
-        # Mode should remain "text" (never entered "call" mode)
-        assert cm.cm.mode == "text"
-
-    @pytest.mark.asyncio
-    async def test_unify_meet_ended_without_started(self, initialized_cm):
-        """UnifyMeetEnded without UnifyMeetStarted should not crash."""
-        cm = initialized_cm
-        contact = TEST_CONTACTS[1]
-
-        # End a meeting that was never started
-        result = await cm.step(UnifyMeetEnded(contact=contact))
-
-        # Should not crash
-        assert cm.cm.mode == "text"
-
-    @pytest.mark.asyncio
-    async def test_duplicate_sms_received(self, initialized_cm):
-        """Duplicate SMS events should be handled (added to thread twice)."""
-        cm = initialized_cm
-        contact = TEST_CONTACTS[1]
-
-        event = SMSReceived(contact=contact, content="Duplicate message")
+        event = UnifyMessageReceived(contact=contact, content="Duplicate message")
 
         # Process the same event twice
         await cm.step(event)
         await cm.step(event)
 
         # Both messages should be in the thread (no deduplication at this level)
-        sms_thread = cm.contact_index.get_messages_for_contact(
-            contact["contact_id"],
-            Medium.SMS_MESSAGE,
-        )
+        thread = cm.contact_index.get_messages_for_contact(contact["contact_id"])
         matching = [
-            m for m in sms_thread if getattr(m, "content", None) == "Duplicate message"
+            m for m in thread if getattr(m, "content", None) == "Duplicate message"
         ]
         assert len(matching) == 2
 
@@ -289,23 +250,11 @@ class TestContactIndexEdgeCases:
         assert contact is None
 
     @pytest.mark.asyncio
-    async def test_get_contact_by_phone_doesnt_crash(self, initialized_cm):
-        """get_contact with phone_number should not crash."""
+    async def test_get_contact_without_id(self, initialized_cm):
+        """get_contact with no contact_id should return None."""
         cm = initialized_cm
 
-        # Search for a phone number - should not raise
-        result = cm.contact_index.get_contact(phone_number="+10000000000")
-
-        # Result is either None or a dict with contact data
-        assert result is None or isinstance(result, dict)
-
-    @pytest.mark.asyncio
-    async def test_get_contact_nonexistent_email(self, initialized_cm):
-        """get_contact with non-existent email should return None."""
-        cm = initialized_cm
-
-        contact = cm.contact_index.get_contact(email="nonexistent@example.com")
-        assert contact is None
+        assert cm.contact_index.get_contact() is None
 
     @pytest.mark.asyncio
     async def test_push_message_creates_conversation(self, initialized_cm):
@@ -317,23 +266,17 @@ class TestContactIndexEdgeCases:
         # Contact 888 not in active_conversations yet
         assert new_contact_id not in cm.contact_index.active_conversations
 
-        # Push a message using the correct signature:
-        # push_message(contact_id, sender_name, thread_name, message_content=...)
         cm.contact_index.push_message(
             contact_id=new_contact_id,
             sender_name="New Person",
-            thread_name=Medium.SMS_MESSAGE,
             message_content="Hello",
             role="user",
         )
 
         # Now contact 888 should have an active conversation
         assert new_contact_id in cm.contact_index.active_conversations
-        sms_thread = cm.contact_index.get_messages_for_contact(
-            new_contact_id,
-            Medium.SMS_MESSAGE,
-        )
-        assert len(sms_thread) == 1
+        thread = cm.contact_index.get_messages_for_contact(new_contact_id)
+        assert len(thread) == 1
 
 
 # =============================================================================
@@ -385,33 +328,39 @@ class TestEventSerializationEdgeCases:
     def test_event_round_trip_preserves_data(self):
         """Event should survive JSON round-trip with all data intact."""
         contact = TEST_CONTACTS[1]
-        original = SMSReceived(contact=contact, content="Test message")
+        original = UnifyMessageReceived(contact=contact, content="Test message")
 
         # Serialize and deserialize
         json_str = original.to_json()
         restored = Event.from_json(json_str)
 
-        assert isinstance(restored, SMSReceived)
+        assert isinstance(restored, UnifyMessageReceived)
         assert restored.contact == original.contact
         assert restored.content == original.content
         # Timestamps should be equal (within serialization precision)
         assert abs((restored.timestamp - original.timestamp).total_seconds()) < 1
 
-    def test_email_event_with_none_email_id(self):
-        """EmailReceived with None email_id should serialize correctly."""
+    def test_event_round_trip_preserves_attachments(self):
+        """Attachment dicts survive the JSON round-trip unchanged."""
         contact = TEST_CONTACTS[1]
-        event = EmailReceived(
+        attachments = [
+            {
+                "filename": "report.pdf",
+                "filepath": "Attachments/att-1_report.pdf",
+                "content_type": "application/pdf",
+                "size_bytes": 1024,
+            },
+        ]
+        original = UnifyMessageReceived(
             contact=contact,
-            subject="Test",
-            body="Test body",
-            email_id=None,
+            content="See attached",
+            attachments=attachments,
         )
 
-        json_str = event.to_json()
-        restored = Event.from_json(json_str)
+        restored = Event.from_json(original.to_json())
 
-        assert isinstance(restored, EmailReceived)
-        assert restored.email_id is None
+        assert isinstance(restored, UnifyMessageReceived)
+        assert restored.attachments == attachments
 
     def test_event_to_dict_with_datetime(self):
         """Event.to_dict should serialize datetime correctly."""
@@ -471,50 +420,6 @@ class TestChatHistoryEdgeCases:
 
 
 # =============================================================================
-# Mode Transition Edge Cases
-# =============================================================================
-
-
-class TestModeTransitions:
-    """Tests for mode transition edge cases."""
-
-    @pytest.mark.asyncio
-    async def test_double_call_start_stays_in_call_mode(self, initialized_cm):
-        """Starting a call while already in call mode should be handled."""
-        cm = initialized_cm
-        contact = TEST_CONTACTS[1]
-
-        # Start first call
-        await cm.step(PhoneCallReceived(contact=contact, conference_name="conf1"))
-        await cm.step(PhoneCallStarted(contact=contact))
-        assert cm.cm.mode == "call"
-
-        # Try to start second call (should be a no-op per current implementation)
-        await cm.step(PhoneCallReceived(contact=contact, conference_name="conf2"))
-        # Mode should still be "call"
-        assert cm.cm.mode == "call"
-
-        # Clean up
-        await cm.step(PhoneCallEnded(contact=contact))
-        assert cm.cm.mode == "text"
-
-    @pytest.mark.asyncio
-    async def test_mode_after_call_cleanup(self, initialized_cm):
-        """Mode should return to text after call cleanup."""
-        cm = initialized_cm
-        contact = TEST_CONTACTS[1]
-
-        # Full call lifecycle
-        await cm.step(PhoneCallReceived(contact=contact, conference_name="conf"))
-        await cm.step(PhoneCallStarted(contact=contact))
-        assert cm.cm.mode == "call"
-
-        await cm.step(PhoneCallEnded(contact=contact))
-        assert cm.cm.mode == "text"
-        assert cm.cm.call_manager.call_contact is None
-
-
-# =============================================================================
 # Debouncer Edge Cases (Symbolic Tests)
 # =============================================================================
 
@@ -554,13 +459,13 @@ class TestLLMRequestEdgeCases:
         """Multiple pending LLM requests should use the last one's params."""
         cm = initialized_cm
 
-        # Manually add multiple requests with different params
-        cm.cm._pending_llm_requests.append((0, False, False))
-        cm.cm._pending_llm_requests.append((1, False, False))
-        cm.cm._pending_llm_requests.append((2, True, False))  # Last one
+        # Manually add multiple (delay, is_user_origin) requests
+        cm.cm._pending_llm_requests.append((0, False))
+        cm.cm._pending_llm_requests.append((1, False))
+        cm.cm._pending_llm_requests.append((2, True))  # Last one
 
         # The flush logic uses the last request's params
-        assert cm.cm._pending_llm_requests[-1] == (2, True, False)
+        assert cm.cm._pending_llm_requests[-1] == (2, True)
 
         # Clear for other tests
         cm.cm._pending_llm_requests.clear()
@@ -581,12 +486,8 @@ class TestContactFallback:
         self,
         initialized_cm,
     ):
-        """When ContactManager is not set, get_contact returns None.
-
-        ContactIndex.get_contact() delegates entirely to ContactManager.
-        When ContactManager is not set, it correctly returns None rather
-        than attempting any fallback. This is by design - ContactManager
-        is the single source of truth for contact data.
+        """When ContactManager is not set, get_contact falls back to the
+        inbound contact cache, which is empty here, so it returns None.
         """
         cm = initialized_cm
 

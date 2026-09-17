@@ -6,14 +6,8 @@ import tomllib
 from pathlib import Path
 
 FIRST_PARTY = {
-    "agent-service",
-    "communication",
-    "console",
-    "orchestra",
-    "unisdk",
     "unillm",
     "unify",
-    "unity-deploy",
 }
 INERT_VERSION = "0.0.0"
 

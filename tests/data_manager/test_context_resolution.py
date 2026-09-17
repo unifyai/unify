@@ -106,23 +106,6 @@ def test_fully_qualified_foreign_path_not_double_prefixed():
         )
 
 
-def test_shared_team_path_not_double_prefixed():
-    """Teams/* contexts are absolute roots, not Data/* children."""
-    from unify.data_manager.data_manager import DataManager
-
-    dm = DataManager.__new__(DataManager)
-    dm._base_ctx = "org123/42/Data"
-
-    assert dm._resolve_context("Teams/7/Dashboards/Tiles") == "Teams/7/Dashboards/Tiles"
-
-
-def test_simulated_shared_team_path_not_double_prefixed():
-    """SimulatedDataManager follows the same Teams/* absolute-root contract."""
-    dm = SimulatedDataManager()
-
-    assert dm._resolve_context("Teams/7/Dashboards/Tiles") == "Teams/7/Dashboards/Tiles"
-
-
 def test_data_manager_constructor_fails_when_context_resolution_fails():
     from unify.data_manager.data_manager import DataManager
 
@@ -185,10 +168,12 @@ def test_context_registry_get_known_base_contexts():
 
     bases = ContextRegistry.get_known_base_contexts()
 
-    # Should include Data and potentially others
+    # Every manager's declared tables, unresolved and sorted
     assert isinstance(bases, list)
+    assert bases == sorted(bases)
     assert "Data" in bases
-    assert "Canvas/Views" in bases
+    assert "Contacts" in bases
+    assert "FileRecords" in bases
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -211,8 +196,8 @@ def test_get_context_with_empty_contextvar_raises():
     CONTEXT_READ.set("")
     CONTEXT_WRITE.set("")
 
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        with patch("unify.common.context_registry.create_fields"):
+    with patch("unify.common.context_registry.create_context_checked"):
+        with patch("unify.db.create_fields"):
             try:
                 ContextRegistry.get_context(FileManager, "FileRecords")
                 assert False, "Expected RuntimeError for empty context"
@@ -235,8 +220,8 @@ def test_get_context_uses_stashed_base_after_clear():
     CONTEXT_READ.set(base)
     CONTEXT_WRITE.set(base)
 
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        with patch("unify.common.context_registry.create_fields"):
+    with patch("unify.common.context_registry.create_context_checked"):
+        with patch("unify.db.create_fields"):
             ContextRegistry.setup()
 
     cached = ContextRegistry._registry.get(("FileManager", "FileRecords", "Personal"))
@@ -250,8 +235,8 @@ def test_get_context_uses_stashed_base_after_clear():
     # Re-setup with the same base restores everything
     CONTEXT_READ.set(base)
     CONTEXT_WRITE.set(base)
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        with patch("unify.common.context_registry.create_fields"):
+    with patch("unify.common.context_registry.create_context_checked"):
+        with patch("unify.db.create_fields"):
             ContextRegistry.setup()
 
     result = ContextRegistry.get_context(FileManager, "FileRecords")

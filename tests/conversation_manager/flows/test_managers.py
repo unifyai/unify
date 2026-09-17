@@ -5,7 +5,7 @@ tests/conversation_manager/test_managers.py
 Tests for task-related conversation flows through the ConversationManager.
 
 Uses the ConversationManager "single-step" API:
-- Construct an input Event (typically SMSReceived)
+- Construct an input Event (typically UnifyMessageReceived)
 - Call `await cm.step(event)`
 - Assert on state changes and output events
 
@@ -20,17 +20,17 @@ from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import filter_events_by_type
 from tests.conversation_manager.conftest import TEST_CONTACTS
 from unify.conversation_manager.events import (
-    SMSReceived,
-    SMSSent,
+    UnifyMessageReceived,
+    UnifyMessageSent,
 )
 
 pytestmark = pytest.mark.eval
 
 
-def _get_sms_response(events):
-    """Get the first SMS response, if any."""
-    sms_list = filter_events_by_type(events, SMSSent)
-    return sms_list[0] if sms_list else None
+def _get_chat_response(events):
+    """Get the first outbound chat message, if any."""
+    sent = filter_events_by_type(events, UnifyMessageSent)
+    return sent[0] if sent else None
 
 
 # =============================================================================
@@ -48,7 +48,7 @@ async def test_task_request_processed(initialized_cm):
     contact = TEST_CONTACTS[0]
 
     result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me all my contacts with their names and phone numbers.",
         ),
@@ -69,7 +69,7 @@ async def test_stop_request_processed(initialized_cm):
 
     # Start a task first
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me all my contacts with their names and phone numbers.",
         ),
@@ -77,7 +77,7 @@ async def test_stop_request_processed(initialized_cm):
 
     # Then send stop request
     stop_result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Stop that task, I don't need it anymore",
         ),
@@ -97,7 +97,7 @@ async def test_status_query_processed(initialized_cm):
 
     # Start a task
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me all my contacts with their names and phone numbers.",
         ),
@@ -105,7 +105,7 @@ async def test_status_query_processed(initialized_cm):
 
     # Ask about status
     status_result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="What's the status of that task you're working on?",
         ),
@@ -125,7 +125,7 @@ async def test_modification_request_processed(initialized_cm):
 
     # Start a task
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me all my contacts with their names and phone numbers.",
         ),
@@ -133,7 +133,7 @@ async def test_modification_request_processed(initialized_cm):
 
     # Modify the task
     modify_result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Actually, for that task, please exclude my own contact from the list",
         ),
@@ -153,7 +153,7 @@ async def test_pause_request_processed(initialized_cm):
 
     # Start a task
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me all my contacts with their names and phone numbers.",
         ),
@@ -161,7 +161,7 @@ async def test_pause_request_processed(initialized_cm):
 
     # Pause request
     pause_result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Pause that task for now",
         ),
@@ -181,7 +181,7 @@ async def test_resume_request_processed(initialized_cm):
 
     # Start a task
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me all my contacts with their names and phone numbers.",
         ),
@@ -189,7 +189,7 @@ async def test_resume_request_processed(initialized_cm):
 
     # Resume request
     resume_result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Resume that task please",
         ),
@@ -210,24 +210,24 @@ async def test_llm_asks_clarification_for_ambiguous_request(initialized_cm):
     Test that the LLM asks for clarification when given an ambiguous request.
 
     When a user's request is vague, the LLM should ask for clarification
-    rather than making assumptions. This produces an immediate SMS response.
+    rather than making assumptions. This produces an immediate chat response.
     """
     cm = initialized_cm
     contact = TEST_CONTACTS[0]
 
     # Send an ambiguous request
     result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="I need help with a contact",  # Ambiguous: which? what help?
         ),
     )
 
-    # Should produce an SMS response asking for clarification
-    sms = _get_sms_response(result.output_events)
-    assert sms is not None, "Expected SMS response"
+    # Should produce a chat response asking for clarification
+    reply = _get_chat_response(result.output_events)
+    assert reply is not None, "Expected a chat response"
 
-    content_lower = sms.content.lower()
+    content_lower = reply.content.lower()
 
     # Verify clarification indicators
     clarification_indicators = ["which", "what", "how", "would you like", "prefer", "?"]
@@ -236,7 +236,7 @@ async def test_llm_asks_clarification_for_ambiguous_request(initialized_cm):
     )
     assert (
         has_clarification
-    ), f"Expected LLM to ask a clarifying question, but got: {sms.content}"
+    ), f"Expected LLM to ask a clarifying question, but got: {reply.content}"
 
 
 @pytest.mark.asyncio
@@ -253,7 +253,7 @@ async def test_llm_processes_clarification_response(initialized_cm):
 
     # Send an ambiguous request
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="I need help with a contact",
         ),
@@ -261,7 +261,7 @@ async def test_llm_processes_clarification_response(initialized_cm):
 
     # Provide clarification
     result = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Show me only contacts that have email addresses.",
         ),
@@ -289,7 +289,7 @@ async def test_multi_turn_task_conversation(initialized_cm):
 
     # Turn 1: Request a task
     result1 = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="List all my contacts",
         ),
@@ -298,7 +298,7 @@ async def test_multi_turn_task_conversation(initialized_cm):
 
     # Turn 2: Ask about status
     result2 = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="How's that task going?",
         ),
@@ -307,7 +307,7 @@ async def test_multi_turn_task_conversation(initialized_cm):
 
     # Turn 3: Stop the task
     result3 = await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Stop that task please",
         ),

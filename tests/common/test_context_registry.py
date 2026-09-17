@@ -3,7 +3,11 @@ from unittest.mock import patch
 import pytest
 from unify.db import CONTEXT_READ, CONTEXT_WRITE
 
-from unify.common.context_registry import ContextRegistry, TableContext
+from unify.common.context_registry import (
+    PERSONAL_ROOT_IDENTITY,
+    ContextRegistry,
+    TableContext,
+)
 from unify.common.tool_outcome import ToolErrorException
 from unify.session_details import SESSION_DETAILS
 
@@ -11,7 +15,6 @@ from unify.session_details import SESSION_DETAILS
 class RegistryExampleManager:
     class Config:
         required_contexts = [
-            TableContext(name="Tasks", description="Scheduled work items."),
             TableContext(
                 name="Contacts",
                 description="People and organizations the assistant knows.",
@@ -36,16 +39,14 @@ class RegistryExampleManager:
             TableContext(name="Files", description="File payload rows."),
             TableContext(name="Data", description="User data tables."),
             TableContext(name="BlackList", description="Blocked contact details."),
-            TableContext(name="Canvas/Views", description="Canvas view rows."),
-            TableContext(
-                name="Canvas/Actions",
-                description="Canvas action rows.",
-            ),
             TableContext(name="Transcripts", description="Conversation messages."),
             TableContext(name="Exchanges", description="Conversation exchanges."),
             TableContext(name="Images", description="Stored images."),
             TableContext(name="SearchCache", description="Non-shared runtime cache."),
         ]
+
+
+_ALL_TABLES = [ctx.name for ctx in RegistryExampleManager.Config.required_contexts]
 
 
 @pytest.fixture(autouse=True)
@@ -59,363 +60,119 @@ def reset_context_registry():
     SESSION_DETAILS.reset()
 
 
-def test_write_root_resolves_personal_and_space_destinations():
-    SESSION_DETAILS.team_ids = [3, 7]
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        assert (
-            ContextRegistry.write_root(
-                RegistryExampleManager,
-                "Tasks",
-                destination=None,
-            )
-            == "user123/42"
-        )
-        assert (
-            ContextRegistry.write_root(
-                RegistryExampleManager,
-                "Tasks",
-                destination="personal",
-            )
-            == "user123/42"
-        )
-        assert (
-            ContextRegistry.write_root(
-                RegistryExampleManager,
-                "Contacts",
-                destination="team:7",
-            )
-            == "Teams/7"
-        )
+@pytest.fixture
+def provision():
+    """Stub the store calls provisioning makes; yields the context-create mock."""
+    with (
+        patch("unify.common.context_registry.create_context_checked") as create_context,
+        patch("unify.common.context_registry.db.create_fields"),
+    ):
+        yield create_context
 
 
-def test_owner_for_root_maps_personal_and_team_roots():
-    SESSION_DETAILS.assistant.agent_id = 99
-    assert ContextRegistry._owner_for_root("Teams/7") == ("team", 7)
-    assert ContextRegistry._owner_for_root("Personal") == ("assistant", 99)
-    # No assigned assistant -> defer to backend name-inference.
-    SESSION_DETAILS.assistant.agent_id = None
-    assert ContextRegistry._owner_for_root("Personal") == (None, None)
-
-
-def test_provisioning_passes_explicit_owner_scope():
-    """Context provisioning forwards explicit owner scope per root type."""
-    SESSION_DETAILS.team_ids = [7]
-    SESSION_DETAILS.assistant.agent_id = 42
-
-    with patch(
-        "unify.common.context_registry._create_context_with_retry",
-    ) as mock_create:
-        ContextRegistry.write_root(RegistryExampleManager, "Tasks", destination=None)
+@pytest.mark.parametrize("destination", [None, "personal", ""])
+def test_write_root_resolves_to_the_session_root(destination, provision):
+    assert (
         ContextRegistry.write_root(
             RegistryExampleManager,
             "Contacts",
-            destination="team:7",
+            destination=destination,
         )
-
-    owners = {
-        (call.kwargs.get("owner_scope"), call.kwargs.get("owner_id"))
-        for call in mock_create.call_args_list
-    }
-    assert ("assistant", 42) in owners
-    assert ("team", 7) in owners
+        == "user123/42"
+    )
 
 
-def test_write_root_resolves_all_manager_destination_tables_to_shared_teams():
-    class DestinationAwareManager:
-        class Config:
-            required_contexts = [
-                TableContext(
-                    name="Knowledge",
-                    description="Structured assistant memory.",
-                ),
-                TableContext(
-                    name="Guidance",
-                    description="Assistant behavior guidance.",
-                ),
-                TableContext(
-                    name="Functions/Compositional",
-                    description="Assistant-authored functions.",
-                ),
-                TableContext(
-                    name="Functions/VirtualEnvs",
-                    description="Custom function environments.",
-                ),
-                TableContext(
-                    name="Functions/Primitives",
-                    description="Runtime-provided primitive functions.",
-                ),
-                TableContext(
-                    name="Functions/Meta",
-                    description="Function synchronization metadata.",
-                ),
-            ]
-
-    SESSION_DETAILS.team_ids = [37]
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        for table_name in (
-            "Knowledge",
-            "Guidance",
-            "Functions/Compositional",
-            "Functions/VirtualEnvs",
-            "Functions/Primitives",
-            "Functions/Meta",
-        ):
-            assert (
-                ContextRegistry.write_root(
-                    DestinationAwareManager,
-                    table_name,
-                    destination="team:37",
-                )
-                == "Teams/37"
-            )
-
-
-def test_invalid_destination_raises_structured_error():
-    SESSION_DETAILS.team_ids = [3, 7]
-
+@pytest.mark.parametrize("destination", ["team:7", "shared", 7])
+def test_invalid_destination_raises_structured_error(destination):
     with pytest.raises(ToolErrorException) as exc_info:
         ContextRegistry.write_root(
             RegistryExampleManager,
-            "Tasks",
-            destination="team:999",
+            "Contacts",
+            destination=destination,
         )
 
     assert exc_info.value.payload["error_kind"] == "invalid_destination"
-    assert exc_info.value.payload["details"]["destination"] == "team:999"
-    assert exc_info.value.payload["details"]["team_ids"] == [3, 7]
-
-
-def test_read_roots_returns_personal_then_sorted_teams():
-    SESSION_DETAILS.team_ids = [7, 3]
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        task_roots = ContextRegistry.read_roots(RegistryExampleManager, "Tasks")
-        contact_roots = ContextRegistry.read_roots(RegistryExampleManager, "Contacts")
-
-    assert task_roots == ["user123/42", "Teams/3", "Teams/7"]
-    assert contact_roots == ["user123/42", "Teams/3", "Teams/7"]
-
-
-def _make_team_owned(owner_team_id: int = 5, member_team_ids=(9,)) -> None:
-    SESSION_DETAILS.assistant.agent_id = 42
-    SESSION_DETAILS.owner_team_id = owner_team_id
-    SESSION_DETAILS.team_ids = [owner_team_id, *member_team_ids]
-    base = f"Teams/{owner_team_id}/Assistants/42"
-    ContextRegistry.set_base_context(base)
-    CONTEXT_READ.set(base)
-    CONTEXT_WRITE.set(base)
-
-
-def test_team_owned_shared_tables_home_at_owner_team_root():
-    _make_team_owned()
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        home = ContextRegistry.write_root(
-            RegistryExampleManager,
-            "Contacts",
-            destination=None,
-        )
-        personal_alias = ContextRegistry.write_root(
-            RegistryExampleManager,
-            "Contacts",
-            destination="personal",
-        )
-        get_ctx = ContextRegistry.get_context(RegistryExampleManager, "Contacts")
-
-    assert home == "Teams/5"
-    # "personal" is forgiving for team-owned assistants: it maps to home.
-    assert personal_alias == "Teams/5"
-    assert get_ctx == "Teams/5/Contacts"
-
-
-def test_team_owned_non_shared_tables_live_under_assistant_subtree():
-    _make_team_owned()
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        # "Secrets" is shared-scoped; use a genuinely non-shared table name.
-        get_ctx = ContextRegistry.get_context(RegistryExampleManager, "SearchCache")
-
-    assert get_ctx == "Teams/5/Assistants/42/SearchCache"
-
-
-def test_team_owned_sync_meta_homes_with_the_rows_it_fingerprints():
-    # A sync-state Meta table must resolve to the same root as the rows it
-    # fingerprints. When a Meta table is not shared-scoped, a team-owned
-    # assistant reads the hash from one root while writing rows to another,
-    # so a stale hash in the wrong root satisfies the aggregate check
-    # forever and the team root is never (re)planted.
-    _make_team_owned()
-
-    _, meta_root, _ = ContextRegistry.resolve_root(
-        RegistryExampleManager,
-        "Workflows/Meta",
-        destination=None,
-    )
-    _, rows_root, _ = ContextRegistry.resolve_root(
-        RegistryExampleManager,
-        "Workflows",
-        destination=None,
-    )
-
-    assert meta_root == rows_root == "Teams/5"
-
-
-def test_team_owned_read_roots_have_no_personal_root():
-    _make_team_owned(owner_team_id=5, member_team_ids=(9, 3))
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        contact_roots = ContextRegistry.read_roots(RegistryExampleManager, "Contacts")
-
-    # Owning team first, then other member teams; no personal root anywhere.
-    assert contact_roots == ["Teams/5", "Teams/3", "Teams/9"]
-
-
-def test_team_owned_implicit_destinations_include_owner_team():
-    _make_team_owned(owner_team_id=5, member_team_ids=())
-    SESSION_DETAILS.team_ids = []
-
-    assert ContextRegistry.implicit_shared_destinations() == ["team:5"]
-
-
-def test_team_owned_owner_metadata_marks_base_as_team_owned():
-    _make_team_owned()
-
-    assert ContextRegistry._owner_for_root("Personal") == ("team", 5)
-    assert ContextRegistry._owner_for_root("Teams/9") == ("team", 9)
-
-
-def test_files_data_and_blacklist_are_shared_scoped():
-    SESSION_DETAILS.team_ids = [7]
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        assert ContextRegistry.read_roots(RegistryExampleManager, "Secrets") == [
-            "user123/42",
-            "Teams/7",
-        ]
-        assert ContextRegistry.read_roots(RegistryExampleManager, "FileRecords") == [
-            "user123/42",
-            "Teams/7",
-        ]
-        assert ContextRegistry.read_roots(RegistryExampleManager, "Files") == [
-            "user123/42",
-            "Teams/7",
-        ]
-        assert ContextRegistry.read_roots(RegistryExampleManager, "Data") == [
-            "user123/42",
-            "Teams/7",
-        ]
-        assert ContextRegistry.read_roots(RegistryExampleManager, "BlackList") == [
-            "user123/42",
-            "Teams/7",
-        ]
-
-
-def test_resolve_root_supports_canvas_tables_without_provisioning():
-    SESSION_DETAILS.team_ids = [7]
-
-    with patch(
-        "unify.common.context_registry._create_context_with_retry",
-    ) as create_context:
-        manager_name, root_identity, root_context = ContextRegistry.resolve_root(
-            RegistryExampleManager,
-            "Canvas/Views",
-            destination="team:7",
-        )
-
-    assert manager_name == "RegistryExampleManager"
-    assert root_identity == "Teams/7"
-    assert root_context == "Teams/7"
-    create_context.assert_not_called()
+    assert exc_info.value.payload["details"]["destination"] == destination
     assert ContextRegistry._registry == {}
 
 
-@pytest.mark.parametrize("table_name", ["Transcripts", "Exchanges", "Images"])
-def test_media_tables_are_shared_scoped(table_name: str):
-    SESSION_DETAILS.team_ids = [7, 3]
-
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        assert (
-            ContextRegistry.write_root(
-                RegistryExampleManager,
-                table_name,
-                destination=None,
-            )
-            == "user123/42"
-        )
-        assert (
-            ContextRegistry.write_root(
-                RegistryExampleManager,
-                table_name,
-                destination="team:7",
-            )
-            == "Teams/7"
-        )
-        assert ContextRegistry.read_roots(RegistryExampleManager, table_name) == [
-            "user123/42",
-            "Teams/3",
-            "Teams/7",
-        ]
+@pytest.mark.parametrize("table_name", _ALL_TABLES)
+def test_read_roots_is_the_single_session_root(table_name: str, provision):
+    assert ContextRegistry.read_roots(RegistryExampleManager, table_name) == [
+        "user123/42",
+    ]
 
 
-def test_lazy_provisioning_is_cached_per_root():
-    SESSION_DETAILS.team_ids = [7]
+def test_resolve_root_does_not_provision(provision):
+    manager_name, root_identity, root_context = ContextRegistry.resolve_root(
+        RegistryExampleManager,
+        "Knowledge",
+        destination=None,
+    )
 
-    with patch(
-        "unify.common.context_registry._create_context_with_retry",
-    ) as create_context:
-        ContextRegistry.write_root(
-            RegistryExampleManager,
-            "Tasks",
-            destination="team:7",
-        )
-        ContextRegistry.write_root(
-            RegistryExampleManager,
-            "Tasks",
-            destination="team:7",
-        )
+    assert manager_name == "RegistryExampleManager"
+    assert root_identity == PERSONAL_ROOT_IDENTITY
+    assert root_context == "user123/42"
+    provision.assert_not_called()
+    assert ContextRegistry._registry == {}
 
-    create_context.assert_called_once()
-    assert create_context.call_args.args[0] == "Teams/7/Tasks"
+
+def test_get_context_returns_the_fully_qualified_table(provision):
     assert (
-        ContextRegistry._registry[("RegistryExampleManager", "Tasks", "Teams/7")]
-        == "Teams/7/Tasks"
+        ContextRegistry.get_context(RegistryExampleManager, "Contacts")
+        == "user123/42/Contacts"
+    )
+    assert (
+        ContextRegistry.get_context(RegistryExampleManager, "SearchCache")
+        == "user123/42/SearchCache"
     )
 
 
-@pytest.mark.parametrize(
-    "table_name",
-    [
-        "Tasks",
-        "Contacts",
-        "Secrets",
-        "Knowledge",
-        "Guidance",
-        "Functions/Compositional",
-        "Functions/Meta",
-        "Functions/Primitives",
-        "Functions/VirtualEnvs",
-        "FileRecords",
-        "Files",
-        "Data",
-        "BlackList",
-        "Canvas/Views",
-        "Canvas/Actions",
-        "Transcripts",
-        "Exchanges",
-        "Images",
-    ],
-)
-def test_landed_shared_tables_accept_space_destinations(table_name: str):
-    SESSION_DETAILS.team_ids = [7]
+def test_lazy_provisioning_is_cached_per_table(provision):
+    ContextRegistry.write_root(RegistryExampleManager, "Contacts")
+    ContextRegistry.write_root(RegistryExampleManager, "Contacts")
+    ContextRegistry.get_context(RegistryExampleManager, "Contacts")
 
-    with patch("unify.common.context_registry._create_context_with_retry"):
-        assert (
-            ContextRegistry.write_root(
-                RegistryExampleManager,
-                table_name,
-                destination="team:7",
-            )
-            == "Teams/7"
-        )
+    provision.assert_called_once()
+    assert provision.call_args.args[0] == "user123/42/Contacts"
+    assert (
+        ContextRegistry._registry[
+            ("RegistryExampleManager", "Contacts", PERSONAL_ROOT_IDENTITY)
+        ]
+        == "user123/42/Contacts"
+    )
+
+
+def test_shared_scoped_tables_gain_the_authoring_field():
+    from unify.common.authorship import AUTHORING_ASSISTANT_ID_FIELD
+
+    contexts = ContextRegistry._get_contexts_for_manager(
+        RegistryExampleManager,
+        "user123/42",
+    )
+    shared_fields = contexts["Contacts"]["table_context"].fields
+    assert AUTHORING_ASSISTANT_ID_FIELD in shared_fields
+    assert contexts["SearchCache"]["table_context"].fields is None
+
+
+def test_forget_and_refresh_reprovision_the_table(provision):
+    ContextRegistry.get_context(RegistryExampleManager, "Contacts")
+    ContextRegistry.forget(RegistryExampleManager, "Contacts")
+    assert ContextRegistry._registry == {}
+    assert (
+        ContextRegistry.refresh(RegistryExampleManager, "Contacts")
+        == "user123/42/Contacts"
+    )
+
+    assert provision.call_count == 2
+
+
+def test_missing_base_context_is_a_recognisable_error():
+    CONTEXT_READ.set("")
+    CONTEXT_WRITE.set("")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        ContextRegistry.get_context(RegistryExampleManager, "Contacts")
+
+    assert ContextRegistry.is_missing_base_context_error(exc_info.value)
+    assert not ContextRegistry.is_missing_base_context_error(ValueError("x"))

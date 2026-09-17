@@ -2042,12 +2042,8 @@ class FileManager(BaseFileManager):
             ``None`` follows ``SETTINGS.file.IMPLICIT_INGESTION``.
         destination : str | None, default None
             Where auto-ingested FileRecords metadata and parsed Files content
-            should live. Pass ``"personal"`` (the default) for private
-            attachments, personal screenshots, and drafts. Pass
-            ``"team:<id>"`` for shared media artifacts the team needs. Read
-            the *Accessible shared teams* block before choosing; call
-            ``request_clarification`` instead of guessing toward a wider
-            audience. When ``auto_ingest`` is false this method only saves bytes
+            should live. Only the personal root exists: pass ``"personal"``
+            or leave it ``None``. When ``auto_ingest`` is false this method only saves bytes
             through the adapter, so the destination is validated but no metadata
             row is written.
 

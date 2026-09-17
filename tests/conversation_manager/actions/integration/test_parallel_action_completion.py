@@ -8,7 +8,7 @@ These tests verify that when multiple parallel actions are started:
 3. When subsequent actions complete, the CM does NOT re-execute already-completed work
 
 Bug scenario this covers:
-- User: "Create contact Bob, then search for X, then create task for Bob"
+- User: "Create contact Bob, then search for X, then look up Y for Bob"
 - CM starts parallel actions: (1) create Bob, (2) search for X
 - (1) completes → CM sees "Bob created", but waits (2 still running)
 - (2) completes → CM sees search result, but FORGETS Bob was created
@@ -32,7 +32,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     inject_actor_result,
     run_cm_until_wait,
 )
-from unify.conversation_manager.events import SMSReceived, ActorHandleStarted
+from unify.conversation_manager.events import UnifyMessageReceived, ActorHandleStarted
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -116,7 +116,7 @@ async def test_parallel_action_completion_preserves_first_result(
     # Step 1: Send compound request that should trigger parallel actions
     # One action creates a contact, another does an unrelated lookup
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 f"I need you to do two things: "

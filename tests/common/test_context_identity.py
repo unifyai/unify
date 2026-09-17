@@ -1,11 +1,10 @@
 """Identity verification for provisioned contexts.
 
-A row write that reaches the store before provisioning auto-creates the
-target context bare — no unique keys, no auto-counting — and the store
-cannot retrofit that configuration later. Rows inserted into a bare context
-receive no identity column, which is silent corruption. These tests pin the
-store shape and prove `create_context_checked` refuses to treat such a
-context as provisioned.
+A context created without unique keys or auto-counting stays bare: the store
+cannot retrofit that configuration later, and rows inserted into it receive
+no identity column, which is silent corruption. These tests pin the store
+shape and prove `create_context_checked` refuses to treat such a context as
+provisioned, and that a row write never creates a context implicitly.
 """
 
 from __future__ import annotations
@@ -21,16 +20,25 @@ from unify.common.log_utils import log as unity_log
 
 
 @_handle_project
-def test_bare_context_write_assigns_no_identity():
+def test_write_to_missing_context_is_refused():
+    base = db.get_active_context()["write"]
+    name = f"{base}/MissingTable"
+
+    with pytest.raises(db.NotFound):
+        db.log(context=name, new=True, payload="row")
+
+
+@_handle_project
+def test_bare_context_assigns_no_identity():
     base = db.get_active_context()["write"]
     name = f"{base}/BareTable"
 
-    # The write itself creates the context, bare.
+    db.create_context(name)
     db.log(context=name, new=True, payload="row")
 
     live = db.get_context(name)
-    assert live.get("unique_keys") in (None, [])
-    assert live.get("auto_counting") in (None, {})
+    assert not live.get("unique_keys")
+    assert not live.get("auto_counting")
 
     rows = db.get_logs(context=name)
     assert rows and "row_id" not in rows[0].entries

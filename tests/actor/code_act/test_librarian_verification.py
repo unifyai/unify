@@ -3,7 +3,7 @@ The librarian shapes verification but never grants trust.
 
 Symbolic: ``confirm_side_effect_class`` raises freely and lowers only to the
 detected bound; ``set_verification_policy`` only raises the bar; both tools
-are wired into the storage and repair loops.
+are wired into the storage loop.
 
 Eval (cached): given a trajectory that computes and then sends, the librarian
 stores the computation and the effect as separate functions plus a root, and
@@ -24,7 +24,6 @@ from unify.actor.code_act_actor import (
     _verification_librarian_tools,
 )
 from unify.function_manager.function_manager import FunctionManager
-from unify.manager_registry import ManagerRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -193,7 +192,7 @@ def test_set_verification_policy_only_raises():
     assert fm.set_verification_policy(function_id=add_id)["outcome"] == "unchanged"
 
 
-def test_librarian_tools_are_wired_into_storage_and_repair(monkeypatch):
+def test_librarian_tools_are_wired_into_storage():
     fm = MagicMock()
     fm.confirm_side_effect_class.__doc__ = "confirm"
     fm.set_verification_policy.__doc__ = "policy"
@@ -209,51 +208,6 @@ def test_librarian_tools_are_wired_into_storage_and_repair(monkeypatch):
         in inspect.signature(tools["set_verification_policy"]).parameters
     )
     assert _verification_librarian_tools(None) == {}
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_repair_loop_receives_verification_tools(monkeypatch):
-    ManagerRegistry.clear()
-    fm = FunctionManager()
-    actor = CodeActActor(function_manager=fm)
-    try:
-        fm.add_functions(implementations=_PURE)
-        function_id = _row(fm, "add")["function_id"]
-        seen: dict = {}
-
-        class _FakeHandle:
-            async def result(self):
-                return "repaired"
-
-        def _fake_loop(**kwargs):
-            seen.update(kwargs)
-            return _FakeHandle()
-
-        monkeypatch.setattr(
-            "unify.actor.code_act_actor.start_async_tool_loop",
-            _fake_loop,
-        )
-        monkeypatch.setattr(
-            "unify.actor.code_act_actor.new_llm_client",
-            lambda model, **kwargs: MagicMock(set_system_message=MagicMock()),
-        )
-        await actor._repair_function(
-            function_id=function_id,
-            request="x",
-            entrypoint_kwargs={},
-            failure=RuntimeError("boom"),
-            repair_context=None,
-        )
-        assert {
-            "confirm_side_effect_class",
-            "set_verification_policy",
-            "run_diagnostic_probe",
-        } <= set(seen["tools"])
-        assert "FunctionManager_add_functions" in seen["tools"]
-    finally:
-        await actor.close()
-        ManagerRegistry.clear()
 
 
 class _TrackingGuidanceManager:

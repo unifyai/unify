@@ -65,9 +65,9 @@ class ObjectStoreArtifactHandle(BaseModel):
     storage_uri: str
     logical_path: str
     # Optional local filesystem path where the artifact has been staged.
-    # Populated by consumers (e.g. the ingest worker) after downloading a
-    # ``gs://`` object to a scratch dir, so ``row_streaming`` can iterate
-    # rows without needing a GCS-aware reader in the unity core. An empty
+    # Populated by consumers (e.g. the ingest worker) after copying a
+    # remote object to a scratch dir, so ``row_streaming`` can iterate
+    # rows without needing a store-aware reader. An empty
     # string means "no local copy staged; resolve from ``storage_uri``".
     source_local_path: str = ""
     artifact_format: Literal["jsonl", "parquet", "arrow_ipc"] = "jsonl"
@@ -91,7 +91,7 @@ class ParsedFileBundle(BaseModel):
 # IngestPlan: the parse -> ingest queue contract
 # ---------------------------------------------------------------------------
 #
-# ``IngestPlan`` is the *manifest* the parse worker publishes to GCS after a
+# ``IngestPlan`` is the *manifest* the parse worker writes to the artifact store after a
 # file has been parsed AND lowered.  It is intentionally pointer-only:
 # content rows and table rows NEVER appear inline. Every heavy artifact is
 # materialised to object storage by the parse worker and referenced here via
@@ -149,7 +149,7 @@ class IngestPlan(BaseModel):
     """Pointer-only plan handed from the parse worker to the ingest worker.
 
     The manifest is always KB-scale regardless of input size.  Heavy data
-    (content rows, table rows) is materialised to GCS by the parse worker
+    (content rows, table rows) is materialised to the artifact store by the parse worker
     and referenced via handles.
 
     Notes
@@ -181,7 +181,7 @@ class IngestPlan(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Queue message models (for GKE workers and local queue)
+# Queue message models (parse / ingest dispatch)
 # ---------------------------------------------------------------------------
 
 
@@ -190,9 +190,9 @@ class AttachmentCallback(BaseModel):
 
     When a ``ParseRequested`` or ``IngestRequested`` message carries this
     callback, the ingest worker publishes a
-    ``thread="attachment_ingestion_complete"`` envelope to the
-    ``unity-{assistant_id}{env_suffix}`` Pub/Sub topic after ingest finishes
-    so the originating ``ConversationManager`` can update ``FileRecords``.
+    ``thread="attachment_ingestion_complete"`` envelope on the assistant's
+    event broker after ingest finishes so the originating
+    ``ConversationManager`` can update ``FileRecords``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -205,14 +205,9 @@ class AttachmentCallback(BaseModel):
 class IngestBinding(BaseModel):
     """Common identity fields for any ingest-mode binding.
 
-    Both FM and DM ingest need a Unify ``UNIFY_KEY`` to authenticate
-    backend calls. Workers are shared across many assistants, so the
-    key cannot live on the pod; it is looked up per message via
-    Orchestra admin endpoints.
-
     ``user_id`` is always required for provenance / routing, and
-    ``assistant_id`` is always required for deterministic Orchestra key
-    resolution via ``GET /v0/admin/assistant?agent_id=...``.
+    ``assistant_id`` names the assistant whose contexts the run writes
+    into, so a worker activates the right session before touching them.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -234,10 +229,9 @@ class FmBinding(IngestBinding):
     fm_alias: str = "Local"
     logical_path: str
     # Ownership root the files land under, same vocabulary as ``DmBinding``:
-    # ``None``/``"personal"`` for the dispatching assistant's own root,
-    # ``"team:<id>"`` for a shared team root. Present on both bindings because a
-    # collection of documents is as shareable as a table of rows, and a caller
-    # asking for one should not silently get the other's scope.
+    # ``None``/``"personal"`` for the dispatching assistant's own root, the
+    # only root there is. Present on both bindings so a caller asking for one
+    # does not silently get the other's scope.
     destination: str | None = None
 
 
@@ -254,16 +248,11 @@ class DmBinding(IngestBinding):
       (e.g. ``"HomeIQ/WirralHousing/v2_2/Purchasing/PurchaseOrderLines"``).
     * ``destination`` is *which root/scope* that path is rooted under.
       ``None`` (or ``"personal"``) routes to the dispatching assistant's
-      personal ``Data`` root (``{user}/{assistant}/Data/<target_context>``);
-      ``"team:<id>"`` routes to the shared team ``Data`` root
-      (``Teams/<id>/Data/<target_context>``) that every member assistant
-      can read. The ingest worker validates membership before honouring a
-      team destination.
+      personal ``Data`` root (``{user}/{assistant}/Data/<target_context>``),
+      the only root there is.
 
-    They compose: the same ``target_context`` lands under either root
-    depending solely on ``destination``. ``destination`` matches the
-    platform-wide ``personal`` / ``team:<id>`` vocabulary used elsewhere
-    for shared-scope routing.
+    ``destination`` matches the ``personal`` vocabulary used everywhere else
+    a root is named.
     """
 
     target_context: str
@@ -279,7 +268,7 @@ class DmBinding(IngestBinding):
 class IngestCheckpoint(BaseModel):
     """Durable per-artifact progress marker for crash recovery.
 
-    Written to GCS after each successful chunk commit so a retried
+    Written to the artifact store after each successful chunk commit so a retried
     worker can skip already-committed rows via ``skip_rows``.
 
     The ``artifact_id`` is ``table_id`` for table artifacts and
@@ -301,16 +290,16 @@ CONTENT_CHECKPOINT_ID = "__content__"
 
 
 class ParseRequested(BaseModel):
-    """Message placed on the parse queue by the coordinator.
+    """Message placed on the parse queue by the dispatcher.
 
     A parse worker picks this up, runs ``FileParser.parse_batch``,
     writes the resulting ``ParsedFileBundle`` manifest to the artifact
     store, and acks the message.
 
     Message granularity contract: ``file_paths`` SHOULD contain exactly one
-    entry per message so that parse work distributes evenly across worker
-    pods via Pub/Sub fan-out. The list type is retained for back-compat but
-    new dispatch paths enforce a single file per message.
+    entry per message so that parse work distributes evenly across workers.
+    The field is a list, but dispatch paths enforce a single file per
+    message.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -336,8 +325,8 @@ class ParseRequested(BaseModel):
     request_key: str = ""
     # Where this run's observability lives: the run key plus the two
     # ``Ingestion/*`` context paths the manager recorded the run in. Workers
-    # journal events there so a dispatched run reads back exactly like an
-    # in-process one. Absent on operator-CLI submits, which have no run row.
+    # journal events there so a queued run reads back exactly like a direct
+    # one. Absent on operator-CLI submits, which have no run row.
     observability: Optional[Dict[str, str]] = None
 
 

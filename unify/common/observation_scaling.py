@@ -1,9 +1,9 @@
-"""Model-aware observation scaling for native display screenshots.
+"""Model-aware observation scaling for screenshots.
 
 LLM planners emit pixel coordinates in the observation image space we send
-them. We downscale display captures to that space, then scale coordinates
-back up before xdotool. Policy is resolved from the configured model so
-web-vm/desktop stay aligned with the agent-service path and provider limits.
+them. We downscale captures to that space, then scale coordinates back up
+when acting on them. Policy is resolved from the configured model so scaling
+stays aligned with the agent-service path and provider limits.
 
 The authoritative policy constants live in the sibling JSON file
 ``observation_scaling_policy.json``; both this module and the TypeScript

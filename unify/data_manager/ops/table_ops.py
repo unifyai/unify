@@ -66,12 +66,12 @@ def create_table_impl(
             auto_counting=auto_counting,
         )
     except Exception:
-        # Name the context in the failure. The backend rejects a malformed name
+        # Name the context in the failure. The store rejects a malformed name
         # by stating the rule it broke and never the value that broke it, so a
         # worker log carried "Invalid context name ... Consecutive slashes are
         # not allowed" with no way to tell which of fifteen destinations was at
-        # fault -- and the name above is logged at DEBUG, which pods do not
-        # emit. Logging rather than re-wrapping keeps the original exception
+        # fault -- and the name above is logged at DEBUG, which background
+        # workers do not emit. Logging rather than re-wrapping keeps the original exception
         # type intact: callers classify on it, and several provider errors
         # cannot be reconstructed from a message alone.
         logger.error("Creating table context %r failed", context)
@@ -265,7 +265,7 @@ def delete_table_impl(context: str, *, dangerous_ok: bool = False) -> None:
             "delete_table requires dangerous_ok=True to confirm deletion. "
             "This is a safety guard to prevent accidental data loss.",
         )
-    # Data contexts are path-keyed (no Orchestra FK). Snapshot Knowledge
+    # Data contexts are path-keyed (no foreign key). Snapshot Knowledge
     # claims that cite this context before the path disappears.
     try:
         from unify.common.stale_reason import StaleReason

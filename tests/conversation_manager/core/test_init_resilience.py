@@ -3,10 +3,10 @@ tests/conversation_manager/core/test_init_resilience.py
 =======================================================
 
 Symbolic tests verifying that failures in non-essential initialization steps
-degrade gracefully instead of preventing the pod from becoming operational.
+degrade gracefully instead of preventing the session from becoming operational.
 
 Each test mocks a single degradable subsystem to raise during init, then
-asserts that ``cm.initialized`` still becomes ``True`` — proving the pod
+asserts that ``cm.initialized`` still becomes ``True`` — proving the session
 would survive and serve requests (with reduced capability) rather than
 becoming a zombie.
 """
@@ -34,11 +34,7 @@ async def resilience_cm():
 
     reset_event_broker()
 
-    cm = await start_async(
-        project_name="TestInitResilience",
-        enable_comms_manager=False,
-        apply_test_mocks=True,
-    )
+    cm = await start_async(project_name="TestInitResilience")
 
     yield cm
 
@@ -163,40 +159,3 @@ class TestContextRegistryResilience:
             ContextRegistry._setup_complete = False
 
         assert call_count > 1, "Mock was not exercised"
-
-
-class TestUserDetailsFetchResilience:
-    """Orchestra user-info fetch failure should fall back to SESSION_DETAILS."""
-
-    @pytest.mark.asyncio
-    async def test_user_details_fetch_failure_uses_fallback(self, resilience_cm):
-        cm = resilience_cm
-        with patch(
-            "unify.contact_manager.system_contacts.db.get_user_basic_info",
-            side_effect=ConnectionError("Orchestra unreachable"),
-        ):
-            await _init(cm, "resilience_userinfo")
-
-        assert cm.initialized is True
-        contact_info = cm.contact_manager.get_contact_info(1)
-        user_contact = contact_info.get(1, {})
-        assert user_contact is not None
-
-
-class TestLivekitWorkerResilience:
-    """LiveKit worker failure must not prevent manager initialization."""
-
-    @pytest.mark.asyncio
-    async def test_livekit_failure_does_not_block_init(self, resilience_cm):
-        cm = resilience_cm
-
-        original_start = cm.call_manager.start_persistent_worker
-        cm.call_manager.start_persistent_worker = MagicMock(
-            side_effect=RuntimeError("worker script not found"),
-        )
-        try:
-            await _init(cm, "resilience_livekit")
-        finally:
-            cm.call_manager.start_persistent_worker = original_start
-
-        assert cm.initialized is True

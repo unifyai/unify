@@ -1,6 +1,6 @@
 """
-tests/conversation_manager/actions/test_action_context_propagation.py
-========================================================================
+tests/conversation_manager/actions/test_action_context_content.py
+===================================================================
 
 Tests that verify ConversationManager correctly propagates parent chat context
 to the Actor when calling `act` and when using steering tools.
@@ -244,11 +244,7 @@ class TestActCompletionInHistory:
             success=True,
             result="Found 3 contacts in New York.",
         )
-        await EventHandler.handle_event(
-            result_event,
-            cm,
-            is_voice_call=False,
-        )
+        await EventHandler.handle_event(result_event, cm)
 
         # The action should now be in completed_actions.
         assert (
@@ -643,7 +639,7 @@ class TestContextContent:
         This tests that context is fresh and includes the current turn.
         """
         from tests.conversation_manager.conftest import BOSS
-        from unify.conversation_manager.events import SMSReceived
+        from unify.conversation_manager.events import UnifyMessageReceived
 
         cm_driver = initialized_cm
         cm = cm_driver.cm
@@ -660,8 +656,8 @@ class TestContextContent:
 
         try:
             # Send a message with distinctive content
-            result = await cm_driver.step_until_wait(
-                SMSReceived(
+            await cm_driver.step_until_wait(
+                UnifyMessageReceived(
                     contact=BOSS,
                     content="Please find the XYZZY123 document for me.",
                 ),
@@ -731,7 +727,10 @@ class TestContextContent:
         This tests that the context is fresh and includes relevant action information.
         """
         from tests.conversation_manager.conftest import BOSS
-        from unify.conversation_manager.events import SMSReceived, ActorHandleStarted
+        from unify.conversation_manager.events import (
+            UnifyMessageReceived,
+            ActorHandleStarted,
+        )
         from tests.conversation_manager.cm_helpers import filter_events_by_type
 
         cm_driver = initialized_cm
@@ -739,7 +738,7 @@ class TestContextContent:
 
         # Step 1: Start an action
         result1 = await cm_driver.step_until_wait(
-            SMSReceived(
+            UnifyMessageReceived(
                 contact=BOSS,
                 content="Search for all engineering contacts.",
             ),
@@ -767,8 +766,8 @@ class TestContextContent:
 
         try:
             # Send a message that should trigger interject
-            result2 = await cm_driver.step_until_wait(
-                SMSReceived(
+            await cm_driver.step_until_wait(
+                UnifyMessageReceived(
                     contact=BOSS,
                     content="Also include their phone numbers.",
                 ),

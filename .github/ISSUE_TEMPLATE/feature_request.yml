@@ -43,7 +43,6 @@ body:
     - New manager (significant — usually needs design discussion first)
     - New primitive exposed to the Actor
     - CLI / setup improvement
-    - Voice / fast-brain improvement
     - Steering / async-tool-loop infrastructure
     - Observability / event bus
     - Tests / test infra

@@ -11,63 +11,46 @@ def _rows(context: str) -> list[dict]:
     return [log.entries for log in db.get_logs(context=context)]
 
 
-def test_secret_writes_route_to_destination_and_reads_merge_roots(
-    secret_manager_context,
-    secret_manager_teams,
-):
-    """Credential writes land in one vault while read tools see every reachable vault."""
-    first_team, second_team = secret_manager_teams
+def test_secret_writes_land_in_the_personal_vault(secret_manager_context):
+    """Credential writes land in the personal vault whichever spelling names it."""
     manager = SecretManager()
 
     manager._create_secret(
-        name="shared_api",
-        value="personal-value",
+        name="implicit_api",
+        value="implicit-value",
         description="Private API key",
     )
     manager._create_secret(
-        name="shared_api",
-        value="team-one-value",
-        description="Patch team service account",
-        destination=f"team:{first_team}",
-    )
-    manager._create_secret(
-        name="family_calendar",
-        value="team-two-value",
-        description="Family calendar shared key",
-        destination=f"team:{second_team}",
+        name="explicit_api",
+        value="explicit-value",
+        description="Private API key filed explicitly",
+        destination="personal",
     )
 
-    personal_rows = _rows(manager._ctx)
-    first_team_rows = _rows(f"Teams/{first_team}/Secrets")
-    second_team_rows = _rows(f"Teams/{second_team}/Secrets")
-
-    assert [row["value"] for row in personal_rows] == ["personal-value"]
-    assert [row["value"] for row in first_team_rows] == ["team-one-value"]
-    assert [row["value"] for row in second_team_rows] == ["team-two-value"]
-
-    merged_rows = manager._filter_secrets()
-    assert [row.name for row in merged_rows].count("shared_api") == 2
-    assert {row.name for row in merged_rows} == {"shared_api", "family_calendar"}
-    assert {(row.name, row.destination) for row in merged_rows} == {
-        ("shared_api", "personal"),
-        ("shared_api", f"team:{first_team}"),
-        ("family_calendar", f"team:{second_team}"),
+    assert {row["name"]: row["value"] for row in _rows(manager._ctx)} == {
+        "implicit_api": "implicit-value",
+        "explicit_api": "explicit-value",
     }
-    assert set(manager._list_secret_keys()) == {"shared_api", "family_calendar"}
 
-    shared_only = manager._filter_secrets(
-        filter=f"name == 'shared_api' and destination == 'team:{first_team}'",
+    rows = manager._filter_secrets()
+    assert {(row.name, row.destination) for row in rows} == {
+        ("implicit_api", "personal"),
+        ("explicit_api", "personal"),
+    }
+    assert set(manager._list_secret_keys()) == {"implicit_api", "explicit_api"}
+
+    personal_only = manager._filter_secrets(
+        filter="name == 'explicit_api' and destination == 'personal'",
     )
-    assert [(row.name, row.destination) for row in shared_only] == [
-        ("shared_api", f"team:{first_team}"),
+    assert [(row.name, row.destination) for row in personal_only] == [
+        ("explicit_api", "personal"),
     ]
 
 
 def test_create_secret_invalid_destination_returns_tool_error(
     secret_manager_context,
-    secret_manager_teams,
 ):
-    """Invalid shared-team destinations return a structured tool error."""
+    """A destination other than the personal vault returns a structured tool error."""
     manager = SecretManager()
 
     outcome = manager._create_secret(
@@ -83,9 +66,8 @@ def test_create_secret_invalid_destination_returns_tool_error(
 
 def test_mutating_secret_invalid_destination_returns_tool_error(
     secret_manager_context,
-    secret_manager_teams,
 ):
-    """Update and delete operations reject inaccessible shared-team destinations."""
+    """Update and delete operations reject destinations other than the personal vault."""
     manager = SecretManager()
 
     update_outcome = manager._update_secret(
@@ -104,75 +86,41 @@ def test_mutating_secret_invalid_destination_returns_tool_error(
     assert delete_outcome["details"]["destination"] == "team:987699"
 
 
-def test_get_credential_reads_exact_destination_root(
-    secret_manager_context,
-    secret_manager_teams,
-):
-    """Credential use reads one vault and never falls back across scopes."""
-    team_id, _ = secret_manager_teams
+def test_get_credential_reads_the_personal_vault(secret_manager_context):
+    """Credential use resolves the personal vault and raises for unknown names."""
     manager = SecretManager()
 
     manager._create_secret(name="sendgrid", value="personal-sendgrid")
-    manager._create_secret(
-        name="sendgrid",
-        value="team-sendgrid",
-        destination=f"team:{team_id}",
-    )
-    manager._create_secret(
-        name="space_only",
-        value="team-only",
-        destination=f"team:{team_id}",
-    )
 
     assert manager.get_credential("sendgrid") == "personal-sendgrid"
     assert (
-        manager.get_credential("sendgrid", destination=f"team:{team_id}")
-        == "team-sendgrid"
+        manager.get_credential("sendgrid", destination="personal")
+        == "personal-sendgrid"
     )
 
     with pytest.raises(KeyError):
-        manager.get_credential("space_only")
+        manager.get_credential("missing_credential")
 
 
 @pytest.mark.asyncio
-async def test_placeholder_resolution_inherits_task_destination(
-    monkeypatch,
+async def test_placeholder_resolution_reads_the_personal_vault(
     secret_manager_context,
-    secret_manager_teams,
 ):
-    """Shared task execution resolves placeholders from the task's destination vault."""
-    team_id, _ = secret_manager_teams
+    """Placeholders resolve from the personal vault, with either destination spelling."""
     manager = SecretManager()
 
     manager._create_secret(name="mail_key", value="personal-mail")
-    manager._create_secret(
-        name="mail_key",
-        value="team-mail",
-        destination=f"team:{team_id}",
+
+    assert await manager.from_placeholder("token=${mail_key}") == "token=personal-mail"
+    assert (
+        await manager.from_placeholder("token=${mail_key}", destination="personal")
+        == "token=personal-mail"
     )
-
-    monkeypatch.setenv("TASK_DESTINATION", f"team:{team_id}")
-
-    assert await manager.from_placeholder("token=${mail_key}") == "token=team-mail"
-
-
-@pytest.mark.asyncio
-async def test_placeholder_resolution_rejects_invalid_task_destination(
-    monkeypatch,
-    secret_manager_context,
-):
-    """Invalid TASK_DESTINATION values fail closed during placeholder resolution."""
-    manager = SecretManager()
-    monkeypatch.setenv("TASK_DESTINATION", "org_default")
-
-    with pytest.raises(ValueError, match="Destination must be"):
-        await manager.from_placeholder("token=${mail_key}")
 
 
 def test_credential_writes_invalidate_pooled_subprocesses(
     monkeypatch,
     secret_manager_context,
-    secret_manager_teams,
 ):
     """Every successful credential mutation invalidates stateful execution pools."""
     calls: list[str] = []
@@ -187,7 +135,6 @@ def test_credential_writes_invalidate_pooled_subprocesses(
         classmethod(record_invalidation),
     )
 
-    team_id, _ = secret_manager_teams
     manager = SecretManager()
 
     error: ToolError = manager._create_secret(
@@ -198,9 +145,9 @@ def test_credential_writes_invalidate_pooled_subprocesses(
     assert error["error_kind"] == "invalid_destination"
     assert calls == []
 
-    manager._create_secret(name="rotating", value="v1", destination=f"team:{team_id}")
-    manager._update_secret(name="rotating", value="v2", destination=f"team:{team_id}")
-    manager._delete_secret(name="rotating", destination=f"team:{team_id}")
+    manager._create_secret(name="rotating", value="v1")
+    manager._update_secret(name="rotating", value="v2")
+    manager._delete_secret(name="rotating")
 
     assert calls == ["invalidate", "invalidate", "invalidate"]
 
@@ -209,7 +156,7 @@ def test_personal_env_sync_failure_does_not_skip_invalidation(
     monkeypatch,
     secret_manager_context,
 ):
-    """A backend credential write still invalidates processes if .env sync fails."""
+    """A credential write still invalidates processes if .env sync fails."""
     calls: list[str] = []
 
     def record_invalidation(cls) -> int:

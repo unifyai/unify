@@ -42,13 +42,11 @@ def pytest_configure(config) -> None:
     test_settings_module._SettingsProxy._instance = None
 
     os.environ.setdefault("TEST", "true")
-    os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "test_job")
 
     # These tests validate direct manager behavior (including fast-path tools),
     # so they need concrete manager implementations.
     os.environ["UNIFY_CONTACT_IMPL"] = "real"
     os.environ["UNIFY_TRANSCRIPT_IMPL"] = "real"
-    os.environ["UNIFY_TASK_IMPL"] = "real"
     os.environ["UNIFY_FUNCTION_IMPL"] = "real"
 
     # Enable FileManager for attachment/file flows.
@@ -75,36 +73,36 @@ def _isolate_local_workspace_home(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[str]:
-    """Give each CM↔CodeAct integration test its own HOME workspace.
+    """Give each CM↔CodeAct integration test its own local workspace root.
 
-    ``parallel_run.sh`` runs these tests concurrently.  The shared
-    ``/tmp/unity_test_home`` from the root conftest means one test's
-    ``ensure_local_workspace_dirs`` (which ``rmtree``s ``Outputs/``) can
-    delete another test's just-written outbound files mid-flight.
+    ``parallel_run.sh`` runs these tests concurrently. A shared workspace
+    would let one test's outbound files be overwritten or removed by another
+    mid-flight.
 
     Hash the node id so the same test always gets the same path (stable
-    LLM cache keys that embed ``~/Unity/Local``), matching the actor
+    LLM cache keys that embed the workspace root), matching the actor
     suite's isolation fixture.
 
-    After switching HOME, clear manager singletons (so FileManager adapters
-    are not left bound to the session ``/tmp/unity_test_home``) and bootstrap
-    the hashed workspace layout the actor prompt embeds via ``get_local_root()``.
+    After switching the root, clear manager singletons (so FileManager
+    adapters are not left bound to the session-wide workspace) and create
+    the directory the actor prompt embeds via ``get_local_root()``.
     """
     import hashlib
     import shutil
     import tempfile
     from pathlib import Path
 
-    from unify.conversation_manager.workspace import ensure_local_workspace_dirs
     from unify.file_manager.settings import get_local_root
     from unify.manager_registry import ManagerRegistry
+    from unify.settings import SETTINGS
 
     suffix = hashlib.md5(request.node.nodeid.encode("utf-8")).hexdigest()[:12]
     test_home = os.path.join(tempfile.gettempdir(), f"unity_test_home_{suffix}")
     os.makedirs(test_home, exist_ok=True)
-    monkeypatch.setenv("HOME", test_home)
+    monkeypatch.setenv("UNIFY_LOCAL_ROOT", test_home)
+    monkeypatch.setattr(SETTINGS, "UNIFY_LOCAL_ROOT", test_home)
     ManagerRegistry.clear()
-    ensure_local_workspace_dirs(Path(get_local_root()))
+    Path(get_local_root()).mkdir(parents=True, exist_ok=True)
     yield test_home
     shutil.rmtree(test_home, ignore_errors=True)
 
@@ -143,7 +141,10 @@ async def _reset_litellm_logging_worker_per_test():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
+async def conversation_manager_codeact(
+    request,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[CMStepDriver]:
     """
     Start ConversationManager in-process for CodeActActor integration tests.
 
@@ -151,9 +152,17 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
     tasks (e.g., actor_watch_result) that must run on the same event loop as the
     test's CodeActActor handle. Module-scoped async fixtures run on a different
     loop under pytest-asyncio strict mode, which can prevent ActorResult propagation.
+
+    The runtime honours the per-test context as its session root only in test
+    mode, so ``SETTINGS.TEST`` is pinned on for the fixture's lifetime; without
+    it the managers bind to the default assistant root while the test body
+    reads from its own re-rooted context.
     """
     from unify import db
+    from unify import settings as unify_settings
     from tests.settings import SETTINGS
+
+    monkeypatch.setattr(unify_settings.SETTINGS, "TEST", True)
     from unify.conversation_manager.event_broker import reset_event_broker
     from unify.conversation_manager import start_async, stop_async
     from unify.conversation_manager.domains import managers_utils
@@ -173,15 +182,13 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
     from unify.common.runtime_context import bind_runtime_context_root
     from unify.contact_manager.contact_manager import ContactManager
     from unify.file_manager.managers.file_manager import FileManager
-    from unify.task_scheduler.task_scheduler import TaskScheduler
     from unify.transcript_manager.transcript_manager import TranscriptManager
 
-    bind_runtime_context_root(skip_create=False, strict=True)
+    bind_runtime_context_root(strict=True)
     ContextRegistry.setup_for_managers(
         [
             ContactManager,
             TranscriptManager,
-            TaskScheduler,
             FileManager,
         ],
         base_context=test_ctx,
@@ -192,31 +199,25 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
     def _init_managers_with_test_context(cm, loop, actor=None):
         db.activate(SETTINGS.test_project_name, overwrite=False)
         db.set_context(test_ctx, relative=False, skip_create=True)
-        bind_runtime_context_root(skip_create=True, strict=True)
+        bind_runtime_context_root(strict=True)
         ContextRegistry.set_base_context(test_ctx)
         return original_init_managers(cm, loop, actor)
 
     managers_utils._init_managers = _init_managers_with_test_context
 
-    cm = await start_async(
-        project_name="TestProject",
-        enable_comms_manager=False,
-        apply_test_mocks=True,
-    )
-    cm.assistant_email = "assistant@test.com"
-    cm.assistant_email_provider = "google_workspace"
+    cm = await start_async(project_name="TestProject")
 
     # Initialize managers once. Actor created here is a placeholder; tests override per-test.
     try:
         cm.initialized = False
         with scenario_file_lock("cm_integration_codeact"):
-            bind_runtime_context_root(skip_create=False, strict=True)
+            bind_runtime_context_root(strict=True)
             await managers_utils.init_conv_manager(cm)
         await managers_utils.wait_for_initialization(cm)
 
         db.activate(SETTINGS.test_project_name, overwrite=False)
         db.set_context(test_ctx, relative=False, skip_create=True)
-        bind_runtime_context_root(skip_create=True, strict=True)
+        bind_runtime_context_root(strict=True)
         ContextRegistry.set_base_context(test_ctx)
 
         # Ensure system contacts are well-formed for tests.
@@ -273,27 +274,17 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
 @pytest_asyncio.fixture
 async def code_act_actor() -> AsyncIterator[object]:
     """Create a production-wired CodeActActor for CM integration tests."""
-    from unify.actor.environments import (
-        ActorEnvironment,
-        ComputerEnvironment,
-        StateManagerEnvironment,
-    )
-    from unify.function_manager.primitives import (
-        ComputerPrimitives,
-        Primitives,
-        default_runtime_scope,
-    )
+    from unify.actor.environments import ActorEnvironment, StateManagerEnvironment
+    from unify.function_manager.primitives import Primitives, default_runtime_scope
     from unify.manager_registry import ManagerRegistry
 
     ManagerRegistry.clear()
-    computer_primitives = ComputerPrimitives()
     actor = ManagerRegistry.get_actor(
         description="cm integration test",
         environments=[
             StateManagerEnvironment(
                 Primitives(primitive_scope=default_runtime_scope()),
             ),
-            ComputerEnvironment(computer_primitives),
             ActorEnvironment(),
         ],
     )

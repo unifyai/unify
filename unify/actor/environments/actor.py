@@ -469,11 +469,11 @@ class _ActorRunner:
                dotted-segment matching against function names stored in
                the database:
 
-               - ``"primitives"`` — all primitives (state managers, computer, actor)
+               - ``"primitives"`` — all primitives (state managers, actor)
                - ``"primitives.contacts"`` — all contacts methods
                - ``"primitives.contacts.ask"`` — just contacts.ask
-               - ``"primitives.computer"`` — all computer methods
-               - ``"primitives.computer.desktop.act"`` — just desktop.act
+               - ``"primitives.data"`` — all data methods
+               - ``"primitives.data.filter"`` — just data.filter
                - ``"primitives.actor"`` — actor delegation
                - ``"alpha"`` — a specific stored function
 

@@ -50,7 +50,7 @@ def test_manager_specs_filtered_by_scope():
     aliases = {s.manager_alias for s in specs}
     assert aliases == {"files", "contacts"}
     # Should NOT include unscoped managers
-    assert "tasks" not in aliases
+    assert "web" not in aliases
     assert "knowledge" not in aliases
 
 
@@ -61,15 +61,6 @@ def test_manager_specs_sorted_by_priority():
     specs = registry.manager_specs(scope)
     priorities = [s.priority for s in specs]
     assert priorities == sorted(priorities)
-
-
-def test_manager_specs_includes_computer_primitives():
-    """manager_specs() includes ComputerPrimitives like any other manager."""
-    registry = get_registry()
-    scope = PrimitiveScope.all_managers()
-    specs = registry.manager_specs(scope)
-    aliases = {s.manager_alias for s in specs}
-    assert "computer" in aliases
 
 
 def test_get_manager_spec_valid():
@@ -86,14 +77,6 @@ def test_get_manager_spec_invalid():
     registry = get_registry()
     spec = registry.get_manager_spec("invalid")
     assert spec is None
-
-
-def test_get_manager_spec_includes_computer():
-    """get_manager_spec() returns the ComputerPrimitives spec."""
-    registry = get_registry()
-    spec = registry.get_manager_spec("computer")
-    assert spec is not None
-    assert spec.manager_alias == "computer"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -131,7 +114,7 @@ def test_primitive_methods_respects_common_exclusions():
     """primitive_methods() excludes common excluded methods."""
     registry = get_registry()
     # Check for all managers
-    for alias in ["contacts", "files", "tasks"]:
+    for alias in ["contacts", "files", "web"]:
         methods = registry.primitive_methods(manager_alias=alias)
         for excluded in _COMMON_EXCLUDED_METHODS:
             assert (
@@ -178,7 +161,7 @@ def test_prompt_context_includes_scoped_managers():
     assert "primitives.files" in context
     assert "primitives.contacts" in context
     # Should NOT include unscoped managers
-    assert "primitives.tasks" not in context
+    assert "primitives.web" not in context
     assert "primitives.knowledge" not in context
 
 
@@ -199,7 +182,7 @@ def test_prompt_context_multiple_managers_has_general_rules():
     consult pointer instead.
     """
     registry = get_registry()
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "tasks"}))
+    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "web"}))
     context = registry.prompt_context(scope)
     assert "General Rules" in context
     assert "Manager Selection Priorities" not in context
@@ -240,7 +223,7 @@ def test_primitive_row_filter():
     assert "unify.contact_manager.contact_manager.ContactManager" in filter_expr
     assert "unify.file_manager.managers.file_manager.FileManager" in filter_expr
     # Should NOT include unscoped managers
-    assert "TaskScheduler" not in filter_expr
+    assert "WebSearcher" not in filter_expr
 
 
 def test_primitive_row_filter_single_manager():
@@ -276,29 +259,9 @@ def test_collect_primitives_returns_expected_fields():
         assert row["is_primitive"] is True
 
 
-def test_integrations_discovery_primitive_is_collected():
-    """Integration catalog discovery is visible without exposing runtime helpers."""
-    registry = get_registry()
-    primitives = registry.collect_primitives(PrimitiveScope.single("integrations"))
-
-    row = primitives["primitives.integrations.search_integrations"]
-    assert row["primitive_method"] == "search_integrations"
-    assert (
-        row["primitive_class"] == "unify.integrations.primitives.IntegrationPrimitives"
-    )
-    assert "support" in row["docstring"].lower()
-    assert "primitives.integrations.search_tools" not in primitives
-    assert "primitives.integrations.execute_tool" not in primitives
-
-
 def test_collect_primitives_matches_get_primitive_sources():
-    """collect_primitives() discovers a superset of get_primitive_sources().
-
-    get_primitive_sources() only returns state managers, while
-    collect_primitives() also includes ComputerPrimitives.  Every state
-    manager primitive from get_primitive_sources must appear in the
-    collected set.
-    """
+    """Every primitive from get_primitive_sources() appears in the
+    collected set."""
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
     primitives = registry.collect_primitives(scope)
@@ -315,14 +278,6 @@ def test_collect_primitives_matches_get_primitive_sources():
                 class_name,
                 method_name,
             ) in method_to_name, f"Expected auto-discovered primitive for {class_name}.{method_name} not found"
-
-    # Additionally, computer primitives should be present.
-    computer_entries = {
-        name for name in primitives if name.startswith("primitives.computer.")
-    }
-    assert (
-        len(computer_entries) > 0
-    ), "Expected ComputerPrimitives in collected primitives"
 
 
 def test_collect_primitives_respects_scope():
@@ -514,25 +469,10 @@ def test_all_primitive_methods_have_summary_and_parameters():
             continue
         methods = registry.primitive_methods(manager_alias=spec.manager_alias)
 
-        # For ComputerPrimitives, dynamic methods live on ComputerBackend.
-        fallback_cls = None
-        if spec.manager_alias == "computer":
-            try:
-                from unify.function_manager.computer_backends import ComputerBackend
-
-                fallback_cls = ComputerBackend
-            except ImportError:
-                pass
-
         for method_name in methods:
             fq = f"primitives.{spec.manager_alias}.{method_name}"
 
-            # Resolve the source class for docstring extraction.
-            source_cls = cls
             doc = registry._extract_method_docstring(cls, method_name)
-            if not doc and fallback_cls is not None:
-                doc = registry._extract_method_docstring(fallback_cls, method_name)
-                source_cls = fallback_cls
 
             summary = _first_paragraph(doc)
             if len(summary) < MIN_SUMMARY_CHARS:
@@ -543,7 +483,7 @@ def test_all_primitive_methods_have_summary_and_parameters():
             import inspect as _inspect
 
             try:
-                sig = _inspect.signature(getattr(source_cls, method_name))
+                sig = _inspect.signature(getattr(cls, method_name))
                 has_params = any(
                     p.name != "self"
                     for p in sig.parameters.values()

@@ -12,11 +12,10 @@ that exceeded Anthropic's 5 MB per-image limit.  The actor's tool loop
 crashed on the LLM inference call (not a tool call), and the exception
 propagated through AsyncToolLoopHandle.result().
 
-_StorageCheckHandle._run_lifecycle() now captures the exception and
-surfaces it as the result string (previously it was swallowed by a bare
-``except Exception: pass``).  actor_watch_result detects "Error" in the
-result and publishes ActorResult(success=False).  The CM should then
-include this failure context in the next act() request.
+_StorageCheckHandle._run_lifecycle() captures the exception and surfaces
+it as the result string.  actor_watch_result detects "Error" in the result
+and publishes ActorResult(success=False).  The CM should then include this
+failure context in the next act() request.
 """
 
 import pytest
@@ -56,18 +55,24 @@ async def test_second_act_includes_failure_context(initialized_cm):
        previous failure so the actor can adjust its strategy.
     """
     cm = initialized_cm
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
             content=(
-                "Could you please take these properties in the image at "
-                "Attachments/att-img-1_IMG_1019.png and put them all into an Excel "
-                "spreadsheet for me, with each of their postcodes listed? "
-                "Could you also please plot them all on a map?"
+                "Could you please take these properties in the attached image "
+                "and put them all into an Excel spreadsheet for me, with each "
+                "of their postcodes listed? Could you also please plot them all "
+                "on a map?"
             ),
+            attachments=[
+                {
+                    "filename": "IMG_1019.png",
+                    "filepath": "Attachments/att-img-1_IMG_1019.png",
+                    "content_type": "image/png",
+                    "size_bytes": 13330552,
+                },
+            ],
         ),
     )
 

@@ -159,9 +159,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "`update_rows` — never download a large table into Python to "
             "count, aggregate, or decide updates. Prefer one selective "
             "`update_rows(..., filter=...)` over fetch-all then per-row "
-            "updates. Team-shared tables are already readable via "
-            "`primitives.data` team-root fan-out — do not peek into "
-            "another assistant's private contexts. "
+            "updates. "
             "STORING new data is not here: use `primitives.ingestion.submit` "
             "for rows from an API or connected app, for files, and for "
             "reshaping one table into another."
@@ -220,11 +218,11 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "`get_logs(run_id)`, fix the cause, submit again — never store "
             "the data another way (`primitives.data.create_table` plus "
             "`insert_rows`, or a hand-written loop, writes rows nothing "
-            "checkpoints, verifies, or can resume). FOR A CANVAS OVER "
-            "CONNECTED APPS the shape is always: integration tool → "
+            "checkpoints, verifies, or can resume). FOR ROWS FETCHED FROM "
+            "AN API the shape is always: fetch → "
             "`submit(RowsSource(rows=...), TableTarget(...))` → `wait` → "
-            "read from that table; also the only way to show two providers together, "
-            "since providers cannot be joined directly."
+            "read from that table; also the only way to combine two sources, "
+            "since API responses cannot be joined directly."
         ),
     ),
     ManagerSpec(
@@ -234,9 +232,9 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         excluded_methods=frozenset(),
         priority=2,
         domain="Conversation History",
-        description="Past messages, conversation history, communication records (chat/SMS/email)",
+        description="Past messages, conversation history, chat records",
         use_when="Questions about past communications, 'what did X say?'",
-        examples="'What did Bob say yesterday?', 'Last SMS with Alice?', 'Messages mentioning budget?'",
+        examples="'What did Bob say yesterday?', 'Last message from Alice?', 'Messages mentioning budget?'",
     ),
     ManagerSpec(
         manager_alias="secrets",
@@ -763,7 +761,7 @@ class ToolSurfaceRegistry:
 
         Returns a compact version containing the summary (up to the first
         blank line), the NumPy-style ``Parameters`` section, and
-        ``Anti-patterns`` when present (critical for Orchestra / DataManager
+        ``Anti-patterns`` when present (critical for DataManager
         efficiency). Omits Returns, Raises, Examples, Notes, and internal
         ``_``-prefixed parameters.
         """

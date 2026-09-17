@@ -19,8 +19,8 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
     ActorHandleStarted,
+    UnifyMessageReceived,
 )
 
 pytestmark = pytest.mark.eval
@@ -72,7 +72,7 @@ async def test_contact_preference_lookup(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Does Sarah prefer phone or email?",
         ),
@@ -93,7 +93,7 @@ async def test_contact_search_by_location(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="I'm heading to Berlin next week. Do we know anyone there?",
         ),
@@ -114,7 +114,7 @@ async def test_contact_phone_number_lookup(initialized_cm):
     cm = initialized_cm
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What's Alice's phone number?",
         ),

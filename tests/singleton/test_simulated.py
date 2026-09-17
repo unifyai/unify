@@ -8,7 +8,6 @@ from unify.contact_manager.simulated import SimulatedContactManager
 from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
 from unify.memory_manager.simulated import SimulatedMemoryManager
 from unify.transcript_manager.simulated import SimulatedTranscriptManager
-from unify.task_scheduler.simulated import SimulatedTaskScheduler
 
 # ---------------------------------------------------------------------------
 #  Helper – parameterisation over the concrete simulated manager classes
@@ -18,7 +17,6 @@ MANAGER_CLASSES = [
     SimulatedKnowledgeManager,
     SimulatedMemoryManager,
     SimulatedTranscriptManager,
-    SimulatedTaskScheduler,
 ]
 
 
@@ -64,23 +62,19 @@ async def test_composition():
     contact_manager = memory_manager._contact_manager
     transcript_manager = memory_manager._transcript_manager
     knowledge_manager = memory_manager._knowledge_manager
-    task_scheduler = memory_manager._task_scheduler
 
     assert contact_manager is SimulatedContactManager()
     assert transcript_manager is SimulatedTranscriptManager()
     assert knowledge_manager is SimulatedKnowledgeManager()
-    assert task_scheduler is SimulatedTaskScheduler()
 
     ManagerRegistry.clear()
 
     contact_manager = SimulatedContactManager()
     transcript_manager = SimulatedTranscriptManager()
     knowledge_manager = SimulatedKnowledgeManager()
-    task_scheduler = SimulatedTaskScheduler()
 
     memory_manager = SimulatedMemoryManager()
 
     assert contact_manager is memory_manager._contact_manager
     assert transcript_manager is memory_manager._transcript_manager
     assert knowledge_manager is memory_manager._knowledge_manager
-    assert task_scheduler is memory_manager._task_scheduler

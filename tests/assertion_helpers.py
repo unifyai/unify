@@ -116,7 +116,7 @@ def assertion_failed(
         actual: The actual value received
         reasoning: List of reasoning steps from LLM tool use
         description: Optional description of the assertion
-        context_data: Optional additional context data to include (e.g., tasks, messages)
+        context_data: Optional additional context data to include (e.g., contacts, messages)
 
     Returns:
         Formatted error message string
@@ -294,7 +294,7 @@ def get_tools_from_manager(
     Parameters
     ----------
     manager_class : Type
-        The manager class (e.g., ContactManager, TaskScheduler).
+        The manager class (e.g., ContactManager, TranscriptManager).
     method : str
         The method name ("ask" or "update").
 

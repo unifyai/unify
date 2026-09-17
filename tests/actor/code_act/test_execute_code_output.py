@@ -38,13 +38,12 @@ def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for impl_attr in [
         "contact",
-        "task",
         "transcript",
         "knowledge",
         "guidance",
         "web",
     ]:
-        monkeypatch.setenv(f"UNITY_{impl_attr.upper()}_IMPL", "simulated")
+        monkeypatch.setenv(f"UNIFY_{impl_attr.upper()}_IMPL", "simulated")
         if hasattr(SETTINGS, impl_attr):
             monkeypatch.setattr(
                 getattr(SETTINGS, impl_attr),
@@ -55,7 +54,7 @@ def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Enable optional managers
     for enabled_attr in ["guidance", "web", "knowledge"]:
-        monkeypatch.setenv(f"UNITY_{enabled_attr.upper()}_ENABLED", "true")
+        monkeypatch.setenv(f"UNIFY_{enabled_attr.upper()}_ENABLED", "true")
         if hasattr(SETTINGS, enabled_attr):
             monkeypatch.setattr(
                 getattr(SETTINGS, enabled_attr),
@@ -75,7 +74,7 @@ async def actor_with_primitives(
     from unify.function_manager.primitives import PrimitiveScope
 
     scope = PrimitiveScope(
-        scoped_managers=frozenset({"contacts", "tasks", "transcripts"}),
+        scoped_managers=frozenset({"contacts", "transcripts"}),
     )
     primitives = Primitives(primitive_scope=scope)
     env = StateManagerEnvironment(primitives)
@@ -132,40 +131,6 @@ def get_error(out: Any) -> str | None:
 def get_result(out: Any) -> Any:
     """Get result from execute_code output."""
     return get_output_field(out, "result", None)
-
-
-# ---------------------------------------------------------------------------
-# Test: Runtime OAuth token helper exposed to real actor execute_code
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_code_oauth_helper_returns_proxy_handle(
-    execute_code_tool: tuple[Any, Primitives],
-) -> None:
-    execute_code, _ = execute_code_tool
-
-    # The sandbox helper returns the local workspace-proxy capability handle
-    # (never a raw provider token); the same handle is exported to the sandbox
-    # env alongside the proxy base URLs, which target the localhost proxy.
-    out = await execute_code(
-        "mock scenario: resolve the workspace proxy handle for both providers",
-        """
-import os
-microsoft_handle = get_oauth_access_token("microsoft", min_ttl_seconds=123)
-google_handle = get_oauth_access_token("google", min_ttl_seconds=456)
-assert microsoft_handle == google_handle
-assert microsoft_handle == os.environ["WORKSPACE_PROXY_TOKEN"]
-assert os.environ["MICROSOFT_GRAPH_BASE"].endswith("/microsoft/v1.0")
-assert os.environ["GOOGLE_DRIVE_BASE"].endswith("/google/drive/v3")
-print("TOKEN_OK")
-""",
-        language="python",
-        state_mode="stateless",
-    )
-
-    assert get_error(out) is None
-    assert "TOKEN_OK" in get_stdout_text(out)
 
 
 # ---------------------------------------------------------------------------
@@ -422,36 +387,6 @@ print(f"RESULT2: {r2}")
 # ---------------------------------------------------------------------------
 # Test: Different state managers
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
-async def test_execute_code_tasks_manager_output(
-    execute_code_tool,
-):
-    """Verifies stdout capture works with TaskScheduler primitives."""
-    execute_code, primitives = execute_code_tool
-
-    code = """
-handle = await primitives.tasks.ask("What tasks are currently pending?")
-result = await handle.result()
-print(f"TASKS: {result}")
-"""
-
-    out = await execute_code(
-        "test tasks manager",
-        code,
-        language="python",
-        state_mode="stateless",
-    )
-
-    error = get_error(out)
-    assert error is None, f"Execution failed: {error}"
-
-    stdout_text = get_stdout_text(out)
-
-    assert "TASKS:" in stdout_text, f"Missing 'TASKS:' in stdout: {stdout_text!r}"
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,12 @@
-"""Run observability written to the ``Ingestion/*`` contexts, from any tier.
+"""Run observability written to the ``Ingestion/*`` contexts, from any worker.
 
 The run row and its events are the record a person or the actor reads;
 checkpoints and leases stay on the artifact store because they are correctness
 primitives that need fenced compare-and-swap, which a log row does not offer.
-This module is the bridge for code that runs *outside* the manager's process --
-worker pods -- so a dispatched run's progress lands in the same two contexts an
-in-process run already writes, and ``get_status`` reads one history whichever
-tier executed.
+This module is the bridge for code that runs *outside* the manager's own call
+stack -- queue workers -- so a queued run's progress lands in the same two
+contexts a direct run already writes, and ``get_status`` reads one history
+whichever path executed.
 
 Drift between the stores is avoided by construction rather than by
 reconciliation jobs: events are emitted at the same commit points that write
@@ -14,10 +14,8 @@ checkpoints, and the run row's terminal state is written exactly once by
 whoever finishes the work. Progress numbers derive from the checkpoint counts,
 so the two can disagree only in staleness, never in direction.
 
-Writes go through unisdk under whatever identity is installed --- the worker
-resolves the owning assistant's key per message and hydrates the session before
-touching this, so a journal row is written *as the assistant*, into contexts
-the assistant already owns. Rows are small on purpose (decision: never a bulk
+Writes go through the store under the active session identity, so a journal
+row is written *as the assistant*, into contexts the assistant already owns. Rows are small on purpose (decision: never a bulk
 payload in a log row); anything heavy stays in object storage and is referenced
 by key.
 
@@ -36,9 +34,9 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Payload block a dispatch carries so workers can journal against the run the
-# manager recorded. Absent on payloads that predate it, in which case the
-# journal is inert and the GCS event trail remains the only record.
+# Payload block a queued message carries so workers can journal against the
+# run the manager recorded. Absent on operator-CLI submits, in which case the
+# journal is inert and the artifact store's event trail is the only record.
 OBSERVABILITY_KEY = "observability"
 
 # Floor between progress events per stage. Stage transitions and terminal
@@ -55,7 +53,7 @@ class RunJournal:
     """Writes one run's events and terminal state to its ``Ingestion/*`` rows.
 
     One instance per (run, worker attempt). Thread-safe for the progress
-    throttle; unisdk calls are already safe to make concurrently.
+    throttle; store calls are already safe to make concurrently.
     """
 
     def __init__(

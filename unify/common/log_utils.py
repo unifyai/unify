@@ -42,7 +42,7 @@ def _get_user_context() -> Optional[str]:
 
     Injected as _user into every log entry. Matches the user_id path segment
     in context paths like {user_id}/{assistant_id}/Contacts.
-    Needed by orchestra for 3-tier deletion cascade.
+    Needed by the store's deletion cascade.
     """
     return SESSION_DETAILS.user_context or None
 
@@ -57,7 +57,7 @@ def _get_assistant_context() -> Optional[str]:
 
     Injected as _assistant into every log entry. Matches the assistant_id path
     segment in context paths like {user_id}/{assistant_id}/Contacts.
-    Needed by orchestra for 3-tier deletion cascade.
+    Needed by the store's deletion cascade.
     """
     return SESSION_DETAILS.assistant_context or None
 
@@ -199,13 +199,12 @@ def create_logs(
     entries : List[Dict[str, Any]]
         List of entry dicts to create
     **kwargs
-        Additional arguments passed to db.create_logs (e.g., batched=True)
+        Additional arguments passed to db.create_logs (e.g. ``on_duplicate``)
 
     Returns
     -------
-    Dict[str, Any] | List[db.Log]
-        Response from db.create_logs. Returns a dict with log_event_ids normally,
-        or a list of Log objects when batched=True.
+    List[db.Log]
+        The created rows, with ids and auto-counted keys filled in.
     """
     authoring_assistant_id = (
         current_authoring_assistant_id() if stamp_authoring else None

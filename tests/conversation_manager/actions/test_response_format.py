@@ -18,7 +18,7 @@ import asyncio
 import inspect
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -50,6 +50,8 @@ def mock_cm():
     cm._pending_steering_tasks = set()
     cm._initialized = asyncio.Event()
     cm._initialized.set()  # mark as initialised so act() doesn't block
+    cm.event_broker = MagicMock()
+    cm.event_broker.publish = AsyncMock()
     cm.suppress_duplicate_commissioning_tool.return_value = None
     return cm
 
@@ -57,12 +59,7 @@ def mock_cm():
 @pytest.fixture
 def brain_action_tools(mock_cm):
     """ConversationManagerBrainActionTools wired to the mock CM."""
-    with patch(
-        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-    ) as mock_broker:
-        mock_broker.return_value = MagicMock()
-        mock_broker.return_value.publish = AsyncMock()
-        yield ConversationManagerBrainActionTools(mock_cm)
+    return ConversationManagerBrainActionTools(mock_cm)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -11,8 +11,8 @@ That is why leases and checkpoints are part of the *port* rather than of one
 backend. A store that cannot fence and cannot checkpoint can still ingest, but
 its runs are not resumable -- and an executor has no way to tell, so it would
 quietly offer a guarantee it cannot keep. Requiring both here means every
-binding is resumable, and the difference between running in-process and running
-on a worker fleet is only which adapter is bound.
+binding is resumable, and the difference between running directly and running
+on a queue worker is only which adapter is bound.
 """
 
 from __future__ import annotations
@@ -123,13 +123,12 @@ class ArtifactStore(Protocol):
     ) -> ObjectStoreArtifactHandle:
         """Materialise *handle* as a durable artifact.
 
-        ``job_id`` is optional so callers that operate outside the
-        worker pipeline (e.g. a local developer running the
-        ``LocalArtifactStore`` with a hash-based on-disk layout) can
-        leave it empty. Object-store-backed implementations (e.g.
-        ``GcsArtifactStore``) use it to scope every artifact under a
-        single ``jobs/<job_id>/artifacts/...`` root so all of a job's
-        outputs live in one place.
+        ``job_id`` is optional so callers that operate outside a job
+        (e.g. the ``LocalArtifactStore`` with its hash-based on-disk
+        layout) can leave it empty. An implementation that groups
+        artifacts per job uses it to scope every artifact under a single
+        ``jobs/<job_id>/artifacts/...`` root so all of a job's outputs
+        live in one place.
         """
         ...
 
@@ -343,8 +342,8 @@ class ArtifactStore(Protocol):
 class LocalArtifactStore:
     """Filesystem-backed artifact store: full port, including resumability.
 
-    Used by self-host and by in-process execution, so it has to offer the same
-    guarantees as the hosted backend rather than a subset -- an executor cannot
+    Used by every execution path, so it has to offer the full port rather
+    than a subset -- an executor cannot
     know which adapter it was handed, and a store that silently could not fence
     or checkpoint would turn every crash into lost or duplicated rows.
 
@@ -352,8 +351,8 @@ class LocalArtifactStore:
     ``flock`` makes each read-modify-write a critical section, and the kernel
     drops it when the descriptor closes -- including on process death, which a
     lock *file* would not, leaving keys wedged after a crash. The generation
-    token lives in a sidecar so payloads stay byte-identical in shape to the
-    hosted backend's, and both are replaced under the same lock, so a reader
+    token lives in a sidecar so payloads stay byte-identical in shape across
+    implementations, and both are replaced under the same lock, so a reader
     never sees a payload and a generation that disagree.
     """
 
@@ -370,10 +369,8 @@ class LocalArtifactStore:
         job_id: str = "",
     ) -> ObjectStoreArtifactHandle:
         # ``job_id`` is intentionally ignored here: LocalArtifactStore's
-        # on-disk layout is hash-based and optimised for developer
-        # ergonomics, not for the per-job roll-ups that the GCS store
-        # uses in production. Keeping the kwarg keeps the protocol
-        # uniform across backends.
+        # on-disk layout is hash-based, not rolled up per job. Keeping
+        # the kwarg keeps the protocol uniform across implementations.
         del job_id
         if isinstance(handle, ObjectStoreArtifactHandle):
             return handle
@@ -522,8 +519,8 @@ class LocalArtifactStore:
 
         The local store's objects are already files, so this is a copy rather
         than a fetch -- but it stays on the port because callers must not have
-        to know that. A ``file://`` URI emitted by this store and a ``gs://``
-        URI emitted by the hosted one are both accepted by their own store.
+        to know that. A ``file://`` URI emitted by this store is accepted
+        back by it, as any implementation accepts the URIs it emits.
         """
         dest_path = Path(dest).expanduser().resolve()
         dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -851,11 +848,11 @@ class _PreconditionFailed(RuntimeError):
 
 
 def _checkpoint_key(job_id: str, artifact_id: str) -> str:
-    """Locate a checkpoint under its job, mirroring the hosted layout.
+    """Locate a checkpoint under its job, in the layout every binding shares.
 
     Keeping the layout identical across bindings is what lets a run that began
-    in-process be adopted by the worker fleet: the fleet looks where it always
-    looks and finds progress it did not write.
+    on one path be adopted by another: the worker looks where it always looks
+    and finds progress it did not write.
     """
     return f"jobs/{_safe_fragment(job_id)}/checkpoints/{_safe_fragment(artifact_id)}"
 

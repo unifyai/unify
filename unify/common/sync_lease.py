@@ -25,7 +25,7 @@ _ACTIVE_KEYS: ContextVar[frozenset[str]] = ContextVar(
     default=frozenset(),
 )
 
-# Process-local fallback when Orchestra has not yet rolled out /sync_lease.
+# Process-local fallback when the store cannot grant a lease.
 _LOCAL_LOCKS: Dict[str, threading.Lock] = {}
 _LOCAL_LOCKS_GUARD = threading.Lock()
 
@@ -90,9 +90,9 @@ def exclusive_sync_lease(
 ) -> Iterator[str]:
     """Hold an exclusive lease for the duration of a ``sync_custom`` body.
 
-    Prefers Orchestra ``/sync_lease/*`` (advisory-lock + durable row). If the
-    endpoint is missing (rolling deploy), falls back to a process-local lock so
-    same-pod writers still serialize, and logs a warning.
+    Prefers the store's sync lease (advisory lock + durable row). If the store
+    cannot grant one, falls back to a process-local lock so in-process writers
+    still serialize, and logs a warning.
 
     Nested acquires for the same key in the same task are no-ops (reentrant).
     """
@@ -127,7 +127,7 @@ def exclusive_sync_lease(
                 status_code = getattr(response, "status_code", None)
                 if status_code in {404, 405}:
                     logger.warning(
-                        "Orchestra sync_lease endpoint unavailable (%s); "
+                        "Store sync_lease unavailable (%s); "
                         "falling back to process-local lock for %s",
                         status_code,
                         lease_key,

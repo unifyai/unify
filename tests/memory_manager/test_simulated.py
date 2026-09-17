@@ -27,7 +27,6 @@ import asyncio
 from unify.memory_manager.simulated import SimulatedMemoryManager
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unify.task_scheduler.simulated import SimulatedTaskScheduler
 from unify.contact_manager.types.contact import Contact
 
 # shared helper used throughout the test-suite -- isolates each test run
@@ -257,52 +256,7 @@ async def test_update_knowledge_invokes_kb_add(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# 3. update_tasks -- should call TaskScheduler.update at least once            #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_update_tasks_invokes_scheduler_update(monkeypatch):
-    counts = {"ts_update": 0}
-
-    orig_ts_update = SimulatedTaskScheduler.update
-
-    @functools.wraps(orig_ts_update)
-    async def spy_ts_update(self, text: str, **kw):
-        counts["ts_update"] += 1
-        return await orig_ts_update(self, text, **kw)
-
-    monkeypatch.setattr(
-        SimulatedTaskScheduler,
-        "update",
-        spy_ts_update,
-        raising=True,
-    )
-
-    ts = SimulatedTaskScheduler(
-        description=(
-            "TEST SCENARIO: Task creation/update. SimulatedTaskScheduler MUST accept a deterministic update"
-            " creating the requested task; do NOT claim the task already exists. SimulatedTranscriptManager"
-            " returns straightforward results. No external I/O."
-        ),
-    )
-    mm = SimulatedMemoryManager(
-        task_scheduler=ts,
-    )
-    transcript = _build_transcript(
-        "Please create a task to organise the quarterly review meeting next Monday.",
-    )
-
-    result = await mm.update_tasks(transcript)
-
-    assert isinstance(result, str) and result.strip()
-    assert counts["ts_update"] >= 1, "TaskScheduler.update should be invoked"
-
-
-# --------------------------------------------------------------------------- #
-# 4. reset -- should complete and manager remains usable                       #
+# 3. reset -- should complete and manager remains usable                       #
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 @pytest.mark.llm_call
@@ -311,14 +265,14 @@ async def test_reset_remains_usable():
     mm = SimulatedMemoryManager()
     await asyncio.wait_for(mm.reset(), timeout=DEFAULT_TIMEOUT)
     result = await asyncio.wait_for(
-        mm.update_tasks("Please schedule a quick follow-up for tomorrow."),
+        mm.update_knowledge("The office moved to 12 King Street in April 2025."),
         timeout=DEFAULT_TIMEOUT,
     )
     assert isinstance(result, str) and result.strip()
 
 
 # --------------------------------------------------------------------------- #
-# 5. build_plain_transcript -- includes manager_method JSON lines              #
+# 4. build_plain_transcript -- includes manager_method JSON lines              #
 # --------------------------------------------------------------------------- #
 @_handle_project
 def test_build_plain_transcript_includes_manager_method_json():

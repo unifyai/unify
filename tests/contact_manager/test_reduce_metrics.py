@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import pytest
-import time
-from unify import db
 from tests.helpers import _handle_project
-from unify.common.context_registry import ContextRegistry
 from unify.contact_manager.contact_manager import ContactManager
-from unify.session_details import SESSION_DETAILS
 
 
 @pytest.mark.requires_real_unify
@@ -75,56 +71,3 @@ def test_contact_reduce_param_shapes():
         filter={"contact_id": "contact_id >= 0"},
     )
     assert isinstance(filtered_multi, dict)
-
-
-@pytest.mark.requires_real_unify
-@_handle_project
-def test_contact_reduce_reads_personal_and_accessible_space_roots():
-    # Random team id is safe here: this test only drives programmatic manager
-    # methods, so the id never enters an LLM prompt and cannot break cache
-    # replay, while randomness isolates concurrent runs without cleanup.
-    team_id = int(time.time_ns() % 1_000_000_000)
-    SESSION_DETAILS.team_ids = [team_id]
-
-    try:
-        cm = ContactManager()
-        marker = f"reduce-marker-{team_id}"
-        cm._create_contact(first_name="Personal Reduce", bio=marker)
-        cm._create_contact(
-            first_name="Shared Reduce",
-            bio=marker,
-            destination=f"team:{team_id}",
-        )
-
-        count = cm._reduce(
-            metric="count",
-            keys="contact_id",
-            filter=f"bio == '{marker}'",
-        )
-        assert count == 2
-
-        grouped = cm._reduce(
-            metric="count",
-            keys="contact_id",
-            filter=f"bio == '{marker}'",
-            group_by="first_name",
-        )
-        assert grouped == {"Personal Reduce": 1, "Shared Reduce": 1}
-
-        SESSION_DETAILS.team_ids = []
-        ContextRegistry.clear()
-        assert (
-            cm._reduce(
-                metric="count",
-                keys="contact_id",
-                filter=f"bio == '{marker}'",
-            )
-            == 1
-        )
-    finally:
-        try:
-            db.delete_context(f"Teams/{team_id}/Contacts")
-        except Exception:
-            pass
-        SESSION_DETAILS.team_ids = []
-        ContextRegistry.clear()

@@ -27,8 +27,8 @@ def _spill_full_tool_text(text: str) -> Optional[str]:
     across processes and repeated calls, and re-spilling the same content is
     an idempotent overwrite rather than a fresh file.
     """
-    # No cleanup beyond OS tmp reaping — unbounded tmp growth in long-lived
-    # pods is the ceiling here. Upgrade path: delete the spill dir when the
+    # No cleanup beyond OS tmp reaping — unbounded tmp growth in a long-lived
+    # process is the ceiling here. Upgrade path: delete the spill dir when the
     # owning tool loop closes.
     try:
         spill_dir = os.path.join(tempfile.gettempdir(), "unify-tool-results")

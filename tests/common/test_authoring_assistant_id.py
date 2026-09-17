@@ -22,7 +22,6 @@ from unify.guidance_manager.types.guidance import Guidance
 from unify.image_manager.types.image import Image
 from unify.secret_manager.types import Secret
 from unify.session_details import SESSION_DETAILS
-from unify.task_scheduler.types.task import Task
 from unify.transcript_manager.types.exchange import Exchange
 from unify.transcript_manager.types.message import Message
 
@@ -59,7 +58,6 @@ def test_update_payloads_cannot_change_authoring_assistant_id() -> None:
 @pytest.mark.parametrize(
     "model",
     [
-        Task,
         Contact,
         Secret,
         Guidance,
@@ -89,8 +87,8 @@ def test_shared_row_models_register_immutable_authoring_field(
     [
         "default/42/Data/Forecasts",
         "default/42/FileRecords/Local",
-        "Teams/7/Knowledge/Competitors",
-        "Teams/7/Files/Contracts/12/Content",
+        "default/42/Knowledge/Competitors",
+        "default/42/Files/Contracts/12/Content",
         "default/42/Functions/Compositional",
     ],
 )
@@ -107,8 +105,6 @@ def test_dynamic_shared_contexts_receive_authoring_field(context: str) -> None:
 def test_unrelated_contexts_are_not_treated_as_shared_data() -> None:
     """Authorship registration stays scoped to shared data tables."""
 
-    assert (
-        is_shared_authored_context("default/42/AssistantJobs/startup_events") is False
-    )
-    assert is_shared_authored_context("default/42/Tasks/Activations") is False
-    assert is_shared_authored_context("default/42/Tasks/Runs") is False
+    assert is_shared_authored_context("default/42/SearchCache") is False
+    assert is_shared_authored_context("default/42/Ingestion/Runs") is False
+    assert is_shared_authored_context("default/42/Ingestion/Events") is False

@@ -77,17 +77,17 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
     `db.create_fields`.
 
     Uses Pydantic's JSON Schema with $ref dereferencing via jsonref.
-    Nested object schemas are serialized as JSON strings for Orchestra.
+    Nested object schemas are serialized as JSON strings for the store.
 
     Supports per-field overrides via ``json_schema_extra``:
-    - ``{"unify_type": "..."}`` — override the inferred Orchestra type
-    - ``{"unique": True}`` — mark the field as unique in Orchestra
-    - ``{"mutable": False}`` — mark the field immutable in Orchestra
-    - ``{"ui_editable": True}`` — allow the field to be edited from the
-      Console UI. Defaults to ``False`` (opt-in), independent of ``mutable``:
-      ``mutable`` governs whether the backend permits writes at all, while
-      ``ui_editable`` governs whether the Console data browser exposes an
-      edit control for the field.
+    - ``{"unify_type": "..."}`` — override the inferred column type
+    - ``{"unique": True}`` — mark the field as unique in the store
+    - ``{"mutable": False}`` — mark the field immutable in the store
+    - ``{"ui_editable": True}`` — allow the field to be edited directly by
+      the user in a row editor. Defaults to ``False`` (opt-in), independent
+      of ``mutable``: ``mutable`` governs whether the store permits writes at
+      all, while ``ui_editable`` governs whether a row editor exposes an edit
+      control for the field.
 
     Examples
     --------
@@ -122,7 +122,7 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
         if unify_type:
             entry: dict[str, Any] = {"type": unify_type}
         elif _is_nested_schema(prop):
-            # Serialize nested schema as JSON string for Orchestra
+            # Serialize nested schema as JSON string for the store
             entry = {"type": json.dumps(prop)}
         else:
             # Use simple ColumnType
@@ -135,15 +135,15 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
         if field_info and isinstance(extra, dict) and extra.get("unique"):
             entry["unique"] = True
 
-        # Opt-in only: Console UI edit controls are hidden unless explicitly
+        # Opt-in only: row-editor edit controls are hidden unless explicitly
         # allowlisted via `json_schema_extra={"ui_editable": True}`.
         entry["ui_editable"] = False
         if field_info and isinstance(extra, dict) and "ui_editable" in extra:
             entry["ui_editable"] = bool(extra["ui_editable"])
 
         # Use Field description (not JSON Schema description which can be very long).
-        # Orchestra StandardFieldDefinition.description max_length is 256; longer
-        # values mis-route create_fields into JsonSchemaFieldDefinition and 400.
+        # The store's field description max_length is 256; longer values are
+        # rejected by create_fields.
         if field_info and getattr(field_info, "description", None):
             entry["description"] = field_info.description.strip()[:256]
 
@@ -159,7 +159,7 @@ def with_ui_editable_forced_false(
     Return a copy of a `model_to_fields` output with every field's
     ``ui_editable`` forced to ``False``.
 
-    Used when a single Pydantic model backs multiple Orchestra tables with
+    Used when a single Pydantic model backs multiple stored tables with
     different editability semantics — e.g. `Function` backs both
     `Functions/Compositional` (user-authored, some fields UI-editable) and
     `Functions/Primitives` (system-defined, never UI-editable). Rather than

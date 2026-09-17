@@ -143,7 +143,7 @@ ICONS = {
     "remote_control": "🕹️",
     "remote_control_off": "🚫",
     "desktop_session": "🖥️",
-    # ── Fast paths (direct manager / desktop shortcuts) ────────────────
+    # ── Fast paths (direct manager shortcuts) ──────────────────────────
     "fast_path": "🏎️",
     # ── Customization / seed data ────────────────────────────────────────
     "customization": "🏷️",

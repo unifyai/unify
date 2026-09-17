@@ -1,20 +1,19 @@
-"""Whether a context name is one the backend will accept.
+"""Whether a context name is one the store will accept.
 
-The backend enforces its own rule and reports a violation by naming the rule,
+The store enforces its own rule and reports a violation by naming the rule,
 never the value: *"Invalid context name. Names can only contain alphanumeric
 characters, underscores, dashes, and forward slashes. Consecutive slashes are
 not allowed."* That is a perfectly good message to receive **synchronously**,
-and close to useless to receive from a worker pod four retries into a dispatch,
-where the caller cannot see which of fifteen destinations was at fault.
+and close to useless to receive from a background worker several retries into
+a run, where the caller cannot see which of fifteen destinations was at fault.
 
-So the same rule is stated here, and checked before anything is published. A
+So the same rule is stated here, and checked before any work is queued. A
 malformed destination then fails at the call that named it, with the value and
-the reason, instead of becoming a poison message that a fleet retries
+the reason, instead of becoming a poison message that a worker retries
 indefinitely.
 
-This deliberately duplicates a backend rule. The alternative -- discovering the
-rule from a rejection -- costs a dispatch, a deploy cycle to add logging, and a
-worker loop in between.
+This deliberately duplicates a store rule. The alternative -- discovering the
+rule from a rejection -- costs a queued run and a worker loop in between.
 """
 
 from __future__ import annotations
@@ -125,7 +124,7 @@ def check_all(names: Iterable[str]) -> List[Tuple[str, str]]:
 def assert_all_valid(names: Iterable[str], *, what: str = "destination") -> None:
     """Raise once, naming every unacceptable name.
 
-    Raised before a dispatch is published, so the caller learns about a bad
+    Raised before any work is queued, so the caller learns about a bad
     destination from the call that named it rather than from a worker log it
     cannot read.
     """

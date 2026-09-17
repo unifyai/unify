@@ -2,22 +2,21 @@
 tests/conversation_manager/core/test_explicit_retirement.py
 ===========================================================
 
-An explicit shutdown is a retirement, not an idle timeout.
+An explicit shutdown is a retirement.
 
 When the process is told to retire (``stop_async``, a benchmark scenario
-ending, a sandbox exiting), the session must retire in seconds: run the same
-``_request_shutdown`` sequence the inactivity route uses, discard in-flight
-actions rather than waiting on them, and return. A fresh boot over the same
-durable world — in the same process — must not block on anything the previous
-instance left behind: not a parked persist session, not a lock a frozen task
-still holds on a dead event loop, not an idle clock.
+ending, a sandbox exiting), the session must retire in seconds: run the
+``_request_shutdown`` sequence, discard in-flight actions rather than waiting
+on them, and return. A fresh boot over the same durable world — in the same
+process — must not block on anything the previous instance left behind: not
+a parked persist session, not a lock a frozen task still holds on a dead
+event loop.
 
-The production inactivity path is pinned by test_inactivity_lifecycle.py and
-is deliberately untouched here; these tests only cover the "asked to shut
-down" side of that distinction, plus the reboot shape the colleague benchmark
-runs (teardown-plus-boot between weekly scenarios) where the stalls were
-first measured: dead windows quantized at whatever outer timeout happened to
-fire — 600s step ceilings, 900s drains — while a rebooted week sat idle.
+These tests cover the "asked to shut down" path plus the reboot shape the
+colleague benchmark runs (teardown-plus-boot between weekly scenarios), where
+a retirement that waits on parked work stalls for whatever outer timeout
+happens to fire — 600s step ceilings, 900s drains — while a rebooted week
+sits idle.
 """
 
 from __future__ import annotations
@@ -25,32 +24,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from unittest.mock import patch
-
 import pytest
 
 
 def _make_cm(event_broker, stop_event):
     from unify.conversation_manager.conversation_manager import ConversationManager
 
-    return ConversationManager(
-        event_broker=event_broker,
-        job_name="test-job",
-        user_id="user_1",
-        assistant_id="assistant_1",
-        user_first_name="Test",
-        user_surname="User",
-        assistant_first_name="Test",
-        assistant_surname="Assistant",
-        assistant_age="25",
-        assistant_nationality="American",
-        assistant_about="Test bio",
-        assistant_number="+15555550000",
-        assistant_email="assistant@test.com",
-        user_number="+15555551111",
-        user_email="user@test.com",
-        stop=stop_event,
-    )
+    return ConversationManager(event_broker, stop_event, project_name="TestProject")
 
 
 @pytest.fixture
@@ -95,15 +75,14 @@ class _SimulatedHandle:
 
 class TestExplicitStopIsARetirement:
     @pytest.mark.asyncio
-    async def test_stop_async_runs_the_idle_routes_retirement_sequence(
+    async def test_stop_async_runs_the_retirement_sequence(
         self,
         event_broker,
     ):
         """stop_async retires through _request_shutdown, in seconds.
 
         Reason recorded, session_end path taken, stop set, broker closed —
-        the same sequence the idle route runs — and control returns promptly
-        even with a parked action in flight.
+        and control returns promptly even with a parked action in flight.
         """
         import unify.conversation_manager as cm_mod
 
@@ -115,13 +94,10 @@ class TestExplicitStopIsARetirement:
         cm_mod._conversation_manager = cm
         started = time.monotonic()
         try:
-            with patch(
-                "unify.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
-            ):
-                await asyncio.wait_for(
-                    cm_mod.stop_async(reason="scenario end"),
-                    timeout=30.0,
-                )
+            await asyncio.wait_for(
+                cm_mod.stop_async(reason="scenario end"),
+                timeout=30.0,
+            )
         finally:
             cm_mod.reset()
         elapsed = time.monotonic() - started
@@ -129,37 +105,33 @@ class TestExplicitStopIsARetirement:
         assert elapsed < 20.0, f"explicit retirement took {elapsed:.1f}s"
         assert cm.shutdown_reason == "scenario end"
         assert stop_event.is_set()
-        assert event_broker._closed, "the idle route closes the broker; so must this"
+        assert event_broker._closed, "retirement closes the broker"
         assert parked.stop_reason == "session retired"
         assert cm.in_flight_actions == {}
         assert cm.completed_actions == {}
 
     @pytest.mark.asyncio
     async def test_an_internal_exit_keeps_its_recorded_reason(self, event_broker):
-        """A stop_async after the idle route already decided must not relabel it."""
+        """A stop_async after an internal exit already decided must not relabel it."""
         import unify.conversation_manager as cm_mod
 
         stop_event = asyncio.Event()
         cm = _make_cm(event_broker, stop_event)
-        await cm._request_shutdown("idle_timeout", "Inactivity timeout reached")
+        await cm._request_shutdown("internal_exit", "Internal exit requested")
 
         cm_mod._conversation_manager = cm
         try:
-            with patch(
-                "unify.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
-            ):
-                await cm_mod.stop_async(reason="cleanup")
+            await cm_mod.stop_async(reason="cleanup")
         finally:
             cm_mod.reset()
 
-        assert cm.shutdown_reason == "idle_timeout"
+        assert cm.shutdown_reason == "internal_exit"
 
     @pytest.mark.asyncio
     async def test_cleanup_abandons_a_handle_that_ignores_stop(self, event_broker):
         """A parked session that cannot stop is discarded, not waited on.
 
-        Idle retirement discards parked Python state by exiting the process;
-        the in-process retirement must be no slower because a handle is deaf.
+        The in-process retirement must be no slower because a handle is deaf.
         The grace period is 5s, so the whole cleanup stays bounded in seconds.
         """
         stop_event = asyncio.Event()
@@ -169,54 +141,13 @@ class TestExplicitStopIsARetirement:
         simulated = cm.in_flight_actions[2]["handle"]
 
         started = time.monotonic()
-        with patch(
-            "unify.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
-        ):
-            await asyncio.wait_for(cm.cleanup(), timeout=30.0)
+        await asyncio.wait_for(cm.cleanup(), timeout=30.0)
         elapsed = time.monotonic() - started
 
         assert elapsed < 20.0, f"cleanup took {elapsed:.1f}s with a deaf handle"
         assert simulated.completed
         assert cm.in_flight_actions == {}
         assert cm.completed_actions == {}
-
-
-class TestBackgroundWatchesEndOnStop:
-    @pytest.mark.asyncio
-    async def test_check_inactivity_survives_a_disabled_timeout_and_exits_on_stop(
-        self,
-        event_broker,
-    ):
-        """An infinite timeout must not crash the watch, and stop must end it.
-
-        ``UNIFY_INACTIVITY_TIMEOUT_SECONDS=0`` maps to ``inf``; ``int(inf)``
-        in the ghost-window arithmetic killed the whole inactivity loop with
-        OverflowError on its first pass, silently (log_task_exc only reports
-        under staging diagnostics). And with no stop check, an explicitly
-        retired session left the watch ticking forever.
-        """
-        stop_event = asyncio.Event()
-        cm = _make_cm(event_broker, stop_event)
-        cm.inactivity_timeout = float("inf")
-        cm.inactivity_check_interval = 0.05
-
-        check_task = asyncio.create_task(cm.check_inactivity())
-        try:
-            await asyncio.sleep(0.3)
-            assert not check_task.done(), (
-                "check_inactivity died within 0.3s — with a disabled timeout "
-                f"it must keep watching (exception: {check_task.exception() if check_task.done() else None})"
-            )
-
-            stop_event.set()
-            await asyncio.wait_for(check_task, timeout=2.0)
-        finally:
-            if not check_task.done():
-                check_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await check_task
-
-        assert cm.shutdown_reason is None, "the watch must not decide anything itself"
 
 
 class TestEventBusSurvivesAnInProcessReboot:
@@ -365,8 +296,7 @@ class TestRebootOverTheSameWorld:
 
         The whole point of the retirement contract: the second boot over the
         same durable world proceeds promptly, with nothing inherited from the
-        first session — no open broker, no in-flight registry, no background
-        watch still ticking.
+        first session — no open broker, no in-flight registry.
         """
         from unify.conversation_manager import (
             get_conversation_manager,
@@ -376,11 +306,7 @@ class TestRebootOverTheSameWorld:
         from unify.conversation_manager.event_broker import reset_event_broker
 
         reset_event_broker()
-        cm1 = await start_async(
-            project_name="TestProject",
-            enable_comms_manager=False,
-            apply_test_mocks=True,
-        )
+        cm1 = await start_async(project_name="TestProject")
         cm1.in_flight_actions[1] = {"handle": _PromptHandle(), "handle_actions": []}
 
         started = time.monotonic()
@@ -388,11 +314,7 @@ class TestRebootOverTheSameWorld:
         # Deliberately no reset_event_broker() here: retirement itself must
         # leave nothing for a successor to trip over.
         cm2 = await asyncio.wait_for(
-            start_async(
-                project_name="TestProject",
-                enable_comms_manager=False,
-                apply_test_mocks=True,
-            ),
+            start_async(project_name="TestProject"),
             timeout=60.0,
         )
         elapsed = time.monotonic() - started
@@ -402,7 +324,7 @@ class TestRebootOverTheSameWorld:
             assert get_conversation_manager() is cm2
             assert elapsed < 45.0, (
                 f"teardown+boot took {elapsed:.1f}s — the reboot shape must "
-                "complete in seconds, not idle-timeout quanta"
+                "complete in seconds, not outer-timeout quanta"
             )
             assert cm1.shutdown_reason == "scenario end"
             assert cm1.stop.is_set()

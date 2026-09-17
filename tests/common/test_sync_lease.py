@@ -11,11 +11,11 @@ from unify.common.sync_lease import SyncLeaseBusy, exclusive_sync_lease
 def test_exclusive_sync_lease_is_reentrant():
     with (
         patch(
-            "db.acquire_sync_lease",
+            "unify.db.acquire_sync_lease",
             return_value={"acquired": True},
         ),
         patch(
-            "db.release_sync_lease",
+            "unify.db.release_sync_lease",
             return_value={"released": True},
         ),
         patch(
@@ -35,7 +35,7 @@ def test_exclusive_sync_lease_local_fallback_busy_when_held():
 
     with (
         patch(
-            "db.acquire_sync_lease",
+            "unify.db.acquire_sync_lease",
             side_effect=_MissingEndpoint,
         ),
         patch(

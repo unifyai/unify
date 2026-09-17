@@ -26,8 +26,8 @@ from tests.conversation_manager.actions.integration.helpers import (
     run_cm_until_wait,
 )
 from unify.conversation_manager.events import (
-    SMSReceived,
-    SMSSent,
+    UnifyMessageReceived,
+    UnifyMessageSent,
 )
 
 pytestmark = pytest.mark.eval
@@ -98,7 +98,7 @@ async def test_storage_check_result_relay(initialized_cm):
 
     # ── Setup: process the user's message into chat history ───────────
     await cm.step(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="What is Alice Smith's phone number?",
         ),
@@ -135,12 +135,12 @@ async def test_storage_check_result_relay(initialized_cm):
 
     events = await run_cm_until_wait(cm)
 
-    sms_events = filter_events_by_type(events, SMSSent)
-    assert sms_events, (
+    sent_events = filter_events_by_type(events, UnifyMessageSent)
+    assert sent_events, (
         "Brain should relay the task result when the action completes. "
         "The act_completed event includes the result."
     )
-    relay_text = " ".join(e.content for e in sms_events)
+    relay_text = " ".join(e.content for e in sent_events)
 
     # Must not leak internal skill-storage details.
     skill_terms = [

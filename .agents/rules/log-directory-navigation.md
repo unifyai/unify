@@ -1,5 +1,5 @@
 ---
-description: How to navigate and read log files (logs/pytest/, logs/unity/, logs/unillm/, logs/unisdk/, logs/orchestra/, logs/all/)
+description: How to navigate and read log files (logs/pytest/, logs/unify/, logs/unillm/)
 ---
 
 # Log Directory Navigation
@@ -12,20 +12,18 @@ The `logs/` directory is gitignored, which affects tool availability:
 |------|--------|-------|
 | **Read** | ✅ Yes | Preferred for reading log file contents |
 | **Shell** | ✅ Yes | Use `ls` to explore directory structure |
-| **LS** | ⚠️ Unreliable | May work with direct paths |
 | **Glob** | ❌ No | Git-aware index excludes gitignored paths |
-| **Grep** | ❌ No | Git-aware index excludes gitignored paths |
+| **Grep** | ❌ No | Git-aware index excludes gitignored paths; use `rg -uu` from the shell |
 
 ## Log Directories
 
 | Directory | Purpose |
 |-----------|---------|
-| `logs/pytest/` | Test output logs (datetime-prefixed subdirs per run) |
-| `logs/unity/` | Unity LOGGER output (async tool loop, managers) |
+| `logs/pytest/` | Test output logs (datetime-prefixed subdirs per run, one file per tmux session, one SQLite store per session under `stores/`) |
+| `logs/unify/` | Runtime LOGGER output (async tool loop, managers) when `UNIFY_LOG_DIR` points here |
 | `logs/unillm/` | Raw LLM request/response traces |
-| `logs/unisdk/` | Unify SDK HTTP traces |
-| `logs/orchestra/` | Orchestra session logs with per-request API traces |
-| `logs/all/` | Cross-repo OTEL traces |
+
+The chat CLI writes its runtime logs under `<UNIFY_HOME>/logs` (default `~/.unify/logs`), not under the repo.
 
 ## Practical Steps
 
@@ -35,37 +33,12 @@ The `logs/` directory is gitignored, which affects tool availability:
 ls logs/pytest/
 
 # List contents of a specific run
-ls logs/pytest/2025-12-05T14-30-45_unity_dev_ttys042/
+ls logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/
 ```
 
 **Step 2: Read with Read tool**
 ```
-Read: logs/pytest/2025-12-05T14-30-45_unity_dev_ttys042/contact_manager-test_ask.txt
-```
-
-## Orchestra Trace Files
-
-Orchestra logs are organized by session with granular per-request traces:
-
-```
-logs/orchestra/
-└── 2025-12-30T18-27-43/              # Session (one per orchestra start)
-    └── requests/                      # Per-request API traces
-        ├── 2025-12-30T18-28-03.852_DELETE_project-name_81ms_5cc61e5f.json
-        ├── 2025-12-30T18-28-03.934_GET_projects_20ms_8e6fb277.json
-        └── 2025-12-30T18-46-55.980_GET_projects_43ms_7be454fc.json
-```
-
-**Filename format:** `{datetime}_{METHOD}_{route}_{duration}_{trace_id_short}.json`
-- `trace_id_short` = last 8 chars of the OpenTelemetry trace_id
-
-**Trace correlation:** Each pytest run logs `TRACE_ID=<32-char-hex>` to stdout. Match the last 8 chars to Orchestra filenames:
-```
-# In pytest output:
-[TRACE] TRACE_ID=099b207f89222185695d25977be454fc test=test_foo
-
-# Corresponding Orchestra file:
-logs/orchestra/<session>/requests/*_7be454fc.json
+Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/contact_manager-test_ask.txt
 ```
 
 ## Worktree Symlinks
@@ -84,27 +57,12 @@ ls logs/pytest/_root/
 ls logs/pytest/
 
 # 2. List logs in the most recent run
-ls logs/pytest/2025-12-21T16-00-00_unity_dev_ttys042/
+ls logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/
 ```
 
 Then use the Read tool:
 ```
-Read: logs/pytest/2025-12-21T16-00-00_unity_dev_ttys042/contact_manager-test_ask.txt
+Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/contact_manager-test_ask.txt
 ```
 
-## Example: Correlating Test ↔ Orchestra Traces
-
-When debugging why a test's API call failed:
-
-```bash
-# 1. Find the trace_id from pytest output (or grep the log file)
-# Look for: [TRACE] TRACE_ID=099b207f89222185695d25977be454fc test=test_foo
-
-# 2. Find the Orchestra session (most recent)
-ls logs/orchestra/
-
-# 3. Find the matching trace file (last 8 chars of trace_id)
-ls logs/orchestra/2025-12-30T18-27-43/requests/*7be454fc*
-```
-
-Then read the trace file to see the full request/response with all spans.
+Each session's store file sits next to its log, so a failing test's rows can be inspected with `sqlite3` after the run.

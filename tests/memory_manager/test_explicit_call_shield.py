@@ -17,7 +17,6 @@ from unify.memory_manager.memory_manager import MemoryManager
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.transcript_manager.simulated import SimulatedTranscriptManager
 from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unify.task_scheduler.simulated import SimulatedTaskScheduler
 from unify.transcript_manager.types.message import Message
 from unify.conversation_manager.cm_types import Medium
 
@@ -74,12 +73,6 @@ async def test_explicit_calls_visible_in_passive_chunk(
                 " as if absent."
             ),
         ),
-        task_scheduler=SimulatedTaskScheduler(
-            description=(
-                "TEST SCENARIO: Explicit ConversationManager calls are present. Accept simple"
-                " task updates deterministically and keep responses minimal."
-            ),
-        ),
     )
     mm._CHUNK_SIZE = 3  # type: ignore[attr-defined]
 
@@ -92,7 +85,7 @@ async def test_explicit_calls_visible_in_passive_chunk(
     base_ts = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
 
     msg = Message(
-        medium=Medium.SMS_MESSAGE,
+        medium=Medium.UNIFY_MESSAGE,
         sender_id=1,
         receiver_ids=[0],
         timestamp=base_ts,

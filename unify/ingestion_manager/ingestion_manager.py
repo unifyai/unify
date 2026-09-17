@@ -259,7 +259,7 @@ class IngestionManager(BaseIngestionManager):
         local_dir = getattr(SESSION_DETAILS, "local_dir", None)
         # Never fall back to the working directory: a CWD-relative store
         # scatters staged requests and checkpoints wherever the process was
-        # launched from -- a repo checkout, a pod entrypoint's directory --
+        # launched from -- a repo checkout, a script's directory --
         # and a resume from a different CWD then finds nothing.
         root = (
             Path(local_dir) / "Ingestion"
@@ -1075,18 +1075,17 @@ class IngestionManager(BaseIngestionManager):
         return [str(path) for path in sorted(walker(source.pattern)) if path.is_file()]
 
     def _sync_if_absent(self, paths: List[str]) -> None:
-        """Pull the managed desktop's writes before deciding a path is missing.
+        """Pull the file sync's pending writes before deciding a path is missing.
 
-        The desktop and this workspace share one tree, but they share it through
-        a sync that runs around desktop *execution*. A file the assistant just
-        downloaded in a browser therefore exists on the desktop and not yet
-        here, and ingesting it moments later measures an empty set -- the same
-        shape of silent shortfall as a listing that omits what it was not asked
-        to include.
+        When a file-sync manager is running, the workspace tree is shared with
+        another writer through a sync that runs around that writer's activity.
+        A file written there moments ago may not yet exist here, and ingesting
+        it immediately measures an empty set -- the same shape of silent
+        shortfall as a listing that omits what it was not asked to include.
 
         Only an absent path under the shared root triggers this, so the ordinary
-        case costs nothing: paths that are already present, and paths that were
-        never on the desktop, do not touch the network.
+        case costs nothing: paths that are already present, and paths outside
+        the shared root, never trigger a sync.
         """
         missing = [p for p in paths if p and not Path(p).exists()]
         if not missing:
@@ -1106,7 +1105,7 @@ class IngestionManager(BaseIngestionManager):
         if manager is None:
             return
         logger.info(
-            "Pulling desktop changes before ingesting %d absent path(s).",
+            "Pulling synced changes before ingesting %d absent path(s).",
             len(missing),
         )
         try:

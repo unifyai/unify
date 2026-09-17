@@ -17,32 +17,13 @@ import pytest
 
 from unify.conversation_manager.domains.contact_index import (
     ContactIndex,
-    EmailMessage,
-    GuidanceMessage,
-    Message,
     UnifyMessage,
 )
 from unify.conversation_manager.domains.managers_utils import hydrate_global_thread
 from unify.conversation_manager.events import (
-    FastBrainNotification,
-    EmailReceived,
-    EmailSent,
-    GoogleMeetChatMessage,
-    GoogleMeetChatSent,
-    InboundGoogleMeetUtterance,
-    InboundPhoneUtterance,
-    InboundUnifyMeetUtterance,
-    OutboundPhoneUtterance,
-    PhoneCallNotAnswered,
-    PhoneCallReceived,
-    PhoneCallStarted,
-    SMSReceived,
-    SMSSent,
-    TeamsMeetChatMessage,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
-from unify.conversation_manager.cm_types import Medium
 
 # =============================================================================
 # Helpers
@@ -69,12 +50,7 @@ def _make_bus_events(cm_events):
     Returns events in descending timestamp order (newest first), matching
     the real EventBus.search() behavior.
     """
-    bus_events = []
-    for ev in cm_events:
-        bus_event = ev.to_bus_event()
-        # Simulate the email_id stripping done by publish_bus_events
-        bus_event.payload.pop("email_id", None)
-        bus_events.append(bus_event)
+    bus_events = [ev.to_bus_event() for ev in cm_events]
     # Descending order (newest first)
     bus_events.reverse()
     return bus_events
@@ -85,243 +61,6 @@ def _make_mock_cm():
     cm = MagicMock()
     cm.contact_index = ContactIndex()
     return cm
-
-
-# =============================================================================
-# SMS Hydration
-# =============================================================================
-
-
-class TestSMSHydration:
-
-    @pytest.mark.asyncio
-    async def test_sms_received_restored(self):
-        """SMSReceived events restore as user messages in the SMS thread."""
-        cm = _make_mock_cm()
-        events = [
-            SMSReceived(contact=ALICE, content="Hello!", timestamp=BASE_TIME),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.SMS_MESSAGE)
-        assert len(msgs) == 1
-        assert isinstance(msgs[0], Message)
-        assert msgs[0].content == "Hello!"
-        assert msgs[0].role == "user"
-
-    @pytest.mark.asyncio
-    async def test_sms_sent_restored(self):
-        """SMSSent events restore as assistant messages."""
-        cm = _make_mock_cm()
-        events = [
-            SMSSent(contact=ALICE, content="Got it!", timestamp=BASE_TIME),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.SMS_MESSAGE)
-        assert len(msgs) == 1
-        assert msgs[0].role == "assistant"
-        assert msgs[0].name == "You"
-
-
-# =============================================================================
-# Email Hydration
-# =============================================================================
-
-
-class TestEmailHydration:
-
-    @pytest.mark.asyncio
-    async def test_email_received_restored(self):
-        """EmailReceived events restore with subject, body, and recipients."""
-        cm = _make_mock_cm()
-        events = [
-            EmailReceived(
-                contact=BOB,
-                subject="Meeting Notes",
-                body="Here are the notes from today.",
-                email_id="msg_123",
-                to=["assistant@unify.ai"],
-                cc=["alice@example.com"],
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(3, Medium.EMAIL)
-        assert len(msgs) == 1
-        assert isinstance(msgs[0], EmailMessage)
-        assert msgs[0].subject == "Meeting Notes"
-        assert msgs[0].body == "Here are the notes from today."
-        assert msgs[0].role == "user"
-
-    @pytest.mark.asyncio
-    async def test_email_sent_restored(self):
-        """EmailSent events restore as assistant emails."""
-        cm = _make_mock_cm()
-        events = [
-            EmailSent(
-                contact=BOB,
-                subject="Re: Meeting Notes",
-                body="Thanks for sharing!",
-                to=["bob@example.com"],
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(3, Medium.EMAIL)
-        assert len(msgs) == 1
-        assert msgs[0].role == "assistant"
-        assert msgs[0].name == "You"
-
-
-# =============================================================================
-# Voice / Call Hydration
-# =============================================================================
-
-
-class TestVoiceHydration:
-
-    @pytest.mark.asyncio
-    async def test_phone_utterances_restored(self):
-        """Inbound and outbound phone utterances restore correctly."""
-        cm = _make_mock_cm()
-        events = [
-            InboundPhoneUtterance(
-                contact=ALICE,
-                content="Hi there",
-                timestamp=BASE_TIME,
-            ),
-            OutboundPhoneUtterance(
-                contact=ALICE,
-                content="Hello!",
-                timestamp=BASE_TIME + timedelta(seconds=5),
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
-        assert len(msgs) == 2
-        assert msgs[0].role == "user"
-        assert msgs[0].content == "Hi there"
-        assert msgs[1].role == "assistant"
-        assert msgs[1].content == "Hello!"
-
-    @pytest.mark.asyncio
-    async def test_unify_meet_utterances_restored(self):
-        """Unify Meet utterances restore to the UNIFY_MEET medium."""
-        cm = _make_mock_cm()
-        events = [
-            InboundUnifyMeetUtterance(
-                contact=ALICE,
-                content="Can you hear me?",
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.UNIFY_MEET)
-        assert len(msgs) == 1
-        assert msgs[0].content == "Can you hear me?"
-
-    @pytest.mark.asyncio
-    async def test_call_guidance_restored(self):
-        """FastBrainNotification events restore as guidance-role messages."""
-        cm = _make_mock_cm()
-        # The hydration handler for FastBrainNotification picks a medium
-        # by inspecting (in order): cm.call_manager.has_active_google_meet,
-        # cm.call_manager.has_active_teams_meet, cm.mode == Mode.MEET,
-        # cm.call_manager._call_channel == "whatsapp_call". With a bare
-        # MagicMock these attributes return truthy Mock objects, so the
-        # very first branch matches and messages land under GOOGLE_MEET
-        # instead of the PHONE_CALL medium this test asserts. Pin the
-        # mocks to False/non-meet values so the handler falls through
-        # to the PHONE_CALL default.
-        cm.call_manager.has_active_google_meet = False
-        cm.call_manager.has_active_teams_meet = False
-        cm.call_manager._call_channel = "phone"
-        cm.mode = None  # any non-Mode.MEET value
-        events = [
-            FastBrainNotification(
-                contact=ALICE,
-                message="Mention the 3pm meeting",
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
-        assert len(msgs) == 1
-        assert isinstance(msgs[0], GuidanceMessage)
-        assert msgs[0].content == "Mention the 3pm meeting"
-
-    @pytest.mark.asyncio
-    async def test_call_lifecycle_events_restored(self):
-        """Call lifecycle events (received, started, not answered) restore correctly."""
-        cm = _make_mock_cm()
-        events = [
-            PhoneCallReceived(
-                contact=ALICE,
-                timestamp=BASE_TIME,
-            ),
-            PhoneCallStarted(
-                contact=ALICE,
-                timestamp=BASE_TIME + timedelta(seconds=2),
-            ),
-            PhoneCallNotAnswered(
-                contact=ALICE,
-                reason="busy",
-                timestamp=BASE_TIME + timedelta(seconds=5),
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
-        assert len(msgs) == 3
-        assert "<Receiving Call...>" in msgs[0].content
-        assert "<Call Started>" in msgs[1].content
-        assert "was busy" in msgs[2].content
 
 
 # =============================================================================
@@ -355,12 +94,14 @@ class TestUnifyMessageHydration:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
 
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.UNIFY_MESSAGE)
+        msgs = cm.contact_index.get_messages_for_contact(2)
         assert len(msgs) == 2
         assert isinstance(msgs[0], UnifyMessage)
         assert msgs[0].role == "user"
         assert msgs[0].content == "Check this file"
+        assert msgs[0].attachments == [{"id": "a1", "filename": "report.pdf"}]
         assert msgs[1].role == "assistant"
+        assert msgs[1].name == "You"
 
 
 # =============================================================================
@@ -372,16 +113,16 @@ class TestHydrationCrossCutting:
 
     @pytest.mark.asyncio
     async def test_chronological_order_preserved(self):
-        """Messages from multiple contacts and mediums maintain chronological order."""
+        """Messages from multiple contacts maintain chronological order."""
         cm = _make_mock_cm()
         events = [
-            SMSReceived(contact=ALICE, content="msg_1", timestamp=BASE_TIME),
-            SMSSent(
+            UnifyMessageReceived(contact=ALICE, content="msg_1", timestamp=BASE_TIME),
+            UnifyMessageSent(
                 contact=ALICE,
                 content="msg_2",
                 timestamp=BASE_TIME + timedelta(minutes=1),
             ),
-            SMSReceived(
+            UnifyMessageReceived(
                 contact=BOB,
                 content="msg_3",
                 timestamp=BASE_TIME + timedelta(minutes=2),
@@ -399,20 +140,23 @@ class TestHydrationCrossCutting:
         assert contents == ["msg_1", "msg_2", "msg_3"]
 
     @pytest.mark.asyncio
-    async def test_multi_contact_multi_medium(self):
-        """Events across contacts and mediums all hydrate correctly."""
+    async def test_multi_contact(self):
+        """Events across contacts hydrate into per-contact views."""
         cm = _make_mock_cm()
         events = [
-            SMSReceived(contact=ALICE, content="sms from alice", timestamp=BASE_TIME),
-            EmailReceived(
+            UnifyMessageReceived(
+                contact=ALICE,
+                content="from alice",
+                timestamp=BASE_TIME,
+            ),
+            UnifyMessageReceived(
                 contact=BOB,
-                subject="Hi",
-                body="Email body",
+                content="from bob",
                 timestamp=BASE_TIME + timedelta(minutes=1),
             ),
-            InboundPhoneUtterance(
+            UnifyMessageSent(
                 contact=ALICE,
-                content="voice from alice",
+                content="to alice",
                 timestamp=BASE_TIME + timedelta(minutes=2),
             ),
         ]
@@ -423,15 +167,8 @@ class TestHydrationCrossCutting:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
 
-        # Alice has SMS and phone
-        alice_sms = cm.contact_index.get_messages_for_contact(2, Medium.SMS_MESSAGE)
-        alice_phone = cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
-        assert len(alice_sms) == 1
-        assert len(alice_phone) == 1
-
-        # Bob has email
-        bob_email = cm.contact_index.get_messages_for_contact(3, Medium.EMAIL)
-        assert len(bob_email) == 1
+        assert len(cm.contact_index.get_messages_for_contact(2)) == 2
+        assert len(cm.contact_index.get_messages_for_contact(3)) == 1
 
         # Active contacts derived from global thread
         active = cm.contact_index.get_active_contact_ids()
@@ -444,8 +181,12 @@ class TestHydrationCrossCutting:
 
         cm = _make_mock_cm()
         # Simulate a mix: one real message + one non-message event
-        sms = SMSReceived(contact=ALICE, content="Hello", timestamp=BASE_TIME)
-        bus_events = _make_bus_events([sms])
+        message = UnifyMessageReceived(
+            contact=ALICE,
+            content="Hello",
+            timestamp=BASE_TIME,
+        )
+        bus_events = _make_bus_events([message])
 
         # Insert a non-message bus event
         non_msg = BusEvent(
@@ -462,7 +203,7 @@ class TestHydrationCrossCutting:
             mock_bus.search = AsyncMock(return_value=bus_events)
             await hydrate_global_thread(cm)
 
-        # Only the SMS should be in the deque
+        # Only the chat message should be in the deque
         assert len(cm.contact_index.global_thread) == 1
 
     @pytest.mark.asyncio
@@ -482,7 +223,7 @@ class TestHydrationCrossCutting:
     async def test_missing_contact_id_skipped(self):
         """Events with no contact_id in the payload are skipped gracefully."""
         cm = _make_mock_cm()
-        event = SMSReceived(contact={}, content="no id", timestamp=BASE_TIME)
+        event = UnifyMessageReceived(contact={}, content="no id", timestamp=BASE_TIME)
         bus_events = _make_bus_events([event])
 
         with patch(
@@ -492,144 +233,3 @@ class TestHydrationCrossCutting:
             await hydrate_global_thread(cm)
 
         assert len(cm.contact_index.global_thread) == 0
-
-
-# =============================================================================
-# Browser-meet chat hydration
-# =============================================================================
-
-
-class TestBrowserMeetChatHydration:
-    """Typed meeting-chat lines survive a restart, like the spoken ones.
-
-    Chat was recorded to the durable stores before it was rehydrated here, so
-    the gap was invisible in the transcript: only the brain's own thread came
-    back short, and only after a mid-meeting restart.
-    """
-
-    @pytest.mark.asyncio
-    async def test_inbound_chat_restored_under_the_meeting_medium(self):
-        cm = _make_mock_cm()
-        events = [
-            GoogleMeetChatMessage(
-                contact=ALICE,
-                sender_name="Bob Jones",
-                content="here is the doc",
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
-        assert len(msgs) == 1
-        assert msgs[0].role == "user"
-        # The marker is the only thing telling the brain this was typed: the
-        # thread is flat text, carrying none of the structure the stored rows do.
-        assert msgs[0].content == "<meeting chat> here is the doc"
-
-    @pytest.mark.asyncio
-    async def test_inbound_chat_credits_the_typist_not_the_call_contact(self):
-        """Anyone in the meeting can type, including a non-participant contact.
-
-        Every other case here derives the name from the contact; chat must not,
-        or a third participant's message is attributed to whoever the call is
-        with.
-        """
-        cm = _make_mock_cm()
-        events = [
-            GoogleMeetChatMessage(
-                contact=ALICE,
-                sender_name="Bob Jones",
-                content="dropping the link here",
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
-        assert msgs[0].name == "Bob Jones"
-
-    @pytest.mark.asyncio
-    async def test_teams_chat_lands_in_the_teams_thread(self):
-        """The two platforms share a handler, so the medium split needs pinning."""
-        cm = _make_mock_cm()
-        events = [
-            TeamsMeetChatMessage(
-                contact=ALICE,
-                sender_name="Bob Jones",
-                content="same but teams",
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        assert len(cm.contact_index.get_messages_for_contact(2, Medium.TEAMS_MEET)) == 1
-        assert cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET) == []
-
-    @pytest.mark.asyncio
-    async def test_assistant_chat_restored_as_its_own(self):
-        """Without it the thread comes back holding questions and no answers."""
-        cm = _make_mock_cm()
-        events = [
-            GoogleMeetChatSent(
-                contact=ALICE,
-                content="https://example.com/doc",
-                timestamp=BASE_TIME,
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
-        assert len(msgs) == 1
-        assert msgs[0].role == "assistant"
-        assert msgs[0].content == "<meeting chat> https://example.com/doc"
-
-    @pytest.mark.asyncio
-    async def test_chat_and_speech_rehydrate_into_one_thread(self):
-        """They shared a medium live; a restart must not split them apart."""
-        cm = _make_mock_cm()
-        events = [
-            InboundGoogleMeetUtterance(
-                contact=ALICE,
-                content="did you get it?",
-                timestamp=BASE_TIME,
-            ),
-            GoogleMeetChatMessage(
-                contact=ALICE,
-                sender_name="Alice Smith",
-                content="here is the doc",
-                timestamp=BASE_TIME + timedelta(seconds=5),
-            ),
-        ]
-
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
-            await hydrate_global_thread(cm)
-
-        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
-        assert [m.content for m in msgs] == [
-            "did you get it?",
-            "<meeting chat> here is the doc",
-        ]

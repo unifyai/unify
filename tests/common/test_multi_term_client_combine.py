@@ -10,6 +10,8 @@ whose embedding exists for the row, maximal distance 2 when none exist.
 
 from __future__ import annotations
 
+
+from unify import db
 import re
 from types import SimpleNamespace
 
@@ -67,8 +69,8 @@ def _fake_get_context(context, *, project=None, **kwargs):
 
 
 def test_combined_client_side_mean_with_missing_penalty(monkeypatch):
-    monkeypatch.setattr(unisdk, "get_logs", _fake_get_logs)
-    monkeypatch.setattr(unisdk, "get_context", _fake_get_context)
+    monkeypatch.setattr(db, "get_logs", _fake_get_logs)
+    monkeypatch.setattr(db, "get_context", _fake_get_context)
 
     rows, score_key = fetch_top_k_by_terms_combined_client_side(
         "Guidance",
@@ -92,8 +94,8 @@ def test_combined_client_side_mean_with_missing_penalty(monkeypatch):
 
 
 def test_combined_client_side_applies_k_window(monkeypatch):
-    monkeypatch.setattr(unisdk, "get_logs", _fake_get_logs)
-    monkeypatch.setattr(unisdk, "get_context", _fake_get_context)
+    monkeypatch.setattr(db, "get_logs", _fake_get_logs)
+    monkeypatch.setattr(db, "get_context", _fake_get_context)
 
     rows, _ = fetch_top_k_by_terms_combined_client_side(
         "Guidance",
@@ -141,7 +143,7 @@ def test_multi_term_foreign_project_routes_to_client_side(monkeypatch):
 
 
 def test_single_term_foreign_project_stays_on_sort_distance_path(monkeypatch):
-    monkeypatch.setattr(unisdk, "get_logs", _fake_get_logs)
+    monkeypatch.setattr(db, "get_logs", _fake_get_logs)
 
     rows, score_key = fetch_top_k_by_terms_with_score(
         "Guidance",

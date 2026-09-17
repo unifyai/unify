@@ -91,13 +91,13 @@ def vector_for_source_read_path(
     """Resolve the embedding column for a search WITHOUT provisioning.
 
     Searches are read-only: column/template creation happens once at manager
-    provisioning (startup warm), and row coverage is Orchestra's write-side
+    provisioning (startup warm), and row coverage is the store's write-side
     responsibility (log writes feed the embedding queue). Running
     ``ensure_vector_column`` per search re-paid provisioning round-trips and
     synchronous backfills on every call — the dominant search latency.
 
     Steady state is a single read-only column lookup: once the column exists,
-    Orchestra's write-time enqueue keeps its rows covered, so the per-call
+    the store's write-time enqueue keeps its rows covered, so the per-call
     probe scans and synchronous backfills are gone. Only a source that has no
     column yet (an ad-hoc field or expression searched for the first time)
     pays a one-time ensure to create the template. Foreign public-read
@@ -278,6 +278,11 @@ def _fetch_single_term_scored(
     sorting = {
         f"cosine({embed_col}, embed('{escaped_ref}', model='{embed_model()}'))": "ascending",
     }
+    # A row whose source column is empty has no vector and no distance; it is
+    # not a hit, and leaving it in the window would crowd out the recency
+    # backfill that should fill the remaining slots.
+    embedded = f"exists({embed_col})"
+    row_filter = f"({row_filter}) and {embedded}" if row_filter else embedded
     if allowed_fields is not None:
         from_fields = list(dict.fromkeys([*allowed_fields, SORT_DISTANCE_KEY]))
         logs = db.get_logs(
@@ -743,9 +748,8 @@ def backfill_rows(
     if unique_id_field is None:
         try:
             ctx_info = db.get_context(context, project=project)
-            unique_id_field = ctx_info.get("unique_keys")
-            if isinstance(unique_id_field, list):
-                unique_id_field = unique_id_field[0] if unique_id_field else None
+            unique_keys = ctx_info.get("unique_keys") or {}
+            unique_id_field = next(iter(unique_keys), None)
         except Exception:
             unique_id_field = None
 

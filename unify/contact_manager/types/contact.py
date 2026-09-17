@@ -43,7 +43,7 @@ class ContactDetailsBase(BaseModel):
 
 
 class ContactDetailsPhone(ContactDetailsBase):
-    """Contact details with phone number for SMS or calls."""
+    """Contact details keyed by phone number."""
 
     phone_number: Optional[str] = Field(
         default=None,
@@ -53,7 +53,7 @@ class ContactDetailsPhone(ContactDetailsBase):
 
 
 class ContactDetailsEmail(ContactDetailsBase):
-    """Contact details with email address for email communication."""
+    """Contact details keyed by email address."""
 
     email_address: Optional[str] = Field(
         default=None,
@@ -63,7 +63,7 @@ class ContactDetailsEmail(ContactDetailsBase):
 
 
 class ContactDetailsWhatsApp(ContactDetailsBase):
-    """Contact details with WhatsApp number for WhatsApp communication."""
+    """Contact details keyed by WhatsApp number."""
 
     whatsapp_number: Optional[str] = Field(
         default=None,
@@ -257,7 +257,7 @@ class Contact(AuthoredRow):
             _log.warning("Unrecognised timezone '%s', falling back to None", v_str)
             return None
 
-    # Ignore unknown Orchestra keys (e.g. legacy leftover columns) on read;
+    # Ignore unknown stored keys (e.g. leftover columns) on read;
     # the Contact schema itself is fixed — extras are not writable features.
     model_config = {"extra": "ignore"}
 

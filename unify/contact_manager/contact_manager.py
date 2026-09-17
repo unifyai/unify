@@ -950,20 +950,8 @@ class ContactManager(BaseContactManager):
         custom_key / custom_hash : str | None
             Deployment-defined contact identity fields. Optional.
         destination : str | None, default None
-            Where to file this contact. Pass ``"personal"`` (the default) for
-            contacts that belong only to you — personal acquaintances, family,
-            contacts whose interactions are private to your relationship with
-            your boss. Pass ``"team:<id>"`` for an operational team contact
-            that every member of a shared team should see (operatives,
-            customers, suppliers, peers in a shared workspace). The set of
-            available ``team:<id>`` values, each with a name and a
-            description naming the team / domain it exists for, is rendered in
-            the *Accessible shared teams* block of your system prompt — read
-            that block before choosing. The privacy floor: when in doubt
-            between personal and a team, pick personal. When confidence is
-            low and the contact would land in a shared team, call
-            ``request_clarification`` instead of guessing toward the wider
-            audience.
+            Where to file this contact. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1082,11 +1070,8 @@ class ContactManager(BaseContactManager):
         custom_key / custom_hash : str | None
             Deployment-defined contact identity fields. Optional.
         destination : str | None, default None
-            The team whose copy of this contact you are updating. Defaults to
-            ``"personal"`` (your private copy). Passing ``"team:<id>"``
-            updates the shared copy in that team and is visible to every
-            member. See the *Accessible shared teams* block in your system
-            prompt for the available teams and their descriptions.
+            Which root holds the contact you are updating. Only the personal
+            root exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1151,11 +1136,8 @@ class ContactManager(BaseContactManager):
         contact_id : int
             The identifier of the contact to remove. Must refer to a non‑system contact.
         destination : str | None, default None
-            Which copy of the contact to remove. Defaults to ``"personal"``.
-            Passing ``"team:<id>"`` removes the shared copy from that team
-            for every member; do not delete a shared contact unless the team
-            decision is to remove the relationship entirely. See the
-            *Accessible shared teams* block in your system prompt.
+            Which copy of the contact to remove. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -1220,10 +1202,8 @@ class ContactManager(BaseContactManager):
             If not provided, the first non‑``None`` value in the order ``contact_id_1`` → ``contact_id_2`` is used for each column.
             The special key ``"contact_id"`` can be provided to explicitly choose which id to keep; the other contact will be deleted.
         destination : str | None, default None
-            Which root the merge operates within. Defaults to ``"personal"``.
-            Passing ``"team:<id>"`` merges the two contacts inside that
-            team's contact pool; merging across roots is not supported.
-            See the *Accessible shared teams* block in your system prompt.
+            Which root the merge operates within. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------

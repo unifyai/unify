@@ -82,6 +82,7 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     "primitives.ingestion.get_status": _S.read_only,
     "primitives.ingestion.list_runs": _S.read_only,
     "primitives.ingestion.pause": _S.idempotent_effectful,
+    "primitives.ingestion.reconcile": _S.read_only,
     "primitives.ingestion.resume": _S.idempotent_effectful,
     "primitives.ingestion.retry": _S.idempotent_effectful,
     "primitives.ingestion.submit": _S.unsafe_effectful,

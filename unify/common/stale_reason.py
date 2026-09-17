@@ -79,7 +79,7 @@ class StaleReason(BaseModel):
     message: str = Field(
         "",
         description=(
-            "Short human-readable explanation for Actor/Console chips, "
+            "Short human-readable explanation for Actor-facing summaries, "
             'e.g. "missing function_id=42 name=export_slides".'
         ),
     )

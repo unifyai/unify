@@ -6,7 +6,7 @@ from functools import cmp_to_key
 from typing import Any, Callable, Literal, Mapping, Optional, Sequence, Union
 
 from unify import db
-from unify.db import StoreError as _UnifyRequestError
+from unify.db import InvalidExpression, NotFound
 
 from .metrics_utils import SUPPORTED_REDUCTION_METRICS, reduce_logs
 from .semantic_search import (
@@ -93,10 +93,7 @@ MetricFetcher = Callable[
 
 
 def is_missing_context_error(exc: Exception) -> bool:
-    if not isinstance(exc, _UnifyRequestError):
-        return False
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    return status == 404
+    return isinstance(exc, NotFound)
 
 
 def _combine_filters(left: Optional[str], right: Optional[str]) -> Optional[str]:
@@ -171,37 +168,18 @@ FILTER_GRAMMAR_HINT = (
 
 
 def _invalid_filter_error(
-    exc: _UnifyRequestError,
+    exc: Exception,
     filter: Optional[str],
 ) -> ToolErrorException:
-    """Translate a 4xx from the filter/search endpoint into an actionable payload.
-
-    ``exc``'s message already carries the backend's response body, but it
-    arrives wrapped in ``"{method}:{url} failed with status code ...: "``
-    plus a JSON-encoded ``{"detail": ...}`` body — not something a caller can
-    act on without unwrapping it first.
-    """
-    response = getattr(exc, "response", None)
-    detail = None
-    if response is not None:
-        try:
-            detail = response.json().get("detail")
-        except Exception:
-            detail = None
-        if not detail:
-            detail = getattr(response, "text", None)
-    detail = detail or str(exc)
+    """Translate a rejected filter expression into an actionable payload."""
     return ToolErrorException(
         {
             "error_kind": "invalid_filter",
             "message": (
-                f"filter {filter!r} was rejected: {detail} "
+                f"filter {filter!r} was rejected: {exc} "
                 f"Supported filter grammar: {FILTER_GRAMMAR_HINT}"
             ),
-            "details": {
-                "filter": filter,
-                "status_code": getattr(response, "status_code", None),
-            },
+            "details": {"filter": filter},
         },
     )
 
@@ -239,11 +217,8 @@ def _server_federated_read(
             unique_id_field=unique_id_field,
             annotate=annotate,
         )
-    except _UnifyRequestError as exc:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        if status is not None and 400 <= status < 500:
-            raise _invalid_filter_error(exc, filter) from exc
-        raise
+    except InvalidExpression as exc:
+        raise _invalid_filter_error(exc, filter) from exc
 
 
 def _compare_present_values(left: object, right: object) -> int:

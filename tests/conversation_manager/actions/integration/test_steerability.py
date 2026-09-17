@@ -23,7 +23,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     wait_for_condition,
 )
-from unify.conversation_manager.events import SMSReceived
+from unify.conversation_manager.events import UnifyMessageReceived
 from unify.conversation_manager.domains.brain_action_tools import (
     get_handle_paused_state,
 )
@@ -39,7 +39,7 @@ async def test_pause_resume_inflight_handle(initialized_cm_codeact):
     cm = initialized_cm_codeact
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Search my transcripts for anything about the quarterly revenue figures.",
         ),
@@ -50,7 +50,7 @@ async def test_pause_resume_inflight_handle(initialized_cm_codeact):
 
     # User asks to pause.
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Hold on, pause that search for a moment. I need to think about what I actually need.",
         ),
@@ -65,7 +65,7 @@ async def test_pause_resume_inflight_handle(initialized_cm_codeact):
 
     # User asks to resume.
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Okay, go ahead and continue that revenue search.",
         ),
@@ -83,7 +83,7 @@ async def test_stop_inflight_handle(initialized_cm_codeact):
     cm = initialized_cm_codeact
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Look through my recent transcripts for mentions of the product launch timeline.",
         ),
@@ -93,7 +93,7 @@ async def test_stop_inflight_handle(initialized_cm_codeact):
 
     # User asks to cancel.
     result_stop = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Never mind, cancel that search. I already found what I needed.",
         ),
@@ -123,7 +123,7 @@ async def test_interject_midflight_constraints(initialized_cm_codeact):
     cm = initialized_cm_codeact
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Summarize our recent transcripts about the marketing campaign.",
         ),
@@ -132,7 +132,7 @@ async def test_interject_midflight_constraints(initialized_cm_codeact):
 
     # User adds a constraint mid-flight.
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Actually, only include items that mention a specific dollar amount or budget figure.",
         ),
@@ -159,7 +159,7 @@ async def test_two_concurrent_handles_pause_one_other_completes(initialized_cm_c
 
     # Action A: research task.
     result_a = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Search my transcripts for anything about the quarterly budget review "
@@ -172,7 +172,7 @@ async def test_two_concurrent_handles_pause_one_other_completes(initialized_cm_c
 
     # User asks to pause A.
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Hold on, pause that budget search for now. I want to do something else first.",
         ),
@@ -186,9 +186,9 @@ async def test_two_concurrent_handles_pause_one_other_completes(initialized_cm_c
 
     # Action B: unrelated request while A is paused.
     result_b = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
-            content="Create a task to follow up with the design team about the new homepage mockups.",
+            content="Look up Alice's phone number for me.",
         ),
     )
     handle_id_b = get_actor_started_event(result_b).handle_id
@@ -208,7 +208,7 @@ async def test_two_concurrent_handles_pause_one_other_completes(initialized_cm_c
 
     # User resumes A.
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Okay, you can continue that budget search now.",
         ),
@@ -237,7 +237,7 @@ async def test_ask_completed_action_about_trajectory(initialized_cm_codeact):
 
     # Step 1: Start an action that will complete
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Find all my contacts and list their names.",
         ),

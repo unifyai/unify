@@ -6,7 +6,7 @@ snapshot tests. They verify that:
 - The prompt teaches the JSON-call convention and defers each tool's
   contract to its schema (the loop renders every callable's docstring and
   signature into the tool list riding each request) — no second rendering.
-- The prompt contains diverse examples: sessions, computer, primitives, mixed.
+- The prompt contains diverse examples: sessions, primitives, mixed.
 - The prompt contains no legacy `execute_python_code` references.
 """
 
@@ -18,24 +18,6 @@ import pytest
 
 from unify.actor.code_act_actor import CodeActActor
 from unify.actor.prompt_builders import build_code_act_prompt
-from unify.session_details import SESSION_DETAILS, AssistantDetails
-
-
-@pytest.fixture()
-def desktop_entitled_assistant():
-    """A session whose assistant holds the managed Computer Use add-on.
-
-    The computer prompt sections are only rendered for an entitled
-    assistant; without this, ambient session details default to
-    unentitled and the environment context is the unavailability stub.
-    """
-    original = SESSION_DETAILS.assistant
-    SESSION_DETAILS.assistant = AssistantDetails(
-        desktop_mode="ubuntu",
-        managed_desktop_status="active",
-    )
-    yield SESSION_DETAILS.assistant
-    SESSION_DETAILS.assistant = original
 
 
 class _DummyEnv:
@@ -49,17 +31,6 @@ class _DummyEnv:
 
     def get_tools(self) -> dict:
         return {}
-
-
-class _DummyToolEnv(_DummyEnv):
-    """Minimal environment stub with configurable tool names."""
-
-    def __init__(self, prompt_context: str, tools: dict[str, Any]):
-        super().__init__(prompt_context)
-        self._tools = tools
-
-    def get_tools(self) -> dict:
-        return self._tools
 
 
 def _real_envs_mixed() -> Mapping[str, Any]:
@@ -120,46 +91,6 @@ def test_code_act_prompt_defers_tool_contracts_to_schemas_and_no_legacy_name():
 
     # Selection policy (not contract) stays inline in the prompt.
     assert "multi-step composition" in prompt.lower()
-
-
-@pytest.mark.timeout(30)
-def test_code_act_prompt_includes_task_guidance_only_with_task_primitives():
-    prompt_with_tasks = build_code_act_prompt(
-        environments={
-            "primitives": _DummyToolEnv(
-                "Task primitives are available.",
-                {"primitives.tasks.update": object()},
-            ),
-        },
-        tools={},
-    )
-    prompt_without_tasks = build_code_act_prompt(
-        environments={
-            "primitives": _DummyToolEnv(
-                "Only contact primitives are available.",
-                {"primitives.contacts.ask": object()},
-            ),
-        },
-        tools={},
-    )
-
-    # The section is a compact contract stub; depth (task types, entrypoint
-    # conventions, binding resolution) lives in the platform/durable-tasks
-    # guidance entry behind the consult pointer.
-    assert "Durable Scheduled And Triggered Tasks" in prompt_with_tasks
-    assert "primitives.tasks.update" in prompt_with_tasks
-    assert "live (armed)" in prompt_with_tasks
-    assert "status armed AND trigger bindings" in prompt_with_tasks
-    # When the primitive confirmed the fields, the actor must report them —
-    # never claim failure or uncertainty.
-    assert "claim failure or uncertainty" in prompt_with_tasks
-    # Consult pointer phrased to hit the platform/durable-tasks title.
-    assert "creating verifying arming and running" in prompt_with_tasks
-    assert "Durable Scheduled And Triggered Tasks" not in prompt_without_tasks
-    # The prompt must not carry incident-specific workaround phrasing.
-    assert "loop to re-discover the" not in prompt_with_tasks
-    assert "person-like token" not in prompt_with_tasks
-    assert "Never fake" not in prompt_with_tasks
 
 
 @pytest.mark.timeout(30)

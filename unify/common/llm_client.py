@@ -52,7 +52,7 @@ class PendingThinkingLog:
 def resolve_default_model() -> tuple[str, str | None]:
     """Resolve the session's default LLM as (model, reasoning_effort).
 
-    The per-assistant default (from Orchestra, via SESSION_DETAILS) takes
+    The per-assistant default (from the assistant record, via SESSION_DETAILS) takes
     priority over the deployment-wide UNIFY_MODEL. A returned effort of None
     means no effort override and per-call-site effort levels apply.
     """
@@ -70,7 +70,7 @@ def resolve_slow_brain_model() -> tuple[str, str | None]:
     """Resolve the ConversationManager slow-brain LLM as (model, effort).
 
     Priority:
-    1. Per-assistant slow brain (Orchestra / SESSION_DETAILS), including effort
+    1. Per-assistant slow brain (assistant record / SESSION_DETAILS), including effort
     2. ``UNIFY_CONVERSATION_SLOW_BRAIN_MODEL`` when set (non-empty)
     3. The global shared model (``UNIFY_MODEL``)
 

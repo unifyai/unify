@@ -46,11 +46,7 @@ def test_contact_created_via_contact_manager_is_visible():
     contact = contact_index.get_contact(contact_id=new_contact_id)
     assert contact is not None
     assert contact["first_name"] == "ActorCreated"
-
-    # Also verify search by email works
-    contact_by_email = contact_index.get_contact(email=unique_email)
-    assert contact_by_email is not None
-    assert contact_by_email["first_name"] == "ActorCreated"
+    assert contact["email_address"] == unique_email
 
 
 @_handle_project
@@ -138,12 +134,6 @@ def test_contact_manager_not_set_returns_none():
     contact = contact_index.get_contact(contact_id=0)
     assert contact is None
 
-    contact_by_email = contact_index.get_contact(email="test@example.com")
-    assert contact_by_email is None
-
-    contact_by_phone = contact_index.get_contact(phone_number="+15555550000")
-    assert contact_by_phone is None
-
 
 # =============================================================================
 # Fallback Contacts Tests
@@ -199,20 +189,13 @@ class TestFallbackContacts:
         ]
         contact_index.set_fallback_contacts(contacts)
 
-        # Query by contact_id
         contact = contact_index.get_contact(contact_id=1)
         assert contact is not None
         assert contact["first_name"] == "Boss"
 
-        # Query by phone_number
-        contact_by_phone = contact_index.get_contact(phone_number="+15555550001")
-        assert contact_by_phone is not None
-        assert contact_by_phone["first_name"] == "Contact"
-
-        # Query by email
-        contact_by_email = contact_index.get_contact(email="boss@test.com")
-        assert contact_by_email is not None
-        assert contact_by_email["first_name"] == "Boss"
+        other = contact_index.get_contact(contact_id=2)
+        assert other is not None
+        assert other["first_name"] == "Contact"
 
     def test_get_contact_uses_fallback_when_contact_manager_not_set(self):
         """get_contact() uses fallback cache when ContactManager is not set."""

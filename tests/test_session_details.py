@@ -2,227 +2,137 @@
 tests/test_session_details.py
 =============================
 
-Unit tests for SessionDetails, focusing on the email_provider field
-and its plumbing through populate / export_to_env / populate_from_env.
+Unit tests for SessionDetails: population, env round-trips, nullable
+runtime strings, and the resolved self/boss contact identities.
 """
 
 import os
-import json
 from dataclasses import fields
-
-import pytest
 
 from unify.session_details import (
     SESSION_DETAILS,
     AssistantDetails,
     SessionDetails,
-    TeamSummary,
     UserDetails,
     is_boss_contact,
     is_self_contact,
 )
 
 
-class TestEmailProvider:
-    def test_default_is_google_workspace(self):
+class TestPopulate:
+    def test_defaults_are_uninitialised(self):
         sd = SessionDetails()
-        assert sd.assistant.email_provider == "google_workspace"
 
-    def test_populate_sets_email_provider(self):
+        assert sd.is_initialized is False
+        assert sd.assistant.agent_id is None
+        assert sd.assistant_context == "0"
+        assert sd.user_context == "default"
+
+    def test_populate_sets_identity_and_contexts(self):
         sd = SessionDetails()
-        sd.populate(assistant_email_provider="microsoft_365")
-        assert sd.assistant.email_provider == "microsoft_365"
+        sd.populate(
+            agent_id=42,
+            assistant_first_name="Unity",
+            assistant_surname="",
+            user_id="user-1",
+            user_first_name="Ada",
+            user_surname="Lovelace",
+        )
 
-    def test_populate_defaults_to_google_workspace(self):
+        assert sd.is_initialized is True
+        assert sd.assistant.name == "Unity"
+        assert sd.user.name == "Ada Lovelace"
+        assert sd.user_id == "user-1"
+        assert sd.assistant_context == "42"
+        assert sd.user_context == "user-1"
+
+    def test_reset_restores_defaults(self):
         sd = SessionDetails()
-        sd.populate()
-        assert sd.assistant.email_provider == "google_workspace"
+        sd.populate(agent_id=42, user_id="user-1", default_model="m@p")
 
+        sd.reset()
+
+        assert sd.is_initialized is False
+        assert sd.assistant.agent_id is None
+        assert sd.user.id == "default"
+        assert sd.assistant.default_model == ""
+
+
+class TestEnvRoundTrip:
     def test_export_and_populate_from_env_round_trips(self, monkeypatch):
-        monkeypatch.delenv("ASSISTANT_EMAIL_PROVIDER", raising=False)
+        for key in (
+            "ASSISTANT_ID",
+            "ASSISTANT_FIRST_NAME",
+            "ASSISTANT_TIMEZONE",
+            "ASSISTANT_DEFAULT_MODEL",
+            "ASSISTANT_SLOW_BRAIN_MODEL",
+            "USER_ID",
+            "USER_EMAIL",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
         sd = SessionDetails()
-        sd.populate(assistant_email_provider="microsoft_365")
+        sd.populate(
+            agent_id=7,
+            assistant_first_name="Unity",
+            assistant_timezone="Europe/London",
+            default_model="model@provider",
+            slow_brain_model="slow@provider",
+            user_id="user-1",
+            user_email="user@example.com",
+        )
         sd.export_to_env()
 
-        assert os.environ["ASSISTANT_EMAIL_PROVIDER"] == "microsoft_365"
+        assert os.environ["ASSISTANT_ID"] == "7"
+        assert os.environ["ASSISTANT_FIRST_NAME"] == "Unity"
+        assert os.environ["ASSISTANT_TIMEZONE"] == "Europe/London"
+        assert os.environ["ASSISTANT_DEFAULT_MODEL"] == "model@provider"
+        assert os.environ["ASSISTANT_SLOW_BRAIN_MODEL"] == "slow@provider"
+        assert os.environ["USER_ID"] == "user-1"
+        assert os.environ["USER_EMAIL"] == "user@example.com"
 
         sd2 = SessionDetails()
         sd2.populate_from_env()
-        assert sd2.assistant.email_provider == "microsoft_365"
 
-    def test_reset_restores_default(self):
+        assert sd2.is_initialized is True
+        assert sd2.assistant.agent_id == 7
+        assert sd2.assistant.first_name == "Unity"
+        assert sd2.assistant.timezone == "Europe/London"
+        assert sd2.assistant.default_model == "model@provider"
+        assert sd2.assistant.slow_brain_model == "slow@provider"
+        assert sd2.user.id == "user-1"
+        assert sd2.user.email == "user@example.com"
+
+    def test_get_subprocess_env_applies_overrides(self, monkeypatch):
+        monkeypatch.delenv("ASSISTANT_FIRST_NAME", raising=False)
         sd = SessionDetails()
-        sd.populate(assistant_email_provider="microsoft_365")
-        assert sd.assistant.email_provider == "microsoft_365"
+        sd.populate(agent_id=7, assistant_first_name="Unity")
 
-        sd.reset()
-        assert sd.assistant.email_provider == "google_workspace"
+        env = sd.get_subprocess_env(EXTRA_FLAG="1")
+
+        assert env["ASSISTANT_FIRST_NAME"] == "Unity"
+        assert env["EXTRA_FLAG"] == "1"
 
 
 class TestNullableRuntimeStrings:
     def test_populate_and_export_coerce_none_strings(self, monkeypatch):
-        for key in (
-            "ASSISTANT_SURNAME",
-            "ASSISTANT_WHATSAPP_NUMBER",
-            "ASSISTANT_DISCORD_BOT_ID",
-            "ASSISTANT_SLACK_BOT_USER_ID",
-            "USER_NUMBER",
-            "USER_WHATSAPP_NUMBER",
-            "VOICE_PROVIDER",
-            "VOICE_ID",
-        ):
+        for key in ("ASSISTANT_SURNAME", "USER_NUMBER"):
             monkeypatch.delenv(key, raising=False)
 
         sd = SessionDetails()
         sd.populate(
             assistant_first_name="T-W1N",
             assistant_surname=None,
-            assistant_whatsapp_number=None,
-            assistant_discord_bot_id=None,
-            assistant_slack_bot_user_id=None,
             user_number=None,
-            user_whatsapp_number=None,
-            voice_provider=None,
-            voice_id=None,
         )
 
         assert sd.assistant.surname == ""
-        assert sd.assistant.whatsapp_number == ""
         assert sd.user.number == ""
-        assert sd.user.whatsapp_number == ""
-        assert sd.voice.provider == ""
-        assert sd.voice.id == ""
 
         sd.export_to_env()
 
         assert os.environ["ASSISTANT_SURNAME"] == ""
-        assert os.environ["ASSISTANT_WHATSAPP_NUMBER"] == ""
-        assert os.environ["ASSISTANT_DISCORD_BOT_ID"] == ""
-        assert os.environ["ASSISTANT_SLACK_BOT_USER_ID"] == ""
         assert os.environ["USER_NUMBER"] == ""
-        assert os.environ["USER_WHATSAPP_NUMBER"] == ""
-        assert os.environ["VOICE_PROVIDER"] == ""
-        assert os.environ["VOICE_ID"] == ""
-
-
-class TestSpaceIds:
-    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
-        monkeypatch.delenv("TEAM_IDS", raising=False)
-        sd = SessionDetails()
-        sd.populate(team_ids=[3, 7])
-        sd.export_to_env()
-
-        assert os.environ["TEAM_IDS"] == "3,7"
-
-        sd2 = SessionDetails()
-        sd2.populate_from_env()
-        assert sd2.team_ids == [3, 7]
-        assert sd2.assistant.team_ids == [3, 7]
-
-        sd.populate(team_ids=[])
-        sd.export_to_env()
-        assert os.environ["TEAM_IDS"] == ""
-
-        sd3 = SessionDetails()
-        sd3.populate_from_env()
-        assert sd3.team_ids == []
-
-    def test_reset_restores_empty_memberships(self):
-        sd = SessionDetails()
-        sd.populate(team_ids=[3, 7])
-        assert sd.team_ids == [3, 7]
-
-        sd.reset()
-        assert sd.team_ids == []
-        assert sd.assistant.team_ids == []
-
-
-class TestCoordinatorFlag:
-    def test_defaults_to_non_coordinator(self):
-        sd = SessionDetails()
-
-        assert sd.is_coordinator is False
-        assert sd.assistant.is_coordinator is False
-
-    def test_populate_sets_coordinator_shortcut(self):
-        sd = SessionDetails()
-
-        sd.populate(is_coordinator=True)
-
-        assert sd.is_coordinator is True
-        assert sd.assistant.is_coordinator is True
-
-    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
-        monkeypatch.delenv("ASSISTANT_IS_COORDINATOR", raising=False)
-        sd = SessionDetails()
-        sd.populate(is_coordinator=True)
-        sd.export_to_env()
-
-        assert os.environ["ASSISTANT_IS_COORDINATOR"] == "True"
-
-        sd2 = SessionDetails()
-        sd2.populate_from_env()
-        assert sd2.is_coordinator is True
-
-        sd.populate(is_coordinator=False)
-        sd.export_to_env()
-        assert os.environ["ASSISTANT_IS_COORDINATOR"] == "False"
-
-        sd3 = SessionDetails()
-        sd3.populate_from_env()
-        assert sd3.is_coordinator is False
-
-    def test_reset_restores_non_coordinator(self):
-        sd = SessionDetails()
-        sd.populate(is_coordinator=True)
-
-        sd.reset()
-
-        assert sd.is_coordinator is False
-        assert sd.assistant.is_coordinator is False
-
-
-class TestSpaceSummaries:
-    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
-        monkeypatch.delenv("TEAM_SUMMARIES", raising=False)
-        summaries = [
-            {
-                "team_id": 3,
-                "name": "Repairs",
-                "description": "South-East repairs patch daily operations.",
-            },
-        ]
-        sd = SessionDetails()
-        sd.populate(team_summaries=summaries)
-        sd.export_to_env()
-
-        assert json.loads(os.environ["TEAM_SUMMARIES"]) == summaries
-
-        sd2 = SessionDetails()
-        sd2.populate_from_env()
-        assert sd2.team_summaries == [
-            TeamSummary(
-                team_id=3,
-                name="Repairs",
-                description="South-East repairs patch daily operations.",
-            ),
-        ]
-
-        sd.reset()
-        assert sd.team_summaries == []
-
-    @pytest.mark.parametrize(
-        "summary",
-        [
-            {"team_id": True, "name": "Repairs", "description": "Valid text"},
-            {"team_id": 3, "name": "", "description": "Valid text"},
-        ],
-    )
-    def test_rejects_malformed_team_summaries(self, summary):
-        sd = SessionDetails()
-
-        with pytest.raises(ValueError):
-            sd.populate(team_summaries=[summary])
 
 
 class TestContactIds:
@@ -296,56 +206,3 @@ class TestContactIds:
         finally:
             SESSION_DETAILS.self_contact_id = original_self
             SESSION_DETAILS.boss_contact_id = original_boss
-
-
-class TestAssistantManagedDesktop:
-    def test_desktop_mode_without_url_is_not_managed(self):
-        assistant = AssistantDetails(
-            desktop_mode="ubuntu",
-            desktop_url=None,
-        )
-        assert assistant.has_managed_desktop is False
-
-    def test_desktop_mode_with_url_is_managed(self):
-        assistant = AssistantDetails(
-            desktop_mode="ubuntu",
-            managed_desktop_status="active",
-            desktop_url="https://unity-pool-1.vm.unify.ai",
-        )
-        assert assistant.has_managed_desktop is True
-
-    def test_non_managed_desktop_mode_is_false_even_with_url(self):
-        assistant = AssistantDetails(
-            desktop_mode="none",
-            desktop_url="https://example.com",
-        )
-        assert assistant.has_managed_desktop is False
-
-    def test_entitlement_does_not_require_a_bound_desktop_url(self):
-        """Requesting a desktop must not depend on already having one.
-
-        A deferred voice activation has no desktop_url yet, so gating the
-        promotion on ``has_managed_desktop`` never fired and the session never
-        got a desktop.
-        """
-        assistant = AssistantDetails(
-            desktop_mode="ubuntu",
-            managed_desktop_status="active",
-            desktop_url=None,
-        )
-        assert assistant.managed_desktop_entitled is True
-        assert assistant.has_managed_desktop is False
-
-    def test_entitlement_requires_the_addon_to_be_active(self):
-        assistant = AssistantDetails(
-            desktop_mode="ubuntu",
-            managed_desktop_status=None,
-        )
-        assert assistant.managed_desktop_entitled is False
-
-    def test_entitlement_requires_a_managed_desktop_mode(self):
-        assistant = AssistantDetails(
-            desktop_mode="none",
-            managed_desktop_status="active",
-        )
-        assert assistant.managed_desktop_entitled is False

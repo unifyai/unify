@@ -297,12 +297,8 @@ class BaseFunctionManager(BaseStateManager):
             ``implementation`` field. When ``False``, implementations are
             omitted to reduce payload size.
         destination : str | None, optional
-            When omitted, reads federate across personal and shared
-            Compositional roots (personal-first). When provided, restrict the
-            Compositional read to one root: ``None`` / ``"personal"`` for the
-            personal catalog, or ``"team:<id>"`` for a shared team catalog.
-            Use this when resolving a ``function_id`` that is only unique
-            within one destination (e.g. symbolic task entrypoints).
+            Which Compositional root to read. Only the personal root exists:
+            pass ``"personal"`` or leave it ``None``.
         _return_callable : bool, default ``False``
             When ``True``, return Python callables instead of metadata dicts.
             Implementations SHOULD inject the resulting callables (and any of their

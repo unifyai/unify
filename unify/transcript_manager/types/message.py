@@ -50,7 +50,7 @@ class Message(AuthoredRow):
     )
     metadata: Optional[dict] = Field(
         default=None,
-        description="Medium-specific metadata (e.g. email_id for email replies).",
+        description="Medium-specific metadata (e.g. the chat message id).",
     )
 
     # Central, single source of truth for shorthand aliases (full → shorthand)

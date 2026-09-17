@@ -1929,10 +1929,10 @@ class _StorageCheckHandle(SteerableToolHandle):
         Called when the actor the review depends on is closing. A review needs
         that actor's venv pool, shell pool and sandboxes to do anything useful,
         so once they are torn down the review cannot succeed -- it can only
-        keep retrying against them. Five offline task pods on staging stayed
-        busy for eight days that way, still issuing inference for runs recorded
-        as finished the week before, because nothing connected the two
-        lifetimes: the actor closed its pools and walked away from the review.
+        keep retrying against them. A review left running that way stays
+        busy indefinitely, still issuing inference for a run already recorded
+        as finished, because nothing connects the two lifetimes: the actor
+        closes its pools and walks away from the review.
 
         The bound this gives a review is its actor's lifetime, not a clock. A
         review that is genuinely working is never interrupted -- the process
@@ -3116,23 +3116,6 @@ class CodeActActor(BaseCodeActActor):
                     if _notification_up_q is not None
                     else None
                 )
-                try:
-                    from unify.manager_registry import ManagerRegistry
-
-                    # Keep generated code's normal environment-based credential
-                    # path fresh at the execution boundary.  The SecretManager
-                    # gate is debounced, so repeated execute_code calls only pay
-                    # a cheap timestamp check within the TTL window.
-                    ManagerRegistry.get_secret_manager().sync_assistant_secrets_if_stale(
-                        ttl_seconds=60.0,
-                        reason="execute_code",
-                    )
-                except Exception:
-                    logger.warning(
-                        "execute_code assistant secret sync failed",
-                        exc_info=True,
-                    )
-
                 _rs = self._resolve_session(
                     state_mode=state_mode,
                     language=str(language),
@@ -5131,8 +5114,8 @@ class CodeActActor(BaseCodeActActor):
         # End any storage review still running before the resources it needs
         # are torn down below. Left alone, a review outlives the actor: it
         # keeps issuing inference against a closed venv pool and dead
-        # sandboxes, which is how offline task pods stayed busy for days after
-        # their run had already been recorded as finished.
+        # sandboxes, issuing inference for a run already recorded as
+        # finished.
         for storage_handle in list(self._live_storage_handles):
             await storage_handle.abandon_storage_review(
                 reason="The actor running this review is shutting down.",

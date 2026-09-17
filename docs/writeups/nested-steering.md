@@ -72,9 +72,6 @@ Interjections are how corrections get in. When the outer loop calls `handle.inte
 
 It's also immediate. The inner loop runs with `interrupt_llm_with_interjections` enabled, so it races the in-flight LLM generation against the interjection queue. If your correction arrives while the model is mid-generation, the generation is cancelled and restarted with your message included. You're not waiting for the current step to finish before "no, wrong account" takes effect.
 
-<p align="center">
-  <img src="../../assets/demo-course-correct.png" alt="A correction — 'use their WORK email, not personal' — entering the ConversationManager and flowing down through the nested Actor, TaskScheduler, and ContactManager loops. Live redirect, no restart." width="720">
-</p>
 
 ## Talking up: clarification
 

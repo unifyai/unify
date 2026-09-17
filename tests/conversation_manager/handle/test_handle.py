@@ -1,6 +1,6 @@
 """
-tests/conversation_manager/test_handle.py
-===============================================
+tests/conversation_manager/handle/test_handle.py
+=================================================
 
 Comprehensive tests for ConversationManagerHandle, specifically the ask() method.
 
@@ -15,7 +15,6 @@ These tests validate the complete flow including:
 - PATH 2: Interactive question/answer with user reply routing
 - Structured output parsing and validation
 - active_ask_handle registration and input routing
-- Multiple communication modalities (voice calls, SMS, email context)
 - Error handling and edge cases
 
 Test Categories:
@@ -36,18 +35,10 @@ import pytest
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.conftest import TEST_CONTACTS
+from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     DirectMessageEvent,
-    EmailReceived,
     Event,
-    InboundPhoneUtterance,
-    InboundUnifyMeetUtterance,
-    PhoneCallReceived,
-    PhoneCallStarted,
-    SMSReceived,
-    UnifyMeetReceived,
-    UnifyMeetStarted,
     UnifyMessageReceived,
 )
 from unify.conversation_manager.handle import ConversationManagerHandle
@@ -80,7 +71,7 @@ async def _wait_for_condition(predicate, *, timeout: float = 30.0, poll: float =
 
 
 def _capture_questions(cm) -> list[str]:
-    """Record every question ``ask_question`` speaks, in order.
+    """Record every question ``ask_question`` posts to the chat, in order.
 
     The direct-speech publish is what marks PATH 2 as genuinely under way:
     it happens inside ``ask_question``, immediately before it blocks on a
@@ -136,34 +127,10 @@ class IssueCategory(str, Enum):
     URGENT = "urgent"
 
 
-class ConfirmationResponse(str, Enum):
-    """Enum for yes/no confirmation."""
-
-    YES = "yes"
-    NO = "no"
-    MAYBE = "maybe"
-
-
 class IssueCategoryResponse(BaseModel):
     """Wrapper for IssueCategory enum to use with response_format."""
 
     category: IssueCategory = Field(description="The category of the issue")
-
-
-class ConfirmationResponseWrapper(BaseModel):
-    """Wrapper for ConfirmationResponse enum to use with response_format."""
-
-    answer: ConfirmationResponse = Field(description="The user's yes/no/maybe response")
-
-
-# =============================================================================
-# Helper Functions
-# =============================================================================
-
-
-def _direct_messages(events) -> list[DirectMessageEvent]:
-    """Extract DirectMessageEvent from output events."""
-    return [e for e in events if isinstance(e, DirectMessageEvent)]
 
 
 # =============================================================================
@@ -185,15 +152,12 @@ class TestHandleInitialization:
     def test_handle_stores_conversation_context(self):
         """Handle stores conversation_id and contact_id correctly."""
         mock_broker = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
             contact_id=42,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         assert handle.conversation_id == "conv_123"
@@ -203,16 +167,11 @@ class TestHandleInitialization:
 
     def test_handle_not_stopped_initially(self):
         """Handle starts in active (not stopped) state."""
-        mock_broker = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
-
         handle = ConversationManagerHandle(
-            event_broker=mock_broker,
+            event_broker=MagicMock(),
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         assert handle.done() is False
@@ -231,15 +190,12 @@ class TestInterject:
         """interject publishes NotificationInjectedEvent to the steering channel."""
         mock_broker = AsyncMock()
         mock_broker.publish = AsyncMock(return_value=1)
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         interjection_id = await handle.interject("Task completed successfully")
@@ -265,15 +221,12 @@ class TestInterject:
         """interject returns empty string and does nothing when handle is stopped."""
         mock_broker = AsyncMock()
         mock_broker.publish = AsyncMock(return_value=1)
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
         await handle.stop(reason="test")
 
@@ -287,15 +240,12 @@ class TestInterject:
         """interject tolerates extra kwargs without crashing."""
         mock_broker = AsyncMock()
         mock_broker.publish = AsyncMock(return_value=1)
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         # Should not raise even with plumbing kwargs
@@ -319,16 +269,11 @@ class TestHandleLifecycle:
     @pytest.mark.asyncio
     async def test_stop_marks_handle_done(self):
         """stop() marks the handle as done."""
-        mock_broker = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
-
         handle = ConversationManagerHandle(
-            event_broker=mock_broker,
+            event_broker=MagicMock(),
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         assert handle.done() is False
@@ -338,16 +283,11 @@ class TestHandleLifecycle:
     @pytest.mark.asyncio
     async def test_stop_returns_reason(self):
         """stop() returns message with reason."""
-        mock_broker = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
-
         handle = ConversationManagerHandle(
-            event_broker=mock_broker,
+            event_broker=MagicMock(),
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         await handle.stop(reason="task completed")
@@ -358,16 +298,11 @@ class TestHandleLifecycle:
     @pytest.mark.asyncio
     async def test_stop_idempotent(self):
         """Calling stop() multiple times is safe."""
-        mock_broker = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
-
         handle = ConversationManagerHandle(
-            event_broker=mock_broker,
+            event_broker=MagicMock(),
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         await handle.stop(reason="first")
@@ -377,16 +312,11 @@ class TestHandleLifecycle:
     @pytest.mark.asyncio
     async def test_result_waits_for_stop(self):
         """result() blocks until handle is stopped."""
-        mock_broker = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.call_manager = MagicMock()
-        mock_cm.contact_index = MagicMock()
-
         handle = ConversationManagerHandle(
-            event_broker=mock_broker,
+            event_broker=MagicMock(),
             conversation_id="conv_123",
             contact_id=1,
-            conversation_manager=mock_cm,
+            conversation_manager=MagicMock(),
         )
 
         # Start waiting for result in background
@@ -510,11 +440,12 @@ async def test_real_ask_question_survives_unanswered_question(monkeypatch):
     mirrored test above documents the invariant; this one is what actually
     holds ``handle.py`` to it.
 
-    A question nobody answers used to leave its reply future cancelled. The
-    next question saw a future that was ``done()`` and read it, and reading a
-    cancelled future raises ``CancelledError`` — which unwound the whole ask
-    loop, so the caller was told the ask produced no answer at all instead of
-    that one question went unanswered.
+    A question nobody answers leaves its reply future cancelled unless the
+    timeout path replaces it. If the next question saw a future that was
+    ``done()`` and read it, reading a cancelled future would raise
+    ``CancelledError`` — unwinding the whole ask loop, so the caller would be
+    told the ask produced no answer at all instead of that one question went
+    unanswered.
     """
     captured_tools: dict = {}
 
@@ -531,16 +462,12 @@ async def test_real_ask_question_survives_unanswered_question(monkeypatch):
         0.1,
     )
 
-    mock_cm = MagicMock()
-    mock_cm.call_manager = MagicMock()
-    mock_cm.contact_index = MagicMock()
-
     handle = ConversationManagerHandle(
         event_broker=AsyncMock(),
         conversation_id="conv_123",
         contact_id=1,
         transcript_manager=MagicMock(),
-        conversation_manager=mock_cm,
+        conversation_manager=MagicMock(),
     )
 
     ask_handle = await handle.ask("What is the user's name?")
@@ -564,29 +491,23 @@ async def test_real_ask_question_survives_unanswered_question(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
-async def test_ask_path1_infers_from_voice_transcript(initialized_cm):
+async def test_ask_path1_infers_from_transcript(initialized_cm):
     """
-    PATH 1: LLM infers answer from voice transcript without asking user.
+    PATH 1: LLM infers answer from the chat transcript without asking user.
 
-    During a voice call, the user mentions their preference. When ask() is called,
-    the LLM should infer the answer from the recent transcript.
+    When the user has already stated something in the chat, ask() should
+    infer from that context without needing to ask again.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
-    # Establish a voice call with conversation context
-    await cm.step(PhoneCallReceived(contact=contact, conference_name="test_conf"))
-    await cm.step(PhoneCallStarted(contact=contact))
-
-    # User mentions their preference in the conversation
-    await cm.step(
-        InboundPhoneUtterance(
+    await cm.step_until_wait(
+        UnifyMessageReceived(
             contact=contact,
             content="I prefer to have meetings in the morning, around 9 AM works best for me.",
         ),
     )
 
-    # Get the handle from CM
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
@@ -600,119 +521,11 @@ async def test_ask_path1_infers_from_voice_transcript(initialized_cm):
         response_format=MeetingTime,
     )
 
-    # Get the result
     result = await ask_handle.result()
 
-    # Should have inferred from transcript
     assert isinstance(result, MeetingTime)
     assert result.hour == 9
     assert result.period.upper() == "AM"
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_path1_infers_from_sms_context(initialized_cm):
-    """
-    PATH 1: LLM infers answer from SMS conversation context.
-
-    When the user has already stated something via SMS, ask() should
-    infer from that context without needing to ask again.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # User sends SMS with clear preference
-    await cm.step_until_wait(
-        SMSReceived(
-            contact=contact,
-            content="For the project meeting, I'd like to discuss billing issues we've been having.",
-        ),
-    )
-
-    # Get the handle
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    # Ask about issue category - should infer billing from context
-    ask_handle = await handle.ask(
-        "What category of issue is the user asking about?",
-        response_format=IssueCategoryResponse,
-    )
-
-    result = await ask_handle.result()
-
-    assert isinstance(result, IssueCategoryResponse)
-    assert result.category == IssueCategory.BILLING
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_path1_sends_acknowledgment(initialized_cm):
-    """
-    PATH 1: When inferring, LLM sends acknowledgment via DirectMessageEvent.
-
-    The acknowledgment should be published to app:comms:direct_speech.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Establish voice call
-    await cm.step(UnifyMeetReceived(contact=contact))
-    await cm.step(UnifyMeetStarted(contact=contact))
-
-    # User provides clear answer
-    await cm.step(
-        InboundUnifyMeetUtterance(
-            contact=contact,
-            content="Yes, I confirm I want to proceed with the booking.",
-        ),
-    )
-
-    # Track published events
-    published_events = []
-    original_publish = cm.event_broker.publish
-
-    async def track_publish(channel, message):
-        try:
-            evt = Event.from_json(message)
-            published_events.append((channel, evt))
-        except Exception:
-            pass
-        return await original_publish(channel, message)
-
-    cm.cm.event_broker.publish = track_publish
-
-    # Get handle and ask
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    ask_handle = await handle.ask(
-        "Does the user confirm they want to proceed?",
-        response_format=ConfirmationResponseWrapper,
-    )
-
-    result = await ask_handle.result()
-
-    # Should have confirmed
-    assert isinstance(result, ConfirmationResponseWrapper)
-    assert result.answer == ConfirmationResponse.YES
-
-    # Check for direct speech event (acknowledgment)
-    direct_speech_events = [
-        evt for channel, evt in published_events if channel == "app:comms:direct_speech"
-    ]
-    # PATH 1 may or may not send acknowledgment depending on LLM decision
-    # Just verify it didn't crash
 
 
 # =============================================================================
@@ -731,15 +544,11 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
     the ask_question tool to ask the user directly.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
-    # Establish voice call with no relevant context
-    await cm.step(PhoneCallReceived(contact=contact, conference_name="test_conf"))
-    await cm.step(PhoneCallStarted(contact=contact))
-
-    # User says something unrelated
-    await cm.step(
-        InboundPhoneUtterance(
+    # User says something unrelated to the question about to be asked
+    await cm.step_until_wait(
+        UnifyMessageReceived(
             contact=contact,
             content="Hello, I wanted to discuss something with you today.",
         ),
@@ -760,7 +569,7 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
         response_format=MeetingTime,
     )
 
-    # Wait until the question has actually been spoken. ``active_ask_handle``
+    # Wait until the question has actually been posted. ``active_ask_handle``
     # is set synchronously by ask() before it returns, so polling it says
     # nothing about whether PATH 2 has begun.
     assert await _wait_for_condition(
@@ -788,54 +597,6 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
-async def test_ask_path2_routes_user_input_via_active_ask_handle(initialized_cm):
-    """
-    PATH 2: User input is routed to active_ask_handle via handle_voice_user_turn.
-
-    When active_ask_handle is set, user utterances should be routed to it
-    instead of triggering the Main CM Brain.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Establish voice call
-    await cm.step(UnifyMeetReceived(contact=contact))
-    await cm.step(UnifyMeetStarted(contact=contact))
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    # Start an ask - this should register active_ask_handle
-    ask_handle = await handle.ask(
-        "What is the user's favorite color?",
-    )
-
-    # Verify active_ask_handle is set
-    assert cm.cm.active_ask_handle is not None
-    assert cm.cm.active_ask_handle is ask_handle
-
-    # Simulate user input - should route to ask_handle
-    await cm.cm.handle_voice_user_turn("My favorite color is blue")
-
-    # Result should now be available
-    result = await asyncio.wait_for(
-        ask_handle.result(),
-        timeout=_ASK_RESULT_TIMEOUT,
-    )
-
-    assert "blue" in result.lower()
-
-    # active_ask_handle should be cleared after result
-    assert cm.cm.active_ask_handle is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
 async def test_ask_path2_multiple_followup_questions(initialized_cm):
     """
     PATH 2: LLM can ask multiple follow-up questions to get clarity.
@@ -844,11 +605,7 @@ async def test_ask_path2_multiple_followup_questions(initialized_cm):
     should ask a follow-up question.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Establish voice call
-    await cm.step(PhoneCallReceived(contact=contact, conference_name="test_conf"))
-    await cm.step(PhoneCallStarted(contact=contact))
+    contact = BOSS
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
@@ -904,7 +661,7 @@ async def test_ask_returns_pydantic_model(initialized_cm):
     ask() returns validated Pydantic model when response_format is specified.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     await cm.step_until_wait(
         UnifyMessageReceived(
@@ -940,10 +697,10 @@ async def test_ask_returns_enum_value(initialized_cm):
     ask() returns correct Enum value when response_format is an Enum.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Can you help me understand why my payment didn't go through?",
         ),
@@ -975,10 +732,10 @@ async def test_ask_without_response_format_returns_string(initialized_cm):
     ask() without response_format returns a string summary.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="The product code I'm asking about is SKU-12345-XYZ.",
         ),
@@ -1019,10 +776,7 @@ async def test_intercepting_handle_delegates_lifecycle_methods(initialized_cm):
     - done() returns True after the inner loop completes
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    await cm.step(UnifyMeetReceived(contact=contact))
-    await cm.step(UnifyMeetStarted(contact=contact))
+    contact = BOSS
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
@@ -1059,10 +813,10 @@ async def test_intercepting_handle_clears_active_ask_handle_on_result(initialize
     When result() completes, active_ask_handle is cleared.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="My name is Alice Johnson.",
         ),
@@ -1088,214 +842,6 @@ async def test_intercepting_handle_clears_active_ask_handle_on_result(initialize
 
 
 # =============================================================================
-# Integration Tests: Multiple Modalities
-# =============================================================================
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_during_phone_call(initialized_cm):
-    """
-    ask() works correctly during an active phone call.
-
-    DirectMessageEvent should be published to call_guidance channel.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Start phone call
-    await cm.step(PhoneCallReceived(contact=contact, conference_name="test_conf"))
-    await cm.step(PhoneCallStarted(contact=contact))
-
-    # User provides context
-    await cm.step(
-        InboundPhoneUtterance(
-            contact=contact,
-            content="I need help with a technical problem with my software.",
-        ),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    ask_handle = await handle.ask(
-        "What type of issue is the user experiencing?",
-        response_format=IssueCategoryResponse,
-    )
-
-    result = await ask_handle.result()
-
-    assert isinstance(result, IssueCategoryResponse)
-    assert result.category == IssueCategory.TECHNICAL
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_during_unify_meet(initialized_cm):
-    """
-    ask() works correctly during an active Unify Meet session.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Start Unify Meet
-    await cm.step(UnifyMeetReceived(contact=contact))
-    await cm.step(UnifyMeetStarted(contact=contact))
-
-    # User provides context
-    await cm.step(
-        InboundUnifyMeetUtterance(
-            contact=contact,
-            content="Yes, let's definitely proceed with the plan we discussed.",
-        ),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    ask_handle = await handle.ask(
-        "Does the user want to proceed?",
-        response_format=ConfirmationResponseWrapper,
-    )
-
-    result = await ask_handle.result()
-
-    assert isinstance(result, ConfirmationResponseWrapper)
-    assert result.answer == ConfirmationResponse.YES
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_with_sms_context_only(initialized_cm):
-    """
-    ask() can infer from SMS-only context (no active voice call).
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # SMS conversation only
-    await cm.step_until_wait(
-        SMSReceived(
-            contact=contact,
-            content="No, I don't think that will work for me.",
-        ),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    ask_handle = await handle.ask(
-        "Is the user agreeing or disagreeing?",
-        response_format=ConfirmationResponseWrapper,
-    )
-
-    result = await ask_handle.result()
-
-    assert isinstance(result, ConfirmationResponseWrapper)
-    assert result.answer == ConfirmationResponse.NO
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_with_email_context(initialized_cm):
-    """
-    ask() can infer from email context.
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    await cm.step_until_wait(
-        EmailReceived(
-            contact=contact,
-            subject="Question about my account",
-            body="I'm not sure if I should continue with this. Maybe we should reconsider?",
-            email_id="email_123",
-        ),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    ask_handle = await handle.ask(
-        "Is the user certain about their decision?",
-        response_format=ConfirmationResponseWrapper,
-    )
-
-    result = await ask_handle.result()
-
-    # "Maybe" or uncertain response expected
-    assert isinstance(result, ConfirmationResponseWrapper)
-    assert result.answer in [ConfirmationResponse.MAYBE, ConfirmationResponse.NO]
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_with_mixed_modality_context(initialized_cm):
-    """
-    ask() handles context from multiple modalities (SMS + voice).
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # First, SMS context
-    await cm.step_until_wait(
-        SMSReceived(
-            contact=contact,
-            content="I'd like to schedule a call to discuss something important.",
-        ),
-    )
-
-    # Then voice call
-    await cm.step(PhoneCallReceived(contact=contact, conference_name="test_conf"))
-    await cm.step(PhoneCallStarted(contact=contact))
-
-    await cm.step(
-        InboundPhoneUtterance(
-            contact=contact,
-            content="So about that important thing - it's a billing question.",
-        ),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    ask_handle = await handle.ask(
-        "What is the main topic the user wants to discuss?",
-        response_format=IssueCategoryResponse,
-    )
-
-    result = await ask_handle.result()
-
-    assert isinstance(result, IssueCategoryResponse)
-    assert result.category == IssueCategory.BILLING
-
-
-# =============================================================================
 # Integration Tests: Error Handling and Edge Cases
 # =============================================================================
 
@@ -1307,7 +853,7 @@ async def test_ask_raises_when_handle_stopped(initialized_cm):
     ask() raises RuntimeError when called on a stopped handle.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
@@ -1332,11 +878,7 @@ async def test_ask_handles_empty_transcript(initialized_cm):
     Should fall back to PATH 2 and ask the user directly.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Start call but no utterances yet
-    await cm.step(PhoneCallReceived(contact=contact, conference_name="test_conf"))
-    await cm.step(PhoneCallStarted(contact=contact))
+    contact = BOSS
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
@@ -1349,7 +891,7 @@ async def test_ask_handles_empty_transcript(initialized_cm):
 
     ask_handle = await handle.ask("What is the user's name?")
 
-    # Wait until the question has actually been spoken. ``active_ask_handle``
+    # Wait until the question has actually been posted. ``active_ask_handle``
     # is set synchronously by ask() before it returns, so polling it says
     # nothing about whether PATH 2 has begun.
     assert await _wait_for_condition(
@@ -1379,11 +921,11 @@ async def test_ask_with_transcript_manager_tool(initialized_cm):
     ask() provides ask_historic_transcript tool for querying older context.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     # Current conversation
     await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=contact,
             content="Can you remind me what we discussed last time?",
         ),
@@ -1444,10 +986,7 @@ async def test_only_one_active_ask_handle_at_a_time(initialized_cm):
     Follows established cleanup pattern: stop() + await result().
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    await cm.step(UnifyMeetReceived(contact=contact))
-    await cm.step(UnifyMeetStarted(contact=contact))
+    contact = BOSS
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
@@ -1483,65 +1022,6 @@ async def test_only_one_active_ask_handle_at_a_time(initialized_cm):
 
 
 # =============================================================================
-# Integration Tests: Transcript Content (FastBrainNotification Exclusion)
-# =============================================================================
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_transcript_excludes_call_guidance(initialized_cm):
-    """
-    FastBrainNotification (internal orchestration) should NOT appear in the transcript.
-
-    The transcript passed to handle.ask() should only contain actual communications
-    between the assistant and contacts, not internal guidance from the Main CM Brain
-    to the Voice Agent.
-
-    This test verifies that:
-    1. User utterances appear in the transcript
-    2. FastBrainNotification messages are filtered out
-    3. Only "user" and "assistant" roles appear (not "guidance")
-    """
-    cm = initialized_cm
-    contact = TEST_CONTACTS[1]
-
-    # Start a Unify Meet session - this will trigger FastBrainNotification from the CM brain
-    await cm.step(UnifyMeetReceived(contact=contact))
-    await cm.step(UnifyMeetStarted(contact=contact))
-
-    # User speaks - this should appear in transcript
-    user_message = "I'd like to schedule a meeting for tomorrow."
-    await cm.step(
-        InboundUnifyMeetUtterance(
-            contact=contact,
-            content=user_message,
-        ),
-    )
-
-    # Get the transcript that would be passed to handle.ask()
-    conversation_turns, _ = cm.cm.get_recent_transcript(
-        contact=contact,
-        max_messages=20,
-    )
-
-    # Should have at least the user message
-    assert len(conversation_turns) >= 1, "Transcript should contain user message"
-
-    # All roles should be either "user" or "assistant" (not "guidance")
-    for turn in conversation_turns:
-        assert turn["role"] in (
-            "user",
-            "assistant",
-        ), f"Unexpected role in transcript: {turn['role']}"
-
-    # User message should be in transcript
-    transcript_contents = [turn["content"] for turn in conversation_turns]
-    assert any(
-        user_message in content for content in transcript_contents
-    ), "User message should appear in transcript"
-
-
-# =============================================================================
 # Integration Tests: get_full_transcript
 # =============================================================================
 
@@ -1553,14 +1033,14 @@ async def test_get_full_transcript_returns_messages(initialized_cm):
     get_full_transcript returns recent conversation messages.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     # Create some conversation
     await cm.step_until_wait(
-        SMSReceived(contact=contact, content="First message"),
+        UnifyMessageReceived(contact=contact, content="First message"),
     )
     await cm.step_until_wait(
-        SMSReceived(contact=contact, content="Second message"),
+        UnifyMessageReceived(contact=contact, content="Second message"),
     )
 
     handle = ConversationManagerHandle(
@@ -1573,9 +1053,9 @@ async def test_get_full_transcript_returns_messages(initialized_cm):
     result = await handle.get_full_transcript(max_messages=10)
 
     assert result["status"] == "ok"
-    # The simulated transcript manager may return varying results
     assert "messages" in result
     assert "count" in result
+    assert all(m["medium"] == "unify_message" for m in result["messages"])
 
 
 # =============================================================================
@@ -1590,7 +1070,7 @@ async def test_unpin_interjection_publishes_event(initialized_cm):
     unpin_interjection publishes NotificationUnpinnedEvent.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[1]
+    contact = BOSS
 
     # Track published events
     published = []

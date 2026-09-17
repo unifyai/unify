@@ -2,7 +2,7 @@
 Tests for RPC access to primitives from custom virtual environments.
 
 Tests that functions running in custom venvs can call back to the main process
-to access primitives (state managers) and primitives.computer.
+to access primitives (state managers).
 """
 
 import asyncio
@@ -44,13 +44,6 @@ async def multi_primitive_call() -> dict:
         "contacts": contacts_result,
         "web": web_result,
     }
-""".strip()
-
-COMPUTER_PRIMITIVES_FUNCTION = """
-async def use_computer(selector: str) -> str:
-    \"\"\"Call computer_primitives via RPC.\"\"\"
-    result = await primitives.computer.click(selector=selector)
-    return result
 """.strip()
 
 SIMPLE_PRIMITIVES_FUNCTION = """
@@ -101,40 +94,6 @@ def mock_primitives():
     primitives.web = MagicMock()
     primitives.web.ask = AsyncMock(return_value="4")
     return primitives
-
-
-@pytest.fixture
-def mock_computer_primitives():
-    """Create a mock computer_primitives object for testing RPC."""
-    computer = MagicMock()
-    computer.click = AsyncMock(return_value="clicked")
-    computer.type_text = AsyncMock(return_value="typed")
-    return computer
-
-
-@pytest.fixture
-def full_mock_computer_primitives():
-    """Create a comprehensive mock of computer_primitives for testing."""
-    computer = MagicMock()
-    computer.click = AsyncMock(return_value="clicked #button")
-    computer.act = AsyncMock(return_value="action performed")
-    computer.observe = AsyncMock(
-        return_value="Page shows login form with email/password fields",
-    )
-    computer.query = AsyncMock(return_value="The page title is 'Dashboard'")
-    computer.navigate = AsyncMock(return_value="navigated to url")
-    computer.get_links = AsyncMock(
-        return_value=[
-            {"text": "Home", "href": "/"},
-            {"text": "About", "href": "/about"},
-            {"text": "Contact", "href": "/contact"},
-        ],
-    )
-    computer.get_content = AsyncMock(
-        return_value="<html><body>Page content here</body></html>",
-    )
-    computer.type_text = AsyncMock(return_value="typed text successfully")
-    return computer
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -202,64 +161,16 @@ async def test_execute_with_multiple_primitive_calls(
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_execute_with_computer_primitives_rpc(
-    function_manager_factory,
-    mock_computer_primitives,
-):
-    """Function in venv should be able to call computer_primitives via RPC."""
-    fm = function_manager_factory()
-    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
-
-    try:
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=COMPUTER_PRIMITIVES_FUNCTION,
-            call_kwargs={"selector": "#button"},
-            is_async=True,
-            computer_primitives=mock_computer_primitives,
-        )
-
-        assert result["error"] is None, f"Unexpected error: {result['error']}"
-        mock_computer_primitives.click.assert_called_once_with(selector="#button")
-        assert result["result"] == "clicked"
-    finally:
-        venv_dir = fm._get_venv_dir(venv_id)
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
-
-
-@_handle_project
-@pytest.mark.asyncio
 async def test_missing_primitives_errors_gracefully(function_manager_factory):
     """Functions calling primitives without them provided should get an error."""
     fm = function_manager_factory()
     venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
 
-    cp_observe = """
-async def use_observe() -> str:
-    result = await primitives.computer.observe()
-    return result
-""".strip()
-
     try:
-        # Test missing primitives
         result = await fm.execute_in_venv(
             venv_id=venv_id,
             implementation=PRIMITIVES_ASK_FUNCTION,
             call_kwargs={"question": "test"},
-            is_async=True,
-            primitives=None,
-        )
-        assert result["error"] is not None
-        assert (
-            "primitives" in result["error"].lower() or "rpc" in result["error"].lower()
-        )
-
-        # Test missing computer primitives (accessed via primitives.computer)
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=cp_observe,
-            call_kwargs={},
             is_async=True,
             primitives=None,
         )
@@ -516,231 +427,6 @@ def crash_subprocess() -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# ComputerPrimitives Method Tests
-# ────────────────────────────────────────────────────────────────────────────
-
-
-@_handle_project
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method,func_impl,call_kwargs,expected_in_result",
-    [
-        (
-            "act",
-            "async def use_act(instruction: str) -> str:\n    return await primitives.computer.act(instruction=instruction)",
-            {"instruction": "Click button"},
-            "action performed",
-        ),
-        (
-            "observe",
-            "async def use_observe() -> str:\n    return await primitives.computer.observe()",
-            {},
-            "login form",
-        ),
-        (
-            "query",
-            "async def use_query(question: str) -> str:\n    return await primitives.computer.query(question=question)",
-            {"question": "What is the title?"},
-            "Dashboard",
-        ),
-        (
-            "navigate",
-            "async def use_navigate(url: str) -> str:\n    return await primitives.computer.navigate(url=url)",
-            {"url": "https://example.com"},
-            "navigated to url",
-        ),
-        (
-            "get_content",
-            "async def use_get_content() -> str:\n    return await primitives.computer.get_content()",
-            {},
-            "<html>",
-        ),
-    ],
-)
-async def test_computer_primitives_methods(
-    function_manager_factory,
-    full_mock_computer_primitives,
-    method,
-    func_impl,
-    call_kwargs,
-    expected_in_result,
-):
-    """All computer_primitives methods should work via RPC."""
-    fm = function_manager_factory()
-    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
-
-    try:
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=func_impl,
-            call_kwargs=call_kwargs,
-            is_async=True,
-            computer_primitives=full_mock_computer_primitives,
-        )
-
-        assert (
-            result["error"] is None
-        ), f"Unexpected error for {method}: {result['error']}"
-        assert expected_in_result in str(
-            result["result"],
-        ), f"Expected '{expected_in_result}' in result for {method}"
-    finally:
-        venv_dir = fm._get_venv_dir(venv_id)
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
-
-
-@_handle_project
-@pytest.mark.asyncio
-async def test_computer_primitives_get_links_returns_list(
-    function_manager_factory,
-    full_mock_computer_primitives,
-):
-    """primitives.computer.get_links should return a list via RPC."""
-    fm = function_manager_factory()
-    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
-
-    func_impl = """
-async def use_get_links() -> list:
-    return await primitives.computer.get_links()
-""".strip()
-
-    try:
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=func_impl,
-            call_kwargs={},
-            is_async=True,
-            computer_primitives=full_mock_computer_primitives,
-        )
-
-        assert result["error"] is None
-        assert isinstance(result["result"], list)
-        assert len(result["result"]) == 3
-        assert result["result"][0]["text"] == "Home"
-    finally:
-        venv_dir = fm._get_venv_dir(venv_id)
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
-
-
-@_handle_project
-@pytest.mark.asyncio
-async def test_computer_primitives_chain_and_mixed(
-    function_manager_factory,
-    mock_primitives,
-    full_mock_computer_primitives,
-):
-    """Chaining and mixing primitives with computer_primitives should work."""
-    fm = function_manager_factory()
-    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
-
-    chain_func = """
-async def chain_cp(url: str, question: str) -> dict:
-    nav = await primitives.computer.navigate(url=url)
-    obs = await primitives.computer.observe()
-    qry = await primitives.computer.query(question=question)
-    return {"navigate": nav, "observe": obs, "query": qry}
-""".strip()
-
-    mixed_func = """
-async def use_both(contact_q: str, url: str) -> dict:
-    contact = await primitives.contacts.ask(question=contact_q)
-    nav = await primitives.computer.navigate(url=url)
-    return {"contacts": contact, "navigate": nav}
-""".strip()
-
-    try:
-        # Test chaining
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=chain_func,
-            call_kwargs={"url": "https://example.com", "question": "What?"},
-            is_async=True,
-            computer_primitives=full_mock_computer_primitives,
-        )
-        assert result["error"] is None
-        assert result["result"]["navigate"] == "navigated to url"
-
-        # Reset mocks
-        full_mock_computer_primitives.navigate.reset_mock()
-
-        # Test mixed primitives
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=mixed_func,
-            call_kwargs={"contact_q": "Who is Alice?", "url": "https://example.com"},
-            is_async=True,
-            primitives=mock_primitives,
-            computer_primitives=full_mock_computer_primitives,
-        )
-        assert result["error"] is None
-        assert result["result"]["contacts"] == "Alice is a test contact"
-        assert result["result"]["navigate"] == "navigated to url"
-    finally:
-        venv_dir = fm._get_venv_dir(venv_id)
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
-
-
-@_handle_project
-@pytest.mark.asyncio
-async def test_computer_primitives_error_handling(function_manager_factory):
-    """ComputerPrimitives errors should propagate with details."""
-    fm = function_manager_factory()
-    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
-
-    nav_func = """
-async def use_navigate(url: str) -> str:
-    return await primitives.computer.navigate(url=url)
-""".strip()
-
-    chain_func = """
-async def chain_cp(url: str, question: str) -> dict:
-    nav = await primitives.computer.navigate(url=url)
-    obs = await primitives.computer.observe()
-    return {"navigate": nav, "observe": obs}
-""".strip()
-
-    try:
-        # Test error with details
-        mock_cp = MagicMock()
-        mock_cp.navigate = AsyncMock(
-            side_effect=RuntimeError("Connection refused: computer not responding"),
-        )
-
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=nav_func,
-            call_kwargs={"url": "https://example.com"},
-            is_async=True,
-            computer_primitives=mock_cp,
-        )
-        assert result["error"] is not None
-        assert "Connection refused" in result["error"]
-
-        # Test partial chain failure
-        mock_cp2 = MagicMock()
-        mock_cp2.navigate = AsyncMock(return_value="navigated")
-        mock_cp2.observe = AsyncMock(side_effect=TimeoutError("Page load timeout"))
-
-        result = await fm.execute_in_venv(
-            venv_id=venv_id,
-            implementation=chain_func,
-            call_kwargs={"url": "https://example.com", "question": "test"},
-            is_async=True,
-            computer_primitives=mock_cp2,
-        )
-        assert result["error"] is not None
-        assert "Page load timeout" in result["error"]
-        mock_cp2.navigate.assert_called_once()
-    finally:
-        venv_dir = fm._get_venv_dir(venv_id)
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
-
-
-# ────────────────────────────────────────────────────────────────────────────
 # Data Handling Tests
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -771,7 +457,7 @@ async def get_none():
 
     list_func = """
 async def get_list():
-    return await primitives.tasks.ask(question="list")
+    return await primitives.transcripts.ask(question="list")
 """.strip()
 
     nested_func = """
@@ -823,8 +509,8 @@ async def get_nested():
         assert result["result"] is None
 
         # Test list
-        mock_p.tasks = MagicMock()
-        mock_p.tasks.ask = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+        mock_p.transcripts = MagicMock()
+        mock_p.transcripts.ask = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
 
         result = await fm.execute_in_venv(
             venv_id=venv_id,
@@ -874,7 +560,7 @@ async def test_concurrent_venv_executions(function_manager_factory):
 
     concurrent_func = """
 async def increment(counter_id: str):
-    result = await primitives.tasks.ask(question=f"increment {counter_id}")
+    result = await primitives.transcripts.ask(question=f"increment {counter_id}")
     return result
 """.strip()
 
@@ -887,8 +573,8 @@ async def increment(counter_id: str):
         return f"incremented {counter_id}"
 
     mock_primitives = MagicMock()
-    mock_primitives.tasks = MagicMock()
-    mock_primitives.tasks.ask = mock_ask
+    mock_primitives.transcripts = MagicMock()
+    mock_primitives.transcripts.ask = mock_ask
 
     try:
         # Test concurrent in same venv

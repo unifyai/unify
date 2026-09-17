@@ -1,6 +1,6 @@
 """The function/venv reconcile must never renumber rows it re-syncs.
 
-Task entrypoints hold ``function_id`` and function rows hold ``venv_id``, so
+Guidance entries hold ``function_ids`` and function rows hold ``venv_id``, so
 a delete-and-reinsert on reconcile orphans every reference. Two behaviors pin
 that: legacy rows whose ``custom_key`` column is null still land in the
 managed index (matched by name), and same-named rows outside the index are
@@ -42,7 +42,7 @@ def test_live_rows_defaults_null_custom_key_to_name(monkeypatch):
         ),
     ]
     monkeypatch.setattr(
-        fm_module.unisdk,
+        fm_module.db,
         "get_logs",
         lambda **kwargs: rows,
     )
@@ -66,7 +66,7 @@ def test_find_adoptable_claims_same_named_row(monkeypatch):
         captured.update(kwargs)
         return [existing]
 
-    monkeypatch.setattr(fm_module.unisdk, "get_logs", fake_get_logs)
+    monkeypatch.setattr(fm_module.db, "get_logs", fake_get_logs)
     adapter = _FunctionSyncAdapter(_manager_stub(), venv_name_to_id={})
     row = adapter.find_adoptable(
         "run_gtm_stargazer_enrich_tick",
@@ -94,7 +94,7 @@ def test_adopt_updates_in_place_preserving_function_id():
 
 def test_venv_adapter_adopts_same_named_row(monkeypatch):
     existing = _fake_log({"venv_id": 7, "name": "scraping"})
-    monkeypatch.setattr(fm_module.unisdk, "get_logs", lambda **kwargs: [existing])
+    monkeypatch.setattr(fm_module.db, "get_logs", lambda **kwargs: [existing])
     adapter = _VenvSyncAdapter(_manager_stub())
     row = adapter.find_adoptable("scraping", {"name": "scraping"})
     assert row["venv_id"] == 7

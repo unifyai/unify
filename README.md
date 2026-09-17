@@ -15,9 +15,9 @@
 
 The shape is deliberately human-in-the-loop: an assistant that keeps moving while you steer it, not one that replaces the person steering.
 
-Every conversation is distilled into **typed, queryable memory** (contacts, knowledge, tasks, transcripts, files, each in its own table, not transcript soup or markdown files you maintain by hand), so the assistant knows what your weekend rewrite is for, which libraries you care about, and the regression you asked it to watch out for last Wednesday.
+Every conversation is distilled into **typed, queryable memory** (contacts, knowledge, transcripts, files, each in its own table, not transcript soup or markdown files you maintain by hand), so the assistant knows what your weekend rewrite is for, which libraries you care about, and the regression you asked it to watch out for last Wednesday.
 
-After a successful run it **promotes what worked into a personal skill library** (executable Python *plus* the procedural how-to prose to use it) that every future session consults before reaching for raw tools. A stored function is bound to a recurring job after one review, but it is not *trusted* on day one: every call runs under independent verification until enough verdicts have accumulated for its effect class, a failed verdict repairs the leaf that failed and re-runs the job without repeating any effect, and only a fully verified job leaves the model out of the loop entirely. Recurring jobs and triggers (*"every Monday at 9, digest the week's open issues"*, *"whenever Alice messages about invoices"*) are first-class **natural-language primitives**, not cron expressions or webhook YAML you hand-maintain.
+After a successful run it **promotes what worked into a personal skill library** (executable Python *plus* the procedural how-to prose to use it) that every future session consults before reaching for raw tools. A stored function is not *trusted* on day one: its side-effect class is read off its code, its contract is checked around every call, and any change to the code, its dependencies, its environment or its linked guidance puts it back at the start of that ramp.
 
 **At a glance, vs the closest open-source alternatives:**
 
@@ -25,9 +25,9 @@ After a successful run it **promotes what worked into a personal skill library**
 |---|---|---|---|
 | Persistent reasoning loop *above* the tool-caller | ✓ | no | no |
 | Mid-flight steering (pause / redirect / interject) | ✓ | abort + redeliver | text injection |
-| Typed memory tables (contacts, knowledge, tasks) | ✓ | markdown / JSONL | markdown + SQLite |
+| Typed memory tables (contacts, knowledge, transcripts) | ✓ | markdown / JSONL | markdown + SQLite |
 | Auto-grown skill library (executable code + prose) | ✓ | skills | skills |
-| Schedules + triggers in plain English | ✓ | cron + webhook YAML | cron |
+| Runs in one process on your machine | ✓ | gateway + agent runs | single loop |
 
 ---
 
@@ -53,11 +53,11 @@ Then start chatting:
 
 ```text
 > What did I leave half-finished on the indexer rewrite last week?
-> Remind me to send Sarah the benchmark numbers on Thursday.
-> Every Monday at 9, summarise the open issues in my repos.
+> Here's the benchmark spreadsheet, which configs regressed?
+> Draft a note to Sarah with the numbers that changed.
 ```
 
-Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the embeddings cache, and the `workspace/` directory the actor reads and writes files in. Delete the directory and you have a fresh assistant.
+Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the embeddings cache, the `workspace/` directory the actor reads and writes files in, and the runtime logs. Delete the directory and you have a fresh assistant. `/help` inside the chat lists the few slash commands (attach a file, quit); `unify --debug` streams the runtime logs to the terminal.
 
 <details>
 <summary>Configuration</summary>
@@ -83,9 +83,8 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 
 - **Chat** with one assistant in the terminal. Every message you send is a normal inbound event; every reply is a normal outbound one, so the same loop drives any front end you put on it.
 - **Work in the background.** "Look into X" dispatches a code-writing actor; the conversation keeps going while it runs, and you can ask it how it is doing, redirect it, pause it, or stop it.
-- **Memory.** Contacts, knowledge claims, transcripts, tasks, files, images and secrets are typed tables in the local store, consolidated from conversations every fifty messages.
+- **Memory.** Contacts, knowledge claims, transcripts, files, images and secrets are typed tables in the local store, consolidated from conversations every fifty messages.
 - **Skills.** Functions and guidance the assistant stored after a job that went well, discovered before it writes new code.
-- **Scheduled and triggered tasks.** Natural-language `Task` rows fired in-process by a timer wheel or by inbound messages that match a trigger.
 - **Files.** Drop a file path into the chat and the assistant parses it, stores tables it finds, and can answer questions about it.
 - **Web research** when a Tavily key is present.
 
@@ -130,10 +129,9 @@ Assistant    ▸  Three tasks running at once.
 <table>
 <tr><td><b>Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running, including operations <i>nested inside other operations</i>, all the way down.</td></tr>
 <tr><td><b>Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow, not a chain of one-tool-at-a-time JSON decisions.</td></tr>
-<tr><td><b>Structured memory, not transcript soup</b></td><td>Contacts, knowledge, tasks, and files live in typed, queryable tables, distilled from conversations every fifty messages, not piled into markdown.</td></tr>
-<tr><td><b>Learns reusable skills, and earns trust in them</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving. Stored functions carry a verification ledger: independent verifier passes check every call until trust is earned, and any change to the code, its dependencies, its environment or its linked guidance puts it back on the ramp.</td></tr>
+<tr><td><b>Structured memory, not transcript soup</b></td><td>Contacts, knowledge, transcripts, and files live in typed, queryable tables, distilled from conversations every fifty messages, not piled into markdown.</td></tr>
+<tr><td><b>Learns reusable skills, and earns trust in them</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving. Stored functions carry a verification ledger: their side-effect class is read off the code, their contract is checked around every call, and any change to the code, its dependencies, its environment or its linked guidance puts them back on the ramp.</td></tr>
 <tr><td><b>Concurrent work, independently steerable</b></td><td>Multiple actions run at once: pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
-<tr><td><b>Schedules and triggers in plain English</b></td><td><i>"Every Monday at 9, digest the week's open issues"</i>, <i>"whenever Alice messages about invoices"</i>: natural-language <code>Task</code> rows that graduate into stored functions, and run with no model in the loop once every function they call is verified.</td></tr>
 <tr><td><b>Local-first, fully open</b></td><td>Runtime, persistence and LLM client are MIT-licensed and run in one process on your laptop. The store is a SQLite file you can open with any tool.</td></tr>
 </table>
 
@@ -209,15 +207,13 @@ Two persistent libraries the Actor consults before reaching for raw tools:
 
 After a successful trajectory, a reviewer loop (`store_skills`) can extract *both*: code worth keeping plus the narrative for using it.
 
-### Schedules and triggers: stored as `Task` rows
+### Stored functions carry a verification ledger
 
-Recurring or triggered work is stored as a `Task` with `schedule` + `repeat` (cadences) or `trigger` (inbound-message matches). When the time arrives or the trigger fires, a contained `Actor` run wakes up, reads the description, and figures out how to do it. After one successful run the storage-review loop can persist the trajectory as a stored function and bind it as the task's entrypoint, at which point the task runs against that function rather than re-planning each time.
-
-Binding is not trust. A bound function runs under **verification**: a static review of its source (once per content hash), an argument review and a precondition probe before every call, and a post-execution review after it, with an irreversible effect never executing while an earlier verdict is still pending. Trust is derived from the accumulated verdicts by a deterministic policy per effect class, never granted by the model that wrote the code. A failed verdict rewinds the run, repairs the leaf that failed and re-runs without repeating any effect. Any change to the source, its dependencies, its environment or its linked guidance puts the function back on the ramp. When every function the entrypoint calls is trusted, the task is promoted to offline delivery and runs with no model in the loop.
+A stored function is not trusted because it was stored. Its **effect class** is read deterministically off its code (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`), a **contract** is derived from its type hints plus whatever the reviewer wrote down, and tier-0 checks validate the arguments before every call and the result after it. Any change to the source, its dependencies, its environment or its linked guidance invalidates that trust.
 
 ### Memory consolidation: every fifty messages
 
-`MemoryManager` runs a background extraction pass over each new transcript window, distilling **contact profiles**, **per-contact summaries**, **response policies**, **domain knowledge**, and **task commitments** into the typed manager tables.
+`MemoryManager` runs a background extraction pass over each new transcript window, distilling **contact profiles**, **per-contact summaries**, **response policies**, and **domain knowledge** into the typed manager tables.
 
 ### Concurrent steerable actions
 
@@ -253,7 +249,6 @@ State Managers (each runs its own async LLM tool loop)
     │
     ├── ContactManager       : people and relationships
     ├── KnowledgeManager     : typed claim ledger (facts, policies, decisions, …)
-    ├── TaskScheduler        : durable tasks, schedules, triggers, execution with live handles
     ├── TranscriptManager    : conversation history and search
     ├── GuidanceManager      : procedures, SOPs, how-to knowledge
     ├── FunctionManager      : user-defined functions, primitives registry
@@ -295,7 +290,7 @@ Because *every* operation, at every level of the call stack, returns the same li
 <details>
 <summary><b>1. Course-correct a task that's running three loops deep, live</b></summary>
 
-Kick off work that nests `ConversationManager → Actor → TaskScheduler → ContactManager`. Halfway through, say *"use their work email, not personal."* The correction travels **down the live call stack** into the innermost loop and changes its behaviour, no restart, no second prompt appended, no waiting for the next tool boundary. A monolithic loop can only hard-interrupt the child and start it over from scratch.
+Kick off work that nests `ConversationManager → Actor → ContactManager → TranscriptManager`. Halfway through, say *"use their work email, not personal."* The correction travels **down the live call stack** into the innermost loop and changes its behaviour, no restart, no second prompt appended, no waiting for the next tool boundary. A monolithic loop can only hard-interrupt the child and start it over from scratch.
 
 </details>
 
@@ -384,8 +379,7 @@ See [tests/README.md](tests/README.md) for the full philosophy: responses are ca
 
 ```text
 unify/
-├── unify/             # Main package: actor, conversation_manager, db, common, and one folder per state manager
-├── sandboxes/         # Dev playgrounds, one per manager; the chat REPL lives here too
+├── unify/             # Main package: cli, actor, conversation_manager, db, common, and one folder per state manager
 ├── tests/             # Pytest suite (cached LLM responses, per-process SQLite store)
 ├── scripts/           # Skill import, builtins seeding, dev tooling
 └── docs/              # Design writeups

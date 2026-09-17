@@ -1,12 +1,10 @@
-"""Vendored subset of Orchestra's type inference, matching, and normalization.
+"""Type inference, matching, and normalization matching the store's semantics.
 
-Source: orchestra/web/api/log/utils/type_utils.py
-Purpose: Mirror Orchestra's type semantics in Unity so that pre-scan type
-         inference and coercion produce results identical to what Orchestra
-         would compute.  Keeping a local copy avoids a cross-deployment import
-         (Orchestra is a separate service).
+Purpose: Mirror the store's type semantics so that pre-scan type inference
+         and coercion produce results identical to what the store would
+         compute when it validates a written row.
 
-Only the **stdlib-only** portions are vendored.  Pydantic / jsonschema helpers
+Only the **stdlib-only** portions are kept here.  Pydantic / jsonschema helpers
 are deliberately excluded — they are not needed for bulk-ingestion type
 inference and matching.
 """
@@ -287,7 +285,7 @@ def parse_nested_type(type_str: str) -> Tuple[str, Optional[List[str]]]:
 def types_match(field_type: Any, inferred_type: str) -> bool:
     """Check whether *inferred_type* is compatible with *field_type*.
 
-    Mirrors Orchestra's ``types_match`` semantics exactly (minus Pydantic
+    Mirrors the store's ``types_match`` semantics exactly (minus Pydantic
     schema support which is not needed for ingestion pre-scan).
 
     Key rules:
@@ -309,7 +307,7 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
     if norm_inferred == "NoneType" or norm_field == "NoneType":
         return True
 
-    # -- AST constraint graph (vendored from Orchestra) --
+    # -- AST constraint graph --
 
     @dataclass
     class _TC:
@@ -604,8 +602,8 @@ def infer_type_from_value(
 ) -> str:
     """Infer a normalized type string from an arbitrary Python value.
 
-    Mirrors Orchestra's ``infer_type_from_value`` exactly so that Unity's
-    pre-scan produces the same type strings that Orchestra would infer.
+    Mirrors the store's ``infer_type_from_value`` exactly so that the
+    pre-scan produces the same type strings that the store would infer.
     """
     if value is None:
         return "NoneType"

@@ -16,7 +16,7 @@ class AnnotatedImageRef(BaseModel):
     """
 
     # extra="forbid" — see RawImageRef for rationale. Mirrors the
-    # strict-schema convention for image-ref types so orchestra's
+    # strict-schema convention for image-ref types so the store's
     # jsonschema validation rejects typo'd keys.
     model_config = {"extra": "forbid"}
 

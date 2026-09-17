@@ -30,11 +30,7 @@ from unify.conversation_manager.conversation_manager import ConversationManager
 from unify.conversation_manager.domains.event_handlers import (
     OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
 )
-from unify.conversation_manager.events import (
-    Event,
-    FastBrainNotification,
-    OpenSlowBrainTurn,
-)
+from unify.conversation_manager.events import OpenSlowBrainTurn
 
 
 def _make_multi_tool_result(*tool_pairs: tuple[str, dict, object]) -> SingleShotResult:
@@ -70,10 +66,10 @@ async def test_run_llm_returns_all_tool_names(initialized_cm):
     cm = initialized_cm.cm
 
     fake_result = _make_multi_tool_result(
-        ("desktop_act", {"instruction": "Click Submit"}, {"status": "acting"}),
+        ("ask_about_contacts", {"text": "Find Alice"}, {"status": "acting"}),
         (
             "act",
-            {"query": "Desktop session active", "persist": True},
+            {"query": "Summarize the attached report", "persist": True},
             {"status": "acting"},
         ),
         ("send_unify_message", {"content": "On it.", "contact_id": 1}, None),
@@ -92,7 +88,7 @@ async def test_run_llm_returns_all_tool_names(initialized_cm):
         f"are called, but got {type(returned).__name__}: {returned!r}"
     )
     assert set(returned) == {
-        "desktop_act",
+        "ask_about_contacts",
         "act",
         "send_unify_message",
     }, f"Expected all three tool names, got: {returned}"
@@ -104,16 +100,16 @@ async def test_step_driver_tracks_all_tool_names(initialized_cm):
     """CMStepDriver.all_tool_calls should record EVERY tool called per turn.
 
     Currently it appends only the single string returned by ``_run_llm()``,
-    so when the LLM calls ``[desktop_act, act, send_unify_message]`` in one
-    turn, only ``desktop_act`` appears in ``all_tool_calls``.
+    so when the LLM calls ``[ask_about_contacts, act, send_unify_message]``
+    in one turn, only ``ask_about_contacts`` appears in ``all_tool_calls``.
     """
     cm_driver = initialized_cm
 
     fake_result = _make_multi_tool_result(
-        ("desktop_act", {"instruction": "Click Submit"}, {"status": "acting"}),
+        ("ask_about_contacts", {"text": "Find Alice"}, {"status": "acting"}),
         (
             "act",
-            {"query": "Desktop session active", "persist": True},
+            {"query": "Summarize the attached report", "persist": True},
             {"status": "acting"},
         ),
     )
@@ -238,7 +234,7 @@ async def test_open_slow_brain_turn_notification_in_rendered_state(initialized_c
     cm = initialized_cm.cm
     event = OpenSlowBrainTurn(
         origin_run_id="llmrun-000001",
-        previous_tools=["set_onboarding_task_state"],
+        previous_tools=["send_unify_message"],
     )
     cm.last_snapshot = event.timestamp - timedelta(seconds=1)
     await EventHandler.handle_event(event, cm)
@@ -263,14 +259,14 @@ async def test_wait_delay_scheduled_when_not_first_tool(initialized_cm):
     alongside other tools in the same turn.
 
     Currently the scheduling logic checks only ``result.tool_name`` (first
-    tool).  If the LLM calls ``[desktop_act, wait(delay=5)]``, the wait is
-    the second tool and ``result.tool_name`` is ``"desktop_act"``, so the
-    ``delay=5`` scheduling is silently skipped.
+    tool).  If the LLM calls ``[act, wait(delay=5)]``, the wait is the
+    second tool and ``result.tool_name`` is ``"act"``, so the ``delay=5``
+    scheduling is silently skipped.
     """
     cm = initialized_cm.cm
 
     fake_result = _make_multi_tool_result(
-        ("desktop_act", {"instruction": "Click Submit"}, {"status": "acting"}),
+        ("act", {"query": "Long task"}, {"status": "acting"}),
         ("wait", {"delay": 5}, None),
     )
 
@@ -283,50 +279,7 @@ async def test_wait_delay_scheduled_when_not_first_tool(initialized_cm):
     ):
         await cm._run_llm()
 
-    mock_run.assert_called_once_with(delay=5), (
-        f"run_llm(delay=5) should have been called for the wait tool, "
-        f"but it was not.  The wait(delay=N) scheduling was missed because "
-        f"wait was not the first tool in the multi-tool response."
-    )
-
-
-# =============================================================================
-# guide_voice_agent SPEAK uses a single message field
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_publish_slow_brain_guidance_speak_mode():
-    """SPEAK publishes message for injection and verbatim TTS."""
-    spoken = "I found it: spot gold is about 4,486 US dollars per troy ounce."
-    cm = ConversationManager.__new__(ConversationManager)
-    cm.get_active_contact = MagicMock(return_value={"contact_id": 1})
-    cm._session_logger = MagicMock()
-
-    published: list[FastBrainNotification] = []
-
-    async def capture_publish(channel: str, message: str) -> int:
-        if channel == "app:call:notification":
-            event = Event.from_json(message)
-            if isinstance(event, FastBrainNotification):
-                published.append(event)
-        return 1
-
-    cm.event_broker = MagicMock()
-    cm.event_broker.publish = AsyncMock(side_effect=capture_publish)
-
-    await cm._publish_slow_brain_fast_brain_guidance(
-        message=spoken,
-        fast_brain_guidance="The answer is X; confirm if they guess it.",
-    )
-
-    assert len(published) == 1
-    notif = published[0]
-    # guide_voice_agent is speak-only: published guidance always speaks.
-    assert notif.should_speak is True
-    assert notif.message == spoken
-    # The bundled one-shot guidance rides on the same event.
-    assert notif.fast_brain_guidance == "The answer is X; confirm if they guess it."
+    mock_run.assert_called_once_with(delay=5)
 
 
 @pytest.mark.asyncio
@@ -338,19 +291,23 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     cm._recent_commissioning_successes = {}
 
     fake_result = _make_multi_tool_result(
-        ("create_team", {"name": "Ops HQ"}, {"team_id": 11, "name": "Ops HQ"}),
+        (
+            "update_contacts",
+            {"text": "Add Ops HQ"},
+            {"contact_id": 11, "name": "Ops HQ"},
+        ),
     )
     with patch(
         "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
         AsyncMock(return_value=fake_result),
     ):
-        await cm._run_llm(trace_meta={"origin_event_name": "SMSSent"})
+        await cm._run_llm(trace_meta={"origin_event_name": "UnifyMessageSent"})
 
     assert len(cm._recent_tool_executions) >= 1
     last = cm._recent_tool_executions[-1]
-    assert last["tool_name"] == "create_team"
-    assert last["origin_event_name"] == "SMSSent"
-    assert "team_id" in last["result_preview"]
+    assert last["tool_name"] == "update_contacts"
+    assert last["origin_event_name"] == "UnifyMessageSent"
+    assert "contact_id" in last["result_preview"]
 
 
 def test_run_llm_marks_tool_commit_boundary():
@@ -359,9 +316,9 @@ def test_run_llm_marks_tool_commit_boundary():
     cm.debouncer = MagicMock()
     cm.debouncer.running_task_trace_meta = {
         "run_id": "llmrun-000123",
-        "origin_event_name": "CoordinatorOnboardingEvent",
+        "origin_event_name": "UnifyMessageReceived",
     }
-    trace_meta = {"origin_event_name": "CoordinatorOnboardingEvent"}
+    trace_meta = {"origin_event_name": "UnifyMessageReceived"}
 
     cm._mark_tool_commit_started(trace_meta, "llmrun-000123")
 
@@ -383,9 +340,9 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
         if len(captured_messages) == 1:
             return _make_multi_tool_result(
                 (
-                    "create_team",
-                    {"name": "Ops HQ"},
-                    {"team_id": 11, "name": "Ops HQ"},
+                    "update_contacts",
+                    {"text": "Add Ops HQ"},
+                    {"contact_id": 11, "name": "Ops HQ"},
                 ),
             )
         return SingleShotResult(tools=[], text_response="noop", structured_output=None)
@@ -401,15 +358,15 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
             new_callable=AsyncMock,
         ),
     ):
-        await cm._run_llm(trace_meta={"origin_event_name": "SMSSent"})
-        await cm._run_llm(trace_meta={"origin_event_name": "SMSReceived"})
+        await cm._run_llm(trace_meta={"origin_event_name": "UnifyMessageSent"})
+        await cm._run_llm(trace_meta={"origin_event_name": "UnifyMessageReceived"})
 
     assert len(captured_messages) == 2
     second_turn_text = "\n".join(
         str(message.get("content")) for message in captured_messages[1]
     )
     assert "<recent_tool_executions>" in second_turn_text
-    assert "tool=create_team" in second_turn_text
+    assert "tool=update_contacts" in second_turn_text
 
 
 def test_duplicate_act_suppression_only_blocks_immediate_followups():
@@ -418,7 +375,7 @@ def test_duplicate_act_suppression_only_blocks_immediate_followups():
     cm = ConversationManager.__new__(ConversationManager)
     cm._llm_gen = 7
     tool_args = {
-        "query": "Repair workspace memberships for Region and Patch teams",
+        "query": "Summarize the attached quarterly report",
         "requesting_contact_id": 1,
         "response_format": None,
         "persist": False,
@@ -426,7 +383,7 @@ def test_duplicate_act_suppression_only_blocks_immediate_followups():
     }
     fingerprint = cm._commissioning_tool_fingerprint("act", tool_args)
     cm._recent_commissioning_successes = {fingerprint: 6}
-    cm._active_llm_trace_meta = {"origin_event_name": "SMSSent"}
+    cm._active_llm_trace_meta = {"origin_event_name": "UnifyMessageSent"}
 
     suppressed = cm.suppress_duplicate_commissioning_tool(
         tool_name="act",
@@ -435,9 +392,9 @@ def test_duplicate_act_suppression_only_blocks_immediate_followups():
 
     assert suppressed is not None
     assert suppressed["error_kind"] == "duplicate_suppressed"
-    assert suppressed["details"]["origin_event_name"] == "SMSSent"
+    assert suppressed["details"]["origin_event_name"] == "UnifyMessageSent"
 
-    cm._active_llm_trace_meta = {"origin_event_name": "SMSReceived"}
+    cm._active_llm_trace_meta = {"origin_event_name": "UnifyMessageReceived"}
     assert (
         cm.suppress_duplicate_commissioning_tool(
             tool_name="act",
@@ -452,7 +409,7 @@ def test_act_duplicate_fingerprint_normalizes_optional_defaults():
 
     cm = ConversationManager.__new__(ConversationManager)
     minimal_args = {
-        "query": "Repair workspace memberships for Region and Patch teams",
+        "query": "Summarize the attached quarterly report",
         "requesting_contact_id": 1,
     }
     expanded_args = {

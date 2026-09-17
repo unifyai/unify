@@ -2,7 +2,7 @@
 # One filename per line; blank lines and #-comments ignored.
 # Order is set by the submodule's manifest.txt, not by this file.
 #
-# Runtime that drives Orchestra through DataManager, runs in the local stack, and defines CURSOR_DEBUG_LOG.
+# Local agent runtime: SQLite store, in-process managers, CURSOR_DEBUG_LOG.
 
 # --- included by every repo ---
 aggressive-refactoring.md
@@ -11,19 +11,10 @@ no-test-info-in-production-code.md
 git-commit-safety.md
 worktree-direct-commits.md
 git-history-for-context.md
-staging-main-fail-closed-gates.md
 shared-agent-context.md
 
 openrouter-only-llm-access.md
 
 # --- specific to this repo ---
 python-formatting-and-pre-commit.md
-full-local-stack-first.md
-orchestra-server-side-queries.md
-infra-command-safety.md
-empty-is-not-absent.md
-deployed-system-topology.md
-local-stack-logs.md
-orchestra-admin-vs-user-api-access.md
-taskscheduler-surgery.md
 temporary-debug-logging.md

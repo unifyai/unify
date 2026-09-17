@@ -444,29 +444,6 @@ def test_insert_rows_bulk(simulated_dm):
     assert len(rows) == 2
 
 
-def test_insert_rows_with_batched(simulated_dm):
-    """insert_rows with batched=True should return log IDs."""
-    simulated_dm.create_table("test/batched", fields={"id": "int", "text": "str"})
-
-    # Default batched=True
-    ids = simulated_dm.insert_rows(
-        "test/batched",
-        [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}],
-        batched=True,
-    )
-
-    assert isinstance(ids, list)
-    assert len(ids) == 2
-
-    # Also works with batched=False
-    ids_unbatched = simulated_dm.insert_rows(
-        "test/batched",
-        [{"id": 3, "text": "c"}],
-        batched=False,
-    )
-    assert len(ids_unbatched) == 1
-
-
 def test_update_rows(seeded_dm):
     """update_rows should modify matching rows."""
     # Update all widgets to have category 'updated_widgets'
@@ -526,24 +503,6 @@ def test_delete_rows_with_log_ids(seeded_dm):
 
     # Verify deletion
     remaining = seeded_dm.filter("test/products", filter="category == 'tools'")
-    assert len(remaining) == 0
-
-
-def test_delete_rows_with_delete_empty_rows(simulated_dm):
-    """delete_rows with delete_empty_rows=True cascades empty cleanup."""
-    simulated_dm.create_table("test/cleanup", fields={"id": "int", "data": "str"})
-    simulated_dm.insert_rows("test/cleanup", [{"id": 1, "data": "test"}])
-
-    # Delete with delete_empty_rows flag
-    deleted = simulated_dm.delete_rows(
-        "test/cleanup",
-        filter="id == 1",
-        dangerous_ok=True,
-        delete_empty_rows=True,
-    )
-
-    assert deleted == 1
-    remaining = simulated_dm.filter("test/cleanup")
     assert len(remaining) == 0
 
 

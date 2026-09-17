@@ -4,8 +4,8 @@ set -euo pipefail
 # Resolve script directory first (needed for relative path resolution)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# Optionally source environment from the repo root's .env
-# This allows storing secrets/config like UNIFY_KEY in the repo root `.env` (not committed).
+# Source the repo root's .env (not committed) so LLM provider keys and any
+# other configuration reach every pytest session.
 _ENV_FILE="$SCRIPT_DIR/../.env"
 if [ -f "$_ENV_FILE" ]; then
   # shellcheck disable=SC1090
@@ -18,16 +18,19 @@ unset _ENV_FILE
 # Source common utilities (socket derivation, locale, timeout handling)
 source "$SCRIPT_DIR/_shell_common.sh"
 
-# Source shared argument parsing (used by both parallel_run.sh and parallel_cloud_run.sh)
+# Source argument parsing
 source "$SCRIPT_DIR/_parse_args.sh"
 
 # ---- Increase file descriptor limit ----
-# Parallel tests open many network connections. Each connection uses a file
-# descriptor. macOS defaults to 256 per process, which is easily exceeded.
-# This setting is inherited by all child processes (tmux sessions, pytest).
+# Parallel sessions open many files and connections at once. macOS defaults
+# to 256 per process, which is easily exceeded. This setting is inherited by
+# all child processes (tmux sessions, pytest).
 ulimit -n 8192 2>/dev/null || true
 
 TMUX_SOCKET="$UNIFY_TMUX_SOCKET"
+
+# Resolve repo root (parent of this script's directory)
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 # ---- Log directory naming ----
 # Log subdirectories use a datetime-prefixed format for natural time-based
@@ -42,6 +45,16 @@ _derive_log_subdir() {
 
 # Generate log subdir once at script start (stable for this run)
 LOG_SUBDIR="${UNIFY_LOG_SUBDIR:-$(_derive_log_subdir "$TMUX_SOCKET")}"
+LOG_DIR="$REPO_ROOT/logs/pytest/$LOG_SUBDIR"
+
+# ---- Per-session stores ----
+# Every pytest process opens the SQLite store named by UNIFY_STORE_PATH.
+# Each session gets its own file under the run's log directory, so sessions
+# never share tables and each store stays on disk next to the session's log
+# for post-mortem queries. A UNIFY_STORE_PATH the caller already set
+# (environment, .env or --env) is honoured instead, and every session then
+# shares that one store.
+STORES_DIR="$LOG_DIR/stores"
 
 # Wrapper for all tmux commands to use our isolated socket
 # LC_ALL=en_US.UTF-8 ensures Unicode emojis work in session names
@@ -69,9 +82,48 @@ _mark_reported() {
   REPORTED_COMPLETIONS="${REPORTED_COMPLETIONS}${sid}:"
 }
 
+# Record one finished session's duration, cache stats and cost for the
+# end-of-run sorted output. The per-session temp files are written by
+# tests/conftest.py, keyed on the tmux session id.
+_record_session_result() {
+  local sid="$1" status="$2" base="$3"
+  [[ -n "${START_TIMES_FILE:-}" && -f "$START_TIMES_FILE" ]] || return 0
+  local start_time
+  start_time=$(grep "^$sid " "$START_TIMES_FILE" 2>/dev/null | cut -d' ' -f2)
+  [[ -n "$start_time" ]] || return 0
+  local duration=$(( $(date +%s) - start_time ))
+
+  local hits=0 canonical=0 misses=0
+  local stats_file="/tmp/parallel_run_cache_${sid}.txt"
+  if [[ -f "$stats_file" ]]; then
+    IFS='|' read -r hits canonical misses < "$stats_file" 2>/dev/null || true
+    rm -f "$stats_file"
+  fi
+
+  local cost="0"
+  local cost_file="/tmp/parallel_run_cost_${sid}.txt"
+  if [[ -f "$cost_file" ]]; then
+    cost=$(tr -d '[:space:]' < "$cost_file" 2>/dev/null || echo 0)
+    rm -f "$cost_file"
+  fi
+
+  # pytest exits 0 when every test skips, so a green session may have run
+  # nothing. Report those as skipped rather than passed.
+  local outcome_passed outcome_skipped
+  local outcome_file="/tmp/parallel_run_outcome_${sid}.txt"
+  if [[ -f "$outcome_file" ]]; then
+    IFS='|' read -r outcome_passed outcome_skipped < "$outcome_file" 2>/dev/null || true
+    rm -f "$outcome_file"
+    if [[ "$status" == "pass" && "${outcome_passed:-0}" == "0" && "${outcome_skipped:-0}" != "0" ]]; then
+      status="skip"
+    fi
+  fi
+
+  echo "$duration|$status|$hits|$canonical|$misses|${cost:-0}|$base" >> "$RESULTS_FILE"
+}
+
 # Report any sessions that have completed since last check
 # Prints pass/fail status inline during the drip-feed phase
-# Also records duration and cache stats for end-of-run sorted output
 report_completed_sessions() {
   # Guard against empty array (set -u treats empty array expansion as unbound)
   (( ${#CREATED_SESSION_IDS[@]} == 0 )) && return 0
@@ -91,74 +143,13 @@ report_completed_sessions() {
         local base="${current_name#p ✅ }"
         echo "  - p ✅ $base"
         _mark_reported "$sid"
-        # Record duration, cache stats, and cost for sorted output
-        if [[ -n "${START_TIMES_FILE:-}" && -f "$START_TIMES_FILE" ]]; then
-          local start_time end_time duration hits canonical misses cost
-          start_time=$(grep "^$sid " "$START_TIMES_FILE" 2>/dev/null | cut -d' ' -f2)
-          if [[ -n "$start_time" ]]; then
-            end_time=$(date +%s)
-            duration=$((end_time - start_time))
-            # Read cache stats from temp file (written by inner script)
-            hits=0
-            canonical=0
-            misses=0
-            local stats_file="/tmp/parallel_run_cache_${sid}.txt"
-            if [[ -f "$stats_file" ]]; then
-              IFS='|' read -r hits canonical misses < "$stats_file" 2>/dev/null || true
-              rm -f "$stats_file"
-            fi
-            # Read LLM provider cost from temp file (written by inner script)
-            cost="0"
-            local cost_file="/tmp/parallel_run_cost_${sid}.txt"
-            if [[ -f "$cost_file" ]]; then
-              cost=$(cat "$cost_file" 2>/dev/null | tr -d '[:space:]')
-              rm -f "$cost_file"
-            fi
-            # pytest exits 0 when every test skips, so a green session may have
-            # run nothing. Report those as skipped rather than passed.
-            local status="pass" outcome_passed outcome_skipped
-            local outcome_file="/tmp/parallel_run_outcome_${sid}.txt"
-            if [[ -f "$outcome_file" ]]; then
-              IFS='|' read -r outcome_passed outcome_skipped < "$outcome_file" 2>/dev/null || true
-              rm -f "$outcome_file"
-              if [[ "${outcome_passed:-0}" == "0" && "${outcome_skipped:-0}" != "0" ]]; then
-                status="skip"
-              fi
-            fi
-            echo "$duration|$status|$hits|$canonical|$misses|$cost|$base" >> "$RESULTS_FILE"
-          fi
-        fi
+        _record_session_result "$sid" pass "$base"
         ;;
       "f ❌ "*)
         local base="${current_name#f ❌ }"
         echo "  - f ❌ $base"
         _mark_reported "$sid"
-        # Record duration, cache stats, and cost for sorted output
-        if [[ -n "${START_TIMES_FILE:-}" && -f "$START_TIMES_FILE" ]]; then
-          local start_time end_time duration hits canonical misses cost
-          start_time=$(grep "^$sid " "$START_TIMES_FILE" 2>/dev/null | cut -d' ' -f2)
-          if [[ -n "$start_time" ]]; then
-            end_time=$(date +%s)
-            duration=$((end_time - start_time))
-            # Read cache stats from temp file (written by inner script)
-            hits=0
-            canonical=0
-            misses=0
-            local stats_file="/tmp/parallel_run_cache_${sid}.txt"
-            if [[ -f "$stats_file" ]]; then
-              IFS='|' read -r hits canonical misses < "$stats_file" 2>/dev/null || true
-              rm -f "$stats_file"
-            fi
-            # Read LLM provider cost from temp file
-            cost="0"
-            local cost_file="/tmp/parallel_run_cost_${sid}.txt"
-            if [[ -f "$cost_file" ]]; then
-              cost=$(cat "$cost_file" 2>/dev/null | tr -d '[:space:]')
-              rm -f "$cost_file"
-            fi
-            echo "$duration|fail|$hits|$canonical|$misses|$cost|$base" >> "$RESULTS_FILE"
-          fi
-        fi
+        _record_session_result "$sid" fail "$base"
         ;;
     esac
   done
@@ -192,26 +183,19 @@ trap '_cleanup_sessions INT; exit 130' INT
 trap '_cleanup_sessions TERM; exit 143' TERM
 
 # ---- Configurable directory excludes (by name) ----
-# Note: 'fixtures' is excluded because those are test data files, not tests themselves.
-# They get run explicitly by the test harness (e.g., test_parallel_run tests).
-EXCLUDE_DIRS=( .git .hg .svn .venv venv .mypy_cache .pytest_cache __pycache__ .idea .vscode fixtures )
+# Note: the fixture directories hold test data for the runner's own tests
+# (tests/parallel_run/), not tests themselves; those tests hand the fixture
+# files to this script explicitly. Excluding them by name keeps a directory
+# sweep from spawning, say, the hang fixture that exists only to be killed by
+# --session-timeout.
+EXCLUDE_DIRS=( .git .hg .svn .venv venv .mypy_cache .pytest_cache __pycache__ .idea .vscode fixtures hang_fixtures store_fixtures )
 
-# Resolve repo root (parent of this script's directory)
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-
-# Parse arguments using shared helper
+# Parse arguments
 # Returns: 0=success, 1=help requested, 2=error
 #
-# IMPORTANT: capture exit code via `|| _parse_result=$?` rather than
-# `parse_test_args "$@"; _parse_result=$?` — the latter aborts under
-# `set -e` (line 2) before the assignment runs, swallowing the help
-# / error exit and producing a silent exit-1. This was the bug behind
-# all 15 tests/parallel_run/test_flags.py failures in TestHelpFlag /
-# TestPytestPassthrough / TestTagsFlag / TestTimeoutFlag / TestEnvFlag
-# — introduced 2026-01-17 in 70ae69790 when the flag handling was
-# extracted from inline `exit 2` calls into a function returning
-# non-zero. Hidden from CI 9 days later by the discover_test_paths.py
-# matrix bug (effective 2026-01-26 in 499de17cc).
+# Capture the exit code via `|| _parse_result=$?`: a bare
+# `parse_test_args "$@"; _parse_result=$?` aborts under `set -e` before the
+# assignment runs, turning a help/usage exit into a silent exit-1.
 _parse_result=0
 parse_test_args "$@" || _parse_result=$?
 if (( _parse_result == 1 )); then
@@ -225,369 +209,13 @@ elif (( _parse_result == 2 )); then
 fi
 unset _parse_result
 
-# Per-session hang guard: in CI, default to 30 minutes per tmux session
-# unless the caller passed --session-timeout (or UNIFY_TEST_SESSION_TIMEOUT).
-# Whole-run --timeout alone lets one hung session burn the entire job budget
-# (seen as exit 2 after 7200s with 1–2 sessions still on "r ⏳").
+# Per-session hang guard: UNIFY_TEST_SESSION_TIMEOUT supplies the default
+# when --session-timeout is not passed. Whole-run --timeout alone lets one
+# hung session burn the entire budget.
 if (( SESSION_TIMEOUT == 0 )); then
   if [[ -n "${UNIFY_TEST_SESSION_TIMEOUT:-}" && "${UNIFY_TEST_SESSION_TIMEOUT}" =~ ^[0-9]+$ && "${UNIFY_TEST_SESSION_TIMEOUT}" -ge 1 ]]; then
     SESSION_TIMEOUT="${UNIFY_TEST_SESSION_TIMEOUT}"
-  elif [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
-    SESSION_TIMEOUT=1800
   fi
-fi
-
-# For backward compatibility, expose _NUM_CORES (used in some places)
-_NUM_CORES=$DETECTED_CPU_CORES
-
-# ---------------------------------------------------------------------------
-# Local Orchestra Setup
-# ---------------------------------------------------------------------------
-# ORCHESTRA_URL is the single source of truth:
-# - Unset or localhost (127.0.0.1/localhost): use local orchestra
-# - Any other URL: use it directly (staging, production, etc.)
-#
-# Local orchestra is started via the orchestra repo's scripts/local.sh.
-# Set ORCHESTRA_REPO_PATH to override the default location (../orchestra).
-#
-# SHARED ORCHESTRA HANDLING:
-# When running from a git worktree (e.g., Cursor Background Agents) or an
-# adjacent clone (created by scripts/clone_adjacent.sh), we don't restart orchestra
-# just to change log directories. Instead, we create symlinks from the
-# worktree/clone's logs/ to wherever orchestra is currently logging. This
-# avoids disrupting concurrent tests in the main repo, other worktrees, or
-# other clones.
-
-_is_local_url() {
-  local url="${1:-}"
-  [[ -z "$url" ]] && return 0  # Unset = local
-  [[ "$url" == *"127.0.0.1"* || "$url" == *"localhost"* ]]
-}
-
-_is_git_worktree() {
-  # In git worktrees, .git is a file (containing "gitdir: /path/..."), not a directory
-  [[ -f "$REPO_ROOT/.git" ]]
-}
-
-_is_adjacent_clone() {
-  # Adjacent clones (created by scripts/clone_adjacent.sh) symlink .venv to the main repo.
-  # They share the same orchestra instance and should not restart it.
-  [[ -L "$REPO_ROOT/.venv" ]]
-}
-
-_create_orchestra_log_symlinks() {
-  # Create symlinks from this repo's log directories to wherever orchestra is logging.
-  # This ensures all OTEL traces go to a single shared location, while allowing
-  # this repo (worktree or adjacent clone) to access them via symlinks.
-  #
-  # Called when orchestra is already running with logs pointing elsewhere and we
-  # don't want to restart it (worktree or adjacent clone).
-
-  local config_file="/tmp/orchestra-local-server.config"
-
-  [[ -f "$config_file" ]] || return 0
-
-  local current_otel_dir
-  current_otel_dir=$(grep "^ORCHESTRA_OTEL_LOG_DIR=" "$config_file" 2>/dev/null | cut -d= -f2-)
-
-  # Ensure logs/ directory exists in worktree
-  mkdir -p "$REPO_ROOT/logs"
-
-  # Symlink logs/all/ → main repo's logs/all/ (for OTEL trace correlation)
-  # This ensures unity/unify/unillm spans from worktree end up in same dir as orchestra spans
-  if [[ -n "$current_otel_dir" ]]; then
-    local link_path="$REPO_ROOT/logs/all"
-
-    if [[ -L "$link_path" ]]; then
-      local current_target
-      current_target=$(readlink "$link_path")
-      if [[ "$current_target" != "$current_otel_dir" ]]; then
-        rm "$link_path"
-        ln -s "$current_otel_dir" "$link_path"
-        echo "  Updated symlink: logs/all → $current_otel_dir"
-      fi
-    elif [[ ! -e "$link_path" ]]; then
-      ln -s "$current_otel_dir" "$link_path"
-      echo "  Created symlink: logs/all → $current_otel_dir"
-    fi
-  fi
-}
-
-# Resolve orchestra repo path (default: sibling directory)
-# For worktrees, look relative to the MAIN repo, not the worktree
-_orchestra_search_base="$REPO_ROOT"
-if _git_common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)"; then
-  # git rev-parse --git-common-dir returns a relative path ".git" for regular repos,
-  # but an absolute path for worktrees. Normalize to absolute for consistent comparison.
-  if [[ "$_git_common_dir" != /* ]]; then
-    _git_common_dir="$REPO_ROOT/$_git_common_dir"
-  fi
-  # If git-common-dir differs from $REPO_ROOT/.git, we're in a worktree
-  # Use the main repo's parent as the search base for orchestra
-  _main_repo_git="${_git_common_dir%/}"
-  if [[ "$_main_repo_git" != "$REPO_ROOT/.git" ]]; then
-    _orchestra_search_base="$(dirname "$_main_repo_git")"
-  fi
-fi
-_orchestra_repo_path="${ORCHESTRA_REPO_PATH:-$_orchestra_search_base/../orchestra}"
-_local_orchestra_script="$_orchestra_repo_path/scripts/local.sh"
-unset _git_common_dir _main_repo_git _orchestra_search_base
-
-_full_stack_state_file() {
-  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
-}
-
-_port_is_listening() {
-  local _port="$1"
-  lsof -nP -iTCP:"$_port" -sTCP:LISTEN 2>/dev/null | sed -n '2p' | grep -q .
-}
-
-_full_stack_source_is_active() {
-  local _state_file
-  _state_file="$(_full_stack_state_file)"
-  if [[ -f "$_state_file" ]]; then
-    python3 - "$_state_file" <<'PY' >/dev/null || return 1
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as fh:
-    mode = json.load(fh).get("mode")
-raise SystemExit(0 if not mode or mode == "source" else 1)
-PY
-  fi
-  _port_is_listening 8000 && _port_is_listening 8001
-}
-
-_resolve_orchestra_db_port() {
-  if [[ -n "${ORCHESTRA_DB_PORT:-}" ]]; then
-    printf '%s\n' "$ORCHESTRA_DB_PORT"
-    return 0
-  fi
-
-  local _prefix="${ORCHESTRA_PREFIX:-orchestra}"
-  local _config_file="/tmp/${_prefix}-local-server.config"
-  if [[ -f "$_config_file" ]]; then
-    local _from_config
-    _from_config=$(grep "^ORCHESTRA_DB_PORT=" "$_config_file" 2>/dev/null | cut -d= -f2- | head -1)
-    if [[ -n "$_from_config" ]]; then
-      printf '%s\n' "$_from_config"
-      return 0
-    fi
-  fi
-
-  if command -v docker >/dev/null 2>&1; then
-    local _mapped _inspect_mapped=""
-    _mapped="$(docker port "${_prefix}-local-db" 5432/tcp 2>/dev/null | sed -n 's/.*://p' | head -1 || true)"
-    if [[ -z "$_mapped" ]]; then
-      _inspect_mapped="$(docker inspect -f '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' "${_prefix}-local-db" 2>/dev/null || true)"
-      _mapped="$_inspect_mapped"
-    fi
-    if [[ -n "$_mapped" ]]; then
-      printf '%s\n' "$_mapped"
-      return 0
-    fi
-  fi
-
-  if _full_stack_source_is_active; then
-    printf '55432\n'
-    return 0
-  fi
-
-  printf '5432\n'
-}
-
-if _is_local_url "${ORCHESTRA_URL:-}"; then
-  if [[ -x "$_local_orchestra_script" ]]; then
-    export ORCHESTRA_DB_PORT="$(_resolve_orchestra_db_port)"
-    echo "Local orchestra PostgreSQL port: $ORCHESTRA_DB_PORT"
-    # Set up orchestra configuration for tests
-    export ORCHESTRA_SEED_USER=1
-    export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-unity-test-user-001}"
-    export ORCHESTRA_TEST_EMAIL="${ORCHESTRA_TEST_EMAIL:-unity-test@debug.local}"
-    # Local orchestra defaults its admin bearer to "local-admin-key"
-    # (scripts/local.sh); the test process needs the same value so reserved
-    # Builtins-project seeding can swap it in (builtins_seed_key_override).
-    # Unconditional, like UNIFY_KEY below: a developer .env commonly carries
-    # a real hosted ORCHESTRA_ADMIN_KEY (for cross-tenant Orchestra ops
-    # against the hosted backend), which would otherwise silently override
-    # this and make every admin-gated call (e.g. Builtins-project seeding)
-    # 401 against the freshly-seeded local instance. CI passes the same
-    # "local-admin-key" value explicitly, so this changes nothing for CI.
-    export ORCHESTRA_ADMIN_KEY="local-admin-key"
-
-    # Set up OTEL log directory for cross-repo trace correlation (logs/all/).
-    # Note: ORCHESTRA_LOG_DIR (per-request JSON traces to logs/orchestra/) is
-    # intentionally NOT set. Those traces duplicate the OTEL spans in logs/all/
-    # and add ~370MB to CI artifacts. Orchestra's own CI still uses it.
-    export ORCHESTRA_OTEL_LOG_DIR="$REPO_ROOT/logs/all"
-    export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-86400}"
-    export SELF_HOST=1
-    export ORCHESTRA_TRIGGER_CALLBACK_BASE_URL="${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-https://orchestra.example}"
-    export COMPOSIO_WEBHOOK_SECRET="${COMPOSIO_WEBHOOK_SECRET:-test-composio-webhook-secret}"
-    export PROVIDER_TRIGGER_CATALOG_ENVIRONMENT="${PROVIDER_TRIGGER_CATALOG_ENVIRONMENT:-selfhost}"
-    export TRIGGER_EVENT_WRAPPING_MASTER_KEY="${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-test-master-key-material}"
-    export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${UNIFY_HOME:-$HOME/.unity}/provider-event-blobs}"
-    mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
-
-    # Check if local orchestra is already running
-    if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
-      # Orchestra is running - check if logging config matches what we need
-      _config_file="/tmp/orchestra-local-server.config"
-      _needs_restart=false
-
-      if [[ -f "$_config_file" ]]; then
-        # Read current config and compare with desired logging dirs
-        _current_otel_dir=$(grep "^ORCHESTRA_OTEL_LOG_DIR=" "$_config_file" 2>/dev/null | cut -d= -f2-)
-
-        # Check if OTEL dir points to our logs/all directory
-        if [[ "$_current_otel_dir" != "$ORCHESTRA_OTEL_LOG_DIR" ]]; then
-          _needs_restart=true
-        fi
-      else
-        # No config file means orchestra was started without our logging setup
-        _needs_restart=true
-      fi
-
-      if [[ "$_needs_restart" == "true" ]]; then
-        if _full_stack_source_is_active && [[ "${UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
-          echo "Full local stack detected: reusing existing Orchestra instead of purging/restarting it."
-          _create_orchestra_log_symlinks
-          export ORCHESTRA_URL="$_local_url"
-        elif _is_git_worktree || _is_adjacent_clone; then
-          # SHARED MODE: Don't restart orchestra (would disrupt other worktrees/clones).
-          # Instead, create symlinks so logs appear in expected locations.
-          echo "Shared orchestra: using existing instance, creating log symlinks..."
-          _create_orchestra_log_symlinks
-          export ORCHESTRA_URL="$_local_url"
-        elif [[ "${UNIFY_FORCE_ORCHESTRA_PURGE:-0}" == "1" ]]; then
-          # MAIN REPO MODE: Purge then start to pick up logging config AND wipe
-          # the database for test isolation. Opt in via UNIFY_FORCE_ORCHESTRA_PURGE=1
-          # so concurrent long-running suites (bare pytest, other agents) are not
-          # killed mid-flight when OTEL log paths differ.
-          _original_url="$_local_url"
-          echo "Purging + starting orchestra to apply logging configuration..."
-          "$_local_orchestra_script" purge >/dev/null 2>&1 || true
-          "$_local_orchestra_script" start >"/tmp/orchestra-startup.log" 2>&1 || true
-          if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
-            echo "Using local orchestra: $_local_url"
-            export ORCHESTRA_URL="$_local_url"
-          else
-            echo "Warning: Orchestra purge/start failed, using existing instance (logging may not work)" >&2
-            export ORCHESTRA_URL="$_original_url"
-          fi
-          unset _original_url
-        else
-          echo "Orchestra running with different logging config; creating symlinks (set UNIFY_FORCE_ORCHESTRA_PURGE=1 to purge DB and restart)..."
-          _create_orchestra_log_symlinks
-          export ORCHESTRA_URL="$_local_url"
-        fi
-      else
-        # Logging already configured correctly, reuse existing instance
-        echo "Local orchestra already running with logging enabled: $_local_url"
-        export ORCHESTRA_URL="$_local_url"
-      fi
-      unset _config_file _needs_restart _current_otel_dir
-    else
-      # Not running - need to start it
-      if _full_stack_source_is_active && [[ "${UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
-        _deploy_repo="${UNIFY_DEPLOY_REPO_PATH:-${UNIFY_DEPLOY_REPO_PATH:-$REPO_ROOT/../unify-deploy}}"
-        _stack_script="$_deploy_repo/selfhost/stack.sh"
-        echo "Error: Full local stack is active but Orchestra is not responding at http://127.0.0.1:8000/v0." >&2
-        if [[ -x "$_stack_script" ]]; then
-          echo "  Repair or restart the stack: bash \"$_stack_script\" status" >&2
-          echo "  Full restart: bash \"$_stack_script\" up --durable" >&2
-        else
-          echo "  Start or repair the stack with unify-deploy/selfhost/stack.sh." >&2
-        fi
-        echo "  To run an isolated test Orchestra anyway: UNIFY_ALLOW_ISOLATED_TEST_ORCHESTRA=1" >&2
-        unset _deploy_repo _stack_script
-        exit 1
-      else
-        # Stop any stale orchestra state first
-        "$_local_orchestra_script" stop >/dev/null 2>&1 || true
-
-        # Remove any existing PostgreSQL container so we get fresh one with correct max_connections
-        _db_port="$ORCHESTRA_DB_PORT"
-        for _container in $(docker ps -a --filter "publish=${_db_port}" --format "{{.Names}}" 2>/dev/null); do
-          docker stop "$_container" >/dev/null 2>&1 || true
-          docker rm "$_container" >/dev/null 2>&1 || true
-        done
-        unset _container
-
-        # Wait for DB port to be fully released (Docker Desktop can be slow)
-        if lsof -i ":$_db_port" &>/dev/null; then
-          echo "Waiting for port $_db_port to be released..."
-          _max_wait=30
-          _waited=0
-          while lsof -i ":$_db_port" &>/dev/null && (( _waited < _max_wait )); do
-            sleep 1
-            (( ++_waited ))
-          done
-          echo "Port $_db_port released."
-        fi
-        unset _db_port _max_wait _waited
-
-        echo "Starting local orchestra..."
-        # Capture local.sh stdout+stderr to a log file so CI can surface the
-        # actual failure reason when start fails (orchestra's own server log
-        # at /tmp/orchestra-local-server.log only exists if start_orchestra_server
-        # reached its background-exec line; earlier failures — check_docker,
-        # start_db_container, run_migrations, etc. — leave no breadcrumb without
-        # this file). The "Dump orchestra logs on failure" step in tests.yml
-        # tails this when a job fails.
-        _orchestra_start_log="/tmp/orchestra-startup.log"
-        if "$_local_orchestra_script" start >"$_orchestra_start_log" 2>&1; then
-          if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
-            echo "Using local orchestra: $_local_url"
-            export ORCHESTRA_URL="$_local_url"
-          else
-            echo "Warning: Local orchestra started but not responding" >&2
-            echo "----- local.sh start output -----" >&2
-            cat "$_orchestra_start_log" >&2 || true
-            echo "---------------------------------" >&2
-          fi
-        else
-          echo "Warning: Could not start local orchestra" >&2
-          echo "----- local.sh start output -----" >&2
-          cat "$_orchestra_start_log" >&2 || true
-          echo "---------------------------------" >&2
-        fi
-        unset _orchestra_start_log
-      fi
-    fi
-  else
-    echo "Warning: Orchestra script not found at $_local_orchestra_script" >&2
-    echo "  Set ORCHESTRA_REPO_PATH or clone orchestra repo to ../orchestra" >&2
-  fi
-
-  # Local pytest must authenticate as the seeded test user. UnityTests/.env
-  # often carries a hosted UNIFY_KEY whose tenant has no billing_account row in
-  # this Postgres, so /v0/credits/deduct returns 400 "Billing is not set up".
-  export SELF_HOST=1
-  export UNIFY_KEY="local-test-api-key"
-  if [[ -x "$_local_orchestra_script" ]]; then
-    if "$_local_orchestra_script" seed; then
-      echo "Local orchestra test user + billing seeded"
-    else
-      echo "Warning: orchestra seed failed; credit-deduct tests may fail" >&2
-    fi
-  fi
-
-  unset _local_url
-else
-  echo "Using remote orchestra: $ORCHESTRA_URL"
-fi
-unset _orchestra_repo_path _local_orchestra_script
-
-# ---------------------------------------------------------------------------
-# Communication Service URL Setup
-# ---------------------------------------------------------------------------
-# UNIFY_COMMS_URL must be set via .env or environment for real-comms tests.
-# CI sets this in .github/workflows/tests.yml; local developers set it in .env.
-# Tests that use simulated comms (the default) do not require this.
-if [[ -n "${UNIFY_COMMS_URL:-}" ]]; then
-  echo "Using communication service: $UNIFY_COMMS_URL"
-else
-  echo "UNIFY_COMMS_URL not set (simulated comms only — real-comms tests will be skipped)"
 fi
 
 # Build pytest marker filter based on flags
@@ -606,79 +234,6 @@ elif (( DETERMINISTIC_ONLY )); then
 fi
 
 # ---------------------------------------------------------------------------
-# Helper: check if a boolean env var is truthy (via --env flags OR system env)
-# Usage: is_env_truthy VAR_NAME
-# ---------------------------------------------------------------------------
-is_env_truthy() {
-  local var_name="$1"
-  # Check --env flags first
-  for kv in "${ENV_OVERRIDES[@]+"${ENV_OVERRIDES[@]}"}"; do
-    case "$kv" in
-      "${var_name}=true"|"${var_name}=True"|"${var_name}=1")
-        return 0 ;;
-      "${var_name}=false"|"${var_name}=False"|"${var_name}=0"|"${var_name}=")
-        return 1 ;;
-    esac
-  done
-  # Fall back to system environment variable
-  local val="${!var_name:-}"
-  case "$val" in
-    true|True|1) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# ---------------------------------------------------------------------------
-# Helper: get env var value (--env flags take precedence over system env)
-# Usage: get_env_value VAR_NAME [DEFAULT]
-# ---------------------------------------------------------------------------
-get_env_value() {
-  local var_name="$1"
-  local default="${2:-}"
-  # Check --env flags first
-  for kv in "${ENV_OVERRIDES[@]+"${ENV_OVERRIDES[@]}"}"; do
-    if [[ "$kv" == "${var_name}="* ]]; then
-      echo "${kv#${var_name}=}"
-      return 0
-    fi
-  done
-  # Fall back to system environment variable
-  local val="${!var_name:-$default}"
-  echo "$val"
-}
-
-# ---------------------------------------------------------------------------
-# Helper: check if random projects mode is enabled
-# ---------------------------------------------------------------------------
-is_random_projects_mode() {
-  is_env_truthy "UNIFY_TESTS_RAND_PROJ"
-}
-
-# ---------------------------------------------------------------------------
-# Helper: delete the shared project (script-level, not per-session)
-# Used for UNIFY_TESTS_DELETE_PROJ_ON_START/EXIT in shared project mode
-# ---------------------------------------------------------------------------
-delete_shared_project() {
-  local phase="$1"  # "start" or "exit"
-  echo "Deleting project '${UNISDK_PROJECT:-UnityTests}'..."
-  "$VENV_PY" - << 'PYEOF'
-import os
-import sys
-try:
-    from unify import db
-    project_name = os.environ.get("UNISDK_PROJECT", "UnityTests")
-    try:
-        db.delete_project(project_name, missing_ok=False)
-        print(f"Deleted project '{project_name}'")
-    except Exception:
-        print(f"Project '{project_name}' did not exist, skipping deletion")
-except ImportError:
-    print("Warning: unify module not available, skipping project deletion")
-    sys.exit(0)
-PYEOF
-}
-
-# ---------------------------------------------------------------------------
 # Helper: check if a var name is in the --env overrides
 # Usage: is_var_in_env_overrides VAR_NAME
 # ---------------------------------------------------------------------------
@@ -690,6 +245,32 @@ is_var_in_env_overrides() {
     fi
   done
   return 1
+}
+
+# ---------------------------------------------------------------------------
+# Helper: resolve the store a session should open
+# Usage: resolve_store_path SESSION_NAME
+# ---------------------------------------------------------------------------
+# --env wins over the environment (which includes .env); with neither set,
+# the runner hands out one store per session under STORES_DIR.
+RUNNER_OWNS_STORES=1
+if is_var_in_env_overrides "UNIFY_STORE_PATH" || [[ -n "${UNIFY_STORE_PATH:-}" ]]; then
+  RUNNER_OWNS_STORES=0
+fi
+
+resolve_store_path() {
+  local session_name="$1"
+  for kv in "${ENV_OVERRIDES[@]+"${ENV_OVERRIDES[@]}"}"; do
+    if [[ "$kv" == "UNIFY_STORE_PATH="* ]]; then
+      echo "${kv#UNIFY_STORE_PATH=}"
+      return 0
+    fi
+  done
+  if [[ -n "${UNIFY_STORE_PATH:-}" ]]; then
+    echo "$UNIFY_STORE_PATH"
+    return 0
+  fi
+  echo "$STORES_DIR/${session_name}.sqlite"
 }
 
 # ---------------------------------------------------------------------------
@@ -705,38 +286,28 @@ build_env_exports() {
   exports="$exports UNIFY_LOG_SUBDIR=$LOG_SUBDIR"
 
   # ---------------------------------------------------------------------------
-  # OpenTelemetry Configuration for Cross-Repo Full-Stack Traces
+  # OpenTelemetry Configuration for Cross-Repo Traces
   # ---------------------------------------------------------------------------
-  # Enable OTEL tracing across all four repos (unity, unify, unillm, orchestra)
-  # so spans from a single test are aggregated into one {trace_id}.jsonl file.
-  # All repos write to logs/all/ (shared directory) - per-test isolation is
-  # provided by unique trace_ids, not subdirectories. This allows Orchestra
-  # (a persistent server) to participate in cross-process traces.
+  # Enable OTEL tracing in unify and unillm so the spans from a single test
+  # are aggregated into one {trace_id}.jsonl file under logs/all/. Per-test
+  # isolation comes from unique trace_ids, not subdirectories.
   local otel_log_dir="$REPO_ROOT/logs/all"
 
   # Enable OTEL master switches (unless explicitly disabled via --env)
   if ! is_var_in_env_overrides "UNIFY_OTEL"; then
     exports="$exports UNIFY_OTEL=true"
   fi
-  if ! is_var_in_env_overrides "UNISDK_OTEL"; then
-    exports="$exports UNISDK_OTEL=true"
-  fi
   if ! is_var_in_env_overrides "UNILLM_OTEL"; then
     exports="$exports UNILLM_OTEL=true"
   fi
 
-  # Point all repos to the unified OTEL log directory (unless explicitly set via --env)
-  # All repos write {trace_id}.jsonl files; shared directory = unified traces
+  # Point both repos to the shared OTEL log directory (unless explicitly set via --env)
   if ! is_var_in_env_overrides "UNIFY_OTEL_LOG_DIR"; then
     exports="$exports UNIFY_OTEL_LOG_DIR=$otel_log_dir"
-  fi
-  if ! is_var_in_env_overrides "UNISDK_OTEL_LOG_DIR"; then
-    exports="$exports UNISDK_OTEL_LOG_DIR=$otel_log_dir"
   fi
   if ! is_var_in_env_overrides "UNILLM_OTEL_LOG_DIR"; then
     exports="$exports UNILLM_OTEL_LOG_DIR=$otel_log_dir"
   fi
-  # Note: ORCHESTRA_OTEL_LOG_DIR is set during local orchestra setup above
 
   # Add all --env flag overrides
   for kv in "${ENV_OVERRIDES[@]+"${ENV_OVERRIDES[@]}"}"; do
@@ -764,10 +335,10 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 # Worktree dependency symlinks (for local editable packages)
 # ---------------------------------------------------------------------------
-# pyproject.toml references ../unisdk and ../unillm as editable local packages.
-# In the main repo at ~/unify, these resolve to ~/unisdk and ~/unillm.
-# In a worktree at ~/unify/.claude/worktrees/xyz, they resolve to
-# ~/unify/.claude/worktrees/unisdk which doesn't exist by default.
+# pyproject.toml references ../unillm as an editable local package. In the
+# main repo at ~/unify that resolves to ~/unillm. In a worktree at
+# ~/unify/.claude/worktrees/xyz it resolves to
+# ~/unify/.claude/worktrees/unillm, which doesn't exist by default.
 #
 # This function creates symlinks at the worktree parent level so that
 # `uv sync` works correctly in any worktree without manual setup.
@@ -792,10 +363,10 @@ ensure_worktree_dependency_symlinks() {
   worktree_parent=$(dirname "$REPO_ROOT")
 
   # For each local dependency, ensure a symlink exists at the worktree parent level
-  local deps=("unify" "unillm" "unisdk")
+  local deps=("unillm")
   for dep in "${deps[@]}"; do
-    local target="$main_repo/../$dep"  # e.g., ~/unify (sibling of main repo)
-    local link="$worktree_parent/$dep"  # e.g., ~/.cursor/worktrees/unity/unify
+    local target="$main_repo/../$dep"  # e.g., ~/unillm (sibling of main repo)
+    local link="$worktree_parent/$dep"  # e.g., ~/.cursor/worktrees/unity/unillm
 
     # Resolve to absolute path
     if [[ -d "$target" ]]; then
@@ -827,9 +398,8 @@ ensure_worktree_dependency_symlinks
 # ---------------------------------------------------------------------------
 # Python environment (uv + repo-local .venv)
 # ---------------------------------------------------------------------------
-# This script is used in local dev, CI, and Cursor Cloud Agents.
-# For portability, avoid hardcoding home-directory venv paths or relying on `python`
-# being present on PATH. Instead, bootstrap and use the repo-local `.venv`.
+# Avoid hardcoding home-directory venv paths or relying on `python` being
+# present on PATH. Instead, bootstrap and use the repo-local `.venv`.
 VENV_DIR="$REPO_ROOT/.venv"
 VENV_PY="$VENV_DIR/bin/python"
 UV_BIN=""
@@ -900,88 +470,24 @@ if ! ensure_project_venv; then
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# Prepare the shared project (unless using random projects mode or skipped)
-# ---------------------------------------------------------------------------
-# UNIFY_SKIP_SHARED_PROJECT_PREP: When set, skip the heavyweight project
-# preparation entirely. Useful for:
-# - Nested parallel_run.sh calls inside tests (the outer call already prepared)
-# - Running fixture tests that don't need the real UnityTests project
-if [[ -n "${UNIFY_SKIP_SHARED_PROJECT_PREP:-}" ]]; then
-  echo "Skipping shared project preparation (UNIFY_SKIP_SHARED_PROJECT_PREP set)..."
-elif is_random_projects_mode; then
-  echo "Random projects mode detected; skipping shared project preparation..."
-else
-  # Handle DELETE_ON_START at script level (before any sessions start)
-  # This is done here (not per-session) to avoid race conditions
-  if is_env_truthy "UNIFY_TESTS_DELETE_PROJ_ON_START"; then
-    delete_shared_project "start"
-  fi
-  echo "Preparing shared project '${UNISDK_PROJECT:-UnityTests}'..."
-  if [[ -f "$SCRIPT_DIR/_prepare_shared_project.py" ]]; then
-    "$VENV_PY" "$SCRIPT_DIR/_prepare_shared_project.py"
-  else
-    echo "Warning: _prepare_shared_project.py not found." >&2
-    echo "Falling back to random projects mode." >&2
-    ENV_OVERRIDES+=( "UNIFY_TESTS_RAND_PROJ=True" "UNIFY_TESTS_DELETE_PROJ_ON_EXIT=True" )
-  fi
-fi
-
 # Build the command to run in each tmux session
 run_cmd() {
-  local target="$1"   # pytest target (file path or node id)
-  local marker_arg="$2"  # optional marker filter (e.g., "-m eval")
+  local target="$1"        # pytest target (file path or node id)
+  local marker_arg="$2"    # optional marker filter (e.g., "-m eval")
+  local session_name="$3"  # unique session name (names the session's store)
   # Build the inner script first with safe %q for path/target, then quote the whole script with %q
   local inner
   local env_exports
-  # Always export UTF-8 locale for proper emoji handling in session names
-  # Enable cache stats tracking (UNILLM_CACHE_STATS must be set before importing unillm)
-  #
-  # Note: tmux sessions use `bash -c` (not `bash -lc`) so they inherit the full
-  # environment from parallel_run.sh. This means all .env variables are available
-  # without an explicit whitelist. The only vars that need special handling are:
-  # - UNIFY_TESTS_DELETE_PROJ_ON_START/EXIT: explicitly unset in shared project mode
-  #   to prevent race conditions (multiple sessions deleting the same project).
-  env_exports='export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 UNILLM_CACHE_STATS=true'
-  # Re-assert the runner's auth/routing env inside the session command. tmux
-  # launches each command through the user's default shell, and zsh sources
-  # ~/.zshenv even for plain `zsh -c`, so a dotfile exporting one of these
-  # (e.g. a personal hosted UNIFY_KEY) silently clobbers the inherited value
-  # and every session 401s against the local Orchestra this runner just
-  # seeded. The runner's values are the source of truth; restate them after
-  # shell init has run.
-  local _reassert_var
-  for _reassert_var in UNIFY_KEY ORCHESTRA_URL ORCHESTRA_ADMIN_KEY; do
-    if [[ -n "${!_reassert_var:-}" ]]; then
-      env_exports="$env_exports $(printf '%s=%q' "$_reassert_var" "${!_reassert_var}")"
-    fi
-  done
-  if is_random_projects_mode; then
-    # Random projects mode: each session gets its own isolated project.
-    # Per-session deletion is safe here since projects don't overlap.
-    env_exports="$env_exports UNIFY_TESTS_RAND_PROJ=True"
-    # Pass delete flags only in random mode (safe per-session)
-    if is_env_truthy "UNIFY_TESTS_DELETE_PROJ_ON_START"; then
-      env_exports="$env_exports UNIFY_TESTS_DELETE_PROJ_ON_START=True"
-    fi
-    if is_env_truthy "UNIFY_TESTS_DELETE_PROJ_ON_EXIT"; then
-      env_exports="$env_exports UNIFY_TESTS_DELETE_PROJ_ON_EXIT=True"
-    fi
-  else
-    # Shared project mode: skip session setup (already done by prepare script).
-    # Blocklist: unset delete flags to prevent race conditions where multiple
-    # sessions try to delete the shared project simultaneously.
-    env_exports="$env_exports UNIFY_SKIP_SESSION_SETUP=True"
-    env_exports="$env_exports; unset UNIFY_TESTS_DELETE_PROJ_ON_START UNIFY_TESTS_DELETE_PROJ_ON_EXIT"
-  fi
-  # Append user-provided --env overrides (includes UNIFY_TEST_SOCKET for log scoping)
-  # Uses a separate `export` statement because in shared-project mode env_exports
-  # ends with `; unset ...` and bare NAME=VALUE pairs would be swallowed by unset.
-  local user_overrides
-  user_overrides="$(build_env_exports)"
-  if [[ -n "$user_overrides" ]]; then
-    env_exports="$env_exports; export$user_overrides"
-  fi
+  # Every value the session depends on is exported inside the command itself
+  # rather than only inherited: tmux launches the command through the user's
+  # default shell, and zsh sources ~/.zshenv even for plain `zsh -c`, so a
+  # dotfile exporting one of these would otherwise silently clobber the
+  # inherited value. UTF-8 locale keeps emoji session names intact;
+  # UNILLM_CACHE_STATS must be set before unillm is imported.
+  env_exports="export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 UNILLM_CACHE_STATS=true"
+  env_exports="$env_exports $(printf 'UNIFY_STORE_PATH=%q' "$(resolve_store_path "$session_name")")"
+  # Append user-provided --env overrides plus the socket/log-dir/OTEL exports
+  env_exports="$env_exports$(build_env_exports)"
   # Build pytest command with optional marker filter, scenario overwrite, and extra args
   local pytest_cmd
   local extra_args=""
@@ -1011,7 +517,7 @@ run_cmd() {
       timeout_bin="gtimeout"
     fi
     if [[ -n "$timeout_bin" ]]; then
-      # --foreground: forward signals to pytest (needed for CI cancel).
+      # --foreground: forward signals to pytest.
       # --kill-after=30s: escalate to SIGKILL if pytest ignores SIGTERM.
       pytest_cmd=$(printf '%q --foreground --kill-after=30s %q %s' "$timeout_bin" "${SESSION_TIMEOUT}s" "$pytest_cmd")
     else
@@ -1021,7 +527,7 @@ run_cmd() {
   # Build inner command with socket name directly interpolated (not via env var)
   # This ensures tmux commands target the correct isolated server
   # Note: LC_ALL=en_US.UTF-8 is required for Unicode emoji support in tmux session names
-  # Note: Log paths are now auto-derived by conftest.py using UNIFY_TEST_SOCKET + semantic naming
+  # Note: Log paths are auto-derived by conftest.py using UNIFY_TEST_SOCKET + semantic naming
   # Inner command runs inside tmux session after pytest completes.
   # The rename-session uses "|| true" to gracefully handle race conditions
   # where multiple sessions complete simultaneously or external agents interfere.
@@ -1292,9 +798,9 @@ collect_nodes_batch() {
   fi
 
   local cmd
-  # Always use UNIFY_SKIP_SESSION_SETUP for collection - we only need test IDs,
-  # not a real project. This avoids slow project creation/deletion per collection.
-  local env_exports='export UNIFY_SKIP_SESSION_SETUP=True'
+  # Collection only needs test ids, not an activated project: SKIP_UNIFY_TEST_INIT
+  # keeps the harness from opening a store and seeding the builtin catalogues.
+  local env_exports='export SKIP_UNIFY_TEST_INIT=1'
   # Append user-provided --env overrides
   local user_overrides
   user_overrides="$(build_env_exports)"
@@ -1432,7 +938,7 @@ if (( ! SERIAL )); then
   fi
   validate_and_add_direct_nodes
 elif [[ -n "$MARKER_FILTER" ]]; then
-  # Default mode WITH marker filter: collect nodes first to find which files
+  # Serial mode WITH marker filter: collect nodes first to find which files
   # have matching tests, then create one session per file (not per-node).
   # This prevents creating sessions for files with 0 matching tests.
   all_targets=()
@@ -1461,7 +967,7 @@ elif [[ -n "$MARKER_FILTER" ]]; then
   fi
   validate_and_add_direct_nodes
 else
-  # Default mode without marker filter: one session per file
+  # Serial mode without marker filter: one session per file
   if (( ${#direct_files[@]} )); then
     printf '%s\0' "${direct_files[@]}" >> "$tmp"
   fi
@@ -1504,7 +1010,12 @@ declare -a session_ids=()
 print_log_directories() {
   echo "========================================================================"
   echo "📁 pytest logs:  logs/pytest/$LOG_SUBDIR/"
-  echo "🔗 OTel traces:  logs/{unity|unify|unillm|orchestra}/ (per-repo), logs/all/ (cross-repo)"
+  if (( RUNNER_OWNS_STORES )); then
+    echo "🗄️  stores:       logs/pytest/$LOG_SUBDIR/stores/ (one SQLite file per session)"
+  else
+    echo "🗄️  store:        $(resolve_store_path "") (UNIFY_STORE_PATH, shared by every session)"
+  fi
+  echo "🔗 OTel traces:  logs/{unify|unillm}/ (per-repo), logs/all/ (cross-repo)"
   echo "📖 Logging docs: logs/README.md"
   echo "========================================================================"
 }
@@ -1518,6 +1029,12 @@ if (( MAX_JOBS > 0 )); then
   echo "Concurrency limit: $MAX_JOBS simultaneous sessions"
 else
   echo "Concurrency limit: unlimited"
+fi
+
+# Sessions open their stores as soon as pytest starts, so the directory has
+# to exist before the first session is created.
+if (( RUNNER_OWNS_STORES )); then
+  mkdir -p "$STORES_DIR"
 fi
 
 # Print header before drip-feeding session creation
@@ -1542,7 +1059,7 @@ for target in "${files[@]}"; do
   # Note: Log directory is created lazily by conftest.py only when a log file is
   # actually written, avoiding empty directories when sessions fail/are interrupted.
   # Note: Log paths are auto-derived by conftest.py (semantic name + timestamp in socket subdir)
-  cmd="$(run_cmd "$target" "$MARKER_FILTER")"
+  cmd="$(run_cmd "$target" "$MARKER_FILTER" "$session")"
 
   # Capture session ID to track this specific run robustly
   sid=$(tmux_cmd new-session -d -P -F "#{session_id}" -s "$session" -n "$wname" "$cmd")
@@ -1646,12 +1163,6 @@ for sid in "${session_ids[@]}"; do
   fi
 done
 
-# Handle DELETE_ON_EXIT at script level (after all sessions complete)
-# This is done here (not per-session) to avoid race conditions in shared mode
-if ! is_random_projects_mode && is_env_truthy "UNIFY_TESTS_DELETE_PROJ_ON_EXIT"; then
-  delete_shared_project "exit"
-fi
-
 # Print test stats (duration, cache, and cost) sorted fastest to slowest
 echo ""
 echo "========================================================================"
@@ -1664,7 +1175,7 @@ skip_count=$( { grep '|skip|' "$RESULTS_FILE" || true; } 2>/dev/null | wc -l | t
 fail_count=$( { grep '|fail|' "$RESULTS_FILE" || true; } 2>/dev/null | wc -l | tr -d ' ')
 
 # Build duration summary for both stdout and file output
-DURATION_SUMMARY_FILE="$REPO_ROOT/logs/pytest/$LOG_SUBDIR/duration_summary.txt"
+DURATION_SUMMARY_FILE="$LOG_DIR/duration_summary.txt"
 mkdir -p "$(dirname "$DURATION_SUMMARY_FILE")"
 
 # Helper to print to both stdout and file

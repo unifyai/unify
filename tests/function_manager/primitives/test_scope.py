@@ -6,9 +6,7 @@ from unify.function_manager.primitives.scope import (
     PrimitiveScope,
     VALID_MANAGER_ALIASES,
     default_runtime_scope,
-    scoped_managers_for_role,
 )
-from unify.session_details import SESSION_DETAILS
 
 # ────────────────────────────────────────────────────────────────────────────
 # PrimitiveScope validation tests
@@ -25,12 +23,12 @@ def test_valid_single_manager():
 
 def test_valid_multiple_managers():
     """Can create scope with multiple valid managers."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "tasks"}))
+    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "web"}))
     assert len(scope.scoped_managers) == 3
     assert scope.includes("files")
     assert scope.includes("contacts")
-    assert scope.includes("tasks")
-    assert not scope.includes("web")
+    assert scope.includes("web")
+    assert not scope.includes("data")
 
 
 def test_invalid_manager_raises():
@@ -53,10 +51,10 @@ def test_empty_scope_raises():
 
 def test_scope_key_is_deterministic():
     """scope_key is deterministic regardless of insertion order."""
-    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "tasks"}))
-    scope2 = PrimitiveScope(scoped_managers=frozenset({"tasks", "files", "contacts"}))
+    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "web"}))
+    scope2 = PrimitiveScope(scoped_managers=frozenset({"web", "files", "contacts"}))
     assert scope1.scope_key == scope2.scope_key
-    assert scope1.scope_key == "contacts,files,tasks"
+    assert scope1.scope_key == "contacts,files,web"
 
 
 def test_scope_key_single_manager():
@@ -94,6 +92,12 @@ def test_single_factory_for_each_manager():
         scope = PrimitiveScope.single(alias)
         assert scope.scoped_managers == frozenset({alias})
         assert scope.includes(alias)
+
+
+def test_default_runtime_scope_exposes_every_manager():
+    """default_runtime_scope() exposes the full alias set."""
+    assert default_runtime_scope().scoped_managers == VALID_MANAGER_ALIASES
+    assert default_runtime_scope() is default_runtime_scope()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -139,21 +143,14 @@ def test_scope_hashable():
 def test_valid_manager_aliases_contains_expected():
     """VALID_MANAGER_ALIASES contains expected managers."""
     expected = {
-        "comms",
         "contacts",
-        "canvas",
         "ingestion",
-        "tasks",
         "transcripts",
         "secrets",
         "web",
         "data",
         "files",
-        "workspace_email",
-        "integrations",
-        "computer",
         "actor",
-        "coordinator",
     }
     assert expected == VALID_MANAGER_ALIASES
 
@@ -163,42 +160,9 @@ def test_valid_manager_aliases_is_frozenset():
     assert isinstance(VALID_MANAGER_ALIASES, frozenset)
 
 
-def test_computer_in_valid_aliases():
-    """computer (ComputerPrimitives) is in VALID_MANAGER_ALIASES.
-
-    ComputerPrimitives are indexed in Functions/Primitives alongside state
-    managers, enabling discovery via FunctionManager and proper masking
-    when promoted to an environment.
-    """
-    assert "computer" in VALID_MANAGER_ALIASES
-
-
 def test_includes_returns_false_for_nonexistent():
     """includes() returns False for aliases not in scope."""
     scope = PrimitiveScope.single("files")
     # Check all other aliases are not included
     for alias in VALID_MANAGER_ALIASES - {"files"}:
         assert not scope.includes(alias)
-
-
-def test_scoped_managers_for_role_excludes_coordinator_for_regular_role():
-    scoped = scoped_managers_for_role(is_coordinator=False)
-    assert "coordinator" not in scoped
-    assert scoped == (VALID_MANAGER_ALIASES - {"coordinator"})
-
-
-def test_scoped_managers_for_role_includes_coordinator_for_coordinator_role():
-    scoped = scoped_managers_for_role(is_coordinator=True)
-    assert scoped == VALID_MANAGER_ALIASES
-
-
-def test_default_runtime_scope_respects_session_role_flag():
-    SESSION_DETAILS.reset()
-    try:
-        SESSION_DETAILS.is_coordinator = False
-        assert "coordinator" not in default_runtime_scope().scoped_managers
-
-        SESSION_DETAILS.is_coordinator = True
-        assert "coordinator" in default_runtime_scope().scoped_managers
-    finally:
-        SESSION_DETAILS.reset()

@@ -23,7 +23,6 @@ ACTOR_SYSTEM_PROMPT_BUDGET = 10_400
 ACTOR_ACT_TOOL_SCHEMAS_BUDGET = 14_500
 STORAGE_REVIEW_DOCTRINE_BUDGET = 4_700
 CM_SYSTEM_PROMPT_BUDGET = 11_100
-VOICE_AGENT_PROMPT_BUDGET = 2_800
 
 
 @pytest.fixture(autouse=True)
@@ -47,26 +46,14 @@ def _simulated_actor():
 
 
 def _actor_system_prompt() -> str:
-    from unify.actor.environments.base import _CompositeEnvironment
-    from unify.actor.environments.computer import ComputerEnvironment
     from unify.actor.environments.state_managers import StateManagerEnvironment
     from unify.actor.prompt_builders import build_code_act_prompt
-    from unify.function_manager.primitives import ComputerPrimitives
 
-    composite = _CompositeEnvironment(
-        [
-            ComputerEnvironment(ComputerPrimitives(computer_mode="mock")),
-            StateManagerEnvironment(),
-        ],
-    )
     return build_code_act_prompt(
-        environments={"primitives": composite},
+        environments={"primitives": StateManagerEnvironment()},
         tools=dict(_simulated_actor().get_tools("act")),
         can_store=True,
         discovery_first_policy=True,
-        # The OAuth section reads live workspace connections; the payload
-        # under ratchet is the connection-independent render.
-        include_oauth_helper=False,
     )
 
 
@@ -115,17 +102,6 @@ def _cm_system_prompt() -> str:
     ).flatten()
 
 
-def _voice_agent_prompt() -> str:
-    from unify.conversation_manager.prompt_builders import build_voice_agent_prompt
-
-    return build_voice_agent_prompt(
-        bio="I help Acme configure its Unify team.",
-        assistant_name="Avery",
-        boss_first_name="Dana",
-        boss_surname="Owner",
-    ).flatten()
-
-
 _CASES = {
     "actor_system_prompt": (_actor_system_prompt, ACTOR_SYSTEM_PROMPT_BUDGET),
     "actor_act_tool_schemas": (
@@ -137,7 +113,6 @@ _CASES = {
         STORAGE_REVIEW_DOCTRINE_BUDGET,
     ),
     "cm_system_prompt": (_cm_system_prompt, CM_SYSTEM_PROMPT_BUDGET),
-    "voice_agent_prompt": (_voice_agent_prompt, VOICE_AGENT_PROMPT_BUDGET),
 }
 
 

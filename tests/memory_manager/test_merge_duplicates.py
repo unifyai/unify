@@ -6,7 +6,6 @@ from unify.memory_manager.memory_manager import MemoryManager
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.transcript_manager.simulated import SimulatedTranscriptManager
 from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unify.task_scheduler.simulated import SimulatedTaskScheduler
 
 
 @pytest.mark.asyncio
@@ -118,12 +117,6 @@ async def test_update_contacts_merges_duplicates(monkeypatch):
             description=(
                 "TEST SCENARIO: Merge duplicates. Keep behaviour lightweight; no assumption"
                 " about pre-existing knowledge is required."
-            ),
-        ),
-        task_scheduler=SimulatedTaskScheduler(
-            description=(
-                "TEST SCENARIO: Merge duplicates. Accept task updates deterministically;"
-                " no external I/O."
             ),
         ),
     )

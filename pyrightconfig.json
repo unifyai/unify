@@ -1,8 +1,6 @@
 {
   "extraPaths": [
-    "../unillm",
-    "../unify",
-    "../unify-deploy"
+    "../unillm"
   ],
   "exclude": [
     "**/.git",
@@ -17,7 +15,7 @@
   "venvPath": ".",
   "typeCheckingMode": "off",
   "include": [
-    "unity",
+    "unify",
     "tests",
     "conftest.py"
   ],

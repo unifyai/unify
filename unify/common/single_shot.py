@@ -8,7 +8,7 @@ final_answer, no steering handles.
 but that decision may include multiple parallel tool calls.
 
 Use cases:
-- Reactive event handlers (ConversationManager responding to SMS/email/call)
+- Reactive event handlers (ConversationManager responding to a chat message)
 - Simple classification/routing decisions
 - Any "pick actions and execute them" pattern
 """

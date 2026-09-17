@@ -1,24 +1,14 @@
-"""
-Tests for DataManager ops builder helpers.
-
-Plot and table-view ops tests were removed alongside ``plot()`` / ``table_view()``
-on DataManager.
-"""
+"""Tests for DataManager ops builder helpers."""
 
 from __future__ import annotations
 
 import pytest
-import requests
-from unify.db import StoreError
+from unify.db import DuplicateKey
 from unify.data_manager.ops import ingest_ops, mutation_ops
 
 
-def _duplicate_key_error() -> StoreError:
-    response = requests.Response()
-    response.status_code = 400
-    response._content = b'{"detail":"Duplicate composite key already exists"}'
-    response.url = "https://api.unify.ai/v0/logs"
-    return StoreError("https://api.unify.ai/v0/logs", "POST", response)
+def _duplicate_key_error() -> DuplicateKey:
+    return DuplicateKey("key", "a")
 
 
 def test_insert_rows_passes_on_duplicate_to_create_logs(monkeypatch):
@@ -37,7 +27,6 @@ def test_insert_rows_passes_on_duplicate_to_create_logs(monkeypatch):
     )
 
     assert captured["on_duplicate"] == "skip"
-    assert captured["batched"] is True
     assert captured["entries"] == [{"key": "a"}, {"key": "b"}]
 
 
@@ -61,7 +50,7 @@ def test_insert_rows_duplicate_key_errors_raise_by_default(monkeypatch):
 
     monkeypatch.setattr(mutation_ops, "unify_create_logs", fake_create_logs)
 
-    with pytest.raises(StoreError, match="Duplicate composite key"):
+    with pytest.raises(DuplicateKey, match="Duplicate entry for unique field"):
         mutation_ops.insert_rows_impl("Data/test", [{"key": "a"}])
 
 

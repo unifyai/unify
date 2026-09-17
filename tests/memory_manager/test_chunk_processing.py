@@ -30,7 +30,6 @@ pytestmark = pytest.mark.enable_eventbus
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.transcript_manager.simulated import SimulatedTranscriptManager
 from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unify.task_scheduler.simulated import SimulatedTaskScheduler
 
 from unify.transcript_manager.types.message import Message
 from unify.conversation_manager.cm_types import Medium
@@ -86,12 +85,6 @@ async def test_parse_transcript_for_updates(monkeypatch):
                 " can assume an empty store and respond quickly."
             ),
         ),
-        task_scheduler=SimulatedTaskScheduler(
-            description=(
-                "TEST SCENARIO: Chunk processing. Simulated TaskScheduler"
-                " should accept simple updates without hesitation."
-            ),
-        ),
     )
 
     # Shrink the chunk size to just **3** messages so the test runs fast.
@@ -107,7 +100,7 @@ async def test_parse_transcript_for_updates(monkeypatch):
 
     msgs = [
         Message(  # contact 1 -> assistant (id 0)
-            medium=Medium.SMS_MESSAGE,
+            medium=Medium.UNIFY_MESSAGE,
             sender_id=1,
             receiver_ids=[0],
             timestamp=base_ts,
@@ -115,7 +108,7 @@ async def test_parse_transcript_for_updates(monkeypatch):
             exchange_id=1,
         ),
         Message(  # assistant -> contact 1
-            medium=Medium.SMS_MESSAGE,
+            medium=Medium.UNIFY_MESSAGE,
             sender_id=0,
             receiver_ids=[1],
             timestamp=base_ts + dt.timedelta(seconds=1),
@@ -123,7 +116,7 @@ async def test_parse_transcript_for_updates(monkeypatch):
             exchange_id=1,
         ),
         Message(  # contact 2 -> assistant (id 0)
-            medium=Medium.SMS_MESSAGE,
+            medium=Medium.UNIFY_MESSAGE,
             sender_id=2,
             receiver_ids=[0],
             timestamp=base_ts + dt.timedelta(seconds=2),

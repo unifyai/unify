@@ -1167,17 +1167,24 @@ class Store:
                 column = str(fk.get("name", ""))
                 if not column or action not in ("CASCADE", "SET NULL"):
                     continue
+                segments = column.split(".")
+                # A reference held inside a list (``ids[*]`` or
+                # ``items[*].ref.id``) is one element among many, so both
+                # rules act on that element: CASCADE pops it and SET NULL
+                # clears it. Only a scalar reference makes CASCADE delete
+                # the referring row itself.
+                row_cascade = action == "CASCADE" and "[*]" not in column
                 for target in self._all_rows(other):
-                    if not _fk_matches(target["data"], column, value):
+                    if not _fk_walk(target["data"], segments, value, action, False):
                         continue
-                    if action == "CASCADE":
+                    if row_cascade:
                         self._cascade_foreign_keys(other, target["data"])
                         self._conn.execute(
                             "DELETE FROM logs WHERE id = ?",
                             (target["id"],),
                         )
                     else:
-                        _fk_set_null(target["data"], column, value)
+                        _fk_walk(target["data"], segments, value, action, True)
                         self._conn.execute(
                             "UPDATE logs SET data = ?, updated_at = ? WHERE id = ?",
                             (dumps(target["data"]), _now_iso(), target["id"]),
@@ -1960,20 +1967,53 @@ class _JoinAliases:
         }
 
 
-def _fk_matches(data: Mapping[str, Any], column: str, value: Any) -> bool:
-    if column.endswith("[*]"):
-        items = data.get(column[:-3])
-        return isinstance(items, list) and value in items
-    return data.get(column) == value
+def _fk_walk(
+    node: Any,
+    segments: Sequence[str],
+    value: Any,
+    on_delete: str,
+    mutate: bool,
+) -> bool:
+    """Whether any leaf under a foreign-key path equals ``value``.
 
-
-def _fk_set_null(data: dict[str, Any], column: str, value: Any) -> None:
-    if column.endswith("[*]"):
-        items = data.get(column[:-3])
-        if isinstance(items, list):
-            data[column[:-3]] = [i for i in items if i != value]
-        return
-    data[column] = None
+    A path is dot-separated; a segment ending in ``[*]`` names a list and
+    applies the rest of the path to every element. With ``mutate`` the
+    ``on_delete`` rule is applied in place: a matching list element is
+    dropped (CASCADE) or, when the path continues into it, the matching leaf
+    inside it is cleared (SET NULL); a list of scalars loses the matching
+    element under either rule; a scalar leaf is set to ``None``.
+    """
+    segment, rest = segments[0], segments[1:]
+    listwise = segment.endswith("[*]")
+    key = segment[:-3] if listwise else segment
+    if not isinstance(node, dict) or key not in node:
+        return False
+    current = node[key]
+    if listwise:
+        if not isinstance(current, list):
+            return False
+        if not rest:
+            hit = any(item == value for item in current)
+            if hit and mutate:
+                node[key] = [item for item in current if item != value]
+            return hit
+        hit = False
+        kept = []
+        for item in current:
+            matched = _fk_walk(item, rest, value, on_delete, mutate)
+            hit = hit or matched
+            if mutate and matched and on_delete == "CASCADE":
+                continue
+            kept.append(item)
+        if mutate:
+            node[key] = kept
+        return hit
+    if not rest:
+        hit = current == value
+        if hit and mutate:
+            node[key] = None
+        return hit
+    return _fk_walk(current, rest, value, on_delete, mutate)
 
 
 # ----------------------------------------------------------------------

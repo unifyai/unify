@@ -166,17 +166,8 @@ class BaseDataManager(BaseStateManager):
             Example: ``{"attempt": "job_id"}`` → attempt auto-increments per job_id
 
         destination : str | None, default ``None``
-            Where this data table lives. Pass ``"personal"`` (the default)
-            for working datasets, scratch tables, and data tied only to your
-            individual analysis. Pass ``"team:<id>"`` for team-shared
-            datasets every member of the team should see, such as operational
-            data, team KPIs, shared reference tables, and datasets every member
-            queries. Read the *Accessible shared teams* block in your system
-            prompt before choosing. Schema operations operate within one
-            destination at a time; cross-destination schema migrations are not
-            supported. The privacy floor is personal: when confidence is low
-            and the data would land in a team, call ``request_clarification``
-            instead of guessing toward the wider audience.
+            Where this data table lives. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -392,8 +383,8 @@ class BaseDataManager(BaseStateManager):
         --------------
         # Get unique key column name
         ctx_info = dm.get_table("Knowledge/Products")
-        unique_keys = ctx_info.get("unique_keys")
-        pk_column = unique_keys[0] if isinstance(unique_keys, list) else unique_keys
+        unique_keys = ctx_info.get("unique_keys") or {}   # {column: type}
+        pk_column = next(iter(unique_keys), None)
 
         # Check if table has auto-counting
         ctx_info = dm.get_table("Data/orders")
@@ -519,13 +510,8 @@ class BaseDataManager(BaseStateManager):
             This prevents accidental data loss.
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"team:<id>"`` for
-            team-shared datasets every member of the team should see. Read
-            the *Accessible shared teams* block before choosing. The privacy
-            floor is personal; call ``request_clarification`` for
-            ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Raises
         ------
@@ -581,13 +567,8 @@ class BaseDataManager(BaseStateManager):
             New full context path for the table.
 
         destination : str | None, default ``None``
-            Which Data root contains the source and destination tables. Pass
-            ``"personal"`` (the default) for working datasets, scratch tables,
-            and data tied only to your individual analysis. Pass
-            ``"team:<id>"`` for team-shared datasets every member of the
-            team should see. Schema operations operate within one destination
-            at a time. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the source and destination tables. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -663,11 +644,8 @@ class BaseDataManager(BaseStateManager):
             Set to ``False`` for immutable audit columns.
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets and scratch tables. Pass
-            ``"team:<id>"`` for a team-shared dataset every member of the
-            team should see. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -734,11 +712,8 @@ class BaseDataManager(BaseStateManager):
             Name of the column to delete.
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets and scratch tables. Pass
-            ``"team:<id>"`` for a team-shared dataset every member of the
-            team should see. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -800,11 +775,8 @@ class BaseDataManager(BaseStateManager):
             The name ``id`` is reserved and cannot be used.
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets and scratch tables. Pass
-            ``"team:<id>"`` for a team-shared dataset every member of the
-            team should see. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -878,11 +850,8 @@ class BaseDataManager(BaseStateManager):
             - ``"({score1} + {score2}) / 2"`` - average
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets and scratch tables. Pass
-            ``"team:<id>"`` for a team-shared dataset every member of the
-            team should see. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -954,8 +923,8 @@ class BaseDataManager(BaseStateManager):
         include_ids: bool = False,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         """
-        Filter rows from a table by expression (Orchestra evaluates
-        ``filter`` server-side). Prefer a selective ``filter=``; use
+        Filter rows from a table by expression (the store evaluates
+        ``filter`` inside the database). Prefer a selective ``filter=``; use
         ``reduce`` to count/sum/group. Never download a large table into
         Python to filter, count, or decide updates.
 
@@ -1033,7 +1002,7 @@ class BaseDataManager(BaseStateManager):
 
         include_ids : bool, default ``False``
             When ``True``, each returned row dict includes ``_log_id`` (the
-            Orchestra log id). Use this when a later ``update_rows`` /
+            store's row id). Use this when a later ``update_rows`` /
             ``update_by_ids`` / ``delete_rows`` call needs stable ids.
             Mutually exclusive with ``return_ids_only``. Requires a single
             resolved context (not federated multi-source reads).
@@ -1462,11 +1431,8 @@ class BaseDataManager(BaseStateManager):
             Example: ``"created_at >= '2024-01-01'"``
 
         destination : str | None, default ``None``
-            Which Data root should receive ``dest_table``. Pass
-            ``"personal"`` (the default) for working datasets and scratch
-            tables. Pass ``"team:<id>"`` for a team-shared dataset every
-            member of the team should see. Read the *Accessible shared teams* block before choosing; call ``request_clarification`` for
-            ambiguity-going-wider.
+            Which Data root should receive ``dest_table``. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2117,7 +2083,6 @@ class BaseDataManager(BaseStateManager):
         context: str,
         rows: List[Dict[str, Any]],
         *,
-        batched: bool = True,
         on_duplicate: Optional[str] = None,
         destination: str | None = None,
     ) -> List[int]:
@@ -2146,26 +2111,16 @@ class BaseDataManager(BaseStateManager):
 
             Example: ``[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]``
 
-        batched : bool, default ``True``
-            When ``True`` (recommended), uses batched log creation for better
-            performance. Set to ``False`` only for special cases requiring
-            sequential insertion.
-
         on_duplicate : str | None, default ``None``
-            Orchestra collision policy for unique-key / unique-field rows.
-            ``"skip"`` inserts non-conflicting rows in one batched call and
-            returns only the successful log ids (prefer this over
-            download-or-per-row retry loops). ``"error"`` / ``None`` keep
-            Orchestra's reject-on-collision default. Only applied when
-            ``batched=True``.
+            Collision policy for unique-key / unique-field rows. ``"skip"``
+            inserts non-conflicting rows in one call and returns only the
+            successful log ids (prefer this over download-or-per-row retry
+            loops). ``"error"`` / ``None`` keep the store's reject-on-collision
+            default.
 
         destination : str | None, default ``None``
-            Where Data-owned rows should be stored. Pass ``"personal"`` (the
-            default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"team:<id>"`` for
-            team-shared operational data, team KPIs, shared reference tables,
-            and datasets every member queries. Read the *Accessible shared teams* block before choosing. The privacy floor is personal; call
-            ``request_clarification`` for ambiguity-going-wider.
+            Where Data-owned rows should be stored. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2204,7 +2159,7 @@ class BaseDataManager(BaseStateManager):
           CORRECT: Batch rows into a single insert_rows call
 
         - WRONG: Catching unique-key failures then retrying each row
-          CORRECT: ``on_duplicate="skip"`` on the batched insert
+          CORRECT: ``on_duplicate="skip"`` on the insert
 
         Notes
         -----
@@ -2249,21 +2204,17 @@ class BaseDataManager(BaseStateManager):
             ``filter()``. Provide ``filter`` and/or ``log_ids``.
 
         log_ids : list[int] | None, default ``None``
-            Specific Orchestra log ids to update. More efficient when ids
+            Specific log ids to update. More efficient when ids
             are already known.
 
         overwrite : bool, default ``False``
             Only applies when updating purely by ``log_ids`` (no filter).
-            When ``True``, pass ``updates`` through Orchestra with
-            overwrite semantics. When ``False``, Orchestra merges fields.
+            When ``True``, the store overwrites the given fields. When
+            ``False``, it merges them into what is already set.
 
         destination : str | None, default ``None``
-            Which Data root contains the rows. Pass ``"personal"`` (the
-            default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"team:<id>"`` for
-            team-shared operational data, team KPIs, shared reference tables,
-            and datasets every member queries. Read the *Accessible shared teams* block before choosing; call ``request_clarification`` for
-            ambiguity-going-wider.
+            Which Data root contains the rows. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2318,20 +2269,20 @@ class BaseDataManager(BaseStateManager):
         context: Optional[str] = None,
     ) -> int:
         """
-        Update known Orchestra log ids in place.
+        Update known log ids in place.
 
         Use when callers already hold log ids (e.g. from
         ``filter(..., include_ids=True)``) and do not need a table filter.
-        ``context`` is optional when Orchestra can resolve the ids alone.
+        ``context`` is optional when the store can resolve the ids alone.
 
         Parameters
         ----------
         log_ids : list[int]
-            Orchestra log ids to update.
+            Log ids to update.
         updates : dict
             Field values to write.
         overwrite : bool, default ``True``
-            Orchestra overwrite flag for the update payload.
+            Whether the update overwrites set fields or merges into them.
         context : str | None, default ``None``
             Optional fully-qualified context hint for the update.
 
@@ -2376,7 +2327,8 @@ class BaseDataManager(BaseStateManager):
             Maximum number of rows to claim.
         destination : str | None, default ``None``
             Which Data root contains the rows (same semantics as
-            ``update_rows``).
+            ``update_rows``). Only the personal root exists: pass
+            ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2427,12 +2379,8 @@ class BaseDataManager(BaseStateManager):
             Safety flag that MUST be set to ``True`` to confirm deletion.
 
         destination : str | None, default ``None``
-            Which Data root contains the rows. Pass ``"personal"`` (the
-            default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"team:<id>"`` for
-            team-shared operational data, team KPIs, shared reference tables,
-            and datasets every member queries. Read the *Accessible shared teams* block before choosing; call ``request_clarification`` for
-            ambiguity-going-wider.
+            Which Data root contains the rows. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2591,12 +2539,8 @@ class BaseDataManager(BaseStateManager):
             *fields*.
 
         destination : str | None, default ``None``
-            Where Data-owned rows should be stored. Pass ``"personal"`` (the
-            default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"team:<id>"`` for
-            team-shared operational data, team KPIs, shared reference tables,
-            and datasets every member queries. Read the *Accessible shared teams* block before choosing. The privacy floor is personal; call
-            ``request_clarification`` for ambiguity-going-wider.
+            Where Data-owned rows should be stored. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         execution : IngestExecutionConfig | None, default ``None``
             Advanced pipeline knobs (max_workers, retries, backoff,
@@ -2620,14 +2564,14 @@ class BaseDataManager(BaseStateManager):
             2. Empty strings (``""``) are universally coerced to ``None``.
             3. Cell values that do not conform to their column's
                determined type are coerced to ``None`` rather than
-               causing per-row rejection in Orchestra.
+               causing per-row rejection in the store.
             4. Determined types are sent as ``explicit_types`` metadata
-               on every row so that Orchestra enforces the schema
+               on every row so that the store enforces the schema
                without re-inferring types from values.
 
             When ``False``, only the universal empty-string → ``None``
             coercion is applied; no type inference or type-mismatch
-            coercion occurs, and Orchestra's default inference is used.
+            coercion occurs, and the store's default inference is used.
 
         storage_client : Any | None, default ``None``
             Optional storage adapter used by streaming handles that reference
@@ -2784,11 +2728,8 @@ class BaseDataManager(BaseStateManager):
             throughput matters more than immediate availability.
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets and scratch tables. Pass
-            ``"team:<id>"`` for a team-shared dataset every member of the
-            team should see. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------
@@ -2858,11 +2799,8 @@ class BaseDataManager(BaseStateManager):
             the full trade-off discussion.
 
         destination : str | None, default ``None``
-            Which Data root contains the table. Pass ``"personal"`` (the
-            default) for working datasets and scratch tables. Pass
-            ``"team:<id>"`` for a team-shared dataset every member of the
-            team should see. Read the *Accessible shared teams* block before
-            choosing; call ``request_clarification`` for ambiguity-going-wider.
+            Which Data root contains the table. Only the personal root
+            exists: pass ``"personal"`` or leave it ``None``.
 
         Returns
         -------

@@ -4,42 +4,42 @@ This document describes Unify's internal architecture for developers who want to
 
 ## Mental model
 
-Unify implements an AI assistant's brain as a **distributed back office**. Rather than one monolithic agent loop, there are specialized **state managers** — each owning a slice of the assistant's persistent state (contacts, knowledge, tasks, transcripts, etc.) — coordinated by a central **Actor** that writes Python programs to compose them.
+Unify implements an AI assistant's brain as a **back office**. Rather than one monolithic agent loop, there are specialized **state managers** — each owning a slice of the assistant's persistent state (contacts, knowledge, transcripts, files, functions, …) — coordinated by a central **Actor** that writes Python programs to compose them, with a persistent **ConversationManager** above the Actor that talks to the user and steers the work.
 
-Most public operations in the system, from searching contacts to executing a multi-step task, run inside an **async LLM tool loop** and return a **steerable handle**. These handles are the universal interface for steerable work: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running. Typed catalogues (Knowledge, Guidance) are the exception: they expose direct CRUD/lifecycle methods as Actor JSON tools, not NL tool loops.
+Most public operations in the system, from searching contacts to running a multi-step plan, run inside an **async LLM tool loop** and return a **steerable handle**. These handles are the universal interface for steerable work: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running. Typed catalogues (Knowledge, Guidance, Functions) are the exception: they expose direct CRUD/lifecycle methods as Actor JSON tools, not NL tool loops.
 
 ```
-User
+User (terminal chat)
  │
  ▼
-ConversationManager ◄── voice IPC ──► Fast Brain (LiveKit)
+ConversationManager ── event-driven, one tool decision per turn
  │
  │  starts actions, steers in-flight work
  ▼
 CodeActActor ── Python plans over primitives.* + JSON tools ──►
  │
  │  primitive calls start LLM tool loops;
- │  KnowledgeManager_* / GuidanceManager_* are typed CRUD tools
+ │  KnowledgeManager_* / GuidanceManager_* / FunctionManager_* are typed tools
  ▼
 ┌───────────────────────────────────────────────────────┐
 │  State Managers                                       │
 │                                                       │
-│  ContactManager    KnowledgeManager   TaskScheduler   │
-│  TranscriptManager GuidanceManager    FileManager     │
-│  ImageManager      FunctionManager    WebSearcher     │
-│  SecretManager     BlacklistManager   DataManager     │
+│  ContactManager    KnowledgeManager   TranscriptManager│
+│  GuidanceManager   FunctionManager    FileManager     │
+│  IngestionManager  ImageManager       WebSearcher     │
+│  SecretManager     DataManager                        │
 │                                                       │
 │  EventBus ─── typed pub/sub backbone                  │
 │  MemoryManager ─── offline consolidation              │
 └───────────────────────────────────────────────────────┘
+ │
+ ▼
+unify.db ── one SQLite file: projects, contexts, rows, derived columns
 ```
 
 Steering propagates through the full tree: stopping the Actor stops its inner manager loops; interjecting into the ConversationManager can reach a deeply nested in-flight tool loop.
 
-Hosted deployment concerns are intentionally optional at this boundary. The
-public repo exposes a small `unify.deploy_runtime` SPI for session assignment,
-job lifecycle hooks, metrics export, and shutdown log archival, with local/no-op
-defaults when no private hosted backend is installed.
+The assistant is **reactive**: every piece of work starts from a message the user sent or from work those messages started. There is no scheduler, no timer wheel and no inbound channel other than the in-app chat, so the runtime is one process with no listeners.
 
 ---
 
@@ -47,7 +47,7 @@ defaults when no private hosted backend is installed.
 
 **Files:** `unify/common/async_tool_loop.py`, `unify/common/_async_tool/loop.py`
 
-The async tool loop is the primary runtime for steerable manager methods. Those methods typically: create an LLM client, register domain-specific tools, start a loop, and return a handle. Typed catalogues (KnowledgeManager, GuidanceManager) instead expose direct CRUD/lifecycle methods consumed as Actor JSON tools.
+The async tool loop is the primary runtime for steerable manager methods. Those methods typically: create an LLM client, register domain-specific tools, start a loop, and return a handle. Typed catalogues instead expose direct CRUD/lifecycle methods consumed as Actor JSON tools.
 
 ### How it works
 
@@ -186,7 +186,7 @@ This means you can ask "what's the flight search doing?" and the inspection loop
 
 ### `forward_handle_call` — signature adaptation
 
-Different handle implementations extend the base signature with domain-specific kwargs (e.g., `BaseActiveTask.stop` adds `cancel`, `ConversationManagerHandle.interject` adds `pinned`). `forward_handle_call` introspects the target method's actual signature, filters out unsupported kwargs, and applies positional fallbacks — so delegation boundaries work without hand-written adapter code.
+Different handle implementations extend the base signature with domain-specific kwargs (e.g., `ConversationManagerHandle.interject` adds `pinned`). `forward_handle_call` introspects the target method's actual signature, filters out unsupported kwargs, and applies positional fallbacks — so delegation boundaries work without hand-written adapter code.
 
 ---
 
@@ -200,20 +200,20 @@ The Actor doesn't pick from a JSON tool menu. It generates Python programs that 
 contacts = await primitives.contacts.ask("Who was at the Henderson meeting?")
 for contact in contacts:
     history = await primitives.transcripts.ask(f"What is {contact} working on?")
-    await primitives.contacts.update(f"Send {contact} a status email about {history}")
+    await primitives.contacts.update(f"Note that {contact} is working on {history}")
 ```
 
 This runs in a `PythonExecutionSession` — a sandboxed environment where the `primitives` namespace is pre-populated with async methods that dispatch to the real managers. Typed catalogues such as Knowledge and Guidance are exposed as top-level JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than `primitives.*`.
 
 ### Why CodeAct over JSON tools
 
-JSON tool calling forces every composition to be a separate round-trip. To look up contacts, query transcripts for each, and send emails, the LLM needs 3+ turns where it re-reads the entire context each time. With CodeAct, the same logic is a single program with variables, loops, and branching — one plan, one LLM turn for the plan, then execution.
+JSON tool calling forces every composition to be a separate round-trip. To look up contacts, query transcripts for each, and record what was found, the LLM needs 3+ turns where it re-reads the entire context each time. With CodeAct, the same logic is a single program with variables, loops, and branching — one plan, one LLM turn for the plan, then execution.
 
 The Actor still uses the async tool loop internally (the LLM generates code as a "tool call" that gets executed), so it inherits all the steering, compression, and observability infrastructure.
 
 ### Discovery-first tool policy
 
-The Actor implements a **gating policy**: until the LLM has queried both `FunctionManager` (what custom functions exist?) and `GuidanceManager` (what procedures/SOPs apply?), the full tool surface is hidden. This forces an explore-then-act pattern that prevents the LLM from jumping to action before understanding what's available.
+The Actor implements a **gating policy**: until the LLM has queried both `FunctionManager` (what stored functions exist?) and `GuidanceManager` (what procedures/SOPs apply?), the full tool surface is hidden. This forces an explore-then-act pattern that prevents the LLM from jumping to action before understanding what's available.
 
 ### Primitives registry
 
@@ -226,17 +226,15 @@ The Actor implements a **gating policy**: until the LLM has queried both `Functi
 - Priority, domain, description, and usage hints for prompt construction
 - Dependencies between managers
 
-The registry auto-discovers methods from manager base classes, generates tool schemas, builds prompt context, and constructs the sandbox's global state — all from the spec definitions.
+The registry auto-discovers methods from manager base classes, generates tool schemas, builds prompt context, and constructs the sandbox's global state — all from the spec definitions. The same registry seeds a read-only **builtins catalogue** of every primitive into the store, so the Actor can search for a capability the way it searches for a stored function.
 
-### Verification
+### Storage review and the verification ledger
 
-**Files:** `unify/actor/verification_runtime.py`, `unify/function_manager/verification/`
+**Files:** `unify/actor/code_act_actor.py` (`_start_storage_check_loop`), `unify/function_manager/verification/`
 
-A recurring task's steady state is a stored function firing with no model in the loop. That state is *earned*. Every compositional `Function` row carries a verification ledger: an **effect class** detected deterministically from its AST (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`; every primitive is classified in `classify.py`, unknown ones are `unsafe_effectful` and logged), a **trust hash** over its source, dependency closure, venv and language, a **contract** derived from type hints plus librarian-authored postconditions, **fixtures** for pure functions, and a summary folded from the append-only `Functions/Verifications` table. `Function.verify` is derived from that evidence by `policy.derive_verify` — no tool, prompt or model writes it.
+After a run completes — and after each completed turn of a persistent session — a **storage review** loop reads the trajectory and decides whether anything is worth persisting: a stored function (code that worked), a procedure (how to compose things), or a claim (something learned). Often nothing is.
 
-While a function is untrusted, a symbolic run (a task entrypoint executing without the CodeAct loop) wraps every untrusted callable in its closure. Per call: tier-0 input check → for effectful leaves, wait for every earlier verdict in the run to land `PASS`, then static review (cached per hash), argument review and precondition probe to completion; for pure/read leaves those passes race the call → memo lookup → execute with an interactions log → tier-0 output check → an async post pass. Verdict tasks run on a dedicated verifier loop; the barrier is total-order over the run's verdicts, not dependency-tracked. A `FAIL` cancels later verdicts and the entrypoint task, repairs the blamed leaf (`fault=caller` blames the parent; a repeat on the same target escalates one frame) and re-invokes the root with a memo so no effect runs twice, bounded by `max_rewinds_per_run`. `UNSURE` or a timeout at the barrier holds the run (`ExecutionState.held`) with an owner notification and no effect executed. Delivery waits for the root verdict by default. Trusted functions in a mixed closure get a memo wrapper only; trusted effectful functions without an output contract are sampled for spot checks that inform but never gate. A fully trusted closure runs with no supervisor, no wrappers and no verdict tasks.
-
-Trust is invalidated by any change to source, dependencies, venv or linked guidance, and by any `FAIL`. Offline promotion follows from the ledger: a task is eligible when every function in its entrypoint's closure is trusted, and is promoted automatically at the end of the run in which the last member flips. Every actor LLM client is tagged with a `purpose` (`planning`, `verification`, `repair`) and each execution row records the token split so the distillation curve — planning tokens falling to zero as verification tokens fall to zero — can be plotted.
+Every stored `Function` row carries a verification ledger: an **effect class** detected deterministically from its AST (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`; every primitive is classified in `classify.py`, unknown ones are `unsafe_effectful`), a **trust hash** over its source, dependency closure, venv and language, a **contract** derived from type hints plus librarian-authored postconditions, **fixtures** for pure functions, and a summary folded from the append-only `Functions/Verifications` table. Tier-0 checks validate arguments against the contract before a call and the result after it, and any change to source, dependencies, venv or linked guidance invalidates trust.
 
 ---
 
@@ -258,44 +256,55 @@ The `_as_caller_description` class attribute on each manager tells nested loops 
 
 ### Key managers
 
-**ContactManager** — People and relationships. CRUD over structured contact records with search, merge (deduplication), and relationship tracking.
+**ContactManager** — People and relationships. CRUD over structured contact records with search, merge (deduplication), and relationship tracking. Provisions the assistant's own contact and the user's contact on first run.
 
-**KnowledgeManager** — Typed claim ledger for durable domain knowledge (facts, policies, definitions, decisions, constraints, insights, preferences) with provenance and lifecycle status. Exposed as `KnowledgeManager_*` JSON tools on the Actor (like Guidance), not as `primitives.knowledge.*`. Passive store; writers are the live Actor/CM, StorageCheck, and optionally MemoryManager.
+**KnowledgeManager** — Typed claim ledger for durable domain knowledge (facts, policies, definitions, decisions, constraints, insights, preferences) with provenance and lifecycle status. Exposed as `KnowledgeManager_*` JSON tools on the Actor (like Guidance), not as `primitives.knowledge.*`. Passive store; writers are the live Actor/ConversationManager, the storage review, and MemoryManager.
 
-**TaskScheduler** — Durable tasks. Create, edit, reorder, and execute tasks. `execute()` starts a task via `Actor.act()` and returns a live steerable handle, making tasks first-class concurrent operations.
+**TranscriptManager** — Conversation history. Logs every chat message, and searches, filters, and analyzes past conversations. Can resolve participants via ContactManager.
 
-**TranscriptManager** — Conversation history. Search, filter, and analyze past conversations. Can resolve participants via ContactManager.
+**GuidanceManager** — Procedures and SOPs. Step-by-step instructions, software walkthroughs, and strategies for composing functions. Linked to FunctionManager entries; editing or deleting an entry invalidates the trust of the functions linked to it. A read-only builtins catalogue imported from the Agent Skills ecosystem is federated into every search.
 
-**GuidanceManager** — Procedures and SOPs. Step-by-step instructions, software walkthroughs, and strategies for composing functions. Linked to FunctionManager entries; editing or deleting an entry invalidates the trust of the functions linked to it.
+**FunctionManager** — Stored Python functions with metadata, per-function venvs, the verification ledger, and execution in-process or out-of-process.
 
-**MemoryManager** — Offline consolidation. Runs periodically (every ~50 messages) to extract contacts, relationships, knowledge, tasks, and response policies from recent conversations into the structured managers.
+**FileManager / IngestionManager / DataManager** — Files are parsed by FileManager, stored through IngestionManager's checkpointed runs, and queried through DataManager's filter/search/reduce/join operations over any store context.
+
+**MemoryManager** — Offline consolidation. Runs every ~50 messages to extract contacts, relationships, knowledge, and response policies from recent conversations into the structured managers.
 
 ---
 
-## The ConversationManager and dual-brain voice
+## The ConversationManager
 
 **File:** `unify/conversation_manager/conversation_manager.py`
 
-The ConversationManager is the top-level orchestrator for live conversations. It has a fundamentally different design from the other managers because it handles real-time interaction.
+The ConversationManager is the top-level orchestrator for the live conversation. It has a fundamentally different design from the other managers because it handles real-time interaction: it sees the full picture — the chat thread, notifications, in-flight actions, system state — and makes deliberate decisions about what to do. It uses a single-shot tool decision pattern (one LLM call → one action) rather than a multi-turn loop, because the user might send another message at any moment.
 
-### Slow brain / fast brain
+### Events in, events out
 
-**Slow brain** (ConversationManager): Runs in the main process. Sees the full picture — all conversations, notifications, in-flight actions, system state. Makes deliberate decisions about what to do. Uses a single-shot tool decision pattern (one LLM call → one action) rather than a multi-turn loop, because the user might send another message at any moment.
-
-**Fast brain** (LiveKit voice agent): Runs as a separate subprocess. Sub-second latency for voice conversations. Handles the conversation autonomously using its own LLM.
-
-They communicate over IPC with three signal types:
-- **SPEAK** — "say exactly this" (bypasses the fast brain's LLM)
-- **NOTIFY** — "here's context, decide how to use it"
-- **BLOCK** — the fast brain continues autonomously
+Inbound messages arrive as `UnifyMessageReceived` events on an in-memory event broker; replies leave as `UnifyMessageSent` events. The terminal chat in `unify/cli.py` is one client of that broker, and any other front end drives the same loop the same way.
 
 ### In-flight action tracking
 
-The ConversationManager maintains `in_flight_actions` — a dict of currently running steerable handles with metadata. For each action, it dynamically generates steering tools (`ask_<action>`, `interject_<action>`, `stop_<action>`, `pause_<action>`, `resume_<action>`) that the slow brain's LLM can call. This is how "how's the flight search going?" routes to the right handle.
+The ConversationManager maintains `in_flight_actions` — a dict of currently running steerable handles with metadata. For each action, it dynamically generates steering tools (`ask_<action>`, `interject_<action>`, `stop_<action>`, `pause_<action>`, `resume_<action>`) that the brain's LLM can call. This is how "how's the flight search going?" routes to the right handle.
 
 ### Event-driven scheduling
 
 The ConversationManager uses a `Debouncer` that coalesces rapid-fire events (new messages, action completions, notifications) into batched brain invocations. This prevents thrashing when multiple things happen simultaneously.
+
+---
+
+## The local store
+
+**Files:** `unify/db/engine.py`, `unify/db/expressions.py`, `unify/db/embeddings.py`
+
+`unify.db` is an in-process SQLite engine with the shape of a document store:
+
+- **Projects** hold **contexts** (tables), and contexts hold **rows** of JSON with typed **fields**.
+- A context can declare **unique keys**, **auto-counted ids**, **foreign keys** (with `CASCADE` / `SET NULL` propagation through scalar, list and nested-list references) and **derived columns** whose equations are evaluated on every write.
+- **Filters and sort keys** are Python expressions evaluated per row by an AST walker (never `eval`), with SQL-style `None` propagation and builtins such as `exists`, `now`, `embed` and `cosine`, so a derived vector column and a nearest-neighbour sort need no external service.
+- **Embeddings** come from a local `fastembed` model by default (or `<model>@openrouter`) and are cached on disk by `(model, text)`.
+- **Commits** snapshot a context or a whole project and can be rolled back, which is what the test fixtures use to reset scenarios.
+
+The public API (`db.get_logs`, `db.create_logs`, `db.update_logs`, `db.create_context`, …) is what every manager reads and writes through, and the whole assistant is one file under `UNIFY_HOME`.
 
 ---
 
@@ -309,9 +318,9 @@ The EventBus is an in-process, asyncio-friendly pub/sub system with:
 - **Searchable history** — events are stored in a windowed deque per type, queryable with filters.
 - **Callback registration** — subscribe to event types with async callbacks.
 - **Callback cascade tracking** — `_CURRENT_ROOT_SEQ` (a context variable) tracks which callback triggered which, so `join_callbacks()` can await an entire cascade deterministically.
-- **Unify log hydration** — the bus can be prefilled from persisted Unify logs, bridging in-process events with the durable backend.
+- **Optional persistence** — the bus can persist events to `Events/*` contexts in the store and prefill itself from them on the next start.
 
-Managers and tool loops publish structured events (tool calls, steering actions, method boundaries) via `to_event_bus()`. This feeds both runtime coordination (MemoryManager reacts to message events) and external observability.
+Managers and tool loops publish structured events (tool calls, steering actions, method boundaries) via `to_event_bus()`. This feeds runtime coordination (MemoryManager reacts to message events) and observability.
 
 ### Lineage and hierarchy
 
@@ -321,7 +330,7 @@ Every tool loop has a **lineage** — a list of string segments tracking its pos
 ["ConversationManager.act(a1b2)", "Actor.act(c3d4)", "ContactManager.ask(e5f6)"]
 ```
 
-This lineage is attached to every event the loop publishes, enabling full parent-child correlation in logs and the frontend.
+This lineage is attached to every event the loop publishes, enabling full parent-child correlation in logs.
 
 ---
 
@@ -373,7 +382,7 @@ Tests use real LLM calls, never mocked. Responses are cached by UniLLM so that:
 
 This means the test suite is both **deterministic** (cached runs are byte-for-byte reproducible) and **honest** (every cached response was produced by a real model given that exact input).
 
-Tests run in parallel via `tests/parallel_run.sh`, which spawns each test in an isolated tmux session with per-terminal tmux server isolation. Results stream inline as tests complete.
+Tests run in parallel via `tests/parallel_run.sh`, which spawns each test in an isolated tmux session against its own SQLite store, with per-terminal tmux server isolation. Results stream inline as tests complete.
 
 Tests fall on a spectrum between **symbolic** (infrastructure-focused: does steering work? does nesting propagate correctly?) and **eval** (capability-focused: did the assistant answer correctly?). The caching system makes both types fast after initial population.
 
@@ -383,15 +392,15 @@ Tests fall on a spectrum between **symbolic** (infrastructure-focused: does stee
 
 ## System dependencies
 
-Unify persists state through **Orchestra** (a REST API backed by PostgreSQL) via the **Unify** Python SDK, and makes LLM calls through **UniLLM** (a caching/tracing/normalization layer).
+Unify persists state in its own SQLite file and makes LLM calls through **UniLLM** (a caching/tracing/normalization layer in a sibling repo).
 
 ```
-Unify ──► Unify SDK ──► Orchestra API ──► PostgreSQL
+Unify ──► unify.db ──► <UNIFY_HOME>/store.sqlite
   │
-  └─────► UniLLM ──► OpenAI / Anthropic / etc.
+  └─────► UniLLM ──► OpenRouter / Anthropic / DeepSeek
 ```
 
-For development and testing, the system runs against simulated backends. The core architecture (handles, loops, CodeAct, manager composition) is independent of the specific persistence layer.
+The core architecture (handles, loops, CodeAct, manager composition) is independent of the specific persistence layer.
 
 ---
 
@@ -400,6 +409,11 @@ For development and testing, the system runs against simulated backends. The cor
 ```
 unify/
 ├── unify/
+│   ├── cli.py                          # Terminal chat, `python -m unify`
+│   ├── db/
+│   │   ├── engine.py                   # The store: contexts, rows, derived columns, commits
+│   │   ├── expressions.py              # The row expression language
+│   │   └── embeddings.py               # Local / OpenRouter embeddings with a disk cache
 │   ├── common/
 │   │   ├── async_tool_loop.py          # SteerableToolHandle, start_async_tool_loop
 │   │   └── _async_tool/
@@ -413,25 +427,27 @@ unify/
 │   ├── actor/
 │   │   ├── base.py                     # BaseActor, BaseCodeActActor
 │   │   ├── code_act_actor.py           # CodeActActor implementation
-│   │   ├── execution.py                # PythonExecutionSession, sandbox
+│   │   ├── execution/                  # PythonExecutionSession, sandbox
 │   │   └── environments/               # Pluggable execution environments
 │   ├── conversation_manager/
-│   │   ├── conversation_manager.py     # ConversationManager (slow brain)
+│   │   ├── conversation_manager.py     # ConversationManager (the interaction loop)
+│   │   ├── events.py                   # Chat and actor events on the broker
 │   │   └── domains/
 │   │       ├── brain.py                # Brain spec construction
-│   │       ├── brain_action_tools.py   # Dynamic steering tools for in-flight actions
-│   │       └── proactive_speech.py     # Fast brain IPC
+│   │       ├── brain_action_tools.py   # act, wait, and per-action steering tools
+│   │       └── event_handlers.py       # One handler per event type
 │   ├── contact_manager/
 │   ├── knowledge_manager/
-│   ├── task_scheduler/
 │   ├── transcript_manager/
 │   ├── guidance_manager/
 │   ├── memory_manager/
 │   ├── function_manager/
+│   │   ├── verification/               # Effect classes, contracts, ledger
 │   │   └── primitives/
 │   │       ├── registry.py             # ToolSurfaceRegistry (single source of truth)
 │   │       └── scope.py                # PrimitiveScope
 │   ├── file_manager/
+│   ├── ingestion_manager/
 │   ├── image_manager/
 │   ├── web_searcher/
 │   ├── secret_manager/
@@ -444,8 +460,8 @@ unify/
 │   ├── parallel_run.sh                 # Isolated parallel test runner
 │   ├── async_helpers.py                # Trigger-based synchronization
 │   └── <module>/                       # Tests mirror production structure
-├── deploy/                             # Dockerfiles, Kubernetes, virtual desktop
-└── agent-service/                      # Node.js browser automation agent
+├── scripts/                            # Skill import, builtins seeding, git hooks
+└── docs/writeups/                      # Design writeups
 ```
 
 ---

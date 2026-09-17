@@ -904,11 +904,10 @@ class SimulatedDataManager(BaseDataManager):
         context: str,
         rows: List[Dict[str, Any]],
         *,
-        batched: bool = True,
         on_duplicate: Optional[str] = None,
         destination: str | None = None,
     ) -> List[int]:
-        del batched, destination
+        del destination
         if not rows:
             return []
 

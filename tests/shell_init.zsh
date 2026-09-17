@@ -46,10 +46,6 @@ parallel_run() {
     "$(_unity_resolve_script parallel_run.sh)" "$@"
 }
 
-parallel_cloud_run() {
-    "$(_unity_resolve_script parallel_cloud_run.sh)" "$@"
-}
-
 watch_tests() {
     "$(_unity_resolve_script watch_tests.sh)" "$@"
 }
@@ -74,28 +70,8 @@ monitor_resources() {
     "$(_unity_resolve_script monitor_resources.sh)" "$@"
 }
 
-project_cleanup() {
-    "$(_unity_resolve_script project_cleanup.sh)" "$@"
-}
-
-orchestra() {
-    # Orchestra management is now handled by the orchestra repo's scripts/local.sh.
-    # Find the orchestra repo relative to the unity repo.
-    local git_root
-    git_root=$(git rev-parse --show-toplevel 2>/dev/null)
-    local orchestra_repo="${ORCHESTRA_REPO_PATH:-${git_root:-$UNIFY_TESTS_DIR/..}/../orchestra}"
-
-    if [[ -x "$orchestra_repo/scripts/local.sh" ]]; then
-        # Set defaults if not already set
-        export ORCHESTRA_SEED_USER="${ORCHESTRA_SEED_USER:-1}"
-        export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-unity-test-user-001}"
-        export ORCHESTRA_TEST_EMAIL="${ORCHESTRA_TEST_EMAIL:-unity-test@debug.local}"
-        "$orchestra_repo/scripts/local.sh" "$@"
-    else
-        echo "Error: Orchestra script not found at $orchestra_repo/scripts/local.sh" >&2
-        echo "  Set ORCHESTRA_REPO_PATH or clone orchestra repo to ../orchestra" >&2
-        return 1
-    fi
+grid_search() {
+    "$(_unity_resolve_script grid_search.sh)" "$@"
 }
 
 # ---- Completion: attach ----
@@ -112,6 +88,7 @@ _unity_parallel_run_complete() {
     _arguments \
         '-t[Timeout in seconds]:timeout:(60 120 300 600)' \
         '--timeout[Timeout in seconds]:timeout:(60 120 300 600)' \
+        '--session-timeout[Per-session pytest kill after N seconds]:timeout:(300 600 1800)' \
         '-s[Serial mode (one session per file)]' \
         '--serial[Serial mode (one session per file)]' \
         '-j[Job limit]:jobs:(8 16 25 40 0)' \
@@ -120,24 +97,18 @@ _unity_parallel_run_complete() {
         '--match[Match filename pattern]:pattern:' \
         '-e[Set environment variable]:var:' \
         '--env[Set environment variable]:var:' \
+        '--no-cache[Call the LLM provider for every request]' \
         '--tags[Add test tags]:tags:' \
         '--eval-only[Run only eval tests]' \
         '--symbolic-only[Run only symbolic tests]' \
+        '--deterministic-only[Run only tests with no model in the loop]' \
         '--repeat[Repeat count]:count:(2 3 5 10)' \
+        '--overwrite-scenarios[Delete and recreate test scenarios]' \
         '-h[Show help]' \
         '--help[Show help]' \
         '*:test path:_files'
 }
 compdef _unity_parallel_run_complete parallel_run
-
-# ---- Completion: parallel_cloud_run ----
-# Completes --env flags and test directories/files
-_unity_parallel_cloud_run_complete() {
-    _arguments \
-        '*--env[Set environment variable]:var:' \
-        '*:test path:_files'
-}
-compdef _unity_parallel_cloud_run_complete parallel_cloud_run
 
 # ---- Completion: list_runs ----
 _unity_list_runs_complete() {

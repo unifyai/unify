@@ -11,7 +11,7 @@ Tests cover:
 These tests verify the tool implementations directly, testing:
 - Tool method signatures and return types
 - Tool docstrings (important for LLM understanding)
-- Dynamic tool generation for action steering
+- Fixed action steering tools addressed by handle_id
 - Integration with ConversationManager state
 """
 
@@ -19,21 +19,20 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-import inspect
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unify.common.llm_helpers import method_to_schema
 from unify.contact_manager.simulated import SimulatedContactManager
-from unify.conversation_manager import conversation_manager as cm_module
 from unify.conversation_manager.domains.brain_tools import (
     ConversationManagerBrainTools,
 )
 from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
+    slow_brain_direct_outbound_active,
 )
-from unify.comms.outbound_origin import slow_brain_direct_outbound_active
+from unify.conversation_manager.events import UnifyMessageSent
 from unify.file_manager.filesystem_adapters.local_adapter import (
     LocalFileSystemAdapter,
 )
@@ -77,40 +76,29 @@ def _setup_mock_contacts(
     return contact_manager
 
 
+def _published_sent_events(brain_action_tools) -> list[dict]:
+    """Decode every UnifyMessageSent payload published through the broker."""
+    return [
+        json.loads(call.args[1])["payload"]
+        for call in brain_action_tools._event_broker.publish.await_args_list
+        if call.args[0] == UnifyMessageSent.topic
+    ]
+
+
 @pytest.fixture
 def mock_cm():
     """Create a minimal mock ConversationManager for testing."""
-    from unify.conversation_manager.cm_types.mode import Mode
-
     cm = MagicMock()
-    cm.mode = Mode.TEXT
     cm.contact_index = ContactIndex()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.notifications_bar = NotificationBar()
     cm.chat_history = []
-    cm.assistant_number = "+15555550000"
-    cm.assistant_email = "assistant@test.com"
-    cm.assistant_email_provider = "google_workspace"
-    cm.assistant_whatsapp_number = ""
-    cm.assistant_discord_bot_id = ""
-    cm.assistant_slack_bot_user_id = ""
     cm.initialized = True
-    cm.call_manager.has_active_call = False
-    cm.call_manager.has_active_google_meet = False
-    cm.call_manager.has_active_teams_meet = False
-    cm.call_manager.has_gmeet_presenting = False
-    cm.call_manager.has_teams_presenting = False
-    cm.call_manager.is_ready_for_outbound_call = True
-    cm.call_manager.await_ready_for_outbound_call = AsyncMock(return_value=True)
-    cm.call_manager._meet_joining = False
-    cm.call_manager._whatsapp_call_joining = False
-    cm.call_manager._call_channel = None
-    cm.call_manager.hang_up_gate_reason = None
-    cm.call_manager.set_hang_up_gate = AsyncMock()
-    cm.in_voice_session = False
-    cm.assistant_has_teams = False
-    cm.assistant_has_ms_teams_bot = False
+    cm.event_broker.publish = AsyncMock()
+    cm._pending_steering_tasks = set()
+    cm._current_state_snapshot = None
+    cm._current_snapshot_state = None
     # Set up SimulatedContactManager (starts with system contacts 0 and 1)
     cm.contact_manager = _setup_mock_contacts(cm.contact_index, [])
     return cm
@@ -125,25 +113,7 @@ def brain_tools(mock_cm):
 @pytest.fixture
 def brain_action_tools(mock_cm):
     """Create ConversationManagerBrainActionTools instance."""
-    # Patch the event broker to avoid actual pubsub
-    with patch(
-        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-    ) as mock_broker:
-        mock_broker.return_value = MagicMock()
-        mock_broker.return_value.publish = AsyncMock()
-        tools = ConversationManagerBrainActionTools(mock_cm)
-        yield tools
-
-
-@pytest.fixture
-def coordinator_session():
-    previous_is_coordinator = SESSION_DETAILS.is_coordinator
-    previous_boss_contact_id = SESSION_DETAILS.boss_contact_id
-    SESSION_DETAILS.is_coordinator = True
-    SESSION_DETAILS.boss_contact_id = 1
-    yield
-    SESSION_DETAILS.is_coordinator = previous_is_coordinator
-    SESSION_DETAILS.boss_contact_id = previous_boss_contact_id
+    return ConversationManagerBrainActionTools(mock_cm)
 
 
 @pytest.fixture
@@ -172,38 +142,6 @@ def sample_contacts():
 # =============================================================================
 # ConversationManagerBrainTools Tests
 # =============================================================================
-
-
-class TestCmGetMode:
-    """Tests for cm_get_mode tool."""
-
-    def test_returns_text_mode(self, brain_tools, mock_cm):
-        """Returns 'text' when CM is in text mode."""
-        from unify.conversation_manager.cm_types.mode import Mode
-
-        mock_cm.mode = Mode.TEXT
-        assert brain_tools.cm_get_mode() == "text"
-
-    def test_returns_call_mode(self, brain_tools, mock_cm):
-        """Returns 'call' when CM is in call mode."""
-        from unify.conversation_manager.cm_types.mode import Mode
-
-        mock_cm.mode = Mode.CALL
-        assert brain_tools.cm_get_mode() == "call"
-
-    def test_returns_meet_mode(self, brain_tools, mock_cm):
-        """Returns 'meet' when CM is in meet mode."""
-        from unify.conversation_manager.cm_types.mode import Mode
-
-        mock_cm.mode = Mode.MEET
-        assert brain_tools.cm_get_mode() == "meet"
-
-    def test_converts_mode_to_string(self, brain_tools, mock_cm):
-        """Converts mode to string regardless of type."""
-        # Mode could be an enum or other type
-        mock_cm.mode = MagicMock(__str__=lambda self: "custom_mode")
-        result = brain_tools.cm_get_mode()
-        assert isinstance(result, str)
 
 
 class TestCmGetContact:
@@ -245,7 +183,7 @@ class TestCmListInFlightActions:
         """Returns summary for each in-flight action."""
         mock_cm.in_flight_actions = {
             0: {"query": "Search for contacts", "handle_actions": []},
-            1: {"query": "Send an email", "handle_actions": [{"action": "test"}]},
+            1: {"query": "Summarise the thread", "handle_actions": [{"a": "test"}]},
         }
         result = brain_tools.cm_list_in_flight_actions()
         assert len(result) == 2
@@ -253,7 +191,7 @@ class TestCmListInFlightActions:
         assert result[0]["query"] == "Search for contacts"
         assert result[0]["num_handle_actions"] == 0
         assert result[1]["handle_id"] == 1
-        assert result[1]["query"] == "Send an email"
+        assert result[1]["query"] == "Summarise the thread"
         assert result[1]["num_handle_actions"] == 1
 
     def test_handles_none_in_flight_actions(self, brain_tools, mock_cm):
@@ -317,18 +255,18 @@ class TestBrainToolsAsTools:
         """Contains all expected brain tools."""
         tools = brain_tools.as_tools()
         expected = {
-            "cm_get_mode",
             "cm_get_contact",
             "cm_list_in_flight_actions",
             "cm_list_notifications",
         }
         assert set(tools.keys()) == expected
 
-    def test_tools_are_bound_methods(self, brain_tools):
+    def test_tools_are_bound_methods(self, brain_tools, mock_cm):
         """Tools are bound to the BrainTools instance."""
+        mock_cm.in_flight_actions = {}
         tools = brain_tools.as_tools()
         # Calling through the dict should work
-        assert tools["cm_get_mode"]() == "text"
+        assert tools["cm_list_in_flight_actions"]() == []
 
 
 # =============================================================================
@@ -345,750 +283,66 @@ class TestActionToolsAsTools:
         assert isinstance(tools, dict)
         assert all(callable(fn) for fn in tools.values())
 
-    def test_contains_all_action_tools_when_fully_configured(
-        self,
-        brain_action_tools,
-    ):
-        """All comms tools present when assistant has both phone and email."""
+    def test_contains_all_action_tools_when_initialized(self, brain_action_tools):
+        """Every action tool is offered once the managers are initialized."""
         tools = brain_action_tools.as_tools()
         expected = {
-            "join_google_meet",
-            "join_teams_meet",
-            "start_unify_meet",
-            "send_sms",
             "send_unify_message",
-            "send_api_response",
-            "send_email",
-            "make_call",
             "act",
             "ask_about_contacts",
             "update_contacts",
             "query_past_transcripts",
             "wait",
-            "show_in_console",
         }
         assert set(tools.keys()) == expected
 
-    def test_console_navigation_is_always_offered(self, mock_cm):
-        """Membership is fixed so a presence flip never reshapes the tools array.
-
-        Tool definitions precede messages in provider prompt-cache keys, so
-        the tool stays even while no console is open; a call at that point
-        answers with a corrective error instead of a vanished tool.
-        """
+    def test_manager_backed_tools_wait_for_initialization(self, mock_cm):
+        """Before the managers are up, only the chat and wait tools are offered."""
+        mock_cm.initialized = False
         tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-
-        assert "show_in_console" in tools
-        # Still a text session, so nothing voice-only came with it.
-        assert "guide_voice_agent" not in tools
-
-    def test_excludes_phone_tools_without_number(self, mock_cm):
-        """send_sms and make_call are excluded when assistant has no phone."""
-        mock_cm.assistant_number = ""
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-        assert "send_sms" not in tools
-        assert "make_call" not in tools
-        assert "send_email" in tools
-        assert "send_unify_message" in tools
-
-    def test_excludes_email_tool_without_email(self, mock_cm):
-        """send_email is excluded when assistant has no email."""
-        mock_cm.assistant_email = ""
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-        assert "send_email" not in tools
-        assert "send_sms" in tools
-        assert "make_call" in tools
-        assert "send_unify_message" in tools
-
-    def test_excludes_all_comms_without_capabilities(self, mock_cm):
-        """Only send_unify_message remains when assistant has no phone or email."""
-        mock_cm.assistant_number = ""
-        mock_cm.assistant_email = ""
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-        assert "send_sms" not in tools
-        assert "make_call" not in tools
-        assert "send_email" not in tools
-        assert "send_unify_message" in tools
-        assert "wait" in tools
-
-    def test_includes_whatsapp_and_discord_tools_when_enabled(self, mock_cm):
-        """WhatsApp and Discord tools appear when those assistant capabilities exist."""
-        mock_cm.assistant_whatsapp_number = "+15555557777"
-        mock_cm.assistant_discord_bot_id = "discord-bot-123"
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-
-        assert "send_whatsapp" in tools
-        assert "make_whatsapp_call" in tools
-        assert "send_discord_message" in tools
-        assert "send_discord_channel_message" in tools
-
-    def test_coordinator_comms_schemas_are_boss_only(
-        self,
-        brain_action_tools,
-        mock_cm,
-        coordinator_session,
-    ):
-        """Coordinator direct comms tools do not expose arbitrary recipients."""
-        mock_cm.assistant_whatsapp_number = "+15555557777"
-        mock_cm.assistant_discord_bot_id = "discord-bot-123"
-        mock_cm.assistant_slack_bot_user_id = "slack-bot-123"
-        mock_cm.assistant_has_teams = True
-
-        tools = brain_action_tools.as_tools()
-
-        assert "send_discord_channel_message" not in tools
-        assert "send_slack_channel_message" not in tools
-        assert "create_teams_channel" not in tools
-        assert "create_teams_meet" in tools
-
-        contact_id_tools = {
-            "send_sms",
-            "send_whatsapp",
-            "send_discord_message",
-            "send_slack_message",
-            "send_teams_message",
-            "send_unify_message",
-            "send_api_response",
-            "make_call",
-            "make_whatsapp_call",
-        }
-        for tool_name in contact_id_tools:
-            schema = method_to_schema(
-                tools[tool_name],
-                tool_name=tool_name,
-                include_class_name=False,
-            )
-            props = schema["function"]["parameters"]["properties"]
-            assert "contact_id" not in props
-            assert "boss" in schema["function"]["description"].lower()
-
-        email_schema = method_to_schema(
-            tools["send_email"],
-            tool_name="send_email",
-            include_class_name=False,
-        )
-        email_props = email_schema["function"]["parameters"]["properties"]
-        assert {"to", "cc", "bcc", "reply_all", "contact_id"}.isdisjoint(
-            email_props,
-        )
-        assert {"subject", "body"}.issubset(email_props)
-
-        teams_schema = method_to_schema(
-            tools["send_teams_message"],
-            tool_name="send_teams_message",
-            include_class_name=False,
-        )
-        teams_props = teams_schema["function"]["parameters"]["properties"]
-        assert {"contact_id", "team_id", "channel_id", "chat_topic"}.isdisjoint(
-            teams_props,
-        )
-        assert {"content", "chat_id"}.issubset(teams_props)
-
-        meet_schema = method_to_schema(
-            tools["create_teams_meet"],
-            tool_name="create_teams_meet",
-            include_class_name=False,
-        )
-        meet_props = meet_schema["function"]["parameters"]["properties"]
-        assert "attendee_contact_ids" not in meet_props
-        assert "email_address" not in meet_props
-
-    @pytest.mark.asyncio
-    async def test_coordinator_comms_wrappers_force_boss_recipient(
-        self,
-        brain_action_tools,
-        mock_cm,
-        coordinator_session,
-    ):
-        """Coordinator exposed tools delegate to CommsPrimitives with the boss contact."""
-        mock_cm.assistant_whatsapp_number = "+15555557777"
-        mock_cm.assistant_discord_bot_id = "discord-bot-123"
-        mock_cm.assistant_slack_bot_user_id = "slack-bot-123"
-        mock_cm.assistant_has_teams = True
-        tools = brain_action_tools.as_tools()
-
-        brain_action_tools._comms.send_sms = AsyncMock(return_value={"status": "ok"})
-        brain_action_tools._comms.send_whatsapp = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.send_discord_message = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.send_slack_message = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.send_teams_message = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.send_unify_message = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.send_api_response = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.send_email = AsyncMock(return_value={"status": "ok"})
-        brain_action_tools._comms.make_call = AsyncMock(return_value={"status": "ok"})
-        brain_action_tools._comms.make_whatsapp_call = AsyncMock(
-            return_value={"status": "ok"},
-        )
-        brain_action_tools._comms.create_teams_meet = AsyncMock(
-            return_value={"status": "ok"},
-        )
-
-        await tools["send_sms"](content="hello")
-        brain_action_tools._comms.send_sms.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            content="hello",
-        )
-
-        await tools["send_whatsapp"](content="hello")
-        brain_action_tools._comms.send_whatsapp.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            content="hello",
-            attachment_filepath=None,
-        )
-
-        await tools["send_discord_message"](content="hello")
-        brain_action_tools._comms.send_discord_message.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            content="hello",
-        )
-
-        await tools["send_slack_message"](content="hello", team_id="T1")
-        brain_action_tools._comms.send_slack_message.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            content="hello",
-            team_id="T1",
-            thread_ts=None,
-        )
-
-        await tools["send_unify_message"](content="hello")
-        brain_action_tools._comms.send_unify_message.assert_called_once_with(
-            content="hello",
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            attachment_filepath=None,
-        )
-
-        await tools["send_api_response"](content="done", tags=["route"])
-        brain_action_tools._comms.send_api_response.assert_called_once_with(
-            content="done",
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            attachment_filepaths=None,
-            tags=["route"],
-        )
-
-        await tools["make_call"](
-            opener="Hi — quick call.",
-            briefing="Full task design.",
-        )
-        brain_action_tools._comms.make_call.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            opener="Hi — quick call.",
-            briefing="Full task design.",
-            allow_hang_up=None,
-        )
-
-        await tools["make_whatsapp_call"](
-            opener="Hi — quick call.",
-            briefing="Full task design.",
-        )
-        brain_action_tools._comms.make_whatsapp_call.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            opener="Hi — quick call.",
-            briefing="Full task design.",
-            allow_hang_up=None,
-        )
-
-        await tools["send_email"](
-            subject="Hi",
-            body="Body",
-            thread_id="gmail-thread-1",
-        )
-        brain_action_tools._comms.send_email.assert_called_once_with(
-            to=[SESSION_DETAILS.boss_contact_id],
-            subject="Hi",
-            body="Body",
-            email_id_to_reply_to=None,
-            thread_id="gmail-thread-1",
-            attachment_filepath=None,
-        )
-
-        await tools["send_teams_message"](
-            content="hello",
-            chat_id="chat-1",
-        )
-        brain_action_tools._comms.send_teams_message.assert_called_once_with(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            content="hello",
-            chat_id="chat-1",
-            attachment_filepath=None,
-        )
-
-        await tools["create_teams_meet"](
-            subject="Sync",
-        )
-        brain_action_tools._comms.create_teams_meet.assert_called_once_with(
-            mode="scheduled",
-            subject="Sync",
-            start=None,
-            duration_minutes=30,
-            timezone="UTC",
-            attendee_contact_ids=[SESSION_DETAILS.boss_contact_id],
-            body_html=None,
-            location=None,
-        )
-
-    def test_regular_comms_schemas_keep_contact_addressed_surface(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Regular assistants keep the existing contact-addressed comms surface."""
-        previous_is_coordinator = SESSION_DETAILS.is_coordinator
-        SESSION_DETAILS.is_coordinator = False
-        mock_cm.assistant_whatsapp_number = "+15555557777"
-        mock_cm.assistant_discord_bot_id = "discord-bot-123"
-        mock_cm.assistant_slack_bot_user_id = "slack-bot-123"
-        mock_cm.assistant_has_teams = True
-        try:
-            tools = brain_action_tools.as_tools()
-        finally:
-            SESSION_DETAILS.is_coordinator = previous_is_coordinator
-
-        assert "send_discord_channel_message" in tools
-        assert "send_slack_channel_message" in tools
-        assert "create_teams_channel" in tools
-
-        sms_props = method_to_schema(
-            tools["send_sms"],
-            tool_name="send_sms",
-            include_class_name=False,
-        )["function"]["parameters"]["properties"]
-        assert "contact_id" in sms_props
-
-        email_props = method_to_schema(
-            tools["send_email"],
-            tool_name="send_email",
-            include_class_name=False,
-        )["function"]["parameters"]["properties"]
-        assert {"to", "cc", "bcc", "reply_all"}.issubset(email_props)
-
-        teams_props = method_to_schema(
-            tools["send_teams_message"],
-            tool_name="send_teams_message",
-            include_class_name=False,
-        )["function"]["parameters"]["properties"]
-        assert {"contact_id", "team_id", "channel_id", "chat_topic"}.issubset(
-            teams_props,
-        )
-
-
-class _ConsolePresenceCM:
-    """The slice of ConversationManager that ``show_in_console`` touches.
-
-    Binds the real presence methods so the call-time contract runs through
-    production code; only the mode attribute and the session logger are stubs.
-    """
-
-    record_console_presence = cm_module.ConversationManager.record_console_presence
-    console_is_open = cm_module.ConversationManager.console_is_open
-    console_action_catalogue = cm_module.ConversationManager.console_action_catalogue
-
-    def __init__(self, mode) -> None:
-        self.mode = mode
-        self._console_guidance: dict[str, str] = {}
-        self._console_guidance_version = ""
-        self._console_presence_at = None
-        self._session_logger = MagicMock()
-
-
-class TestShowInConsoleCallTime:
-    """A shut console answers at call time, not through tool membership."""
-
-    def _host_and_tools(self, mode):
-        host = _ConsolePresenceCM(mode)
-        return host, ConversationManagerBrainActionTools(host)
-
-    @pytest.mark.asyncio
-    async def test_closed_console_returns_a_corrective_error(self):
-        """No throw, no state mutation — just a pointer at the console pane."""
-        from unify.conversation_manager.cm_types.mode import Mode
-
-        host, tools = self._host_and_tools(Mode.TEXT)
-
-        result = await tools.show_in_console(targets=["section:integrations"])
-
-        assert result["status"] == "error"
-        assert "no console is currently open" in result["error"].lower()
-        # The failed call left the console state untouched.
-        assert host.console_is_open() is False
-        assert host.console_action_catalogue() == ""
-
-    @pytest.mark.asyncio
-    async def test_open_console_moves_to_a_catalogued_target(self):
-        """With the console open, a catalogued target is accepted and staged."""
-        from unify.conversation_manager.cm_types.mode import Mode
-
-        host, tools = self._host_and_tools(Mode.MEET)
-        host.record_console_presence(
-            version="v1",
-            brief="b",
-            full="f",
-            actions="- `section:integrations` — Integrations",
-        )
-
-        result = await tools.show_in_console(targets=["section:integrations"])
-
-        assert result == {"status": "showing", "targets": ["section:integrations"]}
-
-    @pytest.mark.asyncio
-    async def test_open_console_rejects_an_uncatalogued_target(self):
-        from unify.conversation_manager.cm_types.mode import Mode
-
-        host, tools = self._host_and_tools(Mode.MEET)
-        host.record_console_presence(
-            version="v1",
-            brief="b",
-            full="f",
-            actions="- `section:integrations` — Integrations",
-        )
-
-        result = await tools.show_in_console(targets=["route:/nowhere"])
-
-        assert result["status"] == "error"
-        assert "route:/nowhere" in result["error"]
+        assert set(tools.keys()) == {"send_unify_message", "wait"}
 
 
 class TestSlowBrainDirectOutboundMarker:
+    """The slow brain's own sends are marked so their sent events do not wake it."""
+
     @pytest.mark.asyncio
-    async def test_send_email_wrapper_marks_outbound_origin(self, brain_action_tools):
-        active_during_send: list[bool] = []
+    async def test_send_unify_message_marks_outbound_origin(
+        self,
+        brain_action_tools,
+        mock_cm,
+        sample_contacts,
+    ):
+        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
+        active_during_publish: list[bool] = []
 
-        async def capture_send(*args, **kwargs):
-            active_during_send.append(slow_brain_direct_outbound_active())
-            return {"status": "ok"}
+        async def capture_publish(*args, **kwargs):
+            active_during_publish.append(slow_brain_direct_outbound_active())
 
-        brain_action_tools._comms.send_email = AsyncMock(side_effect=capture_send)
+        mock_cm.event_broker.publish = AsyncMock(side_effect=capture_publish)
 
-        await brain_action_tools.send_email(
-            to=[2],
-            subject="Hello",
-            body="World",
+        result = await brain_action_tools.send_unify_message(
+            content="Hello",
+            contact_id=1,
         )
 
-        assert active_during_send == [True]
+        assert result == {"status": "ok"}
+        assert active_during_publish == [True]
         assert slow_brain_direct_outbound_active() is False
 
-
-class TestHangUpTool:
-    """Tests for the universal hang_up tool and its exposure in as_tools."""
-
-    def test_hang_up_exposed_only_during_voice_session(self, mock_cm):
-        """hang_up appears while in a voice session; call-starting tools do not,
-        and the standalone leave_* tools are gone."""
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager._call_channel = "phone_call"
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-
-        assert "hang_up" in tools
-        assert "make_call" not in tools
-        assert "join_google_meet" not in tools
-        assert "leave_google_meet" not in tools
-        assert "leave_teams_meet" not in tools
-
-    def test_hang_up_absent_when_not_in_voice_session(self, brain_action_tools):
-        """hang_up is not offered outside a live voice session."""
-        tools = brain_action_tools.as_tools()
-        assert "hang_up" not in tools
-        assert "make_call" in tools
-
-    def test_gate_tools_swap_on_armed_state(self, mock_cm):
-        """allow_hang_up is offered while the gate is disarmed; withdraw_hang_up
-        replaces it once armed. Neither exists outside a voice session."""
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-            assert "allow_hang_up" not in tools
-            assert "withdraw_hang_up" not in tools
-
-            mock_cm.in_voice_session = True
-            mock_cm.call_manager._call_channel = "phone_call"
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-            assert "allow_hang_up" in tools
-            assert "withdraw_hang_up" not in tools
-
-            mock_cm.call_manager.hang_up_gate_reason = "wrap up"
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-            assert "withdraw_hang_up" in tools
-            assert "allow_hang_up" not in tools
-
     @pytest.mark.asyncio
-    async def test_allow_hang_up_arms_gate(self, brain_action_tools, mock_cm):
-        mock_cm.in_voice_session = True
-
-        result = await brain_action_tools.allow_hang_up(
-            reason="channel test complete — wrap up warmly",
-        )
-
-        assert result["status"] == "ok"
-        mock_cm.call_manager.set_hang_up_gate.assert_awaited_once_with(
-            "channel test complete — wrap up warmly",
-        )
-
-    @pytest.mark.asyncio
-    async def test_allow_hang_up_requires_reason(self, brain_action_tools, mock_cm):
-        mock_cm.in_voice_session = True
-
-        result = await brain_action_tools.allow_hang_up(reason="   ")
-
-        assert result["status"] == "error"
-        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_allow_hang_up_requires_voice_session(
+    async def test_sent_event_suppresses_slow_brain_wake(
         self,
         brain_action_tools,
         mock_cm,
+        sample_contacts,
     ):
-        mock_cm.in_voice_session = False
+        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
-        result = await brain_action_tools.allow_hang_up(reason="wrap up")
+        await brain_action_tools.send_unify_message(content="Hello", contact_id=1)
 
-        assert result["status"] == "error"
-        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_withdraw_hang_up_disarms_gate(self, brain_action_tools, mock_cm):
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager.hang_up_gate_reason = "wrap up"
-
-        result = await brain_action_tools.withdraw_hang_up()
-
-        assert result["status"] == "ok"
-        mock_cm.call_manager.set_hang_up_gate.assert_awaited_once_with(None)
-
-    @pytest.mark.asyncio
-    async def test_withdraw_hang_up_noop_when_disarmed(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager.hang_up_gate_reason = None
-
-        result = await brain_action_tools.withdraw_hang_up()
-
-        assert result["status"] == "ok"
-        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_hang_up_defers_then_teardown_ends_phone_call(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """hang_up records a deferred intent (does NOT end the call itself); the
-        teardown helper later routes a phone call to call_manager.end_call()."""
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager._call_channel = "phone_call"
-        mock_cm.call_manager.has_active_google_meet = False
-        mock_cm.call_manager.has_active_teams_meet = False
-        mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
-            return_value=True,
-        )
-
-        result = await brain_action_tools.hang_up()
-
-        # Deferred: nothing torn down yet, intent recorded for _run_llm.
-        assert result["status"] == "ok"
-        assert mock_cm._pending_hang_up is True
-        assert mock_cm._pending_hang_up_teardown is not None
-        mock_cm.call_manager.end_call.assert_not_awaited()
-
-        # The teardown helper performs the real end_call once invoked.
-        teardown = await mock_cm._pending_hang_up_teardown()
-        mock_cm.call_manager.end_call.assert_awaited_once()
-        assert teardown["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_hang_up_teardown_routes_unify_meet_to_end_call(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """A live Unify Meet teardown also routes through call_manager.end_call()."""
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager._call_channel = "unify_meet"
-        mock_cm.call_manager.has_active_google_meet = False
-        mock_cm.call_manager.has_active_teams_meet = False
-        mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
-            return_value=True,
-        )
-
-        await brain_action_tools.hang_up()
-        mock_cm.call_manager.end_call.assert_not_awaited()
-
-        await brain_action_tools._perform_hang_up_teardown()
-        mock_cm.call_manager.end_call.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_hang_up_teardown_routes_google_meet_to_leave(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """A live Google Meet teardown publishes GoogleMeetEnded (leave path)."""
-        from unify.conversation_manager.events import GoogleMeetEnded
-
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager._call_channel = "google_meet"
-        mock_cm.call_manager.has_active_google_meet = True
-        mock_cm.call_manager._disconnect_contact = {}
-        mock_cm.call_manager.end_call = AsyncMock()
-
-        # hang_up defers; the leave only happens on teardown.
-        await brain_action_tools.hang_up()
-        brain_action_tools._event_broker.publish.assert_not_awaited()
-
-        result = await brain_action_tools._perform_hang_up_teardown()
-
-        mock_cm.call_manager.end_call.assert_not_awaited()
-        published_topics = [
-            call.args[0]
-            for call in brain_action_tools._event_broker.publish.await_args_list
-        ]
-        assert GoogleMeetEnded(contact={}).topic in published_topics
-        assert result["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_hang_up_no_active_session_returns_error(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """With nothing live, hang_up reports there is nothing to end."""
-        mock_cm.in_voice_session = False
-        mock_cm.call_manager._call_channel = None
-        mock_cm.call_manager.end_call = AsyncMock()
-
-        result = await brain_action_tools.hang_up()
-
-        assert result["status"] == "error"
-        mock_cm.call_manager.end_call.assert_not_awaited()
-
-    def test_call_tools_hidden_when_worker_not_ready(self, mock_cm):
-        """Between sessions, make_call/make_whatsapp_call are withheld until the
-        voice worker has a freshly prewarmed idle process ready."""
-        mock_cm.in_voice_session = False
-        mock_cm.assistant_whatsapp_number = "+15555550000"
-        mock_cm.call_manager.is_ready_for_outbound_call = False
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-
-        assert "make_call" not in tools
-        assert "make_whatsapp_call" not in tools
-        # Text channels stay available regardless of voice-line readiness.
-        assert "send_sms" in tools
-        assert "send_whatsapp" in tools
-
-    def test_call_tools_exposed_when_worker_ready(self, mock_cm):
-        """With no live session and the worker ready, the call-starting tools
-        are offered again."""
-        mock_cm.in_voice_session = False
-        mock_cm.assistant_whatsapp_number = "+15555550000"
-        mock_cm.call_manager.is_ready_for_outbound_call = True
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
-
-        assert "make_call" in tools
-        assert "make_whatsapp_call" in tools
-
-    @pytest.mark.asyncio
-    async def test_hang_up_teardown_awaits_readiness_before_returning(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """The teardown helper ends the session, then awaits the worker readiness
-        signal and reports whether a new call is safe."""
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager._call_channel = "unify_meet"
-        mock_cm.call_manager.has_active_google_meet = False
-        mock_cm.call_manager.has_active_teams_meet = False
-        mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
-            return_value=True,
-        )
-
-        await brain_action_tools.hang_up()
-        result = await brain_action_tools._perform_hang_up_teardown()
-
-        mock_cm.call_manager.end_call.assert_awaited_once()
-        mock_cm.call_manager.await_ready_for_outbound_call.assert_awaited_once()
-        assert result["status"] == "ok"
-        assert result["ready_for_outbound_call"] is True
-
-    @pytest.mark.asyncio
-    async def test_hang_up_teardown_reports_not_ready_on_timeout(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """If the worker never re-warms within the window, the teardown still ends
-        the call but tells the brain the line is not ready for a new call yet."""
-        mock_cm.in_voice_session = True
-        mock_cm.call_manager._call_channel = "whatsapp_call"
-        mock_cm.call_manager.has_active_google_meet = False
-        mock_cm.call_manager.has_active_teams_meet = False
-        mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
-            return_value=False,
-        )
-
-        await brain_action_tools.hang_up()
-        result = await brain_action_tools._perform_hang_up_teardown()
-
-        assert result["status"] == "ok"
-        assert result["ready_for_outbound_call"] is False
+        (payload,) = _published_sent_events(brain_action_tools)
+        assert payload["suppress_slow_brain_wake"] is True
 
 
 class TestWaitTool:
@@ -1106,104 +360,58 @@ class TestWaitTool:
         assert "Wait" in brain_action_tools.wait.__doc__
 
 
-class TestSendSmsTool:
-    """Tests for send_sms tool."""
-
-    @pytest.mark.asyncio
-    async def test_requires_contact_id(self, brain_action_tools):
-        """Raises TypeError if contact_id not provided."""
-        with pytest.raises(TypeError):
-            await brain_action_tools.send_sms(content="Hello")
-
-    @pytest.mark.asyncio
-    async def test_has_docstring(self, brain_action_tools):
-        """Send SMS tool has descriptive docstring."""
-        assert brain_action_tools.send_sms.__doc__ is not None
-        assert "SMS" in brain_action_tools.send_sms.__doc__
-
-    @pytest.mark.asyncio
-    async def test_sends_sms_to_contact(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Sends SMS when given a valid contact_id with phone number."""
-        contact = {
-            "contact_id": 5,
-            "first_name": "Test",
-            "surname": "Person",
-            "phone_number": "+1234567890",
-            "should_respond": True,
-        }
-        _setup_mock_contacts(mock_cm.contact_index, [contact])
-
-        result = await brain_action_tools.send_sms(
-            contact_id=5,
-            content="Hello",
-        )
-
-        assert result["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_returns_error_for_contact_without_phone(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Returns error when contact has no phone number."""
-        contact_without_phone = {
-            "contact_id": 5,
-            "first_name": "NoPhone",
-            "surname": "Person",
-            "email_address": "nophone@example.com",
-            "should_respond": True,
-        }
-        _setup_mock_contacts(mock_cm.contact_index, [contact_without_phone])
-
-        result = await brain_action_tools.send_sms(
-            contact_id=5,
-            content="Hello",
-        )
-
-        assert result["status"] == "error"
-        assert "does not have" in result["error"]
-        assert "phone" in result["error"].lower()
-
-
-class TestSendDiscordMessageTool:
-    """Tests for send_discord_message tool metadata."""
-
-    def test_uses_dm_only_signature(self, brain_action_tools):
-        """Channel reply args stay on send_discord_channel_message only."""
-        parameters = inspect.signature(
-            brain_action_tools.send_discord_message,
-        ).parameters
-
-        assert "contact_id" in parameters
-        assert "content" in parameters
-        assert "discord_id" in parameters
-        assert "channel_id" not in parameters
-        assert "guild_id" not in parameters
-
-    def test_docstring_points_channel_replies_to_channel_tool(self, brain_action_tools):
-        """DM docstring steers channel posting to the dedicated channel tool."""
-        doc = brain_action_tools.send_discord_message.__doc__
-        assert doc is not None
-        assert "send_discord_channel_message" in doc
-
-
 class TestSendUnifyMessageTool:
     """Tests for send_unify_message tool."""
 
     def test_has_docstring(self, brain_action_tools):
         """Send Unify message tool has descriptive docstring."""
-        assert brain_action_tools.send_unify_message.__doc__ is not None
-        assert "Unify" in brain_action_tools.send_unify_message.__doc__
+        doc = brain_action_tools.send_unify_message.__doc__
+        assert doc is not None
+        assert "chat message" in doc.lower()
 
     def test_docstring_mentions_attachment(self, brain_action_tools):
         """Send Unify message docstring mentions attachment parameter."""
         doc = brain_action_tools.send_unify_message.__doc__
         assert "attachment" in doc.lower()
+
+    @pytest.mark.asyncio
+    async def test_publishes_sent_event_for_contact(
+        self,
+        brain_action_tools,
+        mock_cm,
+        sample_contacts,
+    ):
+        """A plain send publishes UnifyMessageSent addressed to the contact."""
+        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
+
+        result = await brain_action_tools.send_unify_message(
+            content="Hello Alice",
+            contact_id=1,
+        )
+
+        assert result == {"status": "ok"}
+        (payload,) = _published_sent_events(brain_action_tools)
+        assert payload["contact"]["contact_id"] == 1
+        assert payload["content"] == "Hello Alice"
+        assert payload["attachments"] == []
+
+    @pytest.mark.asyncio
+    async def test_returns_error_for_unknown_contact(
+        self,
+        brain_action_tools,
+        mock_cm,
+        sample_contacts,
+    ):
+        """An unknown contact_id is reported without publishing anything."""
+        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
+
+        result = await brain_action_tools.send_unify_message(
+            content="Hello",
+            contact_id=999,
+        )
+
+        assert "999" in result["error"]
+        assert _published_sent_events(brain_action_tools) == []
 
     @pytest.mark.asyncio
     async def test_returns_error_for_file_not_found(
@@ -1221,8 +429,8 @@ class TestSendUnifyMessageTool:
             attachment_filepath="/nonexistent/file.pdf",
         )
 
-        assert result["status"] == "error"
         assert "not found" in result["error"].lower()
+        assert _published_sent_events(brain_action_tools) == []
 
     @pytest.mark.asyncio
     async def test_returns_error_for_file_too_large(
@@ -1240,7 +448,7 @@ class TestSendUnifyMessageTool:
         large_file.write_bytes(b"x" * (26 * 1024 * 1024))
 
         # Patch the class in its home module so the deferred import inside
-        # send_unify_message picks up the rooted adapter.
+        # the attachment helper picks up the rooted adapter.
         rooted = type(
             "RootedAdapter",
             (LocalFileSystemAdapter,),
@@ -1261,9 +469,9 @@ class TestSendUnifyMessageTool:
                 attachment_filepath="large_file.bin",
             )
 
-        assert result["status"] == "error"
         assert "too large" in result["error"].lower()
         assert "25MB" in result["error"]
+        assert _published_sent_events(brain_action_tools) == []
 
     @pytest.mark.asyncio
     async def test_send_with_attachment_success(
@@ -1273,501 +481,50 @@ class TestSendUnifyMessageTool:
         sample_contacts,
         tmp_path,
     ):
-        """Successfully sends message with attachment when file exists and upload succeeds."""
+        """An existing file is described as a local attachment on the sent event."""
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
-        # Create a small test file
         test_file = tmp_path / "test_document.pdf"
         test_file.write_bytes(b"PDF content here")
 
-        # Root the adapter at tmp_path so test files pass the subpath check
-        with (
-            patch(
-                "unify.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
-                lambda: LocalFileSystemAdapter(root=str(tmp_path)),
-            ),
-            patch(
-                "unify.comms.primitives.comms_utils.upload_unify_attachment",
-            ) as mock_upload,
-            patch(
-                "unify.comms.primitives.comms_utils.send_unify_message",
-            ) as mock_send,
-        ):
-            # Configure mocks
-            mock_upload.return_value = {
-                "id": "test-uuid",
-                "filename": "test_document.pdf",
-                "url": "https://storage.googleapis.com/signed-url",
-            }
-            mock_send.return_value = {"success": True}
-
-            result = await brain_action_tools.send_unify_message(
-                content="Here's the document",
-                contact_id=1,
-                attachment_filepath=str(test_file),
-            )
-
-            assert result["status"] == "ok"
-
-            # Verify upload was called with correct args
-            mock_upload.assert_called_once()
-            call_args = mock_upload.call_args
-            assert call_args.kwargs["filename"] == "test_document.pdf"
-            assert b"PDF content here" in call_args.kwargs["file_content"]
-
-            # Verify send was called with the attachment
-            mock_send.assert_called_once()
-            send_args = mock_send.call_args
-            assert send_args.kwargs["content"] == "Here's the document"
-            assert send_args.kwargs["attachment"]["id"] == "test-uuid"
-            assert send_args.kwargs["attachment"]["filename"] == "test_document.pdf"
-
-    @pytest.mark.asyncio
-    async def test_returns_error_when_upload_fails(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-        tmp_path,
-    ):
-        """Returns error when attachment upload fails."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        # Create a small test file
-        test_file = tmp_path / "test_document.pdf"
-        test_file.write_bytes(b"PDF content")
-
-        # Root the adapter at tmp_path so test files pass the subpath check
-        with (
-            patch(
-                "unify.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
-                lambda: LocalFileSystemAdapter(root=str(tmp_path)),
-            ),
-            patch(
-                "unify.comms.primitives.comms_utils.upload_unify_attachment",
-            ) as mock_upload,
-        ):
-            mock_upload.return_value = {
-                "success": False,
-                "error": "Storage service unavailable",
-            }
-
-            result = await brain_action_tools.send_unify_message(
-                content="Here's the document",
-                contact_id=1,
-                attachment_filepath=str(test_file),
-            )
-
-            assert result["status"] == "error"
-            assert "upload" in result["error"].lower()
-
-
-class TestSendEmailTool:
-    """Tests for send_email tool."""
-
-    @pytest.mark.asyncio
-    async def test_requires_at_least_one_recipient(self, brain_action_tools):
-        """Returns error if no recipients provided."""
-        result = await brain_action_tools.send_email(
-            subject="Test",
-            body="Hello, checking in.",
-        )
-        assert result["status"] == "error"
-        assert "at least one recipient" in result["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_reply_all_mutually_exclusive_with_recipients(
-        self,
-        brain_action_tools,
-    ):
-        """Returns error if reply_all=True and to/cc/bcc are also provided."""
-        result = await brain_action_tools.send_email(
-            to=[1],
-            reply_all=True,
-            subject="Test",
-            body="Hello, checking in.",
-        )
-        assert result["status"] == "error"
-        assert "mutually exclusive" in result["error"].lower()
-
-    def test_has_docstring(self, brain_action_tools):
-        """Send email tool has descriptive docstring."""
-        assert brain_action_tools.send_email.__doc__ is not None
-        assert "email" in brain_action_tools.send_email.__doc__.lower()
-
-    def test_docstring_mentions_attachment(self, brain_action_tools):
-        """Send email docstring mentions attachment parameter."""
-        doc = brain_action_tools.send_email.__doc__
-        assert "attachment" in doc.lower()
-
-    def test_docstring_mentions_recipients(self, brain_action_tools):
-        """Send email docstring mentions to/cc/bcc parameters."""
-        doc = brain_action_tools.send_email.__doc__
-        assert "to" in doc.lower()
-        assert "cc" in doc.lower()
-        assert "bcc" in doc.lower()
-
-    @pytest.mark.asyncio
-    async def test_resolves_contact_id_to_email(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Resolves contact_id in to list to email address."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        with patch(
-            "unify.comms.primitives.comms_utils.send_email_via_address",
-        ) as mock_send:
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            result = await brain_action_tools.send_email(
-                to=[1],  # contact_id
-                subject="Test",
-                body="Hello",
-            )
-
-            assert result["status"] == "ok"
-            mock_send.assert_called_once()
-            # Should resolve contact_id 1 to alice@example.com
-            assert mock_send.call_args.kwargs["to"] == ["alice@example.com"]
-
-    @pytest.mark.asyncio
-    async def test_forwards_thread_id_separately_from_reply_email_id(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Forwards provider thread targeting separately from RFC reply headers."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        with patch(
-            "unify.comms.primitives.comms_utils.send_email_via_address",
-        ) as mock_send:
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            result = await brain_action_tools.send_email(
-                to=[1],
-                subject="Re: Budget Discussion",
-                body="Reply body",
-                email_id_to_reply_to="<rfc-message-id@example.com>",
-                thread_id="gmail-thread-123",
-            )
-
-            assert result["status"] == "ok"
-            assert (
-                mock_send.call_args.kwargs["email_id"] == "<rfc-message-id@example.com>"
-            )
-            assert mock_send.call_args.kwargs["thread_id"] == "gmail-thread-123"
-
-    @pytest.mark.asyncio
-    async def test_returns_error_for_file_not_found(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Returns error when attachment file not found."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        result = await brain_action_tools.send_email(
-            to=[1],
-            subject="Test",
-            body="Hello",
-            attachment_filepath="/nonexistent/file.pdf",
+        result = await brain_action_tools.send_unify_message(
+            content="Here's the document",
+            contact_id=1,
+            attachment_filepath=str(test_file),
         )
 
-        assert result["status"] == "error"
-        assert "not found" in result["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_returns_error_for_file_too_large(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-        tmp_path,
-    ):
-        """Returns error when attachment exceeds size limit."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        # Create a file larger than 25MB (use a sparse approach for speed)
-        large_file = tmp_path / "large_file.bin"
-        # Write 26MB of data
-        large_file.write_bytes(b"x" * (26 * 1024 * 1024))
-
-        # Root the adapter at tmp_path so test files pass the subpath check
-        with patch(
-            "unify.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
-            lambda: LocalFileSystemAdapter(root=str(tmp_path)),
-        ):
-            result = await brain_action_tools.send_email(
-                to=[1],
-                subject="Test",
-                body="Hello",
-                attachment_filepath=str(large_file),
-            )
-
-        assert result["status"] == "error"
-        assert "too large" in result["error"].lower()
-        assert "25MB" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_send_with_attachment_success(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-        tmp_path,
-    ):
-        """Successfully sends email with attachment when file exists."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        # Create a small test file
-        test_file = tmp_path / "report.pdf"
-        test_file.write_bytes(b"PDF report content")
-
-        # Root the adapter at tmp_path so test files pass the subpath check
-        with (
-            patch(
-                "unify.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
-                lambda: LocalFileSystemAdapter(root=str(tmp_path)),
-            ),
-            patch(
-                "unify.comms.primitives.comms_utils.send_email_via_address",
-            ) as mock_send,
-        ):
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            result = await brain_action_tools.send_email(
-                to=[1],
-                subject="Quarterly Report",
-                body="Please find the report attached.",
-                attachment_filepath=str(test_file),
-            )
-
-            assert result["status"] == "ok"
-
-            # Verify send was called with attachment
-            mock_send.assert_called_once()
-            call_args = mock_send.call_args
-            assert call_args.kwargs["subject"] == "Quarterly Report"
-            assert call_args.kwargs["attachment"] is not None
-            assert call_args.kwargs["attachment"]["filename"] == "report.pdf"
-            # Verify base64 content
-            import base64
-
-            decoded = base64.b64decode(call_args.kwargs["attachment"]["content_base64"])
-            assert decoded == b"PDF report content"
-
-    @pytest.mark.asyncio
-    async def test_cc_only_email_valid(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Accepts email with only CC recipients (empty TO is valid)."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        with patch(
-            "unify.comms.primitives.comms_utils.send_email_via_address",
-        ) as mock_send:
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            result = await brain_action_tools.send_email(
-                cc=[1],  # Only CC, no TO
-                subject="FYI",
-                body="Just keeping you in the loop.",
-            )
-
-            assert result["status"] == "ok"
-            mock_send.assert_called_once()
-            assert mock_send.call_args.kwargs["to"] == []
-            assert mock_send.call_args.kwargs["cc"] == ["alice@example.com"]
-
-    @pytest.mark.asyncio
-    async def test_bcc_only_email_valid(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Accepts email with only BCC recipients."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        with patch(
-            "unify.comms.primitives.comms_utils.send_email_via_address",
-        ) as mock_send:
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            result = await brain_action_tools.send_email(
-                bcc=[1],  # Only BCC
-                subject="Private",
-                body="Confidential message.",
-            )
-
-            assert result["status"] == "ok"
-            mock_send.assert_called_once()
-            assert mock_send.call_args.kwargs["to"] == []
-            assert mock_send.call_args.kwargs["bcc"] == ["alice@example.com"]
-
-    @pytest.mark.asyncio
-    async def test_deduplicates_recipients(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Deduplicates when same contact_id appears multiple times."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        with patch(
-            "unify.comms.primitives.comms_utils.send_email_via_address",
-        ) as mock_send:
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            # Provide same contact_id twice
-            result = await brain_action_tools.send_email(
-                to=[1, 1],  # Both resolve to alice@example.com
-                subject="Test",
-                body="Hello",
-            )
-
-            assert result["status"] == "ok"
-            # Should deduplicate to single recipient
-            assert len(mock_send.call_args.kwargs["to"]) == 1
-            assert mock_send.call_args.kwargs["to"] == ["alice@example.com"]
-
-    @pytest.mark.asyncio
-    async def test_multiple_recipients_all_fields(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """Handles multiple contact_ids in to, cc, and bcc simultaneously."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        with patch(
-            "unify.comms.primitives.comms_utils.send_email_via_address",
-        ) as mock_send:
-            mock_send.return_value = {"success": True, "id": "sent-email-123"}
-
-            result = await brain_action_tools.send_email(
-                to=[1],
-                cc=[2],
-                bcc=[1],  # duplicate with to — will deduplicate
-                subject="Team Update",
-                body="Update for everyone.",
-            )
-
-            assert result["status"] == "ok"
-            mock_send.assert_called_once()
-            assert len(mock_send.call_args.kwargs["to"]) == 1
-            assert len(mock_send.call_args.kwargs["cc"]) == 1
-
-
-class TestMakeCallTool:
-    """Tests for make_call tool."""
-
-    @pytest.mark.asyncio
-    async def test_requires_contact_id(self, brain_action_tools):
-        """Raises TypeError if contact_id not provided."""
-        with pytest.raises(TypeError):
-            await brain_action_tools.make_call()
-
-    def test_has_docstring(self, brain_action_tools):
-        """Make call tool has descriptive docstring."""
-        assert brain_action_tools.make_call.__doc__ is not None
-        assert "call" in brain_action_tools.make_call.__doc__.lower()
-        assert (
-            "exact words spoken to open the call"
-            in brain_action_tools.make_call.__doc__
-        )
-
-    @pytest.mark.asyncio
-    async def test_calls_contact(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Makes call when given a valid contact_id with phone number."""
-        contact = {
-            "contact_id": 5,
-            "first_name": "Test",
-            "surname": "Person",
-            "phone_number": "+1234567890",
-            "should_respond": True,
+        assert result == {"status": "ok"}
+        (payload,) = _published_sent_events(brain_action_tools)
+        assert payload["content"] == "Here's the document"
+        (attachment,) = payload["attachments"]
+        assert attachment == {
+            "filename": "test_document.pdf",
+            "filepath": str(test_file.resolve()),
+            "content_type": "application/pdf",
+            "size_bytes": len(b"PDF content here"),
         }
-        _setup_mock_contacts(mock_cm.contact_index, [contact])
 
-        result = await brain_action_tools.make_call(
-            contact_id=5,
-            opener="Calling to confirm the Thursday meeting",
-        )
 
-        assert result["status"] == "ok"
+class TestSendUnifyMessageToBossTool:
+    """Tests for send_unify_message_to_boss tool."""
 
     @pytest.mark.asyncio
-    async def test_returns_error_for_contact_without_phone(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Returns error when contact has no phone number."""
-        contact_without_phone = {
-            "contact_id": 5,
-            "first_name": "NoPhone",
-            "surname": "Person",
-            "email_address": "nophone@example.com",
-            "should_respond": True,
-        }
-        _setup_mock_contacts(mock_cm.contact_index, [contact_without_phone])
-
-        result = await brain_action_tools.make_call(
-            contact_id=5,
-            opener="Calling to confirm the Thursday meeting",
+    async def test_targets_boss_contact(self, brain_action_tools, mock_cm):
+        """The boss-only tool addresses the session's boss contact."""
+        result = await brain_action_tools.send_unify_message_to_boss(
+            content="Done with the report.",
         )
 
-        assert result["status"] == "error"
-        assert "does not have" in result["error"]
-        assert "phone" in result["error"].lower()
+        assert result == {"status": "ok"}
+        (payload,) = _published_sent_events(brain_action_tools)
+        assert payload["contact"]["contact_id"] == SESSION_DETAILS.boss_contact_id
+        assert payload["content"] == "Done with the report."
 
-    @pytest.mark.asyncio
-    async def test_opener_stores_pending_opener(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """The opener param stores pending_opener on call_manager
-        before the call is placed, so CallManager can publish it to the
-        fast brain after the subprocess spawns."""
-        contact = {
-            "contact_id": 5,
-            "first_name": "Test",
-            "surname": "Person",
-            "phone_number": "+1234567890",
-            "should_respond": True,
-        }
-        _setup_mock_contacts(mock_cm.contact_index, [contact])
-
-        guidance_text = "Confirm the Thursday 3pm meeting"
-        result = await brain_action_tools.make_call(
-            contact_id=5,
-            opener=guidance_text,
-        )
-
-        assert result["status"] == "ok"
-        assert mock_cm.call_manager.pending_opener == guidance_text
-
-    @pytest.mark.asyncio
-    async def test_opener_is_required(self, brain_action_tools):
-        """opener is a required argument — calling without it raises TypeError."""
-        with pytest.raises(TypeError):
-            await brain_action_tools.make_call(contact_id=5)
+    def test_docstring_restricts_recipient(self, brain_action_tools):
+        """The docstring names the boss as the only recipient."""
+        doc = brain_action_tools.send_unify_message_to_boss.__doc__
+        assert doc is not None
+        assert "boss" in doc.lower()
 
 
 class TestActTool:
@@ -1780,7 +537,7 @@ class TestActTool:
 
 
 # =============================================================================
-# Dynamic Action Steering Tools Tests
+# Action Steering Tools Tests
 # =============================================================================
 
 
@@ -2098,9 +855,6 @@ class TestBuildActionSteeringTools:
                 "handle_actions": [],
             },
         }
-        mock_cm._pending_steering_tasks = set()
-        mock_cm._current_state_snapshot = None
-        mock_cm.event_broker.publish = AsyncMock()
 
         tools = brain_action_tools.build_action_steering_tools()
         result = await tools["ask_action"](handle_id=0, question="What did you find?")
@@ -2150,7 +904,7 @@ class TestBuildActionSteeringTools:
         brain_action_tools,
         mock_cm,
     ):
-        """Already answered clarifications no longer count as pending."""
+        """Already answered clarifications do not count as pending."""
         mock_cm.in_flight_actions = {
             0: {
                 "query": "Do something",
@@ -2300,9 +1054,6 @@ class TestMakeSteeringTool:
                 "handle_actions": [],
             },
         }
-        mock_cm._pending_steering_tasks = set()
-        mock_cm._current_state_snapshot = None
-        mock_cm.event_broker.publish = AsyncMock()
 
         tool = brain_action_tools._make_steering_tool(
             handle_id=0,
@@ -2554,14 +1305,6 @@ class TestToolDocstrings:
             assert fn.__doc__ is not None, f"{name} missing docstring"
             assert len(fn.__doc__) > 10, f"{name} docstring too short"
 
-    def test_send_email_docstring_mentions_parameters(self, brain_action_tools):
-        """send_email docstring mentions recipients, subject and body."""
-        doc = brain_action_tools.send_email.__doc__
-        assert "to" in doc.lower()
-        assert "cc" in doc.lower()
-        assert "subject" in doc.lower()
-        assert "body" in doc.lower()
-
     def test_act_docstring_is_comprehensive(self, brain_action_tools):
         """act tool has comprehensive docstring explaining capabilities."""
         doc = brain_action_tools.act.__doc__
@@ -2600,7 +1343,7 @@ class TestCompletedActionTools:
                 "handle_actions": [],
             },
             1: {
-                "query": "Create a task",
+                "query": "Summarise the thread",
                 "handle": MagicMock(),
                 "handle_actions": [],
             },
@@ -2629,7 +1372,7 @@ class TestBrainToolsIntegration:
         brain_action_tools,
         mock_cm,
     ):
-        """Dynamic steering tools don't overlap with static action tools."""
+        """Steering tools don't overlap with static action tools."""
         mock_cm.in_flight_actions = {
             0: {
                 "query": "Test",
@@ -2641,119 +1384,3 @@ class TestBrainToolsIntegration:
         steering_names = set(brain_action_tools.build_action_steering_tools().keys())
         overlap = static_names & steering_names
         assert len(overlap) == 0, f"Overlapping tool names: {overlap}"
-
-
-class TestOnboardingToggleTools:
-    """Mutually exclusive activate/deactivate onboarding slow-brain tools."""
-
-    def _action_tools(self, mock_cm):
-        with patch(
-            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-        ) as mock_broker:
-            mock_broker.return_value = MagicMock()
-            mock_broker.return_value.publish = AsyncMock()
-            return ConversationManagerBrainActionTools(mock_cm)
-
-    def test_deactivate_exposed_when_onboarding_active(
-        self,
-        mock_cm,
-        coordinator_session,
-    ):
-        mock_cm.coordinator_onboarding_active = True
-        with patch("unify.settings.SETTINGS") as settings:
-            settings.UNIFY_CONSOLE_UI = True
-            tools = self._action_tools(mock_cm).as_tools()
-        assert "deactivate_onboarding" in tools
-        assert "set_onboarding_task_state" in tools
-        assert "activate_onboarding" not in tools
-
-    def test_activate_exposed_when_onboarding_inactive(
-        self,
-        mock_cm,
-        coordinator_session,
-    ):
-        mock_cm.coordinator_onboarding_active = False
-        with patch("unify.settings.SETTINGS") as settings:
-            settings.UNIFY_CONSOLE_UI = True
-            tools = self._action_tools(mock_cm).as_tools()
-        assert "activate_onboarding" in tools
-        assert "deactivate_onboarding" not in tools
-        assert "set_onboarding_task_state" not in tools
-
-    def test_neither_tool_without_console_ui(
-        self,
-        mock_cm,
-        coordinator_session,
-    ):
-        mock_cm.coordinator_onboarding_active = True
-        with patch("unify.settings.SETTINGS") as settings:
-            settings.UNIFY_CONSOLE_UI = False
-            tools = self._action_tools(mock_cm).as_tools()
-        assert "deactivate_onboarding" not in tools
-        assert "set_onboarding_task_state" not in tools
-        assert "activate_onboarding" not in tools
-
-    def test_neither_tool_for_non_coordinator(self, mock_cm):
-        mock_cm.coordinator_onboarding_active = True
-        previous = SESSION_DETAILS.is_coordinator
-        SESSION_DETAILS.is_coordinator = False
-        try:
-            with patch("unify.settings.SETTINGS") as settings:
-                settings.UNIFY_CONSOLE_UI = True
-                tools = self._action_tools(mock_cm).as_tools()
-        finally:
-            SESSION_DETAILS.is_coordinator = previous
-        assert "deactivate_onboarding" not in tools
-        assert "set_onboarding_task_state" not in tools
-        assert "activate_onboarding" not in tools
-
-    @pytest.mark.asyncio
-    async def test_set_onboarding_task_state_calls_patch_helper(self, mock_cm):
-        mock_cm._patch_coordinator_onboarding_step_state = AsyncMock(
-            return_value={"status": "ok", "message": "done"},
-        )
-        tools = ConversationManagerBrainActionTools(mock_cm)
-        result = await tools.set_onboarding_task_state("apps", True)
-        mock_cm._patch_coordinator_onboarding_step_state.assert_awaited_once_with(
-            step_id="apps",
-            completed=True,
-        )
-        assert result["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_set_onboarding_task_state_surfaces_patch_error(self, mock_cm):
-        mock_cm._patch_coordinator_onboarding_step_state = AsyncMock(
-            return_value={
-                "status": "error",
-                "message": "Communication checklist steps complete automatically",
-            },
-        )
-        tools = ConversationManagerBrainActionTools(mock_cm)
-        result = await tools.set_onboarding_task_state("email-reference", True)
-        assert result["status"] == "error"
-        assert "Communication" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_deactivate_calls_patch_helper(self, mock_cm):
-        mock_cm._patch_coordinator_onboarding_active = AsyncMock(
-            return_value={"status": "ok", "message": "paused"},
-        )
-        tools = ConversationManagerBrainActionTools(mock_cm)
-        result = await tools.deactivate_onboarding()
-        mock_cm._patch_coordinator_onboarding_active.assert_awaited_once_with(
-            active=False,
-            clear_onboarding_step=True,
-        )
-        assert result["status"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_activate_calls_patch_helper(self, mock_cm):
-        mock_cm._patch_coordinator_onboarding_active = AsyncMock(
-            return_value={"status": "ok", "message": "live"},
-        )
-        tools = ConversationManagerBrainActionTools(mock_cm)
-        result = await tools.activate_onboarding()
-        mock_cm._patch_coordinator_onboarding_active.assert_awaited_once_with(
-            active=True,
-        )
-        assert result["status"] == "ok"

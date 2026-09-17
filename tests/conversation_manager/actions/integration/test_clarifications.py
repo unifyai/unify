@@ -23,7 +23,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_condition,
     wait_for_actor_completion,
 )
-from unify.conversation_manager.events import SMSReceived
+from unify.conversation_manager.events import UnifyMessageReceived
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -64,7 +64,7 @@ async def test_clarification_handle_contract(initialized_cm_codeact):
     )
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Find contacts named John in our records and return their phone numbers and any "
@@ -104,7 +104,7 @@ async def test_clarification_handle_contract(initialized_cm_codeact):
 
     # User asks to stop the action so the flow completes deterministically.
     result_stop = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="That's enough, cancel that contact search.",
         ),
@@ -145,7 +145,7 @@ async def test_clarification_cm_event_broker_path(initialized_cm_codeact):
     )
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Find John in my contacts and tell me his phone number.",
         ),
@@ -187,7 +187,7 @@ async def test_clarification_cm_event_broker_path(initialized_cm_codeact):
 
     # Send a user message that should cause CM brain to answer via answer_clarification_* tool.
     _ = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="I meant John Smith.",
         ),

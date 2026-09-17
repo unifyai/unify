@@ -77,9 +77,9 @@ def test_matches_segment_namespace_matches_children():
 _ALL_TOOLS = {
     "primitives.contacts.ask",
     "primitives.contacts.update",
-    "primitives.tasks.ask",
-    "primitives.tasks.update",
-    "primitives.tasks.execute",
+    "primitives.secrets.ask",
+    "primitives.secrets.update",
+    "primitives.transcripts.ask",
     "functions.alpha",
     "functions.beta",
     "my_service.do_something",
@@ -105,9 +105,9 @@ def test_resolve_top_level_namespace():
     assert result == {
         "primitives.contacts.ask",
         "primitives.contacts.update",
-        "primitives.tasks.ask",
-        "primitives.tasks.update",
-        "primitives.tasks.execute",
+        "primitives.secrets.ask",
+        "primitives.secrets.update",
+        "primitives.transcripts.ask",
     }
 
 
@@ -175,13 +175,13 @@ def test_sme_allowed_methods_multiple():
     env = StateManagerEnvironment(
         allowed_methods={
             "primitives.contacts.ask",
-            "primitives.tasks.update",
+            "primitives.secrets.update",
         },
     )
     tools = env.get_tools()
 
     assert "primitives.contacts.ask" in tools
-    assert "primitives.tasks.update" in tools
+    assert "primitives.secrets.update" in tools
     assert len(tools) == 2
 
 
@@ -235,16 +235,16 @@ def test_sme_allowed_methods_prompt_includes_manager_header():
 
 def test_sme_allowed_methods_scoped_primitives():
     """allowed_methods works with a scoped Primitives instance."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts", "tasks"}))
+    scope = PrimitiveScope(scoped_managers=frozenset({"contacts", "transcripts"}))
     prims = Primitives(primitive_scope=scope)
     env = StateManagerEnvironment(
         prims,
-        allowed_methods={"primitives.contacts.ask", "primitives.tasks.execute"},
+        allowed_methods={"primitives.contacts.ask", "primitives.transcripts.ask"},
     )
     tools = env.get_tools()
 
     assert "primitives.contacts.ask" in tools
-    assert "primitives.tasks.execute" in tools
+    assert "primitives.transcripts.ask" in tools
     assert len(tools) == 2
 
 
@@ -312,7 +312,7 @@ def test_build_envs_from_db_namespace_expansion():
         {
             "primitives.contacts.ask": {},
             "primitives.contacts.update": {},
-            "primitives.tasks.ask": {},
+            "primitives.transcripts.ask": {},
         },
     )
     envs = _build_environments_from_db(["primitives.contacts"], fm)
@@ -322,4 +322,4 @@ def test_build_envs_from_db_namespace_expansion():
     assert any("contacts.ask" in n for n in tools)
     assert any("contacts.update" in n for n in tools)
     # Should NOT include other managers
-    assert not any("tasks" in n for n in tools)
+    assert not any("transcripts" in n for n in tools)

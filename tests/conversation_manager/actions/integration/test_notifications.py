@@ -19,7 +19,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     wait_for_condition,
 )
-from unify.conversation_manager.events import SMSReceived, SMSSent, UnifyMessageSent
+from unify.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -35,14 +35,14 @@ async def test_actor_progress_notification_e2e_wiring(initialized_cm_codeact):
     1. User starts a long-running action.
     2. Test applies an ActorNotification event to CM state deterministically.
     3. CM records progress in in_flight_actions[handle_id]["handle_actions"].
-    4. User asks for an update; CM emits an outbound SMS response.
+    4. User asks for an update; CM emits an outbound chat response.
     """
     cm = initialized_cm_codeact
     handle_id: int | None = None
 
     try:
         start = await cm.step_until_wait(
-            SMSReceived(
+            UnifyMessageReceived(
                 contact=BOSS,
                 content=(
                     "Search my transcripts for discussion about quarterly planning and "
@@ -81,21 +81,20 @@ async def test_actor_progress_notification_e2e_wiring(initialized_cm_codeact):
         )
 
         update = await cm.step_until_wait(
-            SMSReceived(
+            UnifyMessageReceived(
                 contact=BOSS,
                 content="Any update on that transcript search?",
             ),
         )
         assert_no_errors(update)
 
-        sms_events = [e for e in update.output_events if isinstance(e, SMSSent)]
         message_events = [
             e for e in update.output_events if isinstance(e, UnifyMessageSent)
         ]
         assert (
-            sms_events or message_events
+            message_events
         ), "Expected a user-facing outbound message after progress notification."
-        assert any((e.content or "").strip() for e in (*sms_events, *message_events))
+        assert any((e.content or "").strip() for e in message_events)
 
     finally:
         if handle_id is not None and handle_id in cm.cm.in_flight_actions:

@@ -70,7 +70,7 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     - **Functions**: explicit user requests to add/update/delete functions
       use `FunctionManager_add_functions` (`overwrite=True` to update) or
       `FunctionManager_delete_function` directly. When a stored
-      function or custom task touches Orchestra tables (`Data/*` or other
+      function touches stored tables (`Data/*` or other
       tabular contexts), its body **must** use `primitives.data` with
       server-side `filter=` / `reduce` / `update_rows` / `insert_rows` /
       `ingest` — never client-side full-table scans, which become
@@ -160,8 +160,7 @@ _MANAGER_PRIMITIVE_SCOPE = textwrap.dedent("""
     durable artifacts another assistant must own or execute — use an
     explicit cross-assistant handoff tool if present, otherwise explain
     the limitation or ask. Do not peek into another assistant's private
-    contexts: shared tabular data is already readable via
-    `primitives.data.*` team-scoped fan-out.
+    contexts.
 
     **Python-first principle:** prefer Python packages over shell CLI
     tools. Packages install via the `install_python_packages` JSON tool

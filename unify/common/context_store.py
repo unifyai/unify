@@ -24,10 +24,10 @@ def _verify_context_identity(
 
     ``create_context`` reports success both for a fresh create and for a
     pre-existing context, and a pre-existing context keeps whatever
-    configuration it was first created with — including none at all when a
-    row write reached the store first and auto-created it bare. A bare
-    context assigns no ids to inserted rows, so provisioning time is the only
-    place the corruption is caught before unaddressable rows accumulate.
+    configuration it was first created with — including none at all when it
+    was created bare. A bare context assigns no ids to inserted rows, so
+    provisioning time is the only place the corruption is caught before
+    unaddressable rows accumulate.
     """
     live = db.get_context(name, project=project)
     missing_keys = set(unique_keys) - set(live.get("unique_keys") or [])

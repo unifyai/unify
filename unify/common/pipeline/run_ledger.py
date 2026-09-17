@@ -58,18 +58,18 @@ class PipelineRunManifest(BaseModel):
 
 
 class PipelineHeartbeatManifest(BaseModel):
-    """Periodic liveness signal emitted by a worker pod during active work.
+    """Periodic liveness signal emitted by a worker during active work.
 
     Written once per lease-extension tick by the lease extender running
-    inside each worker pod. The intent is a pageable ops signal for
-    detecting pods that are alive (PID 1 still extending Pub/Sub leases)
+    alongside each worker. The intent is an observable signal for
+    detecting workers that are alive (still extending queue leases)
     but stuck (no forward progress on the underlying handler).
 
-    Ops consumes these by computing
+    An operator consumes these by computing
     ``max(now - heartbeat.last_progress_at)`` across all active runs
-    and paging if the gap ever exceeds an agreed threshold (the plan
-    suggests ~30 minutes). On a page, an operator decides whether to
-    issue a targeted ``kubectl delete pod --grace-period=0 --force``.
+    and investigating if the gap ever exceeds an agreed threshold
+    (~30 minutes is a reasonable default), then decides whether to
+    stop the stuck worker.
 
     There is intentionally no automated kill based on this signal:
     timing thresholds are too error-prone at our file-size variance.
@@ -127,7 +127,7 @@ def generate_diagnostics_path(basename: str) -> str:
 
     Absolute on purpose. A relative fallback resolves against the working
     directory, which is the repo root for a local test run but is wherever its
-    entrypoint left it for a worker pod -- so the same default scattered output
+    entrypoint left it for a background worker -- so the same default scattered output
     across unrelated places depending on who called it.
     """
     stamp = utc_now().strftime("%Y%m%d_%H%M%S")

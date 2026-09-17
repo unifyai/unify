@@ -1,7 +1,7 @@
 """Event logging tests for MemoryManager.
 
 Mirrors the ``test_event_logging.py`` tests that exist for ContactManager,
-TaskScheduler, KnowledgeManager, and TranscriptManager.
+KnowledgeManager, and TranscriptManager.
 
 MemoryManager methods return plain ``str`` results (not SteerableToolHandle),
 so the decorator under test is ``@log_manager_result`` rather than
@@ -33,7 +33,6 @@ _TRANSCRIPT = (
 _LABELS = {
     "update_contacts": "Updating contacts from transcript",
     "update_knowledge": "Updating knowledge from transcript",
-    "update_tasks": "Updating tasks from transcript",
     "process_chunk": "Processing memory chunk",
 }
 
@@ -106,34 +105,6 @@ async def test_events_for_update_knowledge():
     ]
     assert outgoing, "No outgoing ManagerMethod event for update_knowledge()"
     assert isinstance(outgoing[0].payload.get("answer"), str)
-
-
-# ---------------------------------------------------------------------------
-#  update_tasks
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_events_for_update_tasks():
-    mm = SimulatedMemoryManager()
-
-    async with capture_events("ManagerMethod") as events:
-        result = await mm.update_tasks(_TRANSCRIPT)
-
-    assert isinstance(result, str)
-
-    incoming = _filter_mm_events(events, "update_tasks", "incoming")
-    assert incoming, "No incoming ManagerMethod event for update_tasks()"
-    assert incoming[0].payload.get("display_label") == _LABELS["update_tasks"]
-
-    call_id = incoming[0].calling_id
-    outgoing = [
-        e
-        for e in events
-        if e.calling_id == call_id and e.payload.get("phase") == "outgoing"
-    ]
-    assert outgoing, "No outgoing ManagerMethod event for update_tasks()"
 
 
 # ---------------------------------------------------------------------------

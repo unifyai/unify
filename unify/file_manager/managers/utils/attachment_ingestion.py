@@ -1,17 +1,15 @@
 """Attachment ingestion: hand the file to IngestionManager, track its status.
 
-An attachment used to take one of two entirely separate routes. With cloud
-dispatch configured it published to the worker fleet; without, it parsed on a
-thread **inside the assistant's own process** -- which is the case this module no
-longer contains. Parsing loads the file and its model into whatever process does
-it, and a thread shares that process's memory limit, so an oversized attachment
-could take the assistant down with it. Neither route checkpointed, so an
-interrupted attachment was simply lost.
+Parsing an attachment on a bare thread inside the assistant's own process is
+the trap this module avoids: parsing loads the file and its model into whatever
+process does it, a thread shares that process's memory limit, so an oversized
+attachment could take the assistant down with it, and nothing checkpoints, so an
+interrupted attachment is simply lost.
 
-Both are now one call to ``IngestionManager.submit``, which decides where the work
-runs from a single rule and checkpoints it either way. What remains here is the
-part that is genuinely FileManager's: keeping ``FileRecords.ingestion_status``
-current, because that is what the UI reads to show an attachment as still landing.
+Every attachment is therefore one call to ``IngestionManager.submit``, which
+runs and checkpoints the work. What remains here is the part that is genuinely
+FileManager's: keeping ``FileRecords.ingestion_status`` current, because that is
+what a reader checks to see whether an attachment is still landing.
 """
 
 from __future__ import annotations
@@ -287,12 +285,12 @@ def apply_attachment_completion(
     status: str,
     error: str | None = None,
 ) -> None:
-    """Update ``FileRecords`` for a completed worker-dispatched attachment.
+    """Update ``FileRecords`` for a completed attachment ingestion.
 
-    Called from ``CommsManager`` when a ``thread="attachment_ingestion_complete"``
-    message arrives on the per-assistant topic. Kept alongside the watcher rather
-    than replaced by it: the callback arrives as soon as the fleet finishes, where
-    the watcher only notices on its next poll, so the two together make the status
+    Called when a ``thread="attachment_ingestion_complete"`` message arrives on
+    the assistant's event broker. Kept alongside the watcher rather than
+    replaced by it: the callback arrives as soon as the run finishes, where the
+    watcher only notices on its next poll, so the two together make the status
     prompt without either being the sole path.
     """
     if status == "success":

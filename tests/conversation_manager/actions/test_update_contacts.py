@@ -24,8 +24,8 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
     ActorHandleStarted,
+    UnifyMessageReceived,
 )
 
 pytestmark = pytest.mark.eval
@@ -125,7 +125,7 @@ async def test_create_contact(initialized_cm):
     _patch_simulated_update(cm)
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Just met Jane Doe at the conference. Can you save her email jane.d@example.com?",
         ),
@@ -147,7 +147,7 @@ async def test_save_service_number(initialized_cm):
     _patch_simulated_update(cm)
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Save this number 8005551234 - it's the Acme billing support "
@@ -180,7 +180,7 @@ async def test_update_existing_contact(initialized_cm):
     _patch_simulated_update(cm)
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content="Update Bob's phone number to +15551234567.",
         ),
@@ -203,7 +203,7 @@ async def test_check_then_save_bundled(initialized_cm):
     _patch_simulated_update(cm)
 
     result = await cm.step_until_wait(
-        SMSReceived(
+        UnifyMessageReceived(
             contact=BOSS,
             content=(
                 "Check if we already have a contact for Jane Doe, "

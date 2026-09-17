@@ -352,8 +352,8 @@ class TestRunIngestPostIngestIntegration:
 
 class TestFieldsDescriptionPassthrough:
 
-    @patch("unify.data_manager.ops.table_ops.unisdk")
-    def test_rich_fields_payload_reaches_create_fields(self, mock_unify):
+    @patch("unify.data_manager.ops.table_ops.db")
+    def test_rich_fields_payload_reaches_create_fields(self, mock_db):
         """Verify that fields with descriptions pass through to db.create_fields."""
         from unify.data_manager.ops.table_ops import create_table_impl
 
@@ -374,33 +374,33 @@ class TestFieldsDescriptionPassthrough:
             fields=rich_fields,
         )
 
-        mock_unify.create_fields.assert_called_once_with(
-            rich_fields,
+        mock_db.create_fields.assert_called_once_with(
+            fields=rich_fields,
             context="test/ctx",
         )
 
-    @patch("unify.data_manager.ops.table_ops.unisdk")
-    def test_simple_fields_still_work(self, mock_unify):
-        """Backward compatibility: plain {name: type_str} still works."""
+    @patch("unify.data_manager.ops.table_ops.db")
+    def test_simple_fields_still_work(self, mock_db):
+        """Plain ``{name: type_str}`` payloads reach create_fields unchanged."""
         from unify.data_manager.ops.table_ops import create_table_impl
 
         simple_fields = {"name": "str", "age": "int"}
 
         create_table_impl("test/ctx", fields=simple_fields)
 
-        mock_unify.create_fields.assert_called_once_with(
-            simple_fields,
+        mock_db.create_fields.assert_called_once_with(
+            fields=simple_fields,
             context="test/ctx",
         )
 
-    @patch("unify.data_manager.ops.table_ops.unisdk")
-    def test_none_fields_skips_create_fields(self, mock_unify):
+    @patch("unify.data_manager.ops.table_ops.db")
+    def test_none_fields_skips_create_fields(self, mock_db):
         """When fields is None, create_fields should not be called."""
         from unify.data_manager.ops.table_ops import create_table_impl
 
         create_table_impl("test/ctx", fields=None)
 
-        mock_unify.create_fields.assert_not_called()
+        mock_db.create_fields.assert_not_called()
 
 
 # =============================================================================

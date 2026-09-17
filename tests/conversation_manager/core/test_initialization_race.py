@@ -5,30 +5,15 @@ tests/conversation_manager/core/test_initialization_race.py
 Integration tests for manager initialization race conditions.
 
 These tests verify the system correctly handles events that arrive BEFORE or
-DURING manager initialization. This is critical for production deployment where:
-- Pub/Sub messages can arrive immediately after container startup
+DURING manager initialization:
+- Chat messages can arrive immediately after the session boots
 - ContactManager/TranscriptManager take time to initialize
 - Multiple events can arrive in rapid succession
 
-WHY THESE TESTS MATTER:
------------------------
-Ved's production fixes over the past 2 weeks revealed multiple race conditions:
-
-1. fe355d6f - Blacklist manager was blocking inbound until managers initialized
-   (removed blocking code entirely)
-
-2. 78ae1915 - Contact syncing broke system event handling before ContactManager
-   was initialized (added queue_operation pattern)
-
-3. 307b210f - Contact lookup failed before ContactManager was wired up
-   (added fallback cache via BackupContactsEvent)
-
-The common theme: events arriving before initialization was complete caused
-silent failures that were very hard to debug in production.
-
-These tests would have caught those bugs by verifying:
+Events arriving before initialization is complete must not fail silently.
+These tests verify:
 - queue_operation correctly defers work until after initialization
-- BackupContactsEvent correctly populates fallback cache
+- BackupContactsEvent correctly populates the fallback contact cache
 - Events can be handled safely during the initialization window
 - Multiple rapid events don't cause race conditions
 """
@@ -86,9 +71,6 @@ class TestQueueOperationDuringInit:
     The queue_operation() function in managers_utils.py queues async operations
     that require managers to be initialized. listen_to_operations() processes
     them after cm.initialized becomes True.
-
-    This pattern was added in commit 78ae1915 to fix contact syncing that was
-    breaking system event handling.
     """
 
     @pytest.mark.asyncio
@@ -121,10 +103,9 @@ class TestQueueOperationDuringInit:
         await managers_utils.queue_operation(tracked_operation, "op1")
 
         # Verify operation hasn't executed yet
-        assert "executed:op1" not in execution_log, (
-            "Operation executed before initialization! "
-            "This would cause Ved's bug (78ae1915)."
-        )
+        assert (
+            "executed:op1" not in execution_log
+        ), "Operation executed before initialization!"
 
         # Now simulate initialization completing
         mock_cm.initialized = True
@@ -208,11 +189,9 @@ class TestBackupContactsFallback:
     """
     Tests for the BackupContactsEvent fallback mechanism.
 
-    When inbound messages arrive, CommsManager publishes BackupContactsEvent
-    with contact data from the message. This populates a fallback cache in
-    ContactIndex so lookups work before ContactManager is initialized.
-
-    This mechanism was added in commit 307b210f.
+    When inbound messages arrive with contact data, a BackupContactsEvent
+    populates a fallback cache in ContactIndex so lookups work before
+    ContactManager is initialized.
     """
 
     @pytest.mark.asyncio
@@ -241,12 +220,9 @@ class TestBackupContactsFallback:
         assert boss is not None, "Boss contact not found via fallback"
         assert boss["first_name"] == "Boss"
 
-        alice = ci.get_contact(phone_number="+15555551234")
-        assert alice is not None, "Alice contact not found by phone via fallback"
+        alice = ci.get_contact(contact_id=2)
+        assert alice is not None, "Alice contact not found via fallback"
         assert alice["first_name"] == "Alice"
-
-        alice_email = ci.get_contact(email=alice_contact["email_address"])
-        assert alice_email is not None, "Alice contact not found by email via fallback"
 
     @pytest.mark.asyncio
     async def test_fallback_survives_manager_initialization(
@@ -355,7 +331,7 @@ class TestEventsDuringInitialization:
     """
     Tests for handling events during the initialization window.
 
-    In production, events can arrive at any time:
+    Events can arrive at any time:
     - Before initialization starts
     - During initialization (managers partially ready)
     - After initialization completes
@@ -364,22 +340,24 @@ class TestEventsDuringInitialization:
     """
 
     @pytest.mark.asyncio
-    async def test_sms_received_before_init_uses_fallback(
+    async def test_message_received_before_init_uses_fallback(
         self,
         event_broker,
         boss_contact,
     ):
         """
-        Test that SMSReceived before init uses fallback contact.
+        Test that UnifyMessageReceived before init uses the fallback contact.
 
-        This simulates the exact scenario that broke in production:
-        1. Container starts
-        2. SMS arrives immediately
+        1. The session boots
+        2. A chat message arrives immediately
         3. ContactManager not initialized yet
         4. Handler needs to resolve contact
         """
         from unify.conversation_manager.domains.event_handlers import EventHandler
-        from unify.conversation_manager.events import SMSReceived, BackupContactsEvent
+        from unify.conversation_manager.events import (
+            BackupContactsEvent,
+            UnifyMessageReceived,
+        )
         from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
@@ -387,28 +365,23 @@ class TestEventsDuringInitialization:
         mock_cm.contact_index = ci
         mock_cm._session_logger = MagicMock()
         mock_cm.notifications_bar = MagicMock()
-        mock_cm.cancel_proactive_speech = AsyncMock()
         mock_cm.request_llm_run = AsyncMock()
 
-        # First, backup contacts arrive (CommsManager does this)
+        # First, backup contacts arrive
         backup_event = BackupContactsEvent(contacts=[boss_contact])
         await EventHandler.handle_event(backup_event, mock_cm)
 
-        # Now SMS arrives (still before init)
-        sms = SMSReceived(
+        # Now a message arrives (still before init)
+        message = UnifyMessageReceived(
             contact=boss_contact,
             content="Hello!",
         )
 
-        # The handler should be able to resolve the contact via fallback
-        # and not crash
-        try:
-            await EventHandler.handle_event(sms, mock_cm)
-        except Exception as e:
-            pytest.fail(
-                f"SMSReceived handler crashed before init: {e}. "
-                "This is Ved's bug scenario.",
-            )
+        # The handler resolves the contact via fallback and records it
+        await EventHandler.handle_event(message, mock_cm)
+
+        assert ci.get_messages_for_contact(1)[0].content == "Hello!"
+        mock_cm.request_llm_run.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_sync_contacts_queued_before_init(self, event_broker):
@@ -416,7 +389,6 @@ class TestEventsDuringInitialization:
         Test that SyncContacts event queues operation for after init.
 
         SyncContacts requires ContactManager to be initialized.
-        Before Ved's fix (78ae1915), this would fail or block.
         """
         from unify.conversation_manager.domains.event_handlers import EventHandler
         from unify.conversation_manager.domains import managers_utils
@@ -449,119 +421,42 @@ class TestRapidEventsRaceCondition:
     """
     Tests for rapid event handling during initialization.
 
-    In production, the adapter sends both startup message and inbound message
-    in rapid succession. This tests that pattern.
+    Several chat messages can be published in rapid succession while the
+    session is still booting. This tests that pattern.
     """
 
     @pytest.mark.asyncio
-    async def test_startup_followed_by_inbound_within_100ms(self, event_broker):
-        """
-        Test that startup + inbound within 100ms doesn't race.
-
-        This simulates the exact production scenario from commit 3c44b692:
-        1. Adapter sends startup to unity-startup
-        2. Adapter immediately sends inbound to unity-{assistant_id}
-        3. Both must be handled without race conditions
-        """
-        from unify.conversation_manager.events import (
-            StartupEvent,
-            SMSReceived,
-            Event,
-        )
-
-        # Track event receipt order
-        received = []
-
-        async with event_broker.pubsub() as pubsub:
-            await pubsub.psubscribe("app:comms:*")
-
-            # Publish both events with minimal delay (simulating adapter behavior)
-            startup = StartupEvent(
-                api_key="test_key",
-                medium="sms",
-                assistant_id="race_test_assistant",
-                user_id="123",
-                assistant_first_name="Test",
-                assistant_surname="Assistant",
-                assistant_age="25",
-                assistant_nationality="American",
-                assistant_about="Test",
-                assistant_number="+15555550000",
-                assistant_email="assistant@test.com",
-                user_first_name="Boss",
-                user_surname="",
-                user_number="+15555550001",
-                user_email="boss@test.com",
-                voice_provider="cartesia",
-                voice_id="test",
-            )
-
-            sms = SMSReceived(
-                contact={
-                    "contact_id": 1,
-                    "first_name": "Boss",
-                    "surname": "User",
-                    "phone_number": "+15555550001",
-                    "email_address": "boss@test.com",
-                },
-                content="Quick message!",
-            )
-
-            # Rapid-fire publish (no await between them)
-            t1 = asyncio.create_task(
-                event_broker.publish("app:comms:startup", startup.to_json()),
-            )
-            t2 = asyncio.create_task(
-                event_broker.publish("app:comms:msg_message", sms.to_json()),
-            )
-            await asyncio.gather(t1, t2)
-
-            # Collect events with short timeout (get_message already has timeout, no extra sleep needed)
-            for _ in range(10):
-                msg = await pubsub.get_message(
-                    timeout=0.2,
-                    ignore_subscribe_messages=True,
-                )
-                if msg:
-                    try:
-                        event = Event.from_json(msg["data"])
-                        received.append(type(event).__name__)
-                    except Exception:
-                        pass
-
-        # Both events should have been received
-        assert "StartupEvent" in received, "Startup event lost in race"
-        assert "SMSReceived" in received, "SMS event lost in race"
-
-    @pytest.mark.asyncio
-    async def test_multiple_sms_during_init_window(
+    async def test_multiple_messages_during_init_window(
         self,
         event_broker,
         boss_contact,
         alice_contact,
     ):
         """
-        Test that multiple SMS messages during init window are all handled.
+        Test that multiple chat messages during the init window are all handled.
 
         A flurry of messages shouldn't cause any to be dropped.
         """
-        from unify.conversation_manager.events import SMSReceived, Event
+        from unify.conversation_manager.events import UnifyMessageReceived, Event
 
         messages_received = []
 
         async with event_broker.pubsub() as pubsub:
             await pubsub.psubscribe("app:comms:*")
 
-            # Send 5 SMS messages rapidly
+            # Send 5 messages rapidly
             tasks = []
             for i in range(5):
                 contact = boss_contact if i % 2 == 0 else alice_contact
-                sms = SMSReceived(
+                message = UnifyMessageReceived(
                     contact=contact,
                     content=f"Message {i}",
                 )
                 tasks.append(
-                    event_broker.publish("app:comms:msg_message", sms.to_json()),
+                    event_broker.publish(
+                        UnifyMessageReceived.topic,
+                        message.to_json(),
+                    ),
                 )
 
             await asyncio.gather(*tasks)
@@ -575,7 +470,7 @@ class TestRapidEventsRaceCondition:
                 if msg:
                     try:
                         event = Event.from_json(msg["data"])
-                        if isinstance(event, SMSReceived):
+                        if isinstance(event, UnifyMessageReceived):
                             messages_received.append(event.content)
                     except Exception:
                         pass

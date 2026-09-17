@@ -68,14 +68,13 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
     from unify.common.prompt_helpers import now as prompt_now
 
     cm = initialized_cm
-    cm.cm.user_screen_share_active = True
 
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
             content=(
-                "I'm going to show you how to process returns in our system. "
-                "Let me share my screen."
+                "I'm going to walk you through how to process returns in our "
+                "system. Bear with me while I get set up."
             ),
         ),
     )
@@ -84,7 +83,7 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
-            content="Click on the Returns tab at the top of the page.",
+            content="First step: open the Returns tab at the top of the page.",
         ),
     )
     assert_act_triggered(
@@ -99,7 +98,7 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
     cm.cm.in_flight_actions[handle_id]["handle_actions"].append(
         {
             "action_name": "response",
-            "query": "Done — I clicked on the Returns tab. The returns dashboard is now showing.",
+            "query": "Done — the Returns tab is open. The returns dashboard is now showing.",
             "status": "awaiting_input",
             "timestamp": prompt_now(),
         },
