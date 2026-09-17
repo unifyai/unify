@@ -559,7 +559,6 @@ class TestRenderCaps:
                 f"pinned_{i}",
                 datetime(2025, 6, 13, 12, i, 0, tzinfo=timezone.utc),
                 pinned=True,
-                id=f"pinned_{i}",
             )
         # Add transient notifications (newer than last_snapshot)
         for i in range(3):

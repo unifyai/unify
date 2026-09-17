@@ -13,13 +13,9 @@ class ActorSettings(BaseSettings):
 
     Attributes:
         IMPL: Implementation type - "code_act" or "simulated".
-        SIMULATED_STEPS: Number of steps before auto-completion for simulated actor.
-        ANTICAPTCHA_KEY: API key for AntiCaptcha service.
     """
 
     IMPL: str = "code_act"
-    SIMULATED_STEPS: int | None = 1
-    ANTICAPTCHA_KEY: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="UNIFY_ACTOR_",

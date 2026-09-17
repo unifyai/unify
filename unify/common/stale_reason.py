@@ -1,4 +1,4 @@
-"""Structured link-debt records shared by Knowledge, Guidance, and Functions."""
+"""Structured link-debt records shared by Guidance and Functions."""
 
 from __future__ import annotations
 
@@ -8,13 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 
 DepKind = Literal[
     "function",
-    "file",
-    "contact",
-    "data",
     "depends_on",
-    "knowledge",
     "guidance",
-    "transcript",
 ]
 
 
@@ -43,17 +38,15 @@ class StaleReason(BaseModel):
         ...,
         description=(
             "What kind of dependency broke: ``function`` (Guidance "
-            "function_ids), ``file`` / ``contact`` / ``data`` / "
-            "``transcript`` / ``knowledge`` (Knowledge source_refs), "
-            "``depends_on`` (compositional Function name edge), or "
-            "``guidance`` (rare inverse cleanup)."
+            "function_ids), ``depends_on`` (compositional Function name "
+            "edge), or ``guidance`` (rare inverse cleanup)."
         ),
     )
     id: Optional[int] = Field(
         None,
         description=(
             "Numeric id of the missing dependee when known "
-            "(function_id, file_id, contact_id, knowledge_id, …). "
+            "(function_id, guidance_id). "
             "Snapshot before FK CASCADE pops the live pointer."
         ),
     )
@@ -63,17 +56,6 @@ class StaleReason(BaseModel):
             "Human / bare name of the missing dependee when known "
             "(e.g. function name, depends_on bare name). Used for "
             "display and for name-keyed depends_on re-validation."
-        ),
-    )
-    path: Optional[str] = Field(
-        None,
-        description="Workspace filepath when the missing dependee was a file.",
-    )
-    context: Optional[str] = Field(
-        None,
-        description=(
-            "Unify context path when the missing dependee was a data "
-            "context (Knowledge source_refs kind=data)."
         ),
     )
     message: str = Field(
@@ -101,7 +83,7 @@ def coerce_stale_reasons(value) -> List[StaleReason]:
         if isinstance(item, StaleReason):
             out.append(item)
         elif isinstance(item, str):
-            # Legacy / accidental string entries → wrap as message-only debt.
+            # Bare string entries carry only a message.
             out.append(
                 StaleReason(dep_kind="depends_on", message=item),
             )
@@ -117,8 +99,6 @@ def stale_reason_key(reason: StaleReason) -> tuple:
         reason.dep_kind,
         reason.id,
         reason.name,
-        reason.path,
-        reason.context,
     )
 
 

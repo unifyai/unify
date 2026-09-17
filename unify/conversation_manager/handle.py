@@ -9,11 +9,9 @@ from unify.common.llm_client import new_slow_brain_llm_client
 from .base import BaseConversationManagerHandle
 from .events import (
     NotificationInjectedEvent,
-    NotificationUnpinnedEvent,
     DirectMessageEvent,
 )
 from .prompt_builders import build_ask_handle_prompt
-import logging
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -21,7 +19,6 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound=[BaseModel, Enum])
 
-logger = logging.getLogger(__name__)
 
 # How long a question posted to the chat waits for the user before the loop
 # is told the question went unanswered. Long enough to cover a person reading
@@ -29,7 +26,7 @@ logger = logging.getLogger(__name__)
 # loop open indefinitely.
 USER_REPLY_TIMEOUT_S = 120
 
-# How much of the conversation the ask loop and ``get_full_transcript`` see.
+# How much of the conversation the ask loop sees.
 RECENT_TRANSCRIPT_MESSAGES = 20
 
 
@@ -37,57 +34,23 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
     """
     The concrete implementation for steering a live ConversationManager instance.
 
-    This handle communicates with the ConversationManager over the event broker,
-    allowing components like the Actor to steer the conversation
-    by publishing and subscribing to specific event channels.
+    The Actor receives this handle so a running plan can reach back into the
+    chat: ``ask`` puts a question to the user, ``interject`` drops information
+    into the brain's notification bar. Both go over the event broker.
     """
 
     def __init__(
         self,
         event_broker: "InMemoryEventBroker",
-        conversation_id: str,
         *,
         conversation_manager: "ConversationManager",
     ):
-        """
-        Initializes the handle for a specific conversation.
-        """
         self.event_broker = event_broker
-        self.conversation_id = conversation_id
         self.conversation_manager = conversation_manager
 
         self._steering_channel = "app:comms:steering"
         self._stopped = False
         self._final_result = "Handle is active."
-
-    # ─────────────────────────────────────────────────────────────
-    # Conversation-Specific Operations
-    # ─────────────────────────────────────────────────────────────
-    async def get_full_transcript(
-        self,
-        max_messages: int = RECENT_TRANSCRIPT_MESSAGES,
-    ) -> dict:
-        """Return the most recent messages of the conversation."""
-        messages = [
-            {
-                "role": message.role,
-                "timestamp": message.timestamp.isoformat(),
-                "content": message.content,
-                "attachments": list(message.attachments),
-            }
-            for message in self.conversation_manager.chat_history.recent(max_messages)
-        ]
-
-        if messages:
-            logger.info(f"TOOL: Found {len(messages)} message(s).")
-        else:
-            logger.info("TOOL: No messages found yet.")
-
-        return {
-            "status": "ok",
-            "messages": messages,
-            "count": len(messages),
-        }
 
     # ─────────────────────────────────────────────────────────────
     # Standard SteerableToolHandle Methods
@@ -282,43 +245,16 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
         Returns
         -------
         str
-            The ``interjection_id`` assigned to this interjection.  Pass it to
-            :pymeth:`unpin_interjection` to remove a pinned interjection later.
+            The ``interjection_id`` assigned to this interjection.
         """
         if self._stopped:
             return ""
         event = NotificationInjectedEvent(
             content=message,
             source="interjection",
-            target_conversation_id=self.conversation_id,
         )
         await self.event_broker.publish(self._steering_channel, event.to_json())
         return event.interjection_id
-
-    async def unpin_interjection(self, interjection_id: str) -> dict:
-        """
-        Unpin a previously pinned interjection.
-
-        Args:
-            interjection_id: The ID of the interjection to unpin
-
-        Returns:
-            Dict with status indicating success
-        """
-        if self._stopped:
-            return {"status": "error", "message": "Handle is stopped."}
-
-        event = NotificationUnpinnedEvent(
-            interjection_id=interjection_id,
-            target_conversation_id=self.conversation_id,
-        )
-        await self.event_broker.publish(self._steering_channel, event.to_json())
-
-        return {
-            "status": "ok",
-            "message": f"Unpin request sent for interjection {interjection_id}",
-            "interjection_id": interjection_id,
-        }
 
     async def stop(self, reason: Optional[str] = None, **kwargs) -> None:
         """Stops the handle."""

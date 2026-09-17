@@ -1,11 +1,8 @@
-"""Wire unillm LLM events to the Unity EventBus.
+"""Wire unillm LLM events to the EventBus.
 
-This module provides the hook function that converts unillm's LLMEvent
-dataclass into Unity EventBus events, and the setup function to install
-the hook during Unity initialization.
-
-The hook is installed once during unify.init() and remains active for the
-lifetime of the process.
+The hook converts unillm's ``LLMEvent`` into an ``LLM`` EventBus event. It is
+installed once during ``unify.init()`` and stays active for the lifetime of
+the process.
 """
 
 from __future__ import annotations
@@ -21,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 # Module-level flag to prevent double-registration
 _HOOK_INSTALLED = False
-
-# The registered unillm listener, kept so its delivery health is inspectable.
-_LISTENER = None
 
 
 def _llm_event_to_eventbus(event: "LLMEvent") -> None:
@@ -94,7 +88,7 @@ def install_llm_event_hook() -> None:
     (metering, benchmark harnesses) can register alongside this one in any
     order without either displacing the other.
     """
-    global _HOOK_INSTALLED, _LISTENER
+    global _HOOK_INSTALLED
 
     if _HOOK_INSTALLED:
         return
@@ -105,7 +99,7 @@ def install_llm_event_hook() -> None:
         # Use a listener to ensure it works across all threads/contexts.
         # This is essential because unify.init() may run in a thread pool
         # worker while LLM calls happen from the main async context.
-        _LISTENER = unillm.add_llm_event_listener(_llm_event_to_eventbus)
+        unillm.add_llm_event_listener(_llm_event_to_eventbus)
         _HOOK_INSTALLED = True
     except ImportError:
         # unillm not available - skip hook installation

@@ -518,27 +518,6 @@ class PythonExecutionSession:
         # Expose sandbox metadata to user code (best-effort; callers may ignore).
         self.global_state["__sandbox_id__"] = self.id
 
-        # notify() is a backward-compatibility no-op shim. The queue-backed
-        # progress helper was retired in favor of the `send_notification`
-        # tool at the loop layer, but stored functions persisted in tenant
-        # DBs may still call notify(), so it must keep accepting any payload
-        # without raising. Remove only after confirming no stored function
-        # body in any tenant DB still calls notify(.
-        _notify_shim_logged = False
-
-        def notify(*args: Any, **kwargs: Any) -> None:
-            nonlocal _notify_shim_logged
-            if not _notify_shim_logged:
-                _notify_shim_logged = True
-                logger.debug(
-                    "notify() called in sandbox %s: it is a no-op shim; "
-                    "use the send_notification tool for progress updates",
-                    self.id,
-                )
-            return None
-
-        self.global_state["notify"] = notify
-
         # Inject pools into namespace (for function proxies to use)
         if venv_pool is not None:
             self.global_state["__venv_pool__"] = venv_pool
@@ -1393,7 +1372,7 @@ def _wrap_code_as_async_function(code: str) -> str:
     indented = "\n".join(
         ("    " + line) if line.strip() else "    " for line in body.splitlines()
     )
-    return "async def __unity_code_act__():\n" + indented + "\n"
+    return "async def __unify_code_act__():\n" + indented + "\n"
 
 
 async def _execute_shell_stateless(

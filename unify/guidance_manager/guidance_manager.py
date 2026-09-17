@@ -7,7 +7,7 @@ import logging
 from unify import db
 from ..common.log_utils import (
     assigned_row_id,
-    log as unity_log,
+    log as write_log,
 )
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.model_to_fields import model_to_fields
@@ -80,7 +80,6 @@ class GuidanceManager(BaseGuidanceManager):
 
         # Built-in fields derived from Guidance model
         self._BUILTIN_FIELDS: Tuple[str, ...] = tuple(Guidance.model_fields.keys())
-        self._REQUIRED_COLUMNS: set[str] = set(self._BUILTIN_FIELDS)
 
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
 
@@ -358,7 +357,7 @@ class GuidanceManager(BaseGuidanceManager):
             function_ids=function_ids or [],
         )
         payload = g.to_post_json()
-        log = unity_log(
+        log = write_log(
             context=self._ctx,
             **payload,
             new=True,

@@ -24,7 +24,7 @@ This separation guarantees:
 ### Primitive ID Stability
 
 Primitives receive stable IDs derived from a hash of their fully-qualified name (e.g., "_ActorRunner.act" → deterministic integer). This means:
-- IDs are consistent across all deployments
+- IDs are consistent across every store
 - Adding/removing methods doesn't affect other primitives' IDs
 - No manual ID management required
 
@@ -53,16 +53,15 @@ Guidance is **not** a primitive. It is a typed catalogue exposed as top-level Ac
 
 ---
 
-## Primitive Synchronization
+## Primitive Catalogue Seeding
 
-Primitives are lazily synchronized to the database:
+Primitive rows live in a read-only builtins catalogue (`unify/function_manager/builtins_catalog.py`) that every `FunctionManager` reads through at query time:
 
-1. On first access (e.g., `list_primitives()`, `search_functions()`), the manager calls `sync_primitives()`
-2. A hash of all primitive signatures/docstrings is compared against the stored hash
-3. If changed, all primitives are deleted and re-inserted with their stable IDs
-4. The hash is stored in `Functions/Meta` for future comparisons
+1. Seeding compares a hash of each namespace's primitive signatures/docstrings against the hash stored in the catalogue's `Functions/Meta` row
+2. Namespaces whose hash changed are deleted and re-inserted with their stable IDs
+3. Reads federate the catalogue with the manager's own rows, scoped by `primitive_row_filter`
 
-This ensures primitives stay in sync with the codebase while avoiding unnecessary database writes.
+This keeps primitives in sync with the codebase while avoiding unnecessary store writes.
 
 ---
 
@@ -223,7 +222,7 @@ A steerable function is one that:
 Steerability is detected at **runtime** via `isinstance(result, SteerableToolHandle)`:
 
 ```python
-from unity.common.async_tool_loop import SteerableToolHandle
+from unify.common.async_tool_loop import SteerableToolHandle
 
 result = await my_function()
 
@@ -310,9 +309,6 @@ The execution layer will detect this via `isinstance` and handle it normally.
 
 ```python
 fm = FunctionManager()
-
-# Ensure primitives are synced
-fm.sync_primitives()
 
 # List all primitives
 fm.list_primitives()

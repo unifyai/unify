@@ -117,6 +117,8 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
         "no file at",
         "no such file",
         "missing",
+        "absent",
+        "inaccessible",
         "does not point to a valid file",
         "not point to a valid file",
         "unable to read",

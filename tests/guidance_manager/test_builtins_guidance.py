@@ -181,7 +181,7 @@ def test_default_library_semantic_search(builtins_test_project):
 
 
 @_handle_project
-def test_get_guidance_resolves_tenant_and_builtin_entries(builtins_test_project):
+def test_get_guidance_resolves_own_and_builtin_entries(builtins_test_project):
     seed_builtin_guidance(entries=_ENTRIES)
     gm = GuidanceManager()
     outcome = gm.add_guidance(title="mine", content="my own entry")
@@ -205,7 +205,7 @@ def test_get_guidance_resolves_tenant_and_builtin_entries(builtins_test_project)
 
 
 @_handle_project
-def test_guidance_reads_blend_builtins_and_tenant_entries(builtins_test_project):
+def test_guidance_reads_blend_builtins_and_own_entries(builtins_test_project):
     seed_builtin_guidance(entries=_ENTRIES)
     gm = GuidanceManager()
     gm.add_guidance(
@@ -292,7 +292,7 @@ def test_update_and_delete_builtin_guidance_refused(builtins_test_project):
     with pytest.raises(ValueError, match="built-in"):
         gm.delete_guidance(guidance_id=builtin_id)
 
-    # The catalogue row is untouched and tenant CRUD still works normally.
+    # The catalogue row is untouched and the assistant's own CRUD still works normally.
     rows = _builtin_rows(builtins_test_project)
     assert rows["[test] arxiv-search"]["content"] == (
         _ENTRIES["test/arxiv-search"]["content"]

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import contextvars
-from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator
 
 
 @dataclass(frozen=True)
@@ -103,28 +101,3 @@ def resolve_act_llm_profile(profile: str | None) -> ActLLMProfile:
         return ACT_LLM_PROFILES[name]
     valid = ", ".join(sorted(ACT_LLM_PROFILES))
     raise ValueError(f"Unknown act LLM profile {profile!r}. Valid profiles: {valid}")
-
-
-def describe_act_llm_profiles() -> str:
-    """Return compact actor-facing documentation for curated profiles."""
-
-    lines = ["Available `llm_profile` values:"]
-    for profile in ACT_LLM_PROFILES.values():
-        model = profile.model or "actor default"
-        effort = profile.reasoning_effort or "actor default"
-        lines.append(
-            f"- `{profile.name}`: model={model}, reasoning_effort={effort}. "
-            f"{profile.description} Price: {profile.relative_price}",
-        )
-    return "\n".join(lines)
-
-
-@contextmanager
-def use_act_llm_profile(profile: ActLLMProfile) -> Iterator[None]:
-    """Bind the active act profile for the current async context."""
-
-    token = CURRENT_ACT_LLM_PROFILE.set(profile)
-    try:
-        yield
-    finally:
-        CURRENT_ACT_LLM_PROFILE.reset(token)

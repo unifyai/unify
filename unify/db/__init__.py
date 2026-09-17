@@ -1,8 +1,8 @@
 """The assistant's persistence layer: typed, queryable tables in local SQLite.
 
 Managers keep their state as rows in named *contexts* (tables) inside a
-*project*. Contexts are addressed by path (``Contacts``,
-``Personal/12/Contacts``), can declare unique keys, auto-counted ids and
+*project*. Contexts are addressed by path (``Guidance``,
+``tests/foo/Guidance``), can declare unique keys, auto-counted ids and
 derived columns, and are read back with expressions in the row language
 (:mod:`unify.db.expressions`).
 
@@ -455,21 +455,6 @@ class Log:
     @property
     def entries(self) -> dict[str, Any]:
         return self._entries
-
-    def set_id(self, id: int) -> None:
-        self._id = id
-
-    def update_entries(self, **entries: Any) -> None:
-        update_logs(
-            logs=self._id,
-            context=self._context,
-            entries=entries,
-            overwrite=True,
-        )
-        self._entries = {**self._entries, **entries}
-
-    def delete(self) -> None:
-        delete_logs(logs=self._id, context=self._context, project=self._project)
 
     def to_json(self) -> dict[str, Any]:
         return {

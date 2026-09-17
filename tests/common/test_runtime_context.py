@@ -110,15 +110,3 @@ def test_bind_honors_prebound_root_when_resolve_does(monkeypatch) -> None:
         ContextRegistry.set_base_context(original_base or "")
         if original_base is None:
             ContextRegistry._base_context = None
-
-
-def test_contacts_context_resolves_through_the_session_root(monkeypatch) -> None:
-    """prompt_helpers must not rebuild '{user}/{agent}' as a literal path."""
-    from unify.common.prompt_helpers import _contacts_context
-
-    monkeypatch.setattr(
-        runtime_context,
-        "resolve_runtime_context_root",
-        lambda **_: "colleague/track/run/default/0",
-    )
-    assert _contacts_context() == "colleague/track/run/default/0/Contacts"

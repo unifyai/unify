@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 from contextlib import suppress
@@ -95,13 +94,6 @@ question : str
 
 
 class DynamicToolFactory:
-
-    @dataclass
-    class _ToolContext:
-        fn_name: str
-        arg_repr: str
-        call_id: str
-        safe_call_id: str
 
     def __init__(self, tools_data: ToolsData):
         # Only ever holds the STATIC, byte-stable surface: wait, steer,

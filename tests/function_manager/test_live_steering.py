@@ -181,13 +181,11 @@ def test_identity_survives_a_change_of_position():
     everything already sent, which is the failure this identity avoids.
     """
     session = SteeringSession()
-    session.runtime.push_frame("notify")
     session.runtime.start_loop_context("for_1")
     session.runtime.increment_loop_iteration("for_1")
     positioned = make_cache_key(session, "primitives.comms.send", ("a",), {})
 
     replayed = SteeringSession()
-    replayed.runtime.push_frame("notify")
     replayed.runtime.start_loop_context("for_1")
     replayed.runtime.increment_loop_iteration("for_1")
     replayed.runtime.push_path_context("if_1_true")

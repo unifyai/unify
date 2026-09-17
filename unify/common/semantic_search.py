@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Tuple, Dict, Optional
-import json
+from typing import List, Tuple, Optional
 import hashlib
 
 from unify import db
@@ -141,43 +140,6 @@ def resolve_existing_vector_for_source(
     return embed_column_name if embed_column_name in fields else None
 
 
-def extract_placeholders(expr: str) -> list[str]:
-    """Return placeholder field names inside a source expression.
-
-    Example: "str({content}).lower()" -> ["content"].
-    """
-    import re as _re
-
-    return _re.findall(r"\{\s*([a-zA-Z_][\w]*)\s*\}", expr or "")
-
-
-def ensure_join_context(
-    *,
-    left_ctx: str,
-    right_ctx: str,
-    join_expr: str,
-    new_context: str,
-    columns: Dict[str, str],
-    mode: str = "inner",
-) -> str:
-    """Materialize a joined context with aliased columns and return its name.
-
-    This small wrapper standardizes aliasing/copy semantics so downstream code can
-    reference bare column names in the joined context without fully qualified paths.
-    """
-    db.join_logs(
-        pair_of_args=(
-            {"context": left_ctx},
-            {"context": right_ctx},
-        ),
-        join_expr=join_expr,
-        mode=mode,
-        new_context=new_context,
-        columns=columns,
-    )
-    return new_context
-
-
 def ensure_mean_cosine_column(
     context: str,
     terms: List[Tuple[str, str]],
@@ -215,43 +177,6 @@ def ensure_mean_cosine_column(
     )
 
     return sum_key
-
-
-def ensure_mean_cosine_column_piecewise(
-    context: str,
-    terms: List[Tuple[str, str]],
-    seed: str,
-    *,
-    project: Optional[str] = None,
-) -> str:
-    """Create a mean-of-cosines derived column using a single zero-shot equation.
-
-    For backend compatibility and simplicity, this delegates to
-    ``ensure_mean_cosine_column`` so that the full equation is evaluated
-    server-side without creating any intermediate columns.
-
-    Returns the created (or existing) mean column key.
-    """
-    return ensure_mean_cosine_column(context, terms, seed, project=project)
-
-
-def ensure_mean_cosine_column_piecewise_named(
-    context: str,
-    terms: List[Tuple[str, str]],
-    seed: str,
-    *,
-    public_prefix: str = "score_",
-    project: Optional[str] = None,
-) -> str:
-    """Create a private mean-of-cosines column for the provided terms.
-
-    Backward-compatible wrapper that now delegates to ``ensure_mean_cosine_column``
-    to build a single zero-shot equation and returns its private key (underscored).
-    The ``public_prefix`` parameter is ignored.
-
-    Returns the created (or existing) private sum column key.
-    """
-    return ensure_mean_cosine_column(context, terms, seed, project=project)
 
 
 SORT_DISTANCE_KEY = "_sort_distance"
@@ -467,7 +392,7 @@ def fetch_top_k_by_terms_with_score(
     import hashlib as _hashlib
 
     sum_hash = _hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise_named(
+    sum_key = ensure_mean_cosine_column(
         context,
         terms,
         sum_hash,
@@ -500,213 +425,6 @@ def fetch_top_k_by_terms_with_score(
             exclude_fields=exclude_fields,
         )
     return [lg.entries for lg in logs], sum_key
-
-
-def fetch_scores_for_ids(
-    context: str,
-    terms: List[Tuple[str, str]],
-    *,
-    id_field: str,
-    ids: list[int],
-) -> tuple[dict[int, float], str]:
-    """Fetch scores for a specific set of IDs using a private score column.
-
-    Returns a mapping from id -> score and the score column key used.
-    """
-    if len(terms) == 0 or len(ids) == 0:
-        return {}, ""
-
-    canonical = "|".join(f"{i}:{col}=>{txt}" for i, (col, txt) in enumerate(terms))
-    import hashlib as _hashlib
-
-    sum_hash = _hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise_named(context, terms, sum_hash)
-
-    ids_expr = ", ".join(str(int(v)) for v in ids)
-    id_filter = f"{id_field} in [{ids_expr}]"
-
-    # Exclude all private fields except the score key we need to read
-    exclude_fields = [f for f in list_private_fields(context) if f != sum_key]
-
-    rows = db.get_logs(
-        context=context,
-        filter=id_filter,
-        limit=len(ids),
-        exclude_fields=exclude_fields,
-    )
-    out: dict[int, float] = {}
-    for lg in rows:
-        e = lg.entries
-        try:
-            out[int(e[id_field])] = float(e.get(sum_key, 0))
-        except Exception:
-            continue
-    return out, sum_key
-
-
-def fetch_top_k_by_terms(
-    context: str,
-    terms: List[Tuple[str, str]],
-    *,
-    k: int = 10,
-    row_filter: Optional[str] = None,
-    allowed_fields: Optional[List[str]] = None,
-    project: Optional[str] = None,
-) -> List[dict]:
-    """Return top-k rows ranked by semantic similarity given pre-embedded terms.
-
-    terms is a list of (embed_column_name, reference_text) pairs that already exist
-    in the provided context.
-    """
-
-    if len(terms) == 0:
-        return []
-
-    if len(terms) == 1:
-        embed_col, ref_text = terms[0]
-        escaped_ref = ref_text.replace("'", "\\'")
-        if allowed_fields is not None:
-            logs = db.get_logs(
-                context=context,
-                project=project,
-                filter=row_filter,
-                sorting={
-                    f"cosine({embed_col}, embed('{escaped_ref}', model='{embed_model()}'))": "ascending",
-                },
-                limit=k,
-                from_fields=allowed_fields,
-            )
-        else:
-            logs = db.get_logs(
-                context=context,
-                project=project,
-                filter=row_filter,
-                sorting={
-                    f"cosine({embed_col}, embed('{escaped_ref}', model='{embed_model()}'))": "ascending",
-                },
-                limit=k,
-                exclude_fields=list_private_fields(context, project=project),
-            )
-        return [lg.entries for lg in logs]
-
-    # If multiple terms are provided but the filter excludes all rows, avoid
-    # creating a summed-cosine derived column which can fail on empty contexts.
-    try:
-        if row_filter is not None:
-            any_rows = db.get_logs(
-                context=context,
-                project=project,
-                filter=row_filter,
-                limit=1,
-                exclude_fields=list_private_fields(context, project=project),
-            )
-            if not any_rows:
-                return []
-    except Exception:
-        # If introspection fails, fall back to attempting the derived approach
-        pass
-
-    canonical = "|".join(f"{i}:{col}=>{txt}" for i, (col, txt) in enumerate(terms))
-    import hashlib as _hashlib
-
-    sum_hash = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise(
-        context,
-        terms,
-        sum_hash,
-        project=project,
-    )
-
-    if allowed_fields is not None:
-        logs = db.get_logs(
-            context=context,
-            project=project,
-            filter=row_filter,
-            sorting={sum_key: "ascending"},
-            limit=k,
-            from_fields=allowed_fields,
-        )
-    else:
-        logs = db.get_logs(
-            context=context,
-            project=project,
-            filter=row_filter,
-            sorting={sum_key: "ascending"},
-            limit=k,
-            exclude_fields=list_private_fields(context, project=project),
-        )
-    return [lg.entries for lg in logs]
-
-
-def fetch_top_k_by_references(
-    context: str,
-    references: Optional[Dict[str, str]],
-    *,
-    k: int = 10,
-    row_filter: Optional[str] = None,
-    allowed_fields: Optional[List[str]] = None,
-    project: Optional[str] = None,
-) -> List[dict]:
-    """Return top-k rows from a context ranked by semantic similarity to reference text(s).
-
-    This helper abstracts the common flow used by KnowledgeManager's semantic search methods:
-    - Ensure an embedding column exists for each source expression (plain column or derived expr)
-    - Rank by cosine when a single source is provided
-    - Rank by the sum of cosine distances across multiple sources when more than one is provided
-    - Exclude embedding columns ("*_emb") from the result payloads
-    """
-    # When no references are provided, skip semantic search entirely and
-    # let the caller's backfill logic drive the result set.
-    if not references:
-        return []
-
-    # Be tolerant to callers accidentally passing a JSON string for `references`
-    # instead of an object. Parse it when it looks like JSON.
-    if isinstance(references, str):
-        s = references.strip()
-        if s.startswith("{") or s.startswith("["):
-            try:
-                parsed = json.loads(s)
-                if isinstance(parsed, dict):
-                    # Ensure values are strings for the embedding reference text
-                    references = {str(k): (v if isinstance(v, str) else str(v)) for k, v in parsed.items()}  # type: ignore[assignment]
-                else:
-                    raise TypeError
-            except Exception:
-                raise TypeError(
-                    "`references` must be a mapping (e.g., {'bio': 'text'}) or a JSON string of such a mapping.",
-                )
-        else:
-            raise TypeError(
-                "`references` must be a mapping (e.g., {'bio': 'text'}) or a JSON string of such a mapping.",
-            )
-
-    if not isinstance(references, dict):  # defensive guard
-        raise TypeError(
-            "`references` must be a mapping (e.g., {'bio': 'text'}) or a JSON string of such a mapping.",
-        )
-
-    # Collect (embed_col, ref_text) pairs — read-only column resolution;
-    # terms without a provisioned embedding column are skipped.
-    terms: List[Tuple[str, str]] = []
-    for source_expr, ref_text in references.items():
-        embed_col = vector_for_source_read_path(
-            context,
-            source_expr,
-            project=project,
-        )
-        if embed_col is None:
-            continue
-        terms.append((embed_col, ref_text))
-
-    return fetch_top_k_by_terms(
-        context,
-        terms,
-        k=k,
-        row_filter=row_filter,
-        allowed_fields=allowed_fields,
-        project=project,
-    )
 
 
 def backfill_rows(

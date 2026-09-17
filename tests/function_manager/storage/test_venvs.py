@@ -70,8 +70,6 @@ def function_manager_factory():
     def _create():
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         fm = FunctionManager()
         managers.append(fm)
         return fm

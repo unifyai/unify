@@ -24,9 +24,7 @@ import os
 # Pydantic's BaseSettings reads env vars once at instantiation; if SETTINGS
 # is already constructed when pytest_configure() later sets these vars, the
 # overrides are silently ignored and prompts/feature flags fall back to
-# production defaults. A blank ASSISTANT_NUMBER= in .env also defeats
-# setdefault; ensure_test_assistant_identity_env() forces fake values when
-# missing or whitespace-only.
+# production defaults.
 # ─────────────────────────────────────────────────────────────────────────────
 from tests.conversation_manager.assistant_identity_env import (
     ensure_test_assistant_identity_env,
@@ -48,7 +46,6 @@ from .cm_test_driver import CMStepDriver
 def pytest_configure(config):
     """Configure environment variables before any tests run."""
     os.environ["UNIFY_ACTOR_IMPL"] = "simulated"
-    os.environ["UNIFY_ACTOR_SIMULATED_STEPS"] = "0"  # Allows pause+resume interactions
 
     # Enable incrementing timestamps for **NEW** marker comparisons
     os.environ["UNIFY_INCREMENTING_TIMESTAMPS"] = "true"

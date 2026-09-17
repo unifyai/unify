@@ -12,7 +12,6 @@ from ...logger import LOGGER
 from ...common.hierarchical_logger import DEFAULT_ICON
 from contextlib import suppress, contextmanager
 from .tools_utils import create_tool_call_message
-from ..context_dump import make_messages_safe_for_context_dump
 
 # ── sent-watermark invariant ────────────────────────────────────────────
 #
@@ -380,148 +379,6 @@ def is_non_final_tool_reply(msg: dict) -> bool:
     return False
 
 
-def transform_tool_calls_to_context(
-    msgs: list[dict],
-    *,
-    marker_key: str = "_transformed_context",
-    context_header: str = "[Prior tool execution context]",
-    context_footer: str = "[Continue with the original request]",
-    predicate: Callable[[dict], bool] | None = None,
-) -> list[dict]:
-    """Transform assistant tool_calls into a system context message.
-
-    This function handles scenarios where assistant messages with tool_calls
-    need to be transformed into context messages for provider compatibility
-    (e.g., when replaying manually constructed tool calls that lack required
-    provider-specific metadata).
-
-    Parameters
-    ----------
-    msgs : list[dict]
-        The list of messages to transform.
-    marker_key : str
-        Key to set on the context system message for identification.
-    context_header : str
-        Header text for the context message.
-    context_footer : str
-        Footer text for the context message.
-    predicate : callable | None
-        Optional function(msg) -> bool to determine which assistant messages
-        need transformation. If None, transforms ALL assistant messages with
-        tool_calls.
-
-    Returns
-    -------
-    list[dict]
-        Transformed message list with matching tool_calls converted to context.
-    """
-    if not msgs:
-        return msgs
-
-    # Default predicate: transform all assistant messages with tool_calls
-    if predicate is None:
-
-        def predicate(m: dict) -> bool:
-            return (
-                isinstance(m, dict)
-                and m.get("role") == "assistant"
-                and bool(m.get("tool_calls"))
-            )
-
-    # Check if any messages need transformation
-    if not any(predicate(m) for m in msgs):
-        return msgs
-
-    # Build a mapping of tool_call_id -> tool result content
-    tool_results: dict[str, dict] = {}
-    for m in msgs:
-        if not isinstance(m, dict):
-            continue
-        if m.get("role") == "tool":
-            tcid = m.get("tool_call_id")
-            if isinstance(tcid, str) and tcid:
-                tool_results[tcid] = {
-                    "name": m.get("name", "unknown"),
-                    "content": m.get("content", ""),
-                }
-
-    # Collect IDs of tool_calls from messages that need transformation
-    transformed_call_ids: set[str] = set()
-    tool_call_descriptions: list[str] = []
-
-    for m in msgs:
-        if not predicate(m):
-            continue
-        for tc in m.get("tool_calls") or []:
-            if not isinstance(tc, dict):
-                continue
-            tc_id = tc.get("id", "")
-            transformed_call_ids.add(tc_id)
-            func = tc.get("function") or {}
-            name = func.get("name", "unknown")
-            args = func.get("arguments", "{}")
-            result_info = tool_results.get(tc_id)
-            if result_info:
-                result_content = result_info.get("content", "(no result)")
-                tool_call_descriptions.append(
-                    f"• Called `{name}({args})` → {result_content}",
-                )
-            else:
-                tool_call_descriptions.append(
-                    f"• Called `{name}({args})` → (pending/no result)",
-                )
-
-    # Build transformed message list
-    transformed: list[dict] = []
-    context_inserted = False
-
-    for m in msgs:
-        if not isinstance(m, dict):
-            transformed.append(m)
-            continue
-
-        role = m.get("role")
-
-        if role == "user":
-            transformed.append(m)
-
-        elif role == "assistant":
-            if predicate(m):
-                # Insert context AT THIS POSITION (where the transformed turn was).
-                # This maintains chronological order so the model sees preserved
-                # turns before the synthetic summary of transformed turns.
-                if not context_inserted and tool_call_descriptions:
-                    context_msg = {
-                        "role": "system",
-                        "content": (
-                            context_header
-                            + "\n"
-                            + "\n".join(tool_call_descriptions)
-                            + "\n"
-                            + context_footer
-                        ),
-                        marker_key: True,
-                    }
-                    transformed.append(context_msg)
-                    context_inserted = True
-                # Skip the assistant message itself - replaced by context
-            else:
-                transformed.append(m)
-
-        elif role == "tool":
-            # Skip tool messages for transformed calls
-            tcid = m.get("tool_call_id")
-            if tcid in transformed_call_ids:
-                continue
-            else:
-                transformed.append(m)
-
-        else:
-            transformed.append(m)
-
-    return transformed
-
-
 def find_unreplied_assistant_entries(client: unillm.AsyncUnify) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -705,37 +562,6 @@ async def _generate_with_preprocess_inner(
             with suppress(Exception):
                 if original_system_message is not None:
                     setattr(client, "system_message", original_system_message)
-
-
-def chat_context_repr(
-    parent_ctx: Optional[list[dict]],
-    current_msgs: list[dict],
-) -> list[dict]:
-    """
-    Combine **existing** ``parent_ctx`` with the *current* chat history
-    (``current_msgs``) into a depth-aware nested structure:
-
-        root_msg0
-        root_msg1
-        root_msg2
-          └── children:
-              ├── child_msg0
-              └── child_msg1
-
-    Strategy – keep the original list untouched and attach the new
-    messages as ``children`` of the *last* element.
-    """
-    safe_parent_ctx = make_messages_safe_for_context_dump(parent_ctx)
-    safe_current_msgs = make_messages_safe_for_context_dump(current_msgs)
-    ctx_block = [
-        {"role": m.get("role"), "content": m.get("content")} for m in safe_current_msgs
-    ]
-    if not safe_parent_ctx:
-        return ctx_block
-
-    combined = copy.deepcopy(safe_parent_ctx)
-    combined[-1].setdefault("children", []).extend(ctx_block)
-    return combined
 
 
 # Helper Functions
@@ -1138,39 +964,6 @@ async def insert_tool_message_after_assistant(
 
 # Helper: propagate a stop request to any nested SteerableToolHandle returned
 # by base tools. This ensures outer stop/cancel signals reach inner loops.
-async def _propagate_stop_to_nested_handles(
-    task_info,
-    reason: Optional[str] = None,
-) -> None:
-    try:
-        for _t, _inf in list(task_info.items()):
-            h = _inf.handle
-            if h is not None and hasattr(h, "stop"):
-                try:
-                    await forward_handle_call(
-                        h,
-                        "stop",
-                        {"reason": reason} if reason is not None else {},
-                        fallback_positional_keys=["reason"],
-                    )
-                except Exception:
-                    # Best effort – never let propagation failure crash the loop
-                    pass
-    except Exception:
-        pass
-
-
-async def propagate_stop_once(
-    task_info,
-    stop_forward_once,
-    reason: Optional[str],
-) -> bool:
-    if stop_forward_once:
-        return stop_forward_once
-    await _propagate_stop_to_nested_handles(task_info, reason)
-    return True
-
-
 # Helper: insert a tool-acknowledgement message for helper tools
 async def acknowledge_helper_call(
     asst_msg: dict,

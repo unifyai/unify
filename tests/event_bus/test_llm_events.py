@@ -163,12 +163,12 @@ class TestLLMEventToEventBusConversion:
 class TestHookInstallation:
     """Tests for the hook installation mechanism."""
 
-    def test_hook_installed_during_unity_init(self):
+    def test_hook_installed_during_unify_init(self):
         """The hook should be installed during unify.init()."""
         import unify
 
         unify.init()
-        # Unity registers a unillm listener (process-wide, works across threads)
+        # unify.init() registers a unillm listener (process-wide, works across threads)
         callbacks = [listener.callback for listener in unillm.llm_event_listeners()]
         assert _llm_event_to_eventbus in callbacks
 
@@ -317,7 +317,7 @@ async def test_llm_events_searchable_in_eventbus():
     await asyncio.sleep(0.1)
     EVENT_BUS.join_published()
 
-    # Retry search to account for Orchestra indexing latency
+    # Retry search to account for the bus's asynchronous flush
     events = []
     for _ in range(5):
         events = await EVENT_BUS.search(

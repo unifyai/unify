@@ -4,12 +4,9 @@ import pytest
 
 from unify.common.act_llm_profiles import (
     ACT_LLM_PROFILES,
-    CURRENT_ACT_LLM_PROFILE,
     DEFAULT_ACT_LLM_PROFILE,
     GPT_5_5_HIGH_ACT_LLM_PROFILE,
-    describe_act_llm_profiles,
     resolve_act_llm_profile,
-    use_act_llm_profile,
 )
 
 
@@ -34,26 +31,13 @@ def test_unknown_profile_rejected():
         resolve_act_llm_profile("not_a_profile")
 
 
-def test_profile_docs_are_curated_and_include_relative_prices():
-    docs = describe_act_llm_profiles()
-
+def test_profiles_are_curated():
     assert set(ACT_LLM_PROFILES) == {
         "default",
         "gpt_5_5_low",
         "gpt_5_5_medium",
         "gpt_5_5_high",
     }
-    assert "roughly 17x the MiniMax input-token rate" in docs
-    assert "25x the MiniMax output-token rate" in docs
-    assert "openai/gpt-5.5@openrouter" in docs
-    assert "openai/gpt-5.6-sol@openrouter" in docs
-
-
-def test_profile_context_is_scoped():
-    original = CURRENT_ACT_LLM_PROFILE.get()
-    profile = resolve_act_llm_profile(GPT_5_5_HIGH_ACT_LLM_PROFILE)
-
-    with use_act_llm_profile(profile):
-        assert CURRENT_ACT_LLM_PROFILE.get() is profile
-
-    assert CURRENT_ACT_LLM_PROFILE.get() is original
+    priced = [p.relative_price for p in ACT_LLM_PROFILES.values()]
+    assert any("openai/gpt-5.5@openrouter" in price for price in priced)
+    assert any("openai/gpt-5.6-sol@openrouter" in price for price in priced)

@@ -12,11 +12,9 @@ class GuidanceSettings(BaseSettings):
     """GuidanceManager settings.
 
     Attributes:
-        ENABLED: Whether GuidanceManager is enabled.
         IMPL: Implementation type - "real" or "simulated".
     """
 
-    ENABLED: bool = False
     IMPL: str = "real"
 
     model_config = SettingsConfigDict(

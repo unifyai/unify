@@ -209,16 +209,16 @@ class ShellSession:
             wrapped_command = (
                 f'Write-Host "{start_marker}"\n'
                 f"{command}\n"
-                f"$__unity_ec__ = if ($?) {{ 0 }} else {{ 1 }}\n"
-                f'Write-Host "{self._marker} $__unity_ec__"\n'
+                f"$__unify_ec__ = if ($?) {{ 0 }} else {{ 1 }}\n"
+                f'Write-Host "{self._marker} $__unify_ec__"\n'
             )
         else:
             # Bash/zsh/sh syntax
             wrapped_command = (
                 f'echo "{start_marker}"\n'
                 f"{command}\n"
-                f"__unity_ec__=$?\n"
-                f'echo "{self._marker} $__unity_ec__"\n'
+                f"__unify_ec__=$?\n"
+                f'echo "{self._marker} $__unify_ec__"\n'
             )
 
         try:

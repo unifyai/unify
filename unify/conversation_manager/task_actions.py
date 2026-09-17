@@ -100,7 +100,7 @@ def derive_short_name(query: str, max_words: int = 4) -> str:
     pane labels compact.
 
     Examples:
-        "List all contacts" -> "list_all_contacts"
+        "List all invoices" -> "list_all_invoices"
         "What's the weather?" -> "whats_the_weather"
         "Get docs/files/data" -> "get_docs_files_data"
     """
@@ -151,7 +151,7 @@ def iter_steering_tools_for_action(
         pending_clarifications: List of pending clarification dicts with "call_id" keys
         is_paused: If True, only include resume (skip pause).
                    If False, only include pause (skip resume).
-                   If None, include both (backward compatible behavior).
+                   If None, include both.
 
     Returns:
         List of (action_name, description) tuples, rendered as ready-to-use

@@ -102,29 +102,10 @@ class ProductionSettings(BaseSettings):
     UNIFY_TERMINAL_LOG_LEVEL: str = "INFO"
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Debug Modes (performance overhead, development-only)
-    # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_ASYNCIO_DEBUG: bool = False
-
-    # ─────────────────────────────────────────────────────────────────────────
     # Test Infrastructure
     # ─────────────────────────────────────────────────────────────────────────
-    # Log subdirectory for LLM I/O log files (datetime-prefixed for ordering)
-    UNIFY_LOG_SUBDIR: str = ""
-    # Terminal socket name for tmux isolation; also used as log subdir fallback
-    # when UNIFY_LOG_SUBDIR is not set
-    UNIFY_TEST_SOCKET: str = ""
-    # Explicit repository root for log file placement (e.g., worktrees)
-    UNIFY_LOG_ROOT: str = ""
     # Test mode flag
     TEST: bool = False
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Feature Flags
-    # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_READONLY_ASK_GUARD: bool = True
-    FIRST_ASK_TOOL_IS_SEARCH: bool = False
-    FIRST_MUTATION_TOOL_IS_ASK: bool = False
 
     # ─────────────────────────────────────────────────────────────────────────
     # Composed Manager Settings
@@ -141,12 +122,8 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     @field_validator(
         "UNIFY_TERMINAL_LOG",
-        "UNIFY_ASYNCIO_DEBUG",
         "EVENTBUS_PUBLISHING_ENABLED",
         "PYTEST_LOG_TO_FILE",
-        "UNIFY_READONLY_ASK_GUARD",
-        "FIRST_ASK_TOOL_IS_SEARCH",
-        "FIRST_MUTATION_TOOL_IS_ASK",
         "TEST",
         "UNIFY_VALIDATE_LLM_PROVIDERS",
         mode="before",

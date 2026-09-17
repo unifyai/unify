@@ -525,7 +525,7 @@ async def test_time_across_sessions_with_filter() -> None:
 @pytest.mark.asyncio
 @_handle_project
 async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
-    """register_callback must survive Orchestra 404s on freshly created contexts."""
+    """register_callback must survive a NotFound read on a freshly created context."""
 
     from unify import db
     from unify.db import NotFound

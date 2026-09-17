@@ -666,7 +666,7 @@ class ToolSurfaceRegistry:
         fully-qualified name (e.g., "_ActorRunner.act"). This ensures IDs are:
         - Deterministic across runs
         - Stable when methods are added/removed (no positional dependencies)
-        - Consistent across all deployments
+        - Consistent across every store
 
         Args:
             primitive_scope: Optional scope to filter managers. If None, collects all

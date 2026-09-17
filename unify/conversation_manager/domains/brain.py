@@ -73,10 +73,6 @@ def build_brain_spec(
         bio="\n".join(bio_parts),
         first_name=user.first_name or PLACEHOLDER_USER_FIRST_NAME,
         surname=user.surname or PLACEHOLDER_USER_SURNAME,
-        phone_number=user.number or None,
-        email_address=user.email or None,
-        assistant_has_phone=bool(assistant.number),
-        assistant_has_email=bool(assistant.email),
     )
 
     # Validate we can JSON-encode state prompt early (helps catch accidental objects)

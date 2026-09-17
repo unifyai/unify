@@ -348,18 +348,6 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(rendered.encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def _check_valid_response_format(response_format: Any) -> dict[str, Any]:
-    """Return the JSON Schema for ``final_response``/``send_response`` ``answer``.
-
-    Accepts a Pydantic ``BaseModel`` subclass, a JSON Schema dict, a simplified
-    ``{field: type}`` dict, or a JSON string encoding one of those dicts.
-    """
-    normalized = normalize_response_format(response_format)
-    if normalized is None:
-        raise TypeError("response_format is required")
-    return normalized.answer_json_schema
-
-
 async def async_tool_loop_inner(
     client: unillm.AsyncUnify,
     message: str | dict | list[str | dict],
@@ -1383,10 +1371,6 @@ async def async_tool_loop_inner(
             logger.info(f"Early exit – {reason}", prefix=ICONS["early_exit"])
         return notice["content"]
 
-    # ── small local helpers to dedupe repeated logic ─────────────────────────
-    def _pretty(tool_name: str, payload: Any) -> str:
-        return ToolsData._pretty_tool_payload(tool_name, payload)
-
     async def _handle_clarification(
         src_task: asyncio.Task,
         question_payload: Any,
@@ -1966,10 +1950,6 @@ async def async_tool_loop_inner(
                     )
                 if msgs_to_append:
                     await _msg_dispatcher.append_msgs(msgs_to_append)
-                # Update history only if there was user message content
-                if _msg_text:
-                    last_valid_user_history = history_lines + [f"user: {_msg_text}"]
-
                 # Append this interjection to the user-visible history for future context
                 with suppress(Exception):
                     if outer_handle:
@@ -2447,9 +2427,6 @@ async def async_tool_loop_inner(
             dynamic_tool_factory = DynamicToolFactory(tools_data)
             dynamic_tool_factory.generate()
             dynamic_tools = dynamic_tool_factory.dynamic_tools
-            # Keep ToolsData's reference to dynamic_tools up-to-date so
-            # get_ask_tools() always reflects the latest set of helpers.
-            tools_data._dynamic_tools_ref = dynamic_tools
 
             # Register callback to refresh capability bookkeeping (is_interjectable,
             # clarification queue wiring, live-ask closures) when a handle is

@@ -1,4 +1,4 @@
-"""Centralized global docstrings used across Unity base classes."""
+"""Centralized global docstrings used across Unify base classes."""
 
 # Shared docstrings
 

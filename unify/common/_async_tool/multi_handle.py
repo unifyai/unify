@@ -180,24 +180,6 @@ class MultiHandleCoordinator:
         if q is not None:
             q.put_nowait(clarification)
 
-    def route_notification_to_request(
-        self,
-        request_id: int,
-        notification: dict,
-    ) -> None:
-        """Route a notification to the appropriate request's queue.
-
-        Parameters
-        ----------
-        request_id : int
-            The target request ID.
-        notification : dict
-            The notification event dict.
-        """
-        q = self._request_notification_queues.get(request_id)
-        if q is not None:
-            q.put_nowait(notification)
-
     def get_clarification_queue(self, request_id: int) -> asyncio.Queue | None:
         """Get the clarification queue for a request."""
         return self._request_clarification_queues.get(request_id)

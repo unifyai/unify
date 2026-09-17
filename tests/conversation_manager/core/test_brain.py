@@ -7,8 +7,8 @@ in ``domains/brain.py``.
 
 Covers:
 - The plain-text state message shape
-- Boss details resolved from the session's user identity
-- Assistant identity (bio, contact details) flowing into the system prompt
+- User details resolved from the session's user identity
+- Assistant identity (bio) flowing into the system prompt
 """
 
 from __future__ import annotations
@@ -49,8 +49,6 @@ def assistant_identity(monkeypatch):
     """Pin the assistant identity fields build_brain_spec reads."""
     monkeypatch.setattr(SESSION_DETAILS.assistant, "job_title", "")
     monkeypatch.setattr(SESSION_DETAILS.assistant, "about", "Operations assistant.")
-    monkeypatch.setattr(SESSION_DETAILS.assistant, "number", "+15557654321")
-    monkeypatch.setattr(SESSION_DETAILS.assistant, "email", "assistant@acme.com")
     return SESSION_DETAILS.assistant
 
 
@@ -59,8 +57,6 @@ def user_identity(monkeypatch):
     """Pin the user identity fields build_brain_spec reads."""
     monkeypatch.setattr(SESSION_DETAILS.user, "first_name", "Dana")
     monkeypatch.setattr(SESSION_DETAILS.user, "surname", "Owner")
-    monkeypatch.setattr(SESSION_DETAILS.user, "number", "+15551234567")
-    monkeypatch.setattr(SESSION_DETAILS.user, "email", "dana@acme.com")
     return SESSION_DETAILS.user
 
 
@@ -110,13 +106,13 @@ class TestBrainSpecStateMessage:
 class TestBuildBrainSpec:
     """Tests for build_brain_spec prompt construction."""
 
-    def test_boss_details_come_from_the_session_user(
+    def test_user_details_come_from_the_session_user(
         self,
         monkeypatch,
         assistant_identity,
         user_identity,
     ):
-        """The main brain prompt reads boss details from SESSION_DETAILS.user."""
+        """The main brain prompt reads the user's name from SESSION_DETAILS.user."""
         captured_prompt_kwargs = {}
 
         def fake_build_system_prompt(**kwargs):
@@ -135,8 +131,6 @@ class TestBuildBrainSpec:
 
         assert captured_prompt_kwargs["first_name"] == "Dana"
         assert captured_prompt_kwargs["surname"] == "Owner"
-        assert captured_prompt_kwargs["phone_number"] == "+15551234567"
-        assert captured_prompt_kwargs["email_address"] == "dana@acme.com"
 
     def test_state_prompt_is_the_rendered_snapshot(
         self,
@@ -163,43 +157,13 @@ class TestBuildBrainSpec:
         assert "Role / specialization: Ops lead." in prompt
         assert "Operations assistant." in prompt
 
-    def test_boss_details_rendered(self, assistant_identity, user_identity):
-        """The user's details appear under Boss details."""
+    def test_user_details_rendered(self, assistant_identity, user_identity):
+        """The user's name appears under User details."""
         spec = build_brain_spec(_make_cm(), _make_snapshot())
         prompt = spec.system_prompt.flatten()
 
         assert "- First Name: Dana" in prompt
         assert "- Surname: Owner" in prompt
-        assert "- Phone Number: +15551234567" in prompt
-        assert "- Email Address: dana@acme.com" in prompt
-
-    def test_missing_assistant_contact_details_are_flagged(
-        self,
-        monkeypatch,
-        assistant_identity,
-        user_identity,
-    ):
-        """Without a number or email the prompt says so, rather than staying silent."""
-        monkeypatch.setattr(assistant_identity, "number", "")
-        monkeypatch.setattr(assistant_identity, "email", "")
-
-        spec = build_brain_spec(_make_cm(), _make_snapshot())
-        prompt = spec.system_prompt.flatten()
-
-        assert "I have no phone number configured" in prompt
-        assert "I have no email address configured" in prompt
-
-    def test_configured_assistant_contact_details_are_not_flagged(
-        self,
-        assistant_identity,
-        user_identity,
-    ):
-        """With both details on file the missing-detail notices are absent."""
-        spec = build_brain_spec(_make_cm(), _make_snapshot())
-        prompt = spec.system_prompt.flatten()
-
-        assert "I have no phone number configured" not in prompt
-        assert "I have no email address configured" not in prompt
 
     def test_unconfigured_user_falls_back_to_placeholder_names(
         self,
@@ -209,13 +173,9 @@ class TestBuildBrainSpec:
         """A session without a user profile still yields a valid prompt."""
         monkeypatch.setattr(SESSION_DETAILS.user, "first_name", "")
         monkeypatch.setattr(SESSION_DETAILS.user, "surname", "")
-        monkeypatch.setattr(SESSION_DETAILS.user, "number", "")
-        monkeypatch.setattr(SESSION_DETAILS.user, "email", "")
 
         spec = build_brain_spec(_make_cm(), _make_snapshot())
         prompt = spec.system_prompt.flatten()
 
         assert "- First Name: Default" in prompt
         assert "- Surname: User" in prompt
-        assert "- Phone Number:" not in prompt
-        assert "- Email Address:" not in prompt

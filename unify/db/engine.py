@@ -2,8 +2,8 @@
 
 One file holds every project, context, row, field definition, derived-column
 equation, commit snapshot and assistant record for an install. A
-context is a named, hierarchically-addressed table (``Contacts``,
-``tests/foo/Contacts``) whose rows are JSON documents typed by the fields
+context is a named, hierarchically-addressed table (``Guidance``,
+``tests/foo/Functions/Compositional``) whose rows are JSON documents typed by the fields
 declared on it. Rows carry a global integer id, so a row id alone identifies a
 row anywhere in the store.
 
@@ -980,17 +980,6 @@ class Store:
             }
             for r in rows
         ]
-
-    def count_rows(
-        self,
-        project: str,
-        context: str,
-        *,
-        filter: str | None = None,
-    ) -> int:
-        with self._lock:
-            ctx = self._ctx(project, context)
-            return len(self._query(ctx, filter=filter))
 
     def _query(
         self,

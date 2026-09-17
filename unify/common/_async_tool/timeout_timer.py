@@ -28,9 +28,6 @@ class TimeoutTimer:
     def reset(self):
         """Refresh the rolling timeout."""
         self.last_activity_ts = time.perf_counter()
-        self.last_msg_count = (
-            0 if not self._client.messages else len(self._client.messages)
-        )
 
     def has_exceeded_time(self) -> bool:
         """

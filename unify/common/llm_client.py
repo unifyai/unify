@@ -28,7 +28,6 @@ class PendingThinkingLog:
         self._origin = origin
         self._suffix: str = ""
         self._emitted: bool = False
-        self.last_path: str | None = None
 
     def set_thinking_context(self, suffix: str) -> None:
         self._suffix = suffix
@@ -36,7 +35,6 @@ class PendingThinkingLog:
 
     def on_pending_path(self, path: Path) -> None:
         self._emitted = True
-        self.last_path = str(path)
         LOGGER.info(
             f"{_THINKING_ICON} [{self._origin}] LLM thinking…{self._suffix} → {path}",
         )
@@ -153,7 +151,6 @@ def _build_llm_client(
         pending_log = PendingThinkingLog(origin)
         client.set_on_log_file_pending(pending_log.on_pending_path)
         client._pending_thinking_log = pending_log
-    client._unify_purpose = purpose
 
     return client
 

@@ -100,9 +100,6 @@ class SnapshotState:
     notifications: list[NotificationElement] = field(default_factory=list)
     actions: list[ActionElement] = field(default_factory=list)
 
-    # Snapshot metadata
-    snapshot_time: datetime | None = None
-
     def message_ids(self) -> set[tuple[int, datetime]]:
         """Return set of message identity tuples for diff comparison."""
         return {(m.index_in_conversation, m.timestamp) for m in self.messages}
@@ -284,7 +281,6 @@ class Renderer:
             messages=message_elements,
             notifications=notification_elements,
             actions=action_elements,
-            snapshot_time=prompt_now(as_string=False),
         )
         _snapshot_ms = _mark_step()
 

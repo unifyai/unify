@@ -37,7 +37,7 @@ def _get_user_context() -> Optional[str]:
     """Retrieve user's context path component (user ID) from SESSION_DETAILS.
 
     Injected as _user into every log entry. Matches the user_id path segment
-    in context paths like {user_id}/{assistant_id}/Contacts.
+    in context paths like {user_id}/{assistant_id}/Functions.
     Needed by the store's deletion cascade.
     """
     return SESSION_DETAILS.user_context or None
@@ -52,7 +52,7 @@ def _get_assistant_context() -> Optional[str]:
     """Retrieve assistant's context path component (assistant ID) from SESSION_DETAILS.
 
     Injected as _assistant into every log entry. Matches the assistant_id path
-    segment in context paths like {user_id}/{assistant_id}/Contacts.
+    segment in context paths like {user_id}/{assistant_id}/Functions.
     Needed by the store's deletion cascade.
     """
     return SESSION_DETAILS.assistant_context or None
@@ -151,7 +151,7 @@ def log(
     Parameters
     ----------
     context : str
-        The context to log to (e.g., "42/7/Contacts")
+        The context to log to (e.g., "42/7/Functions")
     new : bool, default True
         Whether to create a new log entry
     mutable : bool, default False

@@ -67,13 +67,6 @@ class ContextRegistry:
         cls._base_context = base
         return base
 
-    @staticmethod
-    def is_missing_base_context_error(exc: BaseException) -> bool:
-        """Return whether *exc* indicates missing root-context setup."""
-        return isinstance(exc, RuntimeError) and (
-            "no base context available" in str(exc)
-        )
-
     @classmethod
     def set_base_context(cls, base_context: str) -> None:
         """Cache an already-resolved base context root for worker tasks."""
@@ -118,15 +111,6 @@ class ContextRegistry:
                 "root_context": current_context,
             }
         return out
-
-    @classmethod
-    def declared_tables(
-        cls,
-        manager: Union[BaseStateManager, Type[BaseStateManager]],
-    ) -> frozenset[str]:
-        """Table names a manager declares in ``Config.required_contexts``."""
-        required = getattr(getattr(manager, "Config", None), "required_contexts", None)
-        return frozenset(context.name for context in required or ())
 
     @classmethod
     def _get_managers(cls) -> List[Union[BaseStateManager, Type[BaseStateManager]]]:
@@ -273,29 +257,3 @@ class ContextRegistry:
 
         cls._provision_managers(cls._get_managers(), cls._get_active_context())
         cls._setup_complete = True
-
-    @classmethod
-    def setup_for_managers(
-        cls,
-        managers: List[Union[Type[BaseStateManager], BaseStateManager]],
-        *,
-        base_context: Optional[str] = None,
-    ) -> None:
-        """Provision contexts for a specific subset of managers.
-
-        Unlike :meth:`setup` this does not set ``_setup_complete`` so that a
-        later full ``setup()`` call still runs normally.
-        """
-        cls._provision_managers(
-            managers,
-            base_context or cls._get_active_context(),
-        )
-
-    @classmethod
-    def get_known_base_contexts(cls) -> List[str]:
-        """Return the unresolved table names declared across all managers."""
-        base_contexts = set()
-        for manager in cls._get_managers():
-            for table_ctx in manager.Config.required_contexts:
-                base_contexts.add(table_ctx.name)
-        return sorted(base_contexts)

@@ -532,11 +532,11 @@ async def test_shell_session_source_script():
         # Create a temp script
         await session.execute(
             "echo 'export SOURCED_VAR=from_script\n"
-            'sourced_func() { echo "I am sourced"; }\' > /tmp/unity_test_source.sh',
+            'sourced_func() { echo "I am sourced"; }\' > /tmp/unify_test_source.sh',
         )
 
         # Source it
-        await session.execute("source /tmp/unity_test_source.sh")
+        await session.execute("source /tmp/unify_test_source.sh")
 
         # Verify variable is set
         result = await session.execute("echo $SOURCED_VAR")
@@ -549,7 +549,7 @@ async def test_shell_session_source_script():
         assert "I am sourced" in result.stdout
 
         # Cleanup
-        await session.execute("rm /tmp/unity_test_source.sh")
+        await session.execute("rm /tmp/unify_test_source.sh")
     finally:
         await session.close()
 

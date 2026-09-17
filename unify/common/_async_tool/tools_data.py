@@ -406,14 +406,11 @@ class ToolsData:
         self._on_handle_adopted: Optional[Callable[[asyncio.Task], None]] = None
         # Time context for inline timing annotations on tool results
         self._time_ctx: Optional["TimeContext"] = time_ctx
-        # Reference to the live dynamic_tools dict managed by DynamicToolFactory.
-        # Set by the loop after the factory is initialised each turn.
-        self._dynamic_tools_ref: Optional[Dict[str, Callable]] = None
         # Reference to DynamicToolFactory.live_ask_fns for the current turn —
         # per-call `ask` closures kept ONLY to seed recursive inspection-loop
         # tool schemas (get_ask_tools()); never part of the outer loop's own
-        # visible schema (that dict is `_dynamic_tools_ref`, which now only
-        # ever holds the static wait/steer/ask_about_completed_tool surface).
+        # visible schema, which only ever holds the static
+        # wait/steer/ask_about_completed_tool surface.
         self._live_ask_fns_ref: Optional[Dict[str, Callable]] = None
         self._completed_ask_handles: Dict[str, Callable] = {}
         self._task_ask_keys: Dict[asyncio.Task, str] = {}
@@ -467,10 +464,6 @@ class ToolsData:
 
     def _quota_count(self, task_name: str) -> int:
         return self.call_counts.get(task_name, 0)
-
-    def _can_offer_tool(self, task_name: str) -> bool:
-        limit = self.normalized[task_name].max_concurrent
-        return limit is None or self.active_count(task_name) < limit
 
     def _mutable(self, msg: dict) -> bool:
         """True when *msg* has not yet been included in any dispatched request."""
@@ -765,13 +758,6 @@ class ToolsData:
 
     def active_count(self, task_name: str) -> int:
         return sum(1 for _t, _inf in self.info.items() if _inf.name == task_name)
-
-    def quota_ok(self, task_name: str) -> bool:
-        limit = self.normalized[task_name].max_total_calls
-        return limit is None or self._quota_count(task_name) < limit
-
-    def concurrency_ok(self, task_name: str) -> bool:
-        return task_name not in self.normalized or self._can_offer_tool(task_name)
 
     async def cancel_pending_tasks(self):
         for task in self.pending:

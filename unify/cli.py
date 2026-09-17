@@ -1,7 +1,7 @@
 """Terminal chat with the local assistant.
 
 ``unify`` (or ``python -m unify``) starts the slow brain in-process, wires the
-terminal to the in-app chat medium, and renders what the assistant sends back.
+terminal to the in-app chat, and renders what the assistant sends back.
 Every line typed is an inbound ``UnifyMessageReceived`` event; every reply is
 the ``UnifyMessageSent`` event the brain publishes, so the terminal is one
 front end over the same loop any other client would drive.
@@ -69,7 +69,7 @@ def _configure_environment(args: argparse.Namespace) -> Path:
     configure_log_dir(os.environ.get("UNIFY_LOG_DIR", "").strip() or str(home / "logs"))
     if not args.debug:
         for handler in list(LOGGER.handlers):
-            if getattr(handler, "_unity_terminal", False):
+            if getattr(handler, "_unify_terminal", False):
                 LOGGER.removeHandler(handler)
     return home
 

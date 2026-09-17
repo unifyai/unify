@@ -132,15 +132,6 @@ class _ActiveWorkNotificationQueue:
         return getattr(self._target, name)
 
 
-def _resolve_param(explicit: object, code_value: object, default: object) -> object:
-    """Three-tier resolution: explicit constructor arg > code config > hardcoded default."""
-    if explicit is not _UNSET:
-        return explicit
-    if code_value is not None:
-        return code_value
-    return default
-
-
 def _discovery_tools_for_prefix(
     filtered: Dict[str, Any],
     prefix: str,
@@ -467,30 +458,6 @@ _DEFAULT_STORAGE_REVIEW_INSTRUCTIONS = (
     "Review the trajectory and store any reusable functions and "
     "compositional guidance."
 )
-
-
-def _signature_compatible_kwargs(
-    fn: Callable[..., Any],
-    kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """Return only the scheduler-supplied kwargs accepted by a callable."""
-
-    signature = inspect.signature(fn)
-    parameters = signature.parameters
-    if any(
-        param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters.values()
-    ):
-        return dict(kwargs)
-    accepted = {
-        name
-        for name, param in parameters.items()
-        if param.kind
-        in {
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        }
-    }
-    return {key: value for key, value in kwargs.items() if key in accepted}
 
 
 _STORAGE_WHAT_CAN_BE_STORED = (
@@ -1987,11 +1954,9 @@ class _StorageCheckHandle(SteerableToolHandle):
 
             try:
                 self._original_result = await self._inner.result()
-                task_succeeded = not self._stopped
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                task_succeeded = False
                 # Kept so ``result()`` can re-raise. Flattening the failure into
                 # a string here is what let a crashed run reach the scheduler
                 # looking like a normal return, and be recorded as completed.
@@ -2278,18 +2243,6 @@ class _StorageCheckHandle(SteerableToolHandle):
 
     def done(self) -> bool:
         return self._completion_event.is_set()
-
-    async def wait_until_done(self) -> None:
-        """Block until both phases have finished.
-
-        ``result()`` deliberately resolves at the end of phase 1 so callers are
-        not made to wait on a review they did not ask for. A caller that owns
-        the actor's lifetime needs the other guarantee -- that the review has
-        finished before the resources it runs on are torn down -- and this is
-        how it waits for it.
-        """
-
-        await self._completion_event.wait()
 
     async def result(self) -> str:
         await self._task_done_event.wait()
@@ -2649,16 +2602,6 @@ class CodeActActor(BaseCodeActActor):
             return None
         # Prefer stable ordering for determinism.
         return sorted(names)[0]
-
-    def _unregister_session_name(self, name: str) -> None:
-        key = self._session_names.pop(name, None)
-        if key is None:
-            return
-        names = self._session_names_rev.get(key)
-        if names is not None:
-            names.discard(name)
-            if not names:
-                self._session_names_rev.pop(key, None)
 
     def _unregister_all_names_for_session(self, *, key: SessionKey) -> None:
         names = self._session_names_rev.pop(key, None)

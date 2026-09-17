@@ -2,33 +2,14 @@
 unify/logger.py
 ===============
 
-Unity's runtime logging and OpenTelemetry tracing configuration.
+Unify's runtime logging configuration.
 
 File-based logging:
     When UNIFY_LOG_DIR is set (via env var or configure_log_dir()),
-    Unity's LOGGER output is written to two files:
-      - {UNIFY_LOG_DIR}/unity.log           (DEBUG + INFO)
-      - {UNIFY_LOG_DIR}/unity_info_only.log (INFO only)
+    Unify's LOGGER output is written to two files:
+      - {UNIFY_LOG_DIR}/unify.log           (DEBUG + INFO)
+      - {UNIFY_LOG_DIR}/unify_info_only.log (INFO only)
     This captures async tool loop events, manager operations, etc.
-
-OpenTelemetry tracing:
-    When UNIFY_OTEL is enabled, manager operations and async tool loops
-    create OTel spans that propagate trace context to downstream libraries.
-
-    - UNIFY_OTEL: Master switch (default: false)
-    - UNIFY_OTEL_ENDPOINT: OTLP endpoint for trace export (optional)
-    - UNIFY_OTEL_LOG_DIR: Directory for file-based span export (optional)
-
-    Unity acts as the root TracerProvider when enabled. Child libraries
-    (unillm, unify) will detect the existing provider and create child spans.
-
-File-based span export:
-    When UNIFY_OTEL_LOG_DIR is set, spans are written to JSONL files keyed
-    by trace_id: {UNIFY_OTEL_LOG_DIR}/{trace_id}.jsonl
-
-    This enables trace correlation across processes: any subprocess that
-    receives the traceparent header can write its spans to the same
-    directory.
 """
 
 from __future__ import annotations
@@ -124,16 +105,15 @@ SESSION_ID = datetime.now(timezone.utc).isoformat()
 # File handler state (managed by configure_log_dir)
 _FILE_HANDLER: Optional[logging.FileHandler] = None
 _INFO_FILE_HANDLER: Optional[logging.FileHandler] = None
-_LOG_DIR: Optional[Path] = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Console (Terminal) Logging
 #
-# This is the single authority for all Unity log output.  No other module
+# This is the single authority for all Unify log output.  No other module
 # should call logging.basicConfig(), add handlers, or filter the root logger.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Prevent unity records from propagating to the root logger.  This eliminates
+# Prevent unify records from propagating to the root logger.  This eliminates
 # duplicate output from any root-level handler (e.g. logging.basicConfig())
 # that third-party code may install.
 LOGGER.propagate = False
@@ -180,12 +160,12 @@ if SETTINGS.UNIFY_TERMINAL_LOG:
     _handler.setLevel(getattr(logging, SETTINGS.UNIFY_TERMINAL_LOG_LEVEL, logging.INFO))
 
     _already_configured = any(
-        isinstance(h, logging.StreamHandler) and getattr(h, "_unity_terminal", False)
+        isinstance(h, logging.StreamHandler) and getattr(h, "_unify_terminal", False)
         for h in LOGGER.handlers
     )
 
     if not _already_configured:
-        _handler._unity_terminal = True  # type: ignore[attr-defined]
+        _handler._unify_terminal = True  # type: ignore[attr-defined]
         LOGGER.addHandler(_handler)
 
 # Mute noisy third-party loggers so only unify.* output reaches the terminal.
@@ -199,21 +179,15 @@ for _lib in (
 ):
     logging.getLogger(_lib).setLevel(logging.WARNING)
 
-# RapidOCR reconfigures its own logger on import (unconditionally calling
-# setLevel(INFO)), so setLevel here would be clobbered.  A filter survives.
-logging.getLogger("RapidOCR").addFilter(
-    lambda record: record.levelno >= logging.WARNING,
-)
-
 # File-only loggers: cut propagation so nothing reaches the root/terminal
 # handlers, and attach the DEBUG file handler in configure_log_dir() so the
-# output still lands in unity.log.  NOT wired to unity_info_only.log — that
-# file mirrors the terminal exactly (Unity INFO+ only).
+# output still lands in unify.log.  NOT wired to unify_info_only.log — that
+# file mirrors the terminal exactly (Unify INFO+ only).
 #
 # "py.warnings" captures Python warnings (e.g. unawaited coroutine
 # RuntimeWarnings from LiteLLM's async bridge during task cancellation).
 # They are harmless but noisy on the terminal; routing through the logging
-# system keeps them in unity.log for debugging without cluttering stdout.
+# system keeps them in unify.log for debugging without cluttering stdout.
 _FILE_ONLY_LOGGERS = [
     logging.getLogger(name)
     for name in (
@@ -245,12 +219,12 @@ class _MemoryFileFormatter(logging.Formatter):
 
 
 def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
-    """Configure or reconfigure the Unity LOGGER file output directory.
+    """Configure or reconfigure the Unify LOGGER file output directory.
 
     When configured, LOGGER output is written to two files:
-      - {log_dir}/unity.log           (everything: Unity DEBUG+, plus
+      - {log_dir}/unify.log           (everything: Unify DEBUG+, plus
                                         third-party file-only loggers)
-      - {log_dir}/unity_info_only.log (Unity INFO+ only — mirrors the
+      - {log_dir}/unify_info_only.log (Unify INFO+ only — mirrors the
                                         terminal exactly)
 
     This captures async tool loop events, manager operations, hierarchical
@@ -266,7 +240,7 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
     Returns:
         The configured log directory Path, or None if disabled.
     """
-    global _FILE_HANDLER, _INFO_FILE_HANDLER, _LOG_DIR
+    global _FILE_HANDLER, _INFO_FILE_HANDLER
 
     # Remove existing file handlers if any
     if _FILE_HANDLER is not None:
@@ -279,7 +253,6 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
         LOGGER.removeHandler(_INFO_FILE_HANDLER)
         _INFO_FILE_HANDLER.close()
         _INFO_FILE_HANDLER = None
-    _LOG_DIR = None
 
     # Determine log directory
     if log_dir is not None:
@@ -297,38 +270,31 @@ def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
 
         fmt = "%(asctime)s %(levelname)7s %(message)s"
 
-        log_file = log_path / "unity.log"
+        log_file = log_path / "unify.log"
         handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
         handler.setFormatter(_MemoryFileFormatter(fmt))
         handler.setLevel(logging.DEBUG)
-        handler._unity_file_handler = True  # type: ignore[attr-defined]
+        handler._unify_file_handler = True  # type: ignore[attr-defined]
         LOGGER.addHandler(handler)
         for _fo in _FILE_ONLY_LOGGERS:
             _fo.addHandler(handler)
         _FILE_HANDLER = handler
 
-        info_log_file = log_path / "unity_info_only.log"
+        info_log_file = log_path / "unify_info_only.log"
         info_handler = logging.FileHandler(info_log_file, mode="a", encoding="utf-8")
         info_handler.setFormatter(logging.Formatter(fmt))
         info_handler.setLevel(logging.INFO)
-        info_handler._unity_file_handler = True  # type: ignore[attr-defined]
+        info_handler._unify_file_handler = True  # type: ignore[attr-defined]
         LOGGER.addHandler(info_handler)
         _INFO_FILE_HANDLER = info_handler
 
-        _LOG_DIR = log_path
-
-        LOGGER.debug(f"Unity file logging enabled: {log_file}")
+        LOGGER.debug(f"Unify file logging enabled: {log_file}")
         return log_path
 
     except Exception as e:
         # Best-effort: log to console if file logging fails
-        logging.warning(f"Failed to configure Unity log directory {dir_path}: {e}")
+        logging.warning(f"Failed to configure Unify log directory {dir_path}: {e}")
         return None
-
-
-def get_log_dir() -> Optional[Path]:
-    """Get the current Unity log directory, if configured."""
-    return _LOG_DIR
 
 
 # Auto-configure from settings on module load (if UNIFY_LOG_DIR is set)

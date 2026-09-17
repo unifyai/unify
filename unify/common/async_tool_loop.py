@@ -19,7 +19,6 @@ from ..logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from .llm_helpers import short_id
 from ._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
-from ._async_tool.messages import forward_handle_call
 from ._async_tool.event_bus_util import to_event_bus
 from ..events.types.tool_loop import ToolLoopKind
 from ._async_tool.loop import ToolLoopRuntimeState, async_tool_loop_inner
@@ -31,7 +30,6 @@ from ._async_tool.context_compression import (
 )
 from .context_dump import make_messages_safe_for_context_dump
 from ._async_tool.formatting import TOOL_RESULT_TEXT_CHAR_LIMIT, _truncate_tool_text
-from typing import Iterable
 
 
 from ._async_tool.multi_handle import (
@@ -191,9 +189,9 @@ class SteerableToolHandle(ABC):
     Signature extension contract
     ----------------------------
     Derived classes **may** extend any steering method signature with additional
-    keyword arguments that are specific to their domain.  For example,
-    ``ConversationManagerHandle.interject``
-    replaces ``_parent_chat_context_cont`` with ``pinned`` / ``interjection_id``.
+    keyword arguments that are specific to their domain.  For example, an
+    actor handle's ``interject`` accepts ``_parent_chat_context_cont`` alongside
+    the message.
 
     The signatures defined here represent the **minimum universal contract** —
     the set of parameters that every handle is guaranteed to accept.  Callers
@@ -401,26 +399,6 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             self._user_visible_history.append(
                 {"role": "assistant", "content": message},
             )
-
-    # ── internal: steering helpers ──────────────────────────────────────────
-    def _has_scheduled_tools(self) -> bool:
-        return False
-
-    async def _forward_call_to_handle(
-        self,
-        handle,
-        method_name: str,
-        kwargs: dict,
-        fallback: tuple[str, ...],
-    ):
-        with suppress(Exception):
-            return await forward_handle_call(
-                handle,
-                method_name,
-                kwargs,
-                fallback_positional_keys=fallback,
-            )
-        return None
 
     async def _emit_steering_event(self, action: str, content: str = "") -> None:
         cfg = getattr(self, "_loop_cfg", None)
@@ -632,7 +610,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         # 3.  Fire off a *stand-alone* read-only loop.
         # Compose a clear loop identifier so logs show exactly which loop the
         # question refers to, e.g. "Question(CodeActActor.act)" or
-        # "Question(CodeActActor.act->ContactManager.ask)" when a single
+        # "Question(CodeActActor.act->FunctionManager.execute)" when a single
         # nested handle is present.
         parent_label: str = "unknown"
         with suppress(Exception):
@@ -1406,7 +1384,6 @@ def start_async_tool_loop(
     response_format: Optional[Any] = None,
     max_parallel_tool_calls: Optional[int] = None,
     handle_cls: Optional[Type[AsyncToolLoopHandle]] = None,
-    evented: Optional[bool] = None,
     persist: bool = False,
     multi_handle: bool = False,
     prompt_caching: Optional["PromptCacheParam"] = None,
@@ -1664,9 +1641,6 @@ def start_async_tool_loop(
 
     # --- multi-handle mode: return a MultiRequestHandle for request 0 ---
     if multi_handle and multi_handle_coordinator is not None:
-        # Store the underlying handle reference for potential introspection
-        multi_handle_coordinator._underlying_handle = handle  # type: ignore[attr-defined]
-
         # Update the clarification channels reference once the task has it
         # This is a bit of a hack but necessary since the task attr is set after creation
         try:
@@ -1693,75 +1667,3 @@ def start_async_tool_loop(
         return request_handle  # type: ignore[return-value]
 
     return handle
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Custom steering decorator
-# ─────────────────────────────────────────────────────────────────────────────
-def custom_steering_method(
-    *,
-    aliases: Iterable[str] | None = None,
-    fallback: Iterable[str] | None = None,
-):
-    """
-    Decorator for custom public steering methods defined on classes derived from
-    AsyncToolLoopHandle.
-
-    Behaviour
-    ---------
-    - Executes the original method.
-    - Enqueues a mirror sentinel that the inner loop consumes to synthesize
-      helper tool_calls/acks.
-    - The mirror payload carries control keys ("_custom", "_aliases", "_fallback")
-      used only by the inner loop.
-
-    Parameters
-    ----------
-    aliases : Iterable[str] | None
-        Optional alternative method names to try on children during forwarding.
-    fallback : Iterable[str] | None
-        Optional ordered list of argument keys to use as positional fallbacks
-        when a child's method signature does not accept kwargs (passed to
-        forward_handle_call as fallback_positional_keys).
-    """
-
-    def _decorator(fn):
-        is_async = asyncio.iscoroutinefunction(fn)
-        alias_list = list(aliases or [])
-        fb_list = list(fallback or [])
-
-        def _mirror(self: "AsyncToolLoopHandle", kwargs, result):
-            # Mirror to the inner loop with control keys for routing/dispatch
-            try:
-                self._queue.put_nowait(
-                    {
-                        "_mirror": {
-                            "method": fn.__name__,
-                            "kwargs": dict(kwargs or {}),
-                            "_custom": True,
-                            "_aliases": list(alias_list),
-                            "_fallback": list(fb_list),
-                        },
-                    },
-                )
-            except Exception:
-                pass
-            return result
-
-        if is_async:
-
-            @functools.wraps(fn, updated=())
-            async def _async_wrapped(self: "AsyncToolLoopHandle", *a, **kw):
-                res = await fn(self, *a, **kw)
-                return _mirror(self, kw, res)
-
-            return _async_wrapped
-
-        @functools.wraps(fn, updated=())
-        def _sync_wrapped(self: "AsyncToolLoopHandle", *a, **kw):
-            res = fn(self, *a, **kw)
-            return _mirror(self, kw, res)
-
-        return _sync_wrapped
-
-    return _decorator

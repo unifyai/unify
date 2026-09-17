@@ -1,10 +1,10 @@
 """
-Tests for shell script execution with access to Unity primitives via RPC bridge.
+Tests for shell script execution with access to Unify primitives via RPC bridge.
 
 Coverage
 ========
 ✓ Basic shell script execution
-✓ Shell scripts calling primitives via unity-primitive CLI
+✓ Shell scripts calling primitives via unify-primitive CLI
 ✓ Multiple primitive calls in a single script
 ✓ Various data types (JSON, lists, dicts)
 ✓ Error handling and propagation
@@ -45,27 +45,27 @@ exit 42
 
 SCRIPT_CALLS_PRIMITIVE = """#!/bin/sh
 # Call the actor primitive
-result=$(unity-primitive actor act --request "Who is Alice?")
+result=$(unify-primitive actor act --request "Who is Alice?")
 echo "Primitive result: $result"
 """
 
 SCRIPT_CALLS_MULTIPLE_PRIMITIVES = """#!/bin/sh
 # Call the primitive more than once
-first=$(unity-primitive actor act --request "Who is Alice?")
-second=$(unity-primitive actor act --request "What is 2+2?")
+first=$(unify-primitive actor act --request "Who is Alice?")
+second=$(unify-primitive actor act --request "What is 2+2?")
 echo "First: $first"
 echo "Second: $second"
 """
 
 SCRIPT_WITH_JSON_ARG = """#!/bin/sh
 # Call primitive with JSON and numeric arguments
-result=$(unity-primitive actor act --request "find budget reports" --prompt_functions '["summarise", "rank"]' --timeout 5)
+result=$(unify-primitive actor act --request "find budget reports" --prompt_functions '["summarise", "rank"]' --timeout 5)
 echo "Act result: $result"
 """
 
 SCRIPT_WITH_ERROR_HANDLING = """#!/bin/sh
 # Handle errors from primitives
-result=$(unity-primitive actor act --request "error please" 2>&1)
+result=$(unify-primitive actor act --request "error please" 2>&1)
 exit_code=$?
 if [ $exit_code -ne 0 ]; then
     echo "Primitive failed with code $exit_code"
@@ -115,12 +115,12 @@ echo "Bash map: ${map["key1"]}, ${map["key2"]}"
 
 SCRIPT_LIST_MANAGERS = """#!/bin/sh
 # List available managers
-unity-primitive --list-managers
+unify-primitive --list-managers
 """
 
 SCRIPT_LIST_METHODS = """#!/bin/sh
 # List methods for the actor manager
-unity-primitive actor --list-methods
+unify-primitive actor --list-methods
 """
 
 
@@ -137,8 +137,6 @@ def function_manager_factory():
     def _create():
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         fm = FunctionManager()
         managers.append(fm)
         return fm
@@ -266,7 +264,7 @@ async def test_shell_script_with_cwd(function_manager_factory):
 @_handle_project
 @pytest.mark.asyncio
 async def test_shell_calls_primitive(function_manager_factory, mock_primitives):
-    """Test shell script calling a primitive via unity-primitive CLI."""
+    """Test shell script calling a primitive via unify-primitive CLI."""
     fm = function_manager_factory()
 
     result = await fm.execute_shell_script(
@@ -526,7 +524,7 @@ async def test_primitive_returns_list(function_manager_factory):
     mock_p.actor.act = AsyncMock(return_value=[{"id": 1, "summary": "Exchange 1"}])
 
     script = """#!/bin/sh
-result=$(unity-primitive actor act --request "list all")
+result=$(unify-primitive actor act --request "list all")
 echo "Exchanges: $result"
 """
 
@@ -554,7 +552,7 @@ async def test_primitive_returns_dict(function_manager_factory):
     )
 
     script = """#!/bin/sh
-result=$(unity-primitive actor act --request "get Alice")
+result=$(unify-primitive actor act --request "get Alice")
 echo "Contact: $result"
 """
 
@@ -579,7 +577,7 @@ async def test_unicode_handling(function_manager_factory):
     mock_p.actor.act = AsyncMock(return_value="Hello 世界! 🌍 äöü")
 
     script = """#!/bin/sh
-result=$(unity-primitive actor act --request "unicode test")
+result=$(unify-primitive actor act --request "unicode test")
 echo "Result: $result"
 """
 
@@ -607,17 +605,17 @@ async def test_concurrent_shell_executions(function_manager_factory, mock_primit
     scripts = [
         """#!/bin/sh
 echo "Script 1"
-result=$(unity-primitive actor act --request "q1")
+result=$(unify-primitive actor act --request "q1")
 echo "Result: $result"
 """,
         """#!/bin/sh
 echo "Script 2"
-result=$(unity-primitive actor act --request "q2")
+result=$(unify-primitive actor act --request "q2")
 echo "Result: $result"
 """,
         """#!/bin/sh
 echo "Script 3"
-result=$(unity-primitive actor act --request "q3")
+result=$(unify-primitive actor act --request "q3")
 echo "Result: $result"
 """,
     ]

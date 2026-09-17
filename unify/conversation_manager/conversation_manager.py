@@ -10,7 +10,6 @@ from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.common.startup_timing import log_startup_timing
 from unify.common.diagnostic_logging import staging_diagnostics_enabled
-from unify.session_details import SESSION_DETAILS
 from unify.manager_registry import SingletonABCMeta
 from unify.common.async_tool_loop import SteerableToolHandle
 from unify.common.hierarchical_logger import SessionLogger
@@ -122,10 +121,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         stop: asyncio.Event,
         project_name: str = "Assistants",
     ):
-        # identity
-        self.user_id = SESSION_DETAILS.user.id
-        self.assistant_id = SESSION_DETAILS.assistant.agent_id
-
         # initialization state
         self.initialized: bool = False
         # Open ⇒ slow-brain turns may render. ``init_conv_manager`` closes it
@@ -337,11 +332,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if generation < self._llm_gen - 1:
                 del self._recent_commissioning_successes[fingerprint]
 
-    @property
-    def session_logger(self) -> SessionLogger:
-        """The hierarchical session logger for this ConversationManager instance."""
-        return self._session_logger
-
     def get_recent_transcript(
         self,
         max_messages: int | None = None,
@@ -408,14 +398,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         except Exception:
             return messages
 
-    async def cancel_slow_brain_run(self, turn_id) -> None:
-        """Cancel exactly the slow-brain run spawned by ``turn_id``.
-
-        Targets only that turn's run wherever it sits in the queue (no-op if
-        already gone). A run already in tool commit is spared.
-        """
-        await self.debouncer.cancel_run_by_turn(turn_id)
-
     async def run_llm(
         self,
         delay: float = 0,
@@ -427,26 +409,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             delay=delay,
             label=(trace_meta or {}).get("origin_event_name", ""),
             trace_meta=trace_meta,
-        )
-
-    @staticmethod
-    def _is_transient_llm_error(exc: BaseException) -> bool:
-        """True if ``exc`` is a provider-side transient error after unillm retries.
-
-        unillm (``retry_transient_400_async``) already retries these internally
-        with exponential backoff. If one escapes, it means the provider stayed
-        unhealthy for the whole retry budget — e.g. Anthropic HTTP 529
-        ``overloaded_error`` surfaces as ``litellm.InternalServerError``.
-        """
-        import litellm
-
-        return isinstance(
-            exc,
-            (
-                litellm.InternalServerError,
-                litellm.ServiceUnavailableError,
-                litellm.RateLimitError,
-            ),
         )
 
     async def _run_llm_with_failure_notification(
@@ -523,7 +485,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self,
         delay=0,
         is_user_origin: bool = False,
-        turn_id: int | None = None,
     ) -> str:
         """Request an LLM run.
 
@@ -538,9 +499,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "origin_event_id": event_trace.get("event_id", ""),
             "origin_event_name": event_trace.get("event_name", ""),
             "is_user_origin": is_user_origin,
-            # Carried onto the debouncer task so ``cancel_slow_brain_run`` can
-            # cancel exactly this turn's run by id. ``None`` never matches.
-            "turn_id": turn_id,
         }
         self._pending_llm_requests.append((delay, is_user_origin))
         self._pending_llm_request_meta.append(request_meta)
@@ -1068,8 +1026,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 # process events
                 event = Event.from_json(msg["data"])
                 channel = msg.get("channel", "")
-                if isinstance(channel, bytes):
-                    channel = channel.decode("utf-8", errors="replace")
                 self._event_trace_seq += 1
                 event_id = f"evt-{self._event_trace_seq:06d}"
                 event_name = event.__class__.__name__

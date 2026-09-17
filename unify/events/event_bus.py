@@ -66,9 +66,8 @@ _CURRENT_ROOT_SEQ: contextvars.ContextVar[int | None] = contextvars.ContextVar(
 
 # ───────────────────────────   Event envelope   ─────────────────────────────
 
-# The backend no longer auto-assigns `row_id`.
-# A value of `None` indicates that the client-side `EventBus` has not yet
-# attached a sequence number.
+# `row_id` is assigned by the `EventBus`, not the store. A value of `None`
+# means the bus has not yet attached a sequence number.
 
 
 class Event(BaseModel):
@@ -526,7 +525,7 @@ class EventBus:
         return self._prefill_done.is_set()
 
     # ------------------------------------------------------------------
-    # New *non-blocking* hydration helpers
+    # Non-blocking hydration helpers
     # ------------------------------------------------------------------
     async def _async_initial_hydration(self) -> None:
         """
@@ -680,7 +679,7 @@ class EventBus:
         return []
 
     async def _async_load_subscriptions(self) -> None:
-        """Async wrapper around the former blocking `_load_subscriptions`."""
+        """Rebuild the in-memory subscription map from the persisted rows."""
         rows = await self._get_logs_resilient(
             context=self._callbacks_ctx,
             sorting={"row_id": "ascending"},
@@ -846,15 +845,6 @@ class EventBus:
                 "key_fn": key_fn,
             },
         )
-
-    # ------------------------------------------------------------------
-    def _load_subscriptions(self) -> None:
-        """Synchronously rebuild the in-memory subscription map."""
-        rows = db.get_logs(
-            context=self._callbacks_ctx,
-            sorting={"row_id": "ascending"},
-        )
-        self._subscriptions = self._rows_to_subscriptions(rows)
 
     # ------------------------------------------------------------------
     # Public API
@@ -1514,7 +1504,7 @@ class EventBus:
             throughput while still guaranteeing that entire cascades (e.g. the
             rolling summary hierarchy) have settled before returning."""
 
-        async def _helper():  # inner coroutine – former implementation
+        async def _helper():
             # Snapshot the highest sequence number currently assigned so that
             # we can identify all callbacks that belong to the *same* cascade
             # (root-seq ≤ cutoff).  New, unrelated work gets a fresh root-seq
@@ -1625,14 +1615,13 @@ class EventBus:
     @staticmethod
     def _match_filter(evt: "Event", filter_expr: Optional[str]) -> bool:
         """Return True if *evt* satisfies the provided *filter_expr* (or if the
-        expression is None/empty). The eval sandbox mirrors the original
-        implementation but is now centralised for reuse across the class."""
+        expression is None/empty)."""
         if not filter_expr:
             return True
         ns: dict[str, Any] = {
             "evt": evt,
             "event_type": evt.type,
-            "type": evt.type,  # legacy alias
+            "type": evt.type,
             **evt.model_dump(mode="python"),
         }
         return bool(eval(filter_expr, {"__builtins__": {}}, ns))
@@ -1640,10 +1629,6 @@ class EventBus:
     @staticmethod
     def _row_to_event(row: dict, default_type: Optional[str] | None = None) -> "Event":
         """Convert a *flattened* Unify log row back into an :class:`Event`.
-
-        The logic was previously duplicated in several places (prefill, search
-        fetch, baseline computation). Centralising it greatly reduces code
-        repetition and ensures consistent behaviour.
 
         Payloads are always returned as dicts - the Event validator will attempt
         to validate against the expected Pydantic model but stores as dict.

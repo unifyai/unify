@@ -1,13 +1,11 @@
-"""Model-aware observation scaling for screenshots.
+"""Model-aware observation scaling for images shown to the LLM.
 
-LLM planners emit pixel coordinates in the observation image space we send
-them. We downscale captures to that space, then scale coordinates back up
-when acting on them. Policy is resolved from the configured model so scaling
-stays aligned with the agent-service path and provider limits.
+Images the sandbox displays or passes to ``query_llm`` are downscaled to the
+observation space the configured model accepts. Policy is resolved from the
+model so scaling stays aligned with provider limits.
 
-The authoritative policy constants live in the sibling JSON file
-``observation_scaling_policy.json``; both this module and the TypeScript
-``agent-service/src/observationScaling.ts`` read from that single source.
+The policy constants live in the sibling JSON file
+``observation_scaling_policy.json``.
 """
 
 from __future__ import annotations
@@ -151,7 +149,7 @@ def resolve_observation_model() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Scaling math (mirrors agent-service/src/observationScaling.ts)
+# Scaling math
 # ---------------------------------------------------------------------------
 
 
@@ -205,23 +203,6 @@ def compute_native_observation_scale(
         observation_height=obs_h,
         model=policy.model,
         provider=policy.provider,
-    )
-
-
-def scale_observation_coords_to_display(
-    x: int,
-    y: int,
-    scale: NativeObservationScale,
-) -> tuple[int, int]:
-    """Map LLM-emitted observation coordinates back to display pixels."""
-    if (
-        scale.observation_width == scale.display_width
-        and scale.observation_height == scale.display_height
-    ):
-        return x, y
-    return (
-        round(x * (scale.display_width / scale.observation_width)),
-        round(y * (scale.display_height / scale.observation_height)),
     )
 
 

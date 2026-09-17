@@ -458,7 +458,6 @@ def _init_managers(
         cm._conversation_manager_handle = (
             ManagerRegistry.get_conversation_manager_handle(
                 event_broker=cm.event_broker,
-                conversation_id=SESSION_DETAILS.assistant.agent_id,
                 conversation_manager=cm,
             )
         )

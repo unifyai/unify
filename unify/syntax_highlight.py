@@ -1,8 +1,7 @@
 """Lightweight syntax highlighting for markdown-fenced code blocks.
 
 Only depends on ``re`` (stdlib) and ``pygments`` (optional, graceful
-fallback).  Shared by ``unify.logger`` (server-side TTY formatting) and
-``scripts/dev/job_logs/stream_logs.py`` (client-side log streaming).
+fallback). Used by ``unify.logger`` for TTY formatting.
 """
 
 from __future__ import annotations
@@ -13,8 +12,6 @@ MARKDOWN_CODE_BLOCK_RE = re.compile(
     r"([ \t]*```(\w+))\n(.*?)\n([ \t]*```)(?!\w)",
     re.DOTALL,
 )
-MARKDOWN_OPENING_RE = re.compile(r"```(\w+)")
-MARKDOWN_CLOSING_RE = re.compile(r"```(?!\w)")
 
 
 def highlight_code_blocks(text: str) -> str:

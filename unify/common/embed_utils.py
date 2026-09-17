@@ -288,7 +288,7 @@ def ensure_vector_column(
     rows are backfilled. Field presence alone is not treated as coverage.
 
     Args:
-        context (str): The Unify context (e.g., "Knowledge/table_name" or "ContextName").
+        context (str): The Unify context (e.g., "Functions/Compositional" or "Guidance").
         embed_column (str): The name of the vector column to ensure. (eg: "content_emb")
         source_column (str): The name of the source column to embed. (eg: "content_plus_desc")
         derived_expr Optional(str): An optional expression to dynamically derive the source column

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Optional, Type, Any
 from pydantic import BaseModel
 import unillm
@@ -34,10 +33,6 @@ class SimulatedConversationManagerHandle(
         *,
         description: str = "A simulated conversation between an AI assistant and a user.",
         simulation_guidance: Optional[str] = None,
-        # Accept but ignore parameters that real ConversationManagerHandle uses
-        event_broker: Any = None,
-        conversation_id: Any = None,
-        conversation_manager: Any = None,
         **kwargs: Any,
     ):
         self.assistant_id = assistant_id
@@ -61,32 +56,6 @@ class SimulatedConversationManagerHandle(
 
         # Human-friendly log label for consistent hierarchical logging
         self._log_label = SimulatedLineage.make_label("SimulatedConversationManager")
-
-    async def get_full_transcript(self, **kwargs) -> dict:
-        """Simulates retrieving the full conversation transcript."""
-        if self._stopped:
-            return {"status": "error", "message": "Handle is stopped."}
-
-        # The stateful LLM will generate a plausible transcript based on the scenario description.
-        prompt = (
-            "Based on the conversation scenario, provide a plausible, recent transcript "
-            "that includes both user and assistant messages. Return it as a JSON object "
-            'with a "messages" key, like {"messages": [{"role": "user", "content": "..."}, ...]}.'
-        )
-        response = await self._llm.generate(prompt)
-
-        try:
-            cleaned_str = response.strip()
-            if cleaned_str.startswith("```json"):
-                cleaned_str = cleaned_str[7:].strip()
-            if cleaned_str.startswith("```"):
-                cleaned_str = cleaned_str[3:].strip()
-            if cleaned_str.endswith("```"):
-                cleaned_str = cleaned_str[:-3].strip()
-
-            return json.loads(cleaned_str)
-        except json.JSONDecodeError:
-            raise ValueError(f"Failed to parse LLM response into JSON: {response}")
 
     def _build_system_message(self) -> str:
         """Builds a detailed system message for the stateful LLM, instructing it on how to simulate the conversation."""
@@ -211,23 +180,6 @@ class SimulatedConversationManagerHandle(
         import uuid as _uuid
 
         return _uuid.uuid4().hex[:12]
-
-    async def unpin_interjection(self, interjection_id: str) -> dict:
-        """
-        Unpin a previously pinned interjection.
-
-        Args:
-            interjection_id: The ID of the interjection to unpin
-
-        Returns:
-            Dict with status indicating success
-        """
-        # Simulated implementation - just acknowledge the unpin request
-        return {
-            "status": "ok",
-            "message": f"Unpin simulated for interjection {interjection_id}",
-            "interjection_id": interjection_id,
-        }
 
     async def pause(self) -> str:
         """Pauses the simulated conversation."""

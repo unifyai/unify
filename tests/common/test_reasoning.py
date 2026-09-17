@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 import pytest
@@ -130,30 +129,6 @@ def test_query_llm_docstring_contains_actor_usage_guidance():
     assert "trial them" in doc
     assert "bake in the cheapest model" in doc
     assert "never in the hot path" in doc
-
-
-def test_llm_query_prompt_context_uses_introspected_signatures():
-    context = reasoning.get_llm_query_prompt_context()
-
-    assert f"async def query_llm{inspect.signature(reasoning.query_llm)}" in context
-    assert f"def list_llms{inspect.signature(reasoning.list_llms)}" in context
-
-
-def test_llm_query_prompt_context_includes_model_selection_guidance():
-    context = reasoning.get_llm_query_prompt_context()
-
-    assert "LLM Query Helpers: `query_llm(...)` And `list_llms(...)`" in context
-    assert "Choosing A Model For `query_llm(...)`" in context
-    assert "Artificial Analysis (https://artificialanalysis.ai/)" in context
-    assert "comparing model price, speed, latency" in context
-    assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in context
-    assert "Use `list_llms()` to inspect" in context
-    assert "Supported UniLLM endpoints currently registered" not in context
-    assert "openai/gpt-5.5@openrouter, gpt-5.5" not in context
-    assert "Do not put benchmark browsing or" in context
-    assert (
-        "Pass screenshots, photos, or image paths through ``images=[...]``" in context
-    )
 
 
 def test_list_llms_returns_registered_endpoint_strings():

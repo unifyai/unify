@@ -21,19 +21,6 @@ def custom_dict_factory(kv):
     return d
 
 
-class _TruncatedReprMixin:
-    """Mixin for events that need truncated repr (to avoid logging huge payloads)."""
-
-    def __str__(self) -> str:
-        return self._repr_truncated()
-
-    def __repr__(self) -> str:
-        return self._repr_truncated()
-
-    def _repr_truncated(self) -> str:
-        raise NotImplementedError
-
-
 def _now_datetime() -> datetime:
     """Wrapper for prompt_now that returns datetime for dataclass default_factory."""
     return prompt_now(as_string=False)
@@ -93,17 +80,6 @@ class Event:
     @classmethod
     def from_json(cls, json_data):
         data = json.loads(json_data)
-        return cls.from_dict(data)
-
-    @classmethod
-    def from_bus_event(cls, event):
-        # Use mode="json" to ensure datetime objects are serialized to ISO strings,
-        # which from_dict() expects for the timestamp field
-        event_dump = event.model_dump(mode="json")
-        data = {
-            "event_name": event_dump["payload_cls"],
-            "payload": event_dump["payload"],
-        }
         return cls.from_dict(data)
 
     def __init_subclass__(cls):
@@ -168,12 +144,6 @@ class OpenSlowBrainTurn(Event):
 
 
 @dataclass
-class Ping(Event):
-    loggable: ClassVar[bool] = False
-    kind: str
-
-
-@dataclass
 class Error(Event):
     prominent: ClassVar[bool] = True
 
@@ -182,70 +152,17 @@ class Error(Event):
 
 @dataclass
 class NotificationInjectedEvent(Event):
-    """Event to inject a notification into the ConversationManager."""
+    """A notification injected into the ConversationManager's notification bar."""
 
     content: str
     source: str
-    target_conversation_id: str
     interjection_id: str = field(default_factory=lambda: str(uuid.uuid4().hex[:12]))
     pinned: bool = False
 
 
 @dataclass
-class NotificationUnpinnedEvent(Event):
-    """Event to unpin a previously pinned interjection."""
-
-    interjection_id: str
-    target_conversation_id: str
-
-
-@dataclass(repr=False)
-class ActorRequest(_TruncatedReprMixin, Event):
-    """Event to ask or request the Actor to perform a task."""
-
-    action_name: str
-    query: str
-    parent_chat_context: list[dict]
-
-    def _repr_truncated(self) -> str:
-        return (
-            f"{self.__class__.__name__}(action_name={self.action_name}, "
-            f"query={self.query}, "
-            f"parent_chat_context_len={len(self.parent_chat_context)})"
-        )
-
-
-@dataclass
-class ActorResponse(Event):
-    """Event to respond to an Actor request."""
-
-    handle_id: int
-    action_name: str
-    query: str
-    response: str
-
-
-@dataclass(repr=False)
-class ActorHandleRequest(_TruncatedReprMixin, Event):
-    """Event to any action on an existing Actor handle."""
-
-    handle_id: int
-    action_name: str
-    query: str
-    parent_chat_context: list[dict]
-
-    def _repr_truncated(self) -> str:
-        return (
-            f"{self.__class__.__name__}(handle_id={self.handle_id}, "
-            f"action_name={self.action_name}, "
-            f"query={self.query}, "
-            f"parent_chat_context_len={len(self.parent_chat_context)})"
-        )
-
-
-@dataclass
 class ActorHandleResponse(Event):
-    """Event to respond to an Actor handle request."""
+    """The answer to a steering query (``ask``) on an Actor handle."""
 
     handle_id: int
     action_name: str
@@ -256,7 +173,7 @@ class ActorHandleResponse(Event):
 
 @dataclass
 class ActorResult(Event):
-    """Event to the result of an Actor task."""
+    """The final result (or failure) of an Actor action."""
 
     handle_id: int
     success: bool
@@ -267,19 +184,10 @@ class ActorResult(Event):
 
 @dataclass
 class ActorClarificationRequest(Event):
-    """Event to request clarification from the Actor."""
+    """A question an in-flight Actor action asks the user."""
 
     handle_id: int
     query: str
-    call_id: str
-
-
-@dataclass
-class ActorClarificationResponse(Event):
-    """Event to respond to an Actor clarification request."""
-
-    handle_id: int
-    response: str
     call_id: str
 
 
@@ -316,7 +224,7 @@ class ActorSessionResponse(Event):
 @dataclass
 class ActorHandleStarted(Event):
     action_name: str
-    handle_id: id
+    handle_id: int
     query: str
     response_format: dict | None = None
 

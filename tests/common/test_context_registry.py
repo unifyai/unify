@@ -10,13 +10,7 @@ from unify.session_details import SESSION_DETAILS
 class RegistryExampleManager:
     class Config:
         required_contexts = [
-            TableContext(
-                name="Contacts",
-                description="People and organizations the assistant knows.",
-            ),
-            TableContext(name="Secrets", description="Private credentials."),
-            TableContext(name="Knowledge", description="Structured knowledge tables."),
-            TableContext(name="Guidance", description="Assistant guidance rules."),
+            TableContext(name="Guidance", description="Assistant procedures."),
             TableContext(
                 name="Functions/Compositional",
                 description="Compositional functions.",
@@ -30,14 +24,7 @@ class RegistryExampleManager:
                 name="Functions/VirtualEnvs",
                 description="Function virtual environments.",
             ),
-            TableContext(name="FileRecords", description="File metadata records."),
-            TableContext(name="Files", description="File payload rows."),
-            TableContext(name="Data", description="User data tables."),
-            TableContext(name="BlackList", description="Blocked contact details."),
-            TableContext(name="Transcripts", description="Conversation messages."),
-            TableContext(name="Exchanges", description="Conversation exchanges."),
-            TableContext(name="Images", description="Stored images."),
-            TableContext(name="SearchCache", description="Non-shared runtime cache."),
+            TableContext(name="Chat/Messages", description="Chat history."),
         ]
 
 
@@ -72,35 +59,35 @@ def test_root_is_the_session_root(table_name: str, provision):
 
 def test_get_context_returns_the_fully_qualified_table(provision):
     assert (
-        ContextRegistry.get_context(RegistryExampleManager, "Contacts")
-        == "user123/42/Contacts"
+        ContextRegistry.get_context(RegistryExampleManager, "Guidance")
+        == "user123/42/Guidance"
     )
     assert (
-        ContextRegistry.get_context(RegistryExampleManager, "SearchCache")
-        == "user123/42/SearchCache"
+        ContextRegistry.get_context(RegistryExampleManager, "Chat/Messages")
+        == "user123/42/Chat/Messages"
     )
 
 
 def test_lazy_provisioning_is_cached_per_table(provision):
-    ContextRegistry.root(RegistryExampleManager, "Contacts")
-    ContextRegistry.root(RegistryExampleManager, "Contacts")
-    ContextRegistry.get_context(RegistryExampleManager, "Contacts")
+    ContextRegistry.root(RegistryExampleManager, "Guidance")
+    ContextRegistry.root(RegistryExampleManager, "Guidance")
+    ContextRegistry.get_context(RegistryExampleManager, "Guidance")
 
     provision.assert_called_once()
-    assert provision.call_args.args[0] == "user123/42/Contacts"
+    assert provision.call_args.args[0] == "user123/42/Guidance"
     assert (
-        ContextRegistry._registry[("RegistryExampleManager", "Contacts")]
-        == "user123/42/Contacts"
+        ContextRegistry._registry[("RegistryExampleManager", "Guidance")]
+        == "user123/42/Guidance"
     )
 
 
 def test_forget_and_refresh_reprovision_the_table(provision):
-    ContextRegistry.get_context(RegistryExampleManager, "Contacts")
-    ContextRegistry.forget(RegistryExampleManager, "Contacts")
+    ContextRegistry.get_context(RegistryExampleManager, "Guidance")
+    ContextRegistry.forget(RegistryExampleManager, "Guidance")
     assert ContextRegistry._registry == {}
     assert (
-        ContextRegistry.refresh(RegistryExampleManager, "Contacts")
-        == "user123/42/Contacts"
+        ContextRegistry.refresh(RegistryExampleManager, "Guidance")
+        == "user123/42/Guidance"
     )
 
     assert provision.call_count == 2
@@ -110,8 +97,5 @@ def test_missing_base_context_is_a_recognisable_error():
     CONTEXT_READ.set("")
     CONTEXT_WRITE.set("")
 
-    with pytest.raises(RuntimeError) as exc_info:
-        ContextRegistry.get_context(RegistryExampleManager, "Contacts")
-
-    assert ContextRegistry.is_missing_base_context_error(exc_info.value)
-    assert not ContextRegistry.is_missing_base_context_error(ValueError("x"))
+    with pytest.raises(RuntimeError, match="no base context available"):
+        ContextRegistry.get_context(RegistryExampleManager, "Guidance")

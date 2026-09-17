@@ -251,8 +251,6 @@ async def test_execute_function_returns_composite_when_side_output_present():
 
     ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
     ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-    ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-    ContextRegistry.forget(FunctionManager, "Functions/Meta")
 
     fm = FunctionManager()
     fm.add_functions(

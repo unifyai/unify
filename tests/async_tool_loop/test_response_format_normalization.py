@@ -7,7 +7,6 @@ import json
 import pytest
 from pydantic import BaseModel, Field
 
-from unify.common._async_tool.loop import _check_valid_response_format
 from unify.common._async_tool.response_format import (
     normalize_response_format,
     try_normalize_response_format,
@@ -80,7 +79,7 @@ def test_normalize_json_schema_string():
     assert norm is not None
     assert norm.json_schema == ALICE_MATCHES_SCHEMA
     # Schema extraction used by final_response injection must succeed.
-    assert _check_valid_response_format(raw) == ALICE_MATCHES_SCHEMA
+    assert norm.answer_json_schema == ALICE_MATCHES_SCHEMA
 
 
 def test_normalize_simplified_field_map():
@@ -108,7 +107,10 @@ def test_json_schema_validation_rejects_bad_payload():
         norm.validate({"matches": [{"first_name": "Alice"}]})  # missing required
 
 
-def test_check_valid_response_format_accepts_schema_dict_and_model():
-    assert _check_valid_response_format(ALICE_MATCHES_SCHEMA) == ALICE_MATCHES_SCHEMA
-    schema = _check_valid_response_format(_Greeting)
+def test_answer_json_schema_accepts_schema_dict_and_model():
+    assert (
+        normalize_response_format(ALICE_MATCHES_SCHEMA).answer_json_schema
+        == ALICE_MATCHES_SCHEMA
+    )
+    schema = normalize_response_format(_Greeting).answer_json_schema
     assert "message" in schema["properties"]

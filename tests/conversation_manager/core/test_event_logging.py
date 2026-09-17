@@ -78,7 +78,6 @@ async def cm_with_eventbus():
     from unify.conversation_manager.domains import managers_utils
 
     os.environ["UNIFY_ACTOR_IMPL"] = "simulated"
-    os.environ["UNIFY_ACTOR_SIMULATED_STEPS"] = "3"
     os.environ["UNIFY_INCREMENTING_TIMESTAMPS"] = "true"
     os.environ["TEST"] = "true"
 

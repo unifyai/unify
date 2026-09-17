@@ -52,15 +52,10 @@ class ManagerMethodPayload(BaseModel):
     )
     hierarchy_label: str = Field(
         default="",
-        description=(
-            "Human-readable hierarchy label. "
-            "DEPRECATED: trivially derivable as '->'.join(hierarchy) since "
-            "hierarchy segments now carry per-invocation suffixes. "
-            "TODO: remove once frontend migrates to hierarchy-only tree building."
-        ),
+        description="'->'.join(hierarchy), as one string to filter on",
     )
 
-    # User-facing display label for the action window (e.g., "Checking Contact Book").
+    # User-facing display label for the operation (e.g., "Running code").
     display_label: Optional[str] = Field(
         default=None,
         description="User-friendly phrase describing this operation for non-technical users",

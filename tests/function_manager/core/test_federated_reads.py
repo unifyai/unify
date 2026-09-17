@@ -13,7 +13,6 @@ def _manager_stub(*, include_primitives: bool = True) -> FunctionManager:
     fm._exclude_compositional_ids = None
     fm._exclude_primitive_ids = None
     fm._primitive_scope = object()
-    fm._primitives_ctx = "Functions/Primitives"
     fm._registry = SimpleNamespace(
         primitive_row_filter=lambda _scope: "primitive_class == 'Primitives'",
     )
@@ -89,13 +88,6 @@ def test_filter_functions_delegates_federated_read_to_server(monkeypatch):
             "exclude_fields": ["_embedding"],
             "project_name": builtins,
         },
-        {
-            "context": "Functions/Primitives",
-            "source": "primitives",
-            "filter": f"({scoped_primitive_filter}) "
-            'and metadata["source"] == "provider_backed"',
-            "exclude_fields": ["_embedding"],
-        },
     ]
 
 
@@ -168,18 +160,12 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
     assert [(spec.context, spec.project) for spec in contexts] == [
         ("Functions/Compositional", None),
         ("Functions/Primitives", builtins),
-        ("Functions/Primitives", None),
     ]
     assert [spec.source for spec in contexts] == [
         "compositional",
         "primitives",
-        "primitives",
     ]
     assert contexts[0].row_filter == "(language == 'python') and (function_id != 1)"
     assert contexts[1].row_filter == "primitive_class == 'Primitives'"
-    assert contexts[2].row_filter == (
-        "(primitive_class == 'Primitives') "
-        'and metadata["source"] == "provider_backed"'
-    )
     assert "embedding_text" in contexts[0].allowed_fields
     assert contexts[0].allowed_fields == contexts[1].allowed_fields

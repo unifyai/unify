@@ -8,16 +8,16 @@ parent Python process that's executing the shell script.
 
 Usage from shell scripts:
     # Call a primitive method
-    result=$(unity-primitive actor act --request "Summarise invoices.txt")
+    result=$(unify-primitive actor act --request "Summarise invoices.txt")
 
     # The result is JSON
     echo "$result" | jq '.'
 
     # List available managers
-    unity-primitive --list-managers
+    unify-primitive --list-managers
 
     # List methods for a manager
-    unity-primitive actor --list-methods
+    unify-primitive actor --list-methods
 
 Protocol:
     The CLI connects to a Unix domain socket (path in UNIFY_RPC_SOCKET env var)
@@ -49,7 +49,7 @@ def send_rpc_request(socket_path: str, path: str, kwargs: Dict[str, Any]) -> Any
 
     Args:
         socket_path: Path to the Unix domain socket
-        path: RPC path (e.g., "files.search_files")
+        path: RPC path (e.g., "actor.act")
         kwargs: Keyword arguments for the method call
 
     Returns:
@@ -281,7 +281,7 @@ def main() -> int:
     if not socket_path:
         print(
             "Error: UNIFY_RPC_SOCKET environment variable not set.\n"
-            "This command should be run from within a Unity shell function.",
+            "This command should be run from within a Unify shell function.",
             file=sys.stderr,
         )
         return 1
@@ -291,9 +291,9 @@ def main() -> int:
 
     if not args or args[0] in ("-h", "--help"):
         print(
-            "Usage: unity-primitive [options] <manager> <method> [--arg value ...]\n"
+            "Usage: unify-primitive [options] <manager> <method> [--arg value ...]\n"
             "\n"
-            "Call Unity primitives from shell scripts.\n"
+            "Call Unify primitives from shell scripts.\n"
             "\n"
             "Options:\n"
             "  --list-managers     List available managers\n"
@@ -303,9 +303,9 @@ def main() -> int:
             "  <manager> --list-methods   List methods for a manager\n"
             "\n"
             "Examples:\n"
-            "  unity-primitive --list-managers\n"
-            "  unity-primitive actor --list-methods\n"
-            "  unity-primitive actor act --request 'Summarise budget.txt'\n",
+            "  unify-primitive --list-managers\n"
+            "  unify-primitive actor --list-methods\n"
+            "  unify-primitive actor act --request 'Summarise budget.txt'\n",
         )
         return 0
 
@@ -328,7 +328,7 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
-            f"Use 'unity-primitive {manager_name} --list-methods' to see available methods",
+            f"Use 'unify-primitive {manager_name} --list-methods' to see available methods",
             file=sys.stderr,
         )
         return 1

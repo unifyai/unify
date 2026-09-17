@@ -233,13 +233,9 @@ def _saturated_tools_data() -> ToolsData:
 def test_base_tool_schema_construction_ignores_concurrency_and_quota_state():
     tools_data = _saturated_tools_data()
 
-    # Saturated by both concurrency and quota...
-    assert tools_data.concurrency_ok("busy_tool") is False
-    assert tools_data.quota_ok("busy_tool") is False
-
-    # ...yet the unfiltered schema construction (the shape loop.py now uses
-    # for visible_base_tools_schema) still includes it: no `if concurrency_ok
-    # and quota_ok` gate survives in the schema path.
+    # Saturated by both concurrency and quota, yet the unfiltered schema
+    # construction (the shape loop.py uses for visible_base_tools_schema)
+    # still includes it: no availability gate exists in the schema path.
     schema_names = {
         name
         for name, spec in tools_data.normalized.items()

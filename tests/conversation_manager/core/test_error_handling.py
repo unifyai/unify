@@ -20,9 +20,9 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from unify.conversation_manager.events import (
+    ActorHandleStarted,
     Event,
     UnifyMessageReceived,
-    Ping,
     ActorResult,
 )
 
@@ -69,8 +69,8 @@ class TestMalformedEvents:
         """Event.from_json should raise on invalid timestamp format."""
         data = json.dumps(
             {
-                "event_name": "Ping",
-                "payload": {"kind": "test", "timestamp": "not-a-valid-timestamp"},
+                "event_name": "UnifyMessageReceived",
+                "payload": {"content": "hi", "timestamp": "not-a-valid-timestamp"},
             },
         )
         with pytest.raises(ValueError):
@@ -137,13 +137,15 @@ class TestEventHandlerEdgeCases:
         assert result.output_events == []
 
     @pytest.mark.asyncio
-    async def test_ping_event_handler(self, initialized_cm):
-        """Ping events should be handled without triggering LLM."""
+    async def test_handle_started_event_handler(self, initialized_cm):
+        """ActorHandleStarted is handled without triggering the LLM."""
         cm = initialized_cm
 
-        result = await cm.step(Ping(kind="test"))
+        result = await cm.step(
+            ActorHandleStarted(action_name="act", handle_id=999, query="noop"),
+        )
 
-        # Ping handler doesn't request LLM run
+        # The handler records nothing and requests no LLM run
         assert result.llm_requested is False
         assert result.llm_ran is False
         assert result.output_events == []
@@ -199,14 +201,6 @@ class TestStateRecovery:
 
 class TestNotificationBarEdgeCases:
     """Tests for notification bar edge cases."""
-
-    @pytest.mark.asyncio
-    async def test_remove_nonexistent_notification(self, initialized_cm):
-        """Removing non-existent notification should not crash."""
-        cm = initialized_cm
-
-        # Should not raise
-        cm.cm.notifications_bar.remove_notif("nonexistent_id_12345")
 
     @pytest.mark.asyncio
     async def test_push_notification_with_datetime_timestamp(
@@ -266,7 +260,7 @@ class TestEventSerializationEdgeCases:
 
     def test_event_to_dict_with_datetime(self):
         """Event.to_dict should serialize datetime correctly."""
-        event = Ping(kind="test")
+        event = UnifyMessageReceived(content="test")
         data = event.to_dict()
 
         # Timestamp should be an ISO format string

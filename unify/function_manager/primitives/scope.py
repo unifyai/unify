@@ -20,7 +20,7 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
 @dataclass(frozen=True, slots=True)
 class PrimitiveScope:
     """
-    Defines which primitive namespaces are exposed in a deployment.
+    Defines which primitive namespaces a runtime exposes.
 
     This is the single source of truth for scoping. All downstream consumers
     (Primitives, ActorEnvironment, FunctionManager) read from this object.

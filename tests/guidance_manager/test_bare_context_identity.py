@@ -48,7 +48,7 @@ def test_add_guidance_without_assigned_id_fails_loud(monkeypatch):
         entries={"title": "T", "content": "C"},
     )
     deleted: list[dict] = []
-    monkeypatch.setattr(gm_module, "unity_log", lambda **kwargs: fake_log)
+    monkeypatch.setattr(gm_module, "write_log", lambda **kwargs: fake_log)
     monkeypatch.setattr(
         db,
         "delete_logs",

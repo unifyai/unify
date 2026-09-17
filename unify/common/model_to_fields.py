@@ -91,7 +91,7 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
 
     Examples
     --------
-    >>> fields_dict = model_to_fields(Contact)
+    >>> fields_dict = model_to_fields(Function)
     >>> db.create_fields(fields_dict, context=ctx)
     """
     # Get Pydantic's JSON Schema and dereference all $refs
@@ -159,12 +159,9 @@ def with_ui_editable_forced_false(
     Return a copy of a `model_to_fields` output with every field's
     ``ui_editable`` forced to ``False``.
 
-    Used when a single Pydantic model backs multiple stored tables with
-    different editability semantics — e.g. `Function` backs both
-    `Functions/Compositional` (user-authored, some fields UI-editable) and
-    `Functions/Primitives` (system-defined, never UI-editable). Rather than
-    branching inside `model_to_fields` on which table is being provisioned,
-    callers provision the shared model once and force this override for the
-    read-only table.
+    Used when one Pydantic model backs a table whose rows are system-owned
+    and must never be edited by hand: callers provision the shared model once
+    and force this override for that table instead of branching inside
+    `model_to_fields`.
     """
     return {name: {**entry, "ui_editable": False} for name, entry in fields.items()}

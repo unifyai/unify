@@ -625,23 +625,6 @@ class TestLoopContextState:
         assert len(cont) == 1
         assert cont[0]["content"] == "new cont"
 
-    def test_get_pending_cont_for_active_tools(self):
-        """Verify pending cont calculation for active tools."""
-        state = LoopContextState()
-
-        # Simulate first call to tool
-        state.compute_context_for_inner_tool("call_1", [])
-
-        # Add new cont
-        state.receive_context_continuation([{"role": "user", "content": "pending"}])
-
-        pending = state.get_pending_cont_for_active_tools({"call_1", "call_2"})
-
-        # call_1 has pending cont, call_2 hasn't been called yet
-        assert "call_1" in pending
-        assert "call_2" not in pending
-        assert pending["call_1"][0]["content"] == "pending"
-
     def test_initial_snapshot_keeps_user_turns_and_substantive_assistant_text(self):
         """The initial snapshot keeps exactly genuine user turns and
         substantive assistant text, on both the inherited parent layer and
@@ -732,16 +715,13 @@ class TestLoopContextState:
         state.compute_context_for_inner_tool("call_1", [])
         state.receive_context_continuation([{"role": "user", "content": "cont1"}])
 
-        # Before marking, there's pending cont
-        pending = state.get_pending_cont_for_active_tools({"call_1"})
-        assert len(pending["call_1"]) == 1
-
         # Mark as forwarded
         state.mark_cont_forwarded_to_tool("call_1")
 
-        # After marking, no pending cont
-        pending = state.get_pending_cont_for_active_tools({"call_1"})
-        assert "call_1" not in pending
+        # After marking, the next compute has nothing new to forward
+        parent, cont = state.compute_context_for_inner_tool("call_1", [])
+        assert parent is None
+        assert cont is None
 
 
 # =============================================================================

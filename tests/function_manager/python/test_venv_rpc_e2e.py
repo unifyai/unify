@@ -91,8 +91,6 @@ def function_manager_factory():
     def _create():
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         fm = FunctionManager()
         managers.append(fm)
         return fm
@@ -252,7 +250,7 @@ async def test_e2e_rpc_out_of_scope_manager_error(
 
     out_of_scope_function = """
 def call_out_of_scope() -> str:
-    return primitives.files.describe(file_path="report.pdf")
+    return primitives.spreadsheets.describe(file_path="report.xlsx")
 """.strip()
 
     venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
@@ -267,7 +265,7 @@ def call_out_of_scope() -> str:
     )
 
     assert result["error"] is not None
-    assert "files" in result["error"]
+    assert "spreadsheets" in result["error"]
 
 
 @_handle_project

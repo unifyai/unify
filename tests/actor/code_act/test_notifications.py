@@ -4,121 +4,7 @@ import contextlib
 import pytest
 
 from unify.actor.code_act_actor import CodeActActor
-from unify.actor.execution import PythonExecutionSession
 from unify.events.active_work import ACTIVE_WORK
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(60)
-async def test_notify_is_a_silent_noop_in_bound_sandbox():
-    """
-    notify() is a backward-compatibility no-op shim: generated code calling
-    it (with any payload shape) must execute without error and must NOT
-    produce a notification on the _notification_up_q.  Progress updates now
-    go through the send_notification tool at the loop layer.
-    """
-    from unify.actor.execution import _CURRENT_SANDBOX
-
-    notification_q: asyncio.Queue[dict] = asyncio.Queue()
-
-    actor = CodeActActor()
-
-    sandbox = PythonExecutionSession(
-        environments=actor.environments,
-        venv_pool=actor._venv_pool,
-        shell_pool=actor._shell_pool,
-    )
-    token = _CURRENT_SANDBOX.set(sandbox)
-
-    try:
-        tools = actor.get_tools("act")
-        execute_code = tools["execute_code"]
-
-        result = await execute_code(
-            "call the notify shim with assorted payloads",
-            "notify({'type': 'custom_progress', 'step': 1})\n"
-            "notify('positional', extra=1)\n"
-            "notify()\n"
-            "print('hi')",
-            language="python",
-            state_mode="stateful",
-            session_id=0,
-            venv_id=None,
-            _notification_up_q=notification_q,
-        )
-
-        assert result.error is None, f"notify() shim raised: {result.error}"
-        assert (
-            notification_q.empty()
-        ), f"Expected no notifications but queue has {notification_q.qsize()} item(s)"
-    finally:
-        try:
-            _CURRENT_SANDBOX.reset(token)
-        except Exception:
-            pass
-        try:
-            await sandbox.close()
-        except Exception:
-            pass
-        if actor:
-            try:
-                await actor.close()
-            except Exception:
-                pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(60)
-async def test_notify_is_a_silent_noop_in_named_stateful_session():
-    """
-    The notify() no-op shim also holds in executor-managed named stateful
-    Python sessions, not just the bound sandbox session 0 path.
-    """
-    from unify.actor.execution import _CURRENT_SANDBOX
-
-    notification_q: asyncio.Queue[dict] = asyncio.Queue()
-
-    actor = CodeActActor()
-
-    sandbox = PythonExecutionSession(
-        environments=actor.environments,
-        venv_pool=actor._venv_pool,
-        shell_pool=actor._shell_pool,
-    )
-    token = _CURRENT_SANDBOX.set(sandbox)
-
-    try:
-        tools = actor.get_tools("act")
-        execute_code = tools["execute_code"]
-
-        result = await execute_code(
-            "call the notify shim from a named session",
-            "notify({'type': 'custom_progress', 'step': 1, 'message': 'named session'})\nprint('hi')",
-            language="python",
-            state_mode="stateful",
-            session_name="named_notify_session",
-            venv_id=None,
-            _notification_up_q=notification_q,
-        )
-
-        assert result.error is None, f"notify() shim raised: {result.error}"
-        assert (
-            notification_q.empty()
-        ), f"Expected no notifications but queue has {notification_q.qsize()} item(s)"
-    finally:
-        try:
-            _CURRENT_SANDBOX.reset(token)
-        except Exception:
-            pass
-        try:
-            await sandbox.close()
-        except Exception:
-            pass
-        if actor:
-            try:
-                await actor.close()
-            except Exception:
-                pass
 
 
 @pytest.mark.asyncio
@@ -261,7 +147,7 @@ async def test_execute_code_clears_active_work_after_exception_timeout_and_cance
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(60)
-async def test_execute_code_fallback_progress_and_notify_shim_noop():
+async def test_execute_code_fallback_progress():
     ACTIVE_WORK.clear()
 
     actor = CodeActActor()
@@ -283,21 +169,6 @@ async def test_execute_code_fallback_progress_and_notify_shim_noop():
         assert fallback["source"] == "active_work"
         assert "Still working" in fallback["message"]
         assert notification_q.empty()
-
-        # notify() is a no-op shim: it must neither raise nor enqueue
-        # anything, and (with work shorter than the fallback delay) the
-        # queue stays empty in the stateless path too.
-        actor._active_work_fallback_initial_delay_s = 0.06
-        semantic_q: asyncio.Queue[dict] = asyncio.Queue()
-        result = await execute_code(
-            "call the notify shim before the fallback delay",
-            "import asyncio\nnotify({'type': 'custom_progress', 'message': 'halfway'})\nawait asyncio.sleep(0.04)",
-            language="python",
-            state_mode="stateless",
-            _notification_up_q=semantic_q,
-        )
-        assert result.error is None, f"notify() shim raised: {result.error}"
-        assert semantic_q.empty()
     finally:
         ACTIVE_WORK.clear()
         await actor.close()

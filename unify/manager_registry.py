@@ -2,7 +2,7 @@
 unify/manager_registry.py
 =========================
 
-Centralized manager infrastructure for Unity's state managers.
+Centralized manager infrastructure for Unify's state managers.
 
 This module is the single source of truth for:
   - Manager implementation registration (real, simulated, etc.)
@@ -81,7 +81,7 @@ class ManagerRegistry:
         Parameters
         ----------
         manager_key : str
-            Logical name for the manager (e.g., "contacts", "transcripts").
+            Logical name for the manager (e.g., "functions", "guidance").
         impl_name : str
             Implementation variant (e.g., "real", "simulated").
         klass : Type
@@ -148,7 +148,7 @@ class ManagerRegistry:
         Parameters
         ----------
         manager_key : str
-            Logical name for the manager (e.g., "contacts", "transcripts").
+            Logical name for the manager (e.g., "functions", "guidance").
         description : str | None
             For simulated managers, the scenario description. Ignored for real
             managers.
@@ -254,7 +254,7 @@ class ManagerRegistry:
         set os.environ after import won't affect SETTINGS values.
 
         The env var name is derived from the settings object's model_config
-        env_prefix (e.g., UNIFY_CONTACT_ -> UNIFY_CONTACT_IMPL).
+        env_prefix (e.g., UNIFY_GUIDANCE_ -> UNIFY_GUIDANCE_IMPL).
         """
         import os
 

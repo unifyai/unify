@@ -14,13 +14,9 @@ from ..common._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SU
 
 from contextvars import ContextVar
 
-# Caller context propagation: set by the ConversationManager (or other
-# top-level orchestrators) before dispatching tool calls so that every
-# ManagerMethod event published within that scope carries the caller's
-# identity.  MemoryManager already filters on
-#   source == "ConversationManager"
-# (see register_auto_pin / _setup_explicit_call_callbacks), but the field
-# was never actually populated until now.
+# Caller context propagation: set by the ConversationManager before it
+# dispatches the brain's tool calls so that every ManagerMethod event
+# published within that scope carries the caller's identity in ``source``.
 _EVENT_SOURCE: ContextVar[str | None] = ContextVar("_EVENT_SOURCE", default=None)
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,9 +62,8 @@ async def publish_manager_method_event(  # noqa: D401 – imperative name
     - Otherwise, reads the current lineage from ``TOOL_LOOP_LINEAGE`` (already suffixed),
       appends a new suffixed leaf ``"{manager}.{method}({suffix})"`` and uses that.
 
-    ``hierarchy_label`` is always derived as ``"->".join(hierarchy)`` — it is kept for
-    backward compatibility but carries no independent information.
-    TODO: remove hierarchy_label from payloads once frontend migrates.
+    ``hierarchy_label`` is ``"->".join(hierarchy)``: one string consumers can
+    filter on without joining the list themselves.
     """
     if source is None:
         source = _EVENT_SOURCE.get(None)
@@ -105,8 +100,6 @@ async def publish_manager_method_event(  # noqa: D401 – imperative name
         )
         hierarchy = [*parent_lineage, leaf] if leaf else list(parent_lineage)
 
-    # hierarchy_label is trivially derived — no separate suffix/label logic.
-    # TODO: remove hierarchy_label from payloads once frontend migrates.
     hierarchy_label = "->".join(str(s) for s in hierarchy) if hierarchy else ""
 
     # Truncate traceback to avoid large payloads (best-effort).
@@ -334,10 +327,10 @@ def log_manager_call(
     implementation can tag any sub-events (e.g. clarification requests) with
     the same identifier.
 
-    ``display_label`` is a user-friendly phrase (e.g. "Checking contact book")
-    that gets attached to every event in the lifecycle so the frontend can
-    render it directly without maintaining its own mapping.  May also be a
-    callable ``(kwargs) -> str`` for labels that depend on runtime arguments.
+    ``display_label`` is a user-friendly phrase (e.g. "Running code") that
+    gets attached to every event in the lifecycle so a consumer can render it
+    directly without maintaining its own mapping.  May also be a callable
+    ``(kwargs) -> str`` for labels that depend on runtime arguments.
     """
 
     def _decorator(func):
@@ -450,9 +443,8 @@ def log_manager_result(
     ``TOOL_LOOP_LINEAGE`` so that any inner tool loops or nested manager calls
     inherit the correct parent lineage.
 
-    This is the counterpart to :func:`log_manager_call` for managers like
-    ``MemoryManager`` whose public methods ``await handle.result()`` internally
-    and return the final value directly.
+    This is the counterpart to :func:`log_manager_call` for methods that
+    ``await handle.result()`` internally and return the final value directly.
     """
 
     def _decorator(func):

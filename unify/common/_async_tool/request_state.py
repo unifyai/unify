@@ -69,16 +69,6 @@ class RequestState:
         return self.status == RequestStatus.PENDING
 
     @property
-    def is_completed(self) -> bool:
-        """Return True if this request has completed."""
-        return self.status == RequestStatus.COMPLETED
-
-    @property
-    def is_cancelled(self) -> bool:
-        """Return True if this request was cancelled."""
-        return self.status == RequestStatus.CANCELLED
-
-    @property
     def is_done(self) -> bool:
         """Return True if this request is no longer pending."""
         return self.status != RequestStatus.PENDING
@@ -220,11 +210,3 @@ class RequestRegistry:
     def close(self) -> None:
         """Close the registry, preventing new registrations."""
         self._closed = True
-
-    def all_request_ids(self) -> list[int]:
-        """Return a list of all request IDs (pending and done)."""
-        return list(self._requests.keys())
-
-    def pending_request_ids(self) -> list[int]:
-        """Return a list of all pending request IDs."""
-        return [rid for rid, s in self._requests.items() if s.is_pending]

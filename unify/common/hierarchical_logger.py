@@ -6,8 +6,7 @@ Central icon registry and hierarchical logging infrastructure.
 
 This module provides:
 1. ``ICONS`` / ``DEFAULT_ICON`` -- the single source of truth for all emoji
-   prefixes used across SessionLogger, LoopLogger, FastBrainLogger, and raw
-   ``LOGGER`` calls.
+   prefixes used across SessionLogger, LoopLogger and raw ``LOGGER`` calls.
 2. ``SessionLogger`` -- session-level logger with consistent label formatting.
 3. Integration with ``TOOL_LOOP_LINEAGE`` for nested hierarchy propagation.
 """
@@ -36,58 +35,17 @@ SESSION_LINEAGE: ContextVar[list[str]] = ContextVar("SESSION_LINEAGE", default=[
 DEFAULT_ICON = "⬥"
 
 ICONS = {
-    # ── Communication events ────────────────────────────────────────────
-    "phone_call_received": "📞",
-    "phone_call_started": "📞",
-    "phone_call_ended": "📞",
-    "phone_call_sent": "📞",
-    "phone_call_answered": "📞",
-    "phone_call_not_answered": "📞",
-    "unify_meet_received": "🎥",
-    "unify_meet_started": "🎥",
-    "unify_meet_ended": "🎥",
-    "sms_received": "📱",
-    "sms_sent": "📱",
-    "email_received": "📧",
-    "email_sent": "📧",
+    # ── Chat ────────────────────────────────────────────────────────────
     "unify_message_received": "💬",
     "unify_message_sent": "💬",
-    "comms_outbound": "📤",
-    # ── Voice / utterance ───────────────────────────────────────────────
-    "inbound_utterance": "🎤",
-    "outbound_utterance": "🔊",
-    "call_notification": "🔖",
-    "user_speech": "🧑‍💻",
-    "user_state": "🎤",
-    "assistant_speech": "🔊",
-    # ── Notification pipeline ────────────────────────────────────────────
-    "notification_received": "📨",
-    "notification_buffered": "⏳",
-    "notification_say": "🗣️",
-    # ── Proactive speech ────────────────────────────────────────────────
-    "proactive_speech": "🗣️",
-    "proactive_waiting": "⏳",
-    "proactive_debounce": "⏱️",
-    "proactive_decision": "🗣️",
-    "proactive_deferred": "⏸️",
-    "proactive_speaking": "🗣️",
-    "proactive_published": "📤",
-    "proactive_cancelled": "🚫",
-    "proactive_error": "❌",
+    "direct_message": "💬",
     # ── Session / lifecycle ─────────────────────────────────────────────
     "session_start": "🚀",
     "session_end": "🏁",
-    "session_ready": "⚡",
-    "startup": "⚡",
     "lifecycle": "🚀",
-    "shutdown": "🏁",
-    "call_status": "📞",
     # ── LLM brain ───────────────────────────────────────────────────────
-    "llm_log_file": "📝",
     "llm_thinking": "🧠",
     "llm_response": "🤖",
-    "llm_completed": "✅",
-    "llm_cancelled": "⏹️",
     "llm_error": "❌",
     # ── Async tool loop ─────────────────────────────────────────────────
     "system_message": "📋",
@@ -108,51 +66,12 @@ ICONS = {
     "state_update": "📋",
     "notification_injected": "🔔",
     "notification_unpinned": "🗑️",
-    "direct_message": "💬",
-    # ── Actor integration ───────────────────────────────────────────────
-    "actor_request": "🎯",
-    "actor_response": "📥",
-    "actor_result": "✅",
-    "actor_clarification": "❓",
-    # ── Infrastructure clusters ─────────────────────────────────────────
+    # ── Infrastructure ──────────────────────────────────────────────────
     "managers_worker": "⚙️",
-    "file_sync": "🔀",
-    "ipc": "🔌",
-    "liveview": "🖥️",
-    "desktop_ready": "🖥️",
-    "assistant_jobs": "📋",
-    "metrics": "📊",
-    "windows_exec": "💻",
-    "subscription": "📡",
-    "process_cleanup": "🧹",
-    # ── IPC direction ───────────────────────────────────────────────────
-    "ipc_inbound": "⬇️",
-    "ipc_outbound": "⬆️",
-    "ipc_error": "❌",
-    # ── Inbound comms ────────────────────────────────────────────────────
-    "participant_comms": "📱",
-    # ── Screenshots / media ─────────────────────────────────────────────
-    "screenshot": "📸",
-    "screenshot_capture": "📸",
-    "webcam_on": "📸",
-    "webcam_off": "🚫",
-    "screen_share": "🖥️",
-    "screen_share_off": "🚫",
-    "user_screen_share": "📺",
-    "user_screen_share_off": "🚫",
-    "remote_control": "🕹️",
-    "remote_control_off": "🚫",
-    "desktop_session": "🖥️",
-    # ── Fast paths (direct manager shortcuts) ──────────────────────────
-    "fast_path": "🏎️",
-    # ── Customization / seed data ────────────────────────────────────────
-    "customization": "🏷️",
     # ── Generic / misc ──────────────────────────────────────────────────
     "event": "📣",
     "ping": "🏓",
     "summarize": "📑",
-    "config": "📋",
-    "dispatch": "🚀",
     "info": "ℹ️",
     "warning": "⚠️",
     "error": "❌",
@@ -183,8 +102,8 @@ class SessionLogger:
 
     Usage:
         logger = SessionLogger("ConversationManager")
-        logger.info("phone_call_received", "Incoming call from +1234567890")
-        # Output: 📞 [ConversationManager] Incoming call from +1234567890
+        logger.info("unify_message_received", "Message from the user")
+        # Output: 💬 [ConversationManager] Message from the user
     """
 
     def __init__(
@@ -303,102 +222,6 @@ class SessionLogger:
     ) -> None:
         """Log an error-level message with event-specific icon."""
         self._log(logging.ERROR, event_type, message, icon_override)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Convenience methods for common event types
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def log_llm_thinking(self, context: str = "") -> None:
-        """Log that the LLM brain is processing."""
-        msg = "LLM thinking..." if not context else f"LLM thinking... ({context})"
-        self.info("llm_thinking", msg)
-
-    def log_llm_response(self, summary: str = "") -> None:
-        """Log that the LLM brain has responded."""
-        msg = "LLM response received" if not summary else f"LLM response: {summary}"
-        self.info("llm_response", msg)
-
-    def log_event_received(self, event_name: str, details: str = "") -> None:
-        """Log an incoming event."""
-        msg = f"{event_name} received"
-        if details:
-            msg += f": {details}"
-        self.info("event", msg)
-
-    def log_actor_started(self, handle_id: int, query: str) -> None:
-        """Log an Actor run being started."""
-        preview = query[:80] + "..." if len(query) > 80 else query
-        self.info("actor_request", f"Actor run #{handle_id}: {preview}")
-
-    def log_actor_result(self, handle_id: int, result_preview: str = "") -> None:
-        """Log an Actor run completing."""
-        msg = f"Actor result #{handle_id}"
-        if result_preview:
-            preview = (
-                result_preview[:80] + "..."
-                if len(result_preview) > 80
-                else result_preview
-            )
-            msg += f": {preview}"
-        self.info("actor_result", msg)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper functions for integration with async tool loops
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def get_current_lineage() -> list[str]:
-    """
-    Get the current hierarchical lineage from context.
-
-    Checks TOOL_LOOP_LINEAGE first, then SESSION_LINEAGE.
-    Returns an empty list if no lineage is set.
-    """
-    try:
-        from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
-
-        tool_lineage = TOOL_LOOP_LINEAGE.get([])
-        if tool_lineage:
-            return list(tool_lineage)
-    except Exception:
-        pass
-
-    return list(SESSION_LINEAGE.get([]))
-
-
-def make_child_loop_id(parent_logger: SessionLogger, method_name: str) -> str:
-    """
-    Build a loop_id for a child async tool loop.
-
-    Args:
-        parent_logger: The parent SessionLogger
-        method_name: The method name being called (e.g., "ask")
-
-    Returns:
-        A loop_id string like "ConversationManager.ask"
-    """
-    return f"{parent_logger._component_name}.{method_name}"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Generic helpers for hierarchical labels and boundary logging
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def build_hierarchy_label(lineage: list[str], suffix: str = "") -> str:
-    """Build a hierarchy label from lineage segments.
-
-    With suffixed hierarchy segments, the label is just ``"->".join(lineage)``
-    since each segment already carries its own suffix. The ``suffix`` parameter
-    is accepted for backward compatibility but ignored.
-
-    TODO: remove this function once all callers are migrated.
-    """
-    try:
-        return "->".join([str(x) for x in (lineage or []) if str(x)]) or ""
-    except Exception:
-        return ""
 
 
 def log_boundary_event(

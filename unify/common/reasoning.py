@@ -36,27 +36,6 @@ def _parse_response(result: Any, response_format: Any) -> Any:
     return result
 
 
-def get_llm_query_prompt_context() -> str:
-    """Return actor-facing documentation for the sandbox LLM helpers."""
-
-    query_doc = inspect.getdoc(query_llm) or ""
-    query_prefix = "async def " if inspect.iscoroutinefunction(query_llm) else "def "
-    query_signature = (
-        f"{query_prefix}{query_llm.__name__}{inspect.signature(query_llm)}"
-    )
-    list_doc = inspect.getdoc(list_llms) or ""
-    list_signature = f"def {list_llms.__name__}{inspect.signature(list_llms)}"
-    return (
-        "### LLM Query Helpers: `query_llm(...)` And `list_llms(...)`\n\n"
-        "`query_llm(...)` and `list_llms(...)` are available inside "
-        "`execute_code` Python sessions and stored Python functions. They are "
-        "normal sandbox helpers, not JSON tool calls.\n\n"
-        f"```python\n{query_signature}\n{list_signature}\n```\n\n"
-        f"{query_doc}\n\n"
-        f"{list_doc}"
-    )
-
-
 def list_llms(provider: str | None = None) -> list[str]:
     """Return supported UniLLM endpoint strings available in this runtime.
 
@@ -66,7 +45,7 @@ def list_llms(provider: str | None = None) -> list[str]:
 
     Use this helper when choosing a concrete ``model=`` value for
     ``query_llm(...)``. Do not hardcode assumptions about which endpoints are
-    registered in the current deployment.
+    registered with the runtime.
     """
     try:
         import unillm.endpoints  # noqa: F401  # populate provider registries

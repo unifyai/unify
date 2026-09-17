@@ -148,20 +148,20 @@ class TestHandleInitialization:
         """Handle cannot be created without an event broker."""
         with pytest.raises(TypeError):
             ConversationManagerHandle(
-                conversation_id="test",
+                conversation_manager=MagicMock(),
             )
 
     def test_handle_stores_conversation_context(self):
-        """Handle stores conversation_id and the broker correctly."""
+        """Handle stores the broker and the conversation manager."""
         mock_broker = MagicMock()
+        cm = MagicMock()
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
-            conversation_id="conv_123",
-            conversation_manager=MagicMock(),
+            conversation_manager=cm,
         )
 
-        assert handle.conversation_id == "conv_123"
+        assert handle.conversation_manager is cm
         assert handle.event_broker is mock_broker
         assert not handle._stopped
 
@@ -169,7 +169,6 @@ class TestHandleInitialization:
         """Handle starts in active (not stopped) state."""
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -192,7 +191,6 @@ class TestInterject:
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -222,7 +220,6 @@ class TestInterject:
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
         await handle.stop(reason="test")
@@ -240,7 +237,6 @@ class TestInterject:
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -267,7 +263,6 @@ class TestHandleLifecycle:
         """stop() marks the handle as done."""
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -280,7 +275,6 @@ class TestHandleLifecycle:
         """stop() returns message with reason."""
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -294,7 +288,6 @@ class TestHandleLifecycle:
         """Calling stop() multiple times is safe."""
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -307,7 +300,6 @@ class TestHandleLifecycle:
         """result() blocks until handle is stopped."""
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
-            conversation_id="conv_123",
             conversation_manager=MagicMock(),
         )
 
@@ -458,7 +450,6 @@ async def test_real_ask_question_survives_unanswered_question(monkeypatch):
     conversation_manager.get_recent_transcript.return_value = ([], None)
     handle = ConversationManagerHandle(
         event_broker=AsyncMock(),
-        conversation_id="conv_123",
         conversation_manager=conversation_manager,
     )
 
@@ -499,7 +490,6 @@ async def test_ask_path1_infers_from_transcript(initialized_cm):
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -541,7 +531,6 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -598,7 +587,6 @@ async def test_ask_path2_inbound_chat_message_answers_the_question(initialized_c
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -645,7 +633,6 @@ async def test_ask_path2_multiple_followup_questions(initialized_cm):
     cm = initialized_cm
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -704,7 +691,6 @@ async def test_ask_returns_pydantic_model(initialized_cm):
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -736,7 +722,6 @@ async def test_ask_returns_enum_value(initialized_cm):
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -767,7 +752,6 @@ async def test_ask_without_response_format_returns_string(initialized_cm):
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -801,7 +785,6 @@ async def test_intercepting_handle_delegates_lifecycle_methods(initialized_cm):
     cm = initialized_cm
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -841,7 +824,6 @@ async def test_intercepting_handle_clears_active_ask_handle_on_result(initialize
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -871,7 +853,6 @@ async def test_ask_raises_when_handle_stopped(initialized_cm):
     cm = initialized_cm
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -893,7 +874,6 @@ async def test_ask_handles_empty_transcript(initialized_cm):
     cm = initialized_cm
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -941,7 +921,6 @@ async def test_only_one_active_ask_handle_at_a_time(initialized_cm):
     cm = initialized_cm
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
-        conversation_id="test_conv",
         conversation_manager=cm.cm,
     )
 
@@ -969,82 +948,3 @@ async def test_only_one_active_ask_handle_at_a_time(initialized_cm):
         await asyncio.wait_for(ask_handle_1.result(), timeout=5.0)
     except Exception:
         pass  # May already be cleaned up
-
-
-# =============================================================================
-# Integration Tests: get_full_transcript
-# =============================================================================
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_get_full_transcript_returns_messages(initialized_cm):
-    """
-    get_full_transcript returns recent conversation messages.
-    """
-    cm = initialized_cm
-    # Create some conversation
-    await cm.step_until_wait(
-        UnifyMessageReceived(content="First message"),
-    )
-    await cm.step_until_wait(
-        UnifyMessageReceived(content="Second message"),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        conversation_manager=cm.cm,
-    )
-
-    result = await handle.get_full_transcript(max_messages=10)
-
-    assert result["status"] == "ok"
-    assert result["count"] == len(result["messages"])
-    contents = [m["content"] for m in result["messages"]]
-    assert "First message" in contents
-    assert "Second message" in contents
-    assert all(m["role"] in {"user", "assistant"} for m in result["messages"])
-
-
-# =============================================================================
-# Integration Tests: unpin_interjection
-# =============================================================================
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_unpin_interjection_publishes_event(initialized_cm):
-    """
-    unpin_interjection publishes NotificationUnpinnedEvent.
-    """
-    cm = initialized_cm
-    # Track published events
-    published = []
-    original_publish = cm.event_broker.publish
-
-    async def track(channel, message):
-        published.append((channel, message))
-        return await original_publish(channel, message)
-
-    cm.cm.event_broker.publish = track
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        conversation_manager=cm.cm,
-    )
-
-    # Interject to get a real interjection_id, then unpin it
-    interjection_id = await handle.interject("Pinned reminder")
-    assert interjection_id  # non-empty
-    unpin_result = await handle.unpin_interjection(interjection_id)
-
-    assert unpin_result["status"] == "ok"
-    assert unpin_result["interjection_id"] == interjection_id
-
-    # Verify unpin event was published
-    unpin_events = [
-        (ch, msg) for ch, msg in published if "NotificationUnpinnedEvent" in msg
-    ]
-    assert len(unpin_events) >= 1

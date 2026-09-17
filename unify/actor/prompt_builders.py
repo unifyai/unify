@@ -539,9 +539,9 @@ def build_code_act_prompt(
     if has_execute_code:
         # Sections are ordered static → dynamic so the stable core forms a
         # cache-friendly prefix: role, contracts, execution semantics, and
-        # selection rules first (identical across assistants of a
-        # deployment), then per-assistant/per-session content (environment
-        # scope, filesystem paths, guidelines) at the tail.
+        # selection rules first (identical across actors), then per-actor and
+        # per-session content (environment scope, filesystem paths,
+        # guidelines) at the tail.
         parts.append(
             "### Role\n\n"
             "You are an expert agent that solves tasks by writing and executing code. "

@@ -6,7 +6,7 @@ Tests for persistent ``act`` sessions (``persist=True``), including:
 
 - The ``persist`` parameter on the CM's ``act`` tool
 - Persistent action metadata and rendering
-- ``ActorResponse`` vs ``ActorNotification`` event routing
+- ``ActorSessionResponse`` vs ``ActorNotification`` event routing
 - Event handlers for both event types
 """
 
@@ -220,7 +220,7 @@ class TestActLLMProfileParameter:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 2. Event handlers — ActorResponse and ActorNotification
+# 2. Event handlers — ActorSessionResponse and ActorNotification
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -399,7 +399,7 @@ class TestPersistentActionRendering:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4. Notification routing — ActorResponse vs ActorNotification
+# 4. Notification routing — ActorSessionResponse vs ActorNotification
 # ═════════════════════════════════════════════════════════════════════════════
 
 

@@ -39,8 +39,6 @@ def scoped_function_manager_factory():
     def _create(scope: PrimitiveScope):
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         fm = FunctionManager(primitive_scope=scope)
         managers.append(fm)
         return fm

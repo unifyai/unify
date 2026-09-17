@@ -12,7 +12,6 @@ class ActiveWorkSnapshot:
     active_count: int
     oldest_started_at: float | None
     newest_heartbeat_at: float | None
-    oldest_elapsed_s: float
     works: tuple[dict[str, Any], ...]
 
 
@@ -152,7 +151,6 @@ class ActiveWorkRegistry:
                     active_count=0,
                     oldest_started_at=None,
                     newest_heartbeat_at=None,
-                    oldest_elapsed_s=0.0,
                     works=(),
                 )
 
@@ -163,7 +161,6 @@ class ActiveWorkRegistry:
                 active_count=len(records),
                 oldest_started_at=oldest_started_at,
                 newest_heartbeat_at=newest_heartbeat_at,
-                oldest_elapsed_s=now - oldest_started_at,
                 works=works,
             )
 

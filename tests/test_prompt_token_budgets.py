@@ -94,8 +94,6 @@ def _cm_system_prompt() -> str:
         bio="A helpful assistant.",
         first_name="Alice",
         surname="Smith",
-        assistant_has_phone=True,
-        assistant_has_email=True,
     ).flatten()
 
 

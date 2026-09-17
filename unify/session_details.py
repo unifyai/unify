@@ -27,26 +27,17 @@ from dataclasses import dataclass, field
 UNASSIGNED_USER_ID = "default"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Placeholder Contact Details
-# Used in tests and before a session has populated a real profile. The local
-# single-assistant experience is intentionally fixed to "Unity".
+# Placeholder identity details, used in tests and before a session has
+# populated a real profile. The local single-assistant experience is fixed to
+# one assistant called "Unify".
 # ─────────────────────────────────────────────────────────────────────────────
-DEFAULT_SELF_CONTACT_ID = 0
-DEFAULT_BOSS_CONTACT_ID = 1
-PLACEHOLDER_ASSISTANT_FIRST_NAME = "Unity"
-PLACEHOLDER_ASSISTANT_SURNAME = None  # Contact.surname is Optional[str] with a
-# UNICODE_NAME_RE pattern; empty string fails the pattern and Pydantic coerces
-# to None anyway, so the placeholder matches what contacts end up with.
-PLACEHOLDER_ASSISTANT_EMAIL = "assistant@unify.ai"
-PLACEHOLDER_ASSISTANT_PHONE = "+10000000000"
-PLACEHOLDER_ASSISTANT_BIO = "Your local Unity assistant."
+PLACEHOLDER_ASSISTANT_FIRST_NAME = "Unify"
 PLACEHOLDER_USER_FIRST_NAME = "Default"
 PLACEHOLDER_USER_SURNAME = "User"
-PLACEHOLDER_USER_EMAIL = "user@example.com"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Context Path Defaults (for the store's context hierarchy)
-# Format: {user_id}/{agent_id}/... e.g., "default/0/Contacts"
+# Format: {user_id}/{agent_id}/... e.g., "default/0/Functions"
 # ─────────────────────────────────────────────────────────────────────────────
 UNASSIGNED_USER_CONTEXT = UNASSIGNED_USER_ID
 UNASSIGNED_ASSISTANT_CONTEXT = "0"
@@ -79,8 +70,6 @@ class AssistantDetails:
     # (independent of default_model / UNIFY_MODEL).
     slow_brain_model: str = ""
     slow_brain_reasoning_effort: str = ""
-    contact_id: int = 0  # Contact ID in Contacts table
-    self_contact_id: int = 0
 
     @property
     def name(self) -> str:
@@ -89,14 +78,13 @@ class AssistantDetails:
 
 @dataclass
 class UserDetails:
-    """Details about the user and their assistant-scoped boss identity."""
+    """Details about the user the assistant works for."""
 
     id: str = UNASSIGNED_USER_ID
     first_name: str = ""
     surname: str = ""
     number: str = ""
     email: str = ""
-    boss_contact_id: int = 1
 
     @property
     def name(self) -> str:
@@ -137,24 +125,6 @@ class SessionDetails:
         """Shortcut to user.id for convenient access."""
         return self.user.id
 
-    @property
-    def self_contact_id(self) -> int:
-        """Shortcut to assistant.self_contact_id for convenient access."""
-        return self.assistant.self_contact_id
-
-    @self_contact_id.setter
-    def self_contact_id(self, value: int) -> None:
-        self.assistant.self_contact_id = value
-
-    @property
-    def boss_contact_id(self) -> int:
-        """Shortcut to user.boss_contact_id for convenient access."""
-        return self.user.boss_contact_id
-
-    @boss_contact_id.setter
-    def boss_contact_id(self, value: int) -> None:
-        self.user.boss_contact_id = value
-
     def populate(
         self,
         *,
@@ -168,14 +138,11 @@ class SessionDetails:
         assistant_job_title: str = "",
         assistant_number: str = "",
         assistant_email: str = "",
-        assistant_contact_id: int = 0,
-        assistant_self_contact_id: int = DEFAULT_SELF_CONTACT_ID,
         user_id: str = "",
         user_first_name: str = "",
         user_surname: str = "",
         user_number: str = "",
         user_email: str = "",
-        user_boss_contact_id: int = DEFAULT_BOSS_CONTACT_ID,
         default_model: str = "",
         default_reasoning_effort: str = "",
         slow_brain_model: str = "",
@@ -192,14 +159,11 @@ class SessionDetails:
         self.assistant.job_title = _runtime_str(assistant_job_title)
         self.assistant.number = _runtime_str(assistant_number)
         self.assistant.email = _runtime_str(assistant_email)
-        self.assistant.contact_id = assistant_contact_id
-        self.self_contact_id = assistant_self_contact_id
         self.user.id = _runtime_str(user_id)
         self.user.first_name = _runtime_str(user_first_name)
         self.user.surname = _runtime_str(user_surname)
         self.user.number = _runtime_str(user_number)
         self.user.email = _runtime_str(user_email)
-        self.boss_contact_id = user_boss_contact_id
         self.assistant.default_model = _runtime_str(default_model)
         self.assistant.default_reasoning_effort = _runtime_str(
             default_reasoning_effort,
@@ -217,7 +181,7 @@ class SessionDetails:
         self._initialized = False
 
     def export_to_env(self) -> None:
-        """Export current values to environment variables for subprocesses."""
+        """Export current values to the environment variables populate_from_env reads."""
         os.environ["ASSISTANT_ID"] = (
             str(self.assistant.agent_id) if self.assistant.agent_id is not None else ""
         )
@@ -248,18 +212,11 @@ class SessionDetails:
         os.environ["USER_SURNAME"] = _runtime_str(self.user.surname)
         os.environ["USER_NUMBER"] = _runtime_str(self.user.number)
         os.environ["USER_EMAIL"] = _runtime_str(self.user.email)
-        self.export_contact_ids_to_env()
-
-    def export_contact_ids_to_env(self) -> None:
-        """Export resolved self and boss contact ids to the subprocess env shape."""
-        os.environ["SELF_CONTACT_ID"] = str(self.assistant.self_contact_id)
-        os.environ["BOSS_CONTACT_ID"] = str(self.user.boss_contact_id)
 
     def populate_from_env(self) -> None:
-        """Populate from environment variables.
+        """Populate from environment variables (the ``.env`` identity block).
 
-        Useful for subprocesses that inherit env vars from parent process.
-        Only sets fields if the corresponding env var is non-empty.
+        Only sets fields whose corresponding env var is non-empty.
         """
         if val := os.environ.get("ASSISTANT_ID"):
             try:
@@ -292,52 +249,9 @@ class SessionDetails:
         ):
             if val := os.environ.get(env_name):
                 setattr(self.user, attr, val)
-        if val := os.environ.get("SELF_CONTACT_ID"):
-            try:
-                self.self_contact_id = int(val)
-            except (ValueError, TypeError):
-                pass
-        if val := os.environ.get("BOSS_CONTACT_ID"):
-            try:
-                self.boss_contact_id = int(val)
-            except (ValueError, TypeError):
-                pass
         if self.assistant.agent_id is not None:
             self._initialized = True
-
-    def get_subprocess_env(self, **overrides: str) -> dict[str, str]:
-        """Get a copy of the current environment for subprocess use.
-
-        First exports SESSION_DETAILS values, then returns a copy with any
-        overrides applied.
-        """
-        self.export_to_env()
-        env = dict(os.environ)
-        env.update(overrides)
-        return env
-
-    @staticmethod
-    def get_impl_setting(name: str, default: str = "real") -> str:
-        """Get implementation setting from environment for test-time override.
-
-        SETTINGS is instantiated at import time, before test conftests can set
-        environment variables. This helper reads directly from os.environ to
-        allow conftests to set UNIFY_*_IMPL=simulated and have it take effect.
-        """
-        return os.environ.get(name, default)
 
 
 # Global singleton instance
 SESSION_DETAILS = SessionDetails()
-
-
-def is_self_contact(contact_id: int | None) -> bool:
-    """Return whether a contact id is the assistant's own contact identity."""
-
-    return contact_id is not None and int(contact_id) == SESSION_DETAILS.self_contact_id
-
-
-def is_boss_contact(contact_id: int | None) -> bool:
-    """Return whether a contact id is the boss contact identity."""
-
-    return contact_id is not None and int(contact_id) == SESSION_DETAILS.boss_contact_id

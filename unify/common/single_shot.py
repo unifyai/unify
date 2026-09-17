@@ -143,7 +143,7 @@ async def single_shot_tool_decision(
         - "none": LLM cannot call tools (text response only)
     include_class_name : bool, default False
         Whether to include the class name prefix in tool schemas (e.g.,
-        "ContactManager_filter_contacts" vs "filter_contacts").
+        "FunctionManager_filter_functions" vs "filter_functions").
     response_format : Type[BaseModel] | None, default None
         Optional Pydantic model for structured output. When provided, the LLM
         response content will be parsed into this model and returned in

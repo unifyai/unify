@@ -18,10 +18,9 @@ def stable_hash_for_rows(
 ) -> str:
     """Hash selected row fields in deterministic order.
 
-    FunctionManager uses this for materialized row idempotency checks. Callers
-    choose their own field list because static primitives and provider-backed
-    integration rows have different lifecycle metadata, but both need the same
-    deterministic projection and SHA-256 calculation.
+    The builtins catalogue uses this for its seeding idempotency check. Callers
+    choose their own field list; the projection and SHA-256 calculation are
+    deterministic for any choice.
     """
 
     selected_fields = tuple(fields)

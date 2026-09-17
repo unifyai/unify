@@ -31,9 +31,9 @@ pytestmark = pytest.mark.eval
 @_handle_project
 async def test_knowledge_query_triggers_act(initialized_cm):
     """
-    Boss asks about company policy -> should call act to search knowledge.
+    The user asks about company policy -> should call act to search knowledge.
 
-    Natural scenario: Boss needs to know a policy detail.
+    Natural scenario: the user needs to know a policy detail.
     """
     cm = initialized_cm
 
@@ -58,9 +58,9 @@ async def test_knowledge_query_triggers_act(initialized_cm):
 @_handle_project
 async def test_knowledge_about_product_triggers_act(initialized_cm):
     """
-    Boss asks about product information -> should call act.
+    The user asks about product information -> should call act.
 
-    Natural scenario: Boss needs warranty/product details for a customer.
+    Natural scenario: the user needs warranty/product details for a customer.
     """
     cm = initialized_cm
 
@@ -85,9 +85,9 @@ async def test_knowledge_about_product_triggers_act(initialized_cm):
 @_handle_project
 async def test_store_knowledge_triggers_act(initialized_cm):
     """
-    Boss asks to remember some information -> should call act.
+    The user asks to remember some information -> should call act.
 
-    Natural scenario: Boss wants to store a piece of information.
+    Natural scenario: the user wants to store a piece of information.
     """
     cm = initialized_cm
 
@@ -117,9 +117,9 @@ async def test_store_knowledge_triggers_act(initialized_cm):
 @_handle_project
 async def test_weather_query_triggers_act(initialized_cm):
     """
-    Boss asks about current weather -> should call act for web search.
+    The user asks about current weather -> should call act for web search.
 
-    Natural scenario: Boss planning travel or outdoor activity.
+    Natural scenario: the user planning travel or outdoor activity.
     """
     cm = initialized_cm
 
@@ -144,9 +144,9 @@ async def test_weather_query_triggers_act(initialized_cm):
 @_handle_project
 async def test_news_query_triggers_act(initialized_cm):
     """
-    Boss asks about current news -> should call act for web search.
+    The user asks about current news -> should call act for web search.
 
-    Natural scenario: Boss wants to stay informed.
+    Natural scenario: the user wants to stay informed.
     """
     cm = initialized_cm
 
@@ -171,9 +171,9 @@ async def test_news_query_triggers_act(initialized_cm):
 @_handle_project
 async def test_current_events_query_triggers_act(initialized_cm):
     """
-    Boss asks about a recent event -> should call act for web search.
+    The user asks about a recent event -> should call act for web search.
 
-    Natural scenario: Boss following industry developments.
+    Natural scenario: the user following industry developments.
     """
     cm = initialized_cm
 
@@ -203,9 +203,9 @@ async def test_current_events_query_triggers_act(initialized_cm):
 @_handle_project
 async def test_guidance_query_triggers_act(initialized_cm):
     """
-    Boss asks for guidance on a process -> should call act.
+    The user asks for guidance on a process -> should call act.
 
-    Natural scenario: Boss needs to follow a procedure.
+    Natural scenario: the user needs to follow a procedure.
     """
     cm = initialized_cm
 
@@ -235,9 +235,9 @@ async def test_guidance_query_triggers_act(initialized_cm):
 @_handle_project
 async def test_find_and_action_triggers_act(initialized_cm):
     """
-    Boss asks to find something and do something with it -> should call act.
+    The user asks to find something and do something with it -> should call act.
 
-    Natural scenario: Boss wants information found and acted upon.
+    Natural scenario: the user wants information found and acted upon.
     """
     cm = initialized_cm
 
@@ -262,9 +262,9 @@ async def test_find_and_action_triggers_act(initialized_cm):
 @_handle_project
 async def test_research_request_triggers_act(initialized_cm):
     """
-    Boss asks for research on a topic -> should call act.
+    The user asks for research on a topic -> should call act.
 
-    Natural scenario: Boss needs background information compiled.
+    Natural scenario: the user needs background information compiled.
     """
     cm = initialized_cm
 
@@ -298,7 +298,7 @@ async def test_unify_message_summarize_attachment_triggers_act_with_filepath(
     """
     Unify message with attachment + request to summarize -> act should include filepath.
 
-    Natural scenario: Boss sends a document through the chat and asks the
+    Natural scenario: the user sends a document through the chat and asks the
     assistant to summarize it. The assistant should call `act` with the
     attachment's filepath so the Actor can access and process the file.
 

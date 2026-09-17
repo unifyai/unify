@@ -15,9 +15,10 @@ is cheap when nothing is pending; ``_int`` raises when a patch targets the
 function it names.
 
 **An idempotency cache.** Every dispatch through a tool namespace is memoised
-under ``(call_stack, loop_context, branch_path, step, tool, args)``. Path and
-loop context come from probes the same AST pass injects, so the key describes
-*where in the execution* a call happened rather than just what it was.
+under ``(tool, args, occurrence)``: the n-th time this exact call was made in
+the attempt. Loop and branch position come from probes the same AST pass
+injects and are reported alongside, but they do not decide identity, so a
+correction that restructures control flow still replays what already ran.
 
 **Retry in place.** ``ControlledInterruption`` unwinds to a retry loop around
 the invocation, which swaps in the patched source and runs it again. The cache
@@ -103,16 +104,6 @@ class ExecutionStopped(Exception):
         return {"status": "stopped", "reason": str(self)}
 
 
-def is_stopped_outcome(value: Any) -> bool:
-    """Whether *value* is the result an execution boundary returns for a stop.
-
-    Callers that post-process a boundary's result — reading artifacts the run
-    was expected to produce — use this to recognise that the run was ended by
-    a correction, rather than misreading the missing artifacts as failure.
-    """
-    return isinstance(value, dict) and value.get("status") == "stopped"
-
-
 @dataclass
 class Patch:
     """Replacement source for one function, and what it invalidates.
@@ -153,21 +144,20 @@ class InterruptionRequest:
 # Execution position
 # ---------------------------------------------------------------------------
 class SteeringRuntime:
-    """Where execution currently is, in terms the cache key can use.
+    """Where execution currently is, and how often each call has been made.
 
-    Three independent axes, kept separate on purpose: the call stack says which
-    function, the loop context says which iteration of which loop, and the path
-    context says which branch of which conditional. Collapsing them into one
-    counter would make a call inside the second iteration of a loop in the else
-    branch indistinguishable from an unrelated call that happened to be the same
-    number of steps in.
+    Two independent position axes, kept separate on purpose: the loop context
+    says which iteration of which loop, and the path context says which branch
+    of which conditional. Collapsing them into one counter would make a call
+    inside the second iteration of a loop in the else branch indistinguishable
+    from an unrelated call that happened to be the same number of steps in.
+    Position is reported with progress; the occurrence count is what keys the
+    cache.
     """
 
     def __init__(self, pause_event: Optional[asyncio.Event] = None) -> None:
         self.action_counter = 0
         self.path_context: List[str] = []
-        self.call_stack: List[Tuple[int, str]] = []
-        self._frame_counter = 0
         self._loop_stack: List[Tuple[str, int]] = []
         self._occurrences: Dict[Tuple[str, str], int] = {}
         self._pause = pause_event or asyncio.Event()
@@ -183,29 +173,6 @@ class SteeringRuntime:
         seen = self._occurrences.get(signature, 0)
         self._occurrences[signature] = seen + 1
         return seen
-
-    # ── call stack ────────────────────────────────────────────────────────
-    def push_frame(self, func_name: str) -> Tuple[int, str]:
-        self._frame_counter += 1
-        token = (self._frame_counter, func_name)
-        self.call_stack.append(token)
-        return token
-
-    def pop_frame(self, token: Tuple[int, str]) -> None:
-        # A mismatched pop means the stack is already wrong; correcting it here
-        # would hide that, and a wrong stack silently corrupts every subsequent
-        # cache key.
-        if self.call_stack and self.call_stack[-1] == token:
-            self.call_stack.pop()
-        elif self.call_stack:
-            logger.warning(
-                "steering: stale frame pop, expected %s found %s",
-                token,
-                self.call_stack[-1],
-            )
-
-    def stack_tuple(self) -> Tuple[str, ...]:
-        return tuple(name for _, name in self.call_stack)
 
     # ── branch path ───────────────────────────────────────────────────────
     def push_path_context(self, context_id: str) -> None:
@@ -254,8 +221,6 @@ class SteeringRuntime:
         """
         self.action_counter = 0
         self.path_context.clear()
-        self.call_stack.clear()
-        self._frame_counter = 0
         self._loop_stack.clear()
         self._occurrences.clear()
 
@@ -298,7 +263,7 @@ class IdempotencyCache:
         """Drop every entry whose tool matches one of *tool_paths*.
 
         Matching is by prefix so a correction can name a family
-        (``primitives.comms``) or one call (``primitives.comms.send``).
+        (``primitives.actor``) or one call (``primitives.actor.act``).
         """
         wanted = tuple(tool_paths)
         if not wanted:
@@ -845,8 +810,7 @@ def instrument(tree: ast.Module, *, tool_namespaces: typing.Set[str]) -> ast.Mod
 # ---------------------------------------------------------------------------
 #: Attribute values handed back untouched rather than descended into. Anything
 #: else non-callable is treated as a nested namespace, because the calls that
-#: matter live one level down: ``primitives.integrations.slack.send_message``,
-#: ``primitives.computer.web.new_session``.
+#: matter live one level down: ``primitives.actor.act``.
 _PASSTHROUGH_TYPES = (
     str,
     bytes,

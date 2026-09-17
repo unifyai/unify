@@ -9,7 +9,6 @@ from unify.conversation_manager.events import (
     ActorHandleResponse,
     ActorHandleStarted,
     ActorNotification,
-    ActorResponse,
     ActorResult,
     ActorSessionResponse,
     DirectMessageEvent,
@@ -17,9 +16,7 @@ from unify.conversation_manager.events import (
     Event,
     InitializationComplete,
     NotificationInjectedEvent,
-    NotificationUnpinnedEvent,
     OpenSlowBrainTurn,
-    Ping,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
@@ -91,12 +88,6 @@ class EventHandler:
         return f(event, cm, *args, **kwargs)
 
 
-@EventHandler.register(Ping)
-async def _(event: Ping, cm: "ConversationManager", *args, **kwargs):
-    log_str = "Ping received - keeping conversation manager alive"
-    cm._session_logger.debug("ping", log_str)
-
-
 @EventHandler.register(ActionStopRequested)
 async def _(
     event: ActionStopRequested,
@@ -117,55 +108,54 @@ async def _(
         )
 
 
-@EventHandler.register(
-    (
-        ActorResponse,
-        ActorHandleResponse,
-        ActorResult,
-        ActorClarificationRequest,
-    ),
-)
-async def _(event, cm: "ConversationManager", *args, **kwargs):
-    if isinstance(event, ActorClarificationRequest):
-        if event.handle_id in cm.in_flight_actions:
-            from unify.common.prompt_helpers import now as prompt_now
+@EventHandler.register(ActorClarificationRequest)
+async def _(
+    event: ActorClarificationRequest,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if event.handle_id in cm.in_flight_actions:
+        from unify.common.prompt_helpers import now as prompt_now
 
-            cm.in_flight_actions[event.handle_id]["handle_actions"].append(
-                {
-                    "action_name": "clarification_request",
-                    "query": event.query,
-                    "call_id": event.call_id,
-                    "timestamp": prompt_now(),
-                },
-            )
-            await cm.request_llm_run()
-    elif isinstance(event, ActorHandleResponse):
-        # Handle response from an action steering operation.
-        # Check both in-flight and completed actions — post-completion asks
-        # publish on the same channel after ActorResult has already moved
-        # the action to completed_actions.
-        handle_data = cm.in_flight_actions.get(
-            event.handle_id,
-        ) or cm.completed_actions.get(event.handle_id)
-        if handle_data:
-            handle_actions = handle_data.get("handle_actions", [])
-            action_name = event.action_name or "ask"
-            expected_action_name = f"{action_name}_{event.handle_id}"
+        cm.in_flight_actions[event.handle_id]["handle_actions"].append(
+            {
+                "action_name": "clarification_request",
+                "query": event.query,
+                "call_id": event.call_id,
+                "timestamp": prompt_now(),
+            },
+        )
+        await cm.request_llm_run()
 
-            # Find the pending action and update it with the response.
-            for action in reversed(handle_actions):
-                if (
-                    action.get("action_name") == expected_action_name
-                    and action.get("status") == "pending"
-                ):
-                    action["status"] = "completed"
-                    action["response"] = event.response
-                    break
 
-            # Wake the brain LLM to process the response
-            await cm.request_llm_run()
-    else:
-        ...
+@EventHandler.register(ActorHandleResponse)
+async def _(event: ActorHandleResponse, cm: "ConversationManager", *args, **kwargs):
+    """Complete the pending steering query the response answers, then wake the brain.
+
+    Both in-flight and completed actions are checked: a post-completion
+    ``ask`` answers after ``ActorResult`` has already moved the action to
+    ``completed_actions``.
+    """
+    handle_data = cm.in_flight_actions.get(
+        event.handle_id,
+    ) or cm.completed_actions.get(event.handle_id)
+    if not handle_data:
+        return
+    handle_actions = handle_data.get("handle_actions", [])
+    action_name = event.action_name or "ask"
+    expected_action_name = f"{action_name}_{event.handle_id}"
+
+    for action in reversed(handle_actions):
+        if (
+            action.get("action_name") == expected_action_name
+            and action.get("status") == "pending"
+        ):
+            action["status"] = "completed"
+            action["response"] = event.response
+            break
+
+    await cm.request_llm_run()
 
 
 @EventHandler.register((UnifyMessageSent, UnifyMessageReceived))
@@ -242,25 +232,9 @@ async def _(
         event.content,
         event.timestamp,
         pinned=event.pinned,
-        id=event.interjection_id,
     )
 
     await cm.request_llm_run(delay=0)
-
-
-@EventHandler.register(NotificationUnpinnedEvent)
-async def _(
-    event: NotificationUnpinnedEvent,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    cm._session_logger.info(
-        "notification_unpinned",
-        f"Unpinned interjection: {event.interjection_id}",
-    )
-
-    cm.notifications_bar.remove_notif(event.interjection_id)
 
 
 @EventHandler.register(ActorResult)
@@ -320,8 +294,8 @@ async def _(event: ActorSessionResponse, cm: "ConversationManager", *args, **kwa
 async def _(event: ActorNotification, cm: "ConversationManager", *args, **kwargs):
     """A progress notification from an in-flight action.
 
-    Unlike ``ActorResponse``, notifications arrive while the actor is still
-    working.  Progress is recorded in the action's history so the slow brain
+    Unlike ``ActorSessionResponse``, notifications arrive while the actor is
+    still working.  Progress is recorded in the action's history so the slow brain
     sees accumulated progress when it next runs on a legitimate event.
 
     A notification can also arrive *late* -- after the handle has already

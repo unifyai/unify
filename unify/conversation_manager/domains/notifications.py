@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 from dataclasses import dataclass
 
 
@@ -9,7 +8,6 @@ class Notification:
     content: str
     timestamp: datetime
     pinned: bool = False
-    interjection_id: Optional[str] = None
 
 
 class NotificationBar:
@@ -22,14 +20,7 @@ class NotificationBar:
         notif_content,
         timestamp: datetime,
         pinned=False,
-        id=None,
     ):
         self.notifications.append(
-            Notification(type, notif_content, timestamp, pinned, id),
+            Notification(type, notif_content, timestamp, pinned),
         )
-
-    def remove_notif(self, interjection_id: str):
-        """Remove a notification by its interjection_id."""
-        self.notifications = [
-            n for n in self.notifications if n.interjection_id != interjection_id
-        ]

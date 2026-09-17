@@ -82,7 +82,7 @@ slow brain's first turn after a boot holds at the hydration gate until that
 load has landed.
 
 Identity comes from `SESSION_DETAILS`: the user's name labels their lines
-in the rendered conversation and fills the "Boss details" section of the
+in the rendered conversation and fills the "User details" section of the
 system prompt; the assistant's own lines render as `You`.
 
 ### The brain (`domains/brain.py`, `brain_tools.py`, `brain_action_tools.py`)
@@ -115,7 +115,6 @@ conversation:
   handle is registered as `active_ask_handle`, and the next inbound chat
   message is delivered to it as the answer instead of waking the brain.
 - `interject(message)` injects information into the conversation.
-- `get_full_transcript()` returns the recent conversation.
 
 ### `EventHandler` (`domains/event_handlers.py`)
 
@@ -131,12 +130,11 @@ Dataclass events carried over the broker:
 
 - **Chat**: `UnifyMessageReceived`, `UnifyMessageSent` (content, attachment
   paths, timestamp), `DirectMessageEvent`.
-- **Actor**: `ActorRequest`, `ActorResponse`, `ActorHandleStarted`,
-  `ActorResult`, `ActorNotification`, `ActorSessionResponse`,
-  `ActorClarificationRequest` / `ActorClarificationResponse`,
+- **Actor**: `ActorHandleStarted`, `ActorHandleResponse`, `ActorResult`,
+  `ActorNotification`, `ActorSessionResponse`, `ActorClarificationRequest`,
   `ActionStopRequested`.
-- **State**: `NotificationInjectedEvent`, `NotificationUnpinnedEvent`,
-  `OpenSlowBrainTurn`, `InitializationComplete`, `Ping`, `Error`.
+- **State**: `NotificationInjectedEvent`, `OpenSlowBrainTurn`,
+  `InitializationComplete`, `Error`.
 
 The broker itself (`event_broker.py`, `in_memory_event_broker.py`) is an
 in-process pub/sub keyed by channel prefix (`app:comms:*`, `app:actor:*`).

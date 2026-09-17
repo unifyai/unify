@@ -54,14 +54,8 @@ class VerificationSettings(BaseModel):
             SideEffectClass.unsafe_effectful: 0.1,
         },
     )
-    max_rewinds_per_run: int = 2
-    pending_verdict_timeout_s: int = 120
-    deliver_before_root_verdict: bool = False
-    auto_promote_offline: bool = True
     max_fixtures_per_function: int = 5
     max_fixture_bytes: int = 8192
-    max_guidance_chars: int = 6000
-    unsure_warning_threshold: int = 3
 
 
 class FunctionSettings(BaseSettings):

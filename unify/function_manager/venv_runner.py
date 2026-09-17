@@ -3,7 +3,7 @@
 Standalone runner script for executing functions in isolated virtual environments.
 
 This script is designed to be copied into custom venvs and executed as a subprocess.
-It has NO dependencies on the unity package - it's completely standalone.
+It has NO dependencies on the unify package - it's completely standalone.
 
 Communication Protocol (Bidirectional JSON-RPC):
 
@@ -616,7 +616,7 @@ def list_llms(provider: str = None) -> list[str]:
 
     Use this helper when choosing a concrete ``model=`` value for
     ``query_llm(...)``. Do not hardcode assumptions about which endpoints are
-    registered in the current deployment.
+    registered with the runtime.
     """
     return rpc_call_sync("runtime.list_llms", {"provider": provider})
 
@@ -852,12 +852,6 @@ def create_safe_globals(is_async: bool = True):
     return mod.__dict__
 
 
-def execute_sync(implementation: str, call_kwargs: dict) -> dict:
-    """Execute a synchronous function (one-shot mode with fresh globals)."""
-    globals_dict = create_safe_globals(is_async=False)
-    return execute_sync_in_globals(implementation, call_kwargs, globals_dict)
-
-
 def execute_sync_in_globals(
     implementation: str,
     call_kwargs: dict,
@@ -902,12 +896,6 @@ def execute_sync_in_globals(
     if interrupted is not None:
         out["interrupted"] = interrupted
     return out
-
-
-async def execute_async(implementation: str, call_kwargs: dict) -> dict:
-    """Execute an asynchronous function (one-shot mode with fresh globals)."""
-    globals_dict = create_safe_globals(is_async=True)
-    return await execute_async_in_globals(implementation, call_kwargs, globals_dict)
 
 
 def _extract_function_name(implementation: str) -> str:
@@ -1171,7 +1159,7 @@ def apply_env_overlay(env_overlay: dict | None) -> None:
     """Apply parent-supplied runtime env updates inside the child process.
 
     The venv runner can be a long-lived subprocess, so inherited environment
-    variables may be older than Unity's parent runtime. The parent sends the
+    variables may be older than the parent runtime's. The parent sends the
     localhost workspace-proxy endpoints (base URLs + nonce) before each call.
     Raw provider OAuth tokens are never overlaid; any that slipped in are
     scrubbed defensively.

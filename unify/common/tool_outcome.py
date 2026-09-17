@@ -8,7 +8,7 @@ class ToolOutcome(TypedDict, total=False):
     Keys
     ----
     outcome : str
-        Human-friendly summary (“task created successfully”, “3 contacts updated”…)
+        Human-friendly summary (“function stored successfully”, “3 procedures updated”…)
     details : Any
         Free-form extra data – usually an ID, list of IDs, or a backend
         response object.  It is up to each tool to decide what is most useful.

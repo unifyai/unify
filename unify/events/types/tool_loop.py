@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ToolLoopKind(str, Enum):
     """Semantic kind for every distinct ToolLoop event.
 
-    Computed once at publish time so consumers (stream filters, frontend)
+    Computed once at publish time so consumers (stream filters, log views)
     can key off a single discriminator instead of re-deriving the kind
     from ``message.role`` plus scattered ad-hoc flags.
     """
@@ -38,7 +38,6 @@ class ToolLoopKind(str, Enum):
     PLACEHOLDER = "placeholder"
     STATUS_CHECK = "status_check"
     WAIT_NOOP = "wait_noop"
-    EARLY_EXIT = "early_exit"
     SYSTEM_NOTICE = "system_notice"
 
 
@@ -134,11 +133,9 @@ class ToolLoopPayload(BaseModel):
         default_factory=list,
         description="Lineage of nested loops",
     )
-    # TODO: remove hierarchy_label once frontend migrates to hierarchy-only
-    # tree building -- it is now trivially "->".join(hierarchy).
     hierarchy_label: str = Field(
         default="",
-        description="Human-readable hierarchy label (deprecated: derivable from hierarchy)",
+        description="'->'.join(hierarchy), as one string to filter on",
     )
     origin: Optional[str] = Field(default=None, description="Origin identifier")
     tool_aliases: Optional[Dict[str, str]] = Field(

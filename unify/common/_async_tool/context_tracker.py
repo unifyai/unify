@@ -209,42 +209,6 @@ class LoopContextState:
 
         return result_parent_ctx, result_cont
 
-    def get_pending_cont_for_active_tools(
-        self,
-        active_call_ids: set[str],
-    ) -> dict[str, list[dict]]:
-        """Get pending context continuations for all active inner tools.
-
-        Used when new cont items arrive via interjection and need to be
-        forwarded to all currently running inner tools.
-
-        Args:
-            active_call_ids: Set of call_ids for currently running inner tools.
-
-        Returns:
-            Dict mapping call_id to list of cont items that need forwarding.
-        """
-        result: dict[str, list[dict]] = {}
-
-        for call_id in active_call_ids:
-            state = self.get_forwarding_state(call_id)
-            if not state.initial_context_sent:
-                # Tool hasn't been called yet, skip
-                continue
-
-            if state.last_cont_idx_forwarded < len(
-                self._parent_chat_context_cont_received,
-            ):
-                pending = self._parent_chat_context_cont_received[
-                    state.last_cont_idx_forwarded :
-                ]
-                if pending:
-                    result[call_id] = list(pending)
-                    # Note: we don't update last_cont_idx_forwarded here
-                    # That happens when the interjection is actually delivered
-
-        return result
-
     def mark_cont_forwarded_to_tool(self, call_id: str) -> None:
         """Mark that all pending cont items have been forwarded to a tool.
 

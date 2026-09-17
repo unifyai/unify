@@ -211,8 +211,6 @@ class FunctionStoreEnvironment(BaseEnvironment):
                 header_parts.append(f"language: {lang}")
             if row.get("is_primitive"):
                 header_parts.append("primitive")
-            if row.get("windows_os_required"):
-                header_parts.append("windows_os_required")
             header_tag = f" [{', '.join(header_parts)}]" if header_parts else ""
 
             lines.append(

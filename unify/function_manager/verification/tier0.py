@@ -278,7 +278,6 @@ def tier0_boundary(
             return result
 
         _async_call.__tier0_inner__ = inner  # type: ignore[attr-defined]
-        _async_call.__tier0_checker__ = checker  # type: ignore[attr-defined]
         return _async_call
 
     @functools.wraps(target)
@@ -302,5 +301,4 @@ def tier0_boundary(
         return result
 
     _call.__tier0_inner__ = inner  # type: ignore[attr-defined]
-    _call.__tier0_checker__ = checker  # type: ignore[attr-defined]
     return _call

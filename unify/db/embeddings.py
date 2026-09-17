@@ -18,7 +18,6 @@ lookup, across processes and runs.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import sqlite3
 import struct
@@ -183,7 +182,3 @@ def reset() -> None:
         if _cache_conn is not None:
             _cache_conn.close()
         _cache_conn, _cache_path = None, None
-
-
-def _json_safe(vector: list[float]) -> str:
-    return json.dumps(vector)

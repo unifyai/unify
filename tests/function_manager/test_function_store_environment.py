@@ -36,8 +36,6 @@ def fm_factory():
     def _create(**kwargs):
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         kwargs.setdefault("include_primitives", False)
         fm = FunctionManager(**kwargs)
         managers.append(fm)

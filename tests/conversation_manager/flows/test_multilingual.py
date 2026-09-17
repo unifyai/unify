@@ -328,16 +328,16 @@ async def test_arabic_message_reply_in_arabic(initialized_cm):
 # =====================================================================
 #  Group 2 — Act queries stay in English
 #
-#  The boss asks for a file to be written into the workspace, which is
+#  The user asks for a file to be written into the workspace, which is
 #  what forces the ``act`` delegation.
 # =====================================================================
 
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
+async def test_act_query_english_when_user_speaks_spanish(initialized_cm):
     """
-    Boss gives instructions in Spanish -> the act query must still be English.
+    The user gives instructions in Spanish -> the act query must still be English.
 
     Writing a file into the workspace needs the actor, so the request is
     dispatched as an act whose query is an internal interface and must stay
@@ -345,8 +345,8 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
     """
     cm = initialized_cm
 
-    # Boss gives instruction in Spanish -> needs the actor (writes a file)
-    result_boss = await cm.step_until_wait(
+    # The user gives an instruction in Spanish -> needs the actor (writes a file)
+    result_user = await cm.step_until_wait(
         UnifyMessageReceived(
             content=(
                 "Crea un archivo de texto con una lista de verificación para "
@@ -356,13 +356,13 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
     )
 
     actor_events = filter_events_by_type(
-        result_boss.output_events,
+        result_user.output_events,
         ActorHandleStarted,
     )
     assert actor_events, (
         "Expected act to be called (ActorHandleStarted), "
         f"got tools={cm.all_tool_calls}, "
-        f"events={[type(e).__name__ for e in result_boss.output_events]}"
+        f"events={[type(e).__name__ for e in result_user.output_events]}"
     )
 
     for event in actor_events:
@@ -377,9 +377,9 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
+async def test_act_query_english_when_user_speaks_japanese(initialized_cm):
     """
-    Boss gives instructions in Japanese -> act query must still be English.
+    The user gives instructions in Japanese -> act query must still be English.
 
     Writing a file into the workspace needs the actor. Even though the entire
     conversation is in Japanese, the act query must be in English with no CJK
@@ -387,7 +387,7 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
     """
     cm = initialized_cm
 
-    # Boss gives instruction in Japanese -> needs the actor (writes a file)
+    # The user gives an instruction in Japanese -> needs the actor (writes a file)
     result = await cm.step_until_wait(
         UnifyMessageReceived(
             content="会議の準備チェックリストをテキストファイルにまとめて、ワークスペースに保存してください",

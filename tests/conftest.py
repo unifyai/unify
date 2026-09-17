@@ -2,7 +2,7 @@
 tests/conftest.py
 =================
 
-Global pytest configuration for Unity test suite.
+Global pytest configuration for the Unify test suite.
 
 Sections:
   1. Imports and logging guard
@@ -494,9 +494,9 @@ def pytest_unconfigure(config):
     We deliberately do NOT rmtree `/tmp/unity_test_home` here. The path
     is shared across every parallel pytest session that
     ``parallel_run.sh`` spawns (deterministic so LLM cache keys
-    embedding ``~/Unity/Local`` stay stable). Wiping it on this
+    embedding the workspace root stay stable). Wiping it on this
     session's exit also wipes the in-flight venvs (FunctionManager
-    creates them under ``$HOME/Unity/Local/.unity/venvs/<ctx>/<id>/``)
+    creates them under ``<workspace>/.venvs/<ctx>/<id>/``)
     that other still-running pytest sessions are about to invoke —
     producing the "venv python disappeared between prepare_venv() and
     create_subprocess_exec()" RuntimeError that the function_manager/
@@ -569,12 +569,12 @@ def pytest_configure(config):
 
     # ------------------------------------------------------------------
     # Isolate HOME so that tests never touch the real home directory.
-    # get_local_root() defaults to ~/Unity/Local, and the process cwd
-    # is set to the same path at startup.  By pointing HOME at a temp
+    # get_local_root() resolves under the home directory, and the process
+    # cwd is set to the same path at startup.  By pointing HOME at a temp
     # dir we keep Attachments/, .env, snapshots, etc. sandboxed.
     #
     # The path is deterministic (not random) so that CodeActActor system
-    # prompts — which embed the resolved ~/Unity/Local path — produce
+    # prompts — which embed the resolved workspace path — produce
     # stable LLM cache keys across pytest sessions.  Actual test file
     # isolation is handled by pytest's tmp_path fixture, not HOME.
     # ------------------------------------------------------------------

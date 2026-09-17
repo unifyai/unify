@@ -69,7 +69,7 @@ def run_cli(
     """Entry point shared by both source-specific migration CLIs."""
     parser = argparse.ArgumentParser(
         description=(
-            f"Import {source} skills (SKILL.md files) into Unity's "
+            f"Import {source} skills (SKILL.md files) into Unify's "
             "GuidanceManager as guidance entries."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

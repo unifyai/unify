@@ -1,15 +1,12 @@
 """Global builtin-primitives catalogue: idempotent seeding.
 
-The catalogue lives in the public-read builtins project (see
-``unify.common.builtins``) owned by the platform admin account. It stores
-exactly one copy of the static primitive rows for every manager;
-deployments scope at read time via ``primitive_row_filter`` and never
-write to it.
+The catalogue lives in the builtins project (see ``unify.common.builtins``)
+of the local store. It holds exactly one copy of the static primitive rows
+for every manager; a FunctionManager scopes at read time via
+``primitive_row_filter`` and never writes to it.
 
-Seeding runs in bootstrap/admin processes (deploy hooks, self-host install,
-the test harness) whose API key owns the catalogue project. It is
-hash-guarded per manager — mirroring the per-assistant sync it replaces —
-so repeated runs are cheap and idempotent.
+Seeding runs at startup and in the test harness. It is hash-guarded per
+manager, so repeated runs are cheap and idempotent.
 """
 
 from __future__ import annotations

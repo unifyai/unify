@@ -20,7 +20,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 from .steering import InterruptionRequest, Patch, SteeringSession
 
@@ -197,19 +197,3 @@ def build_patch_author(*, model: Optional[str] = None) -> LLMPatchAuthor:
         return new_llm_client(model, async_client=True, origin="steering_patch")
 
     return LLMPatchAuthor(client_factory=_factory)
-
-
-def describe(request: InterruptionRequest) -> Dict[str, Any]:
-    """A compact record of a correction, for progress reporting."""
-    return {
-        "reason": request.reason,
-        "stop": request.stop,
-        "patches": [
-            {
-                "function": patch.function_name,
-                "reason": patch.reason,
-                "invalidated": list(patch.invalidate),
-            }
-            for patch in request.patches
-        ],
-    }

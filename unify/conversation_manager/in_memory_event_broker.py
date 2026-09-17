@@ -1,11 +1,9 @@
 """
 In-memory event broker for async pub/sub communication.
 
-Provides:
-- Async publish/subscribe API
-- Pattern-based subscriptions (psubscribe with glob patterns)
-- No serialization overhead (messages passed by reference)
-- No external dependencies
+Subscriptions are by exact channel name (``subscribe``) or glob pattern
+(``psubscribe``); messages are passed by reference between subscribers in
+the same process.
 """
 
 from __future__ import annotations
@@ -102,34 +100,6 @@ class InMemoryPubSub:
                 ),
             )
 
-    async def unsubscribe(self, *channels: str) -> None:
-        """Unsubscribe from channels. If no channels specified, unsubscribe from all."""
-        if not channels:
-            # Unsubscribe from all
-            for sub in self._subscriptions:
-                self._broker._remove_subscription(sub)
-            self._subscriptions.clear()
-        else:
-            for channel in channels:
-                for sub in self._subscriptions[:]:
-                    if not sub.is_pattern and sub.value == channel:
-                        self._broker._remove_subscription(sub)
-                        self._subscriptions.remove(sub)
-
-    async def punsubscribe(self, *patterns: str) -> None:
-        """Unsubscribe from patterns. If no patterns specified, unsubscribe from all."""
-        if not patterns:
-            for sub in self._subscriptions[:]:
-                if sub.is_pattern:
-                    self._broker._remove_subscription(sub)
-                    self._subscriptions.remove(sub)
-        else:
-            for pattern in patterns:
-                for sub in self._subscriptions[:]:
-                    if sub.is_pattern and sub.value == pattern:
-                        self._broker._remove_subscription(sub)
-                        self._subscriptions.remove(sub)
-
     async def get_message(
         self,
         *,
@@ -164,8 +134,6 @@ class InMemoryPubSub:
                 if ignore_subscribe_messages and msg.type in (
                     "subscribe",
                     "psubscribe",
-                    "unsubscribe",
-                    "punsubscribe",
                 ):
                     continue
 
@@ -328,18 +296,6 @@ class InMemoryEventBroker:
         with self._subs_lock:
             self._subscriptions.clear()
 
-    async def execute_command(self, *args) -> Any:
-        """
-        Execute a command (limited support for test compatibility).
-
-        Currently supports:
-            PUBSUB NUMPAT - returns number of pattern subscriptions
-        """
-        if len(args) >= 2 and args[0] == "PUBSUB" and args[1] == "NUMPAT":
-            with self._subs_lock:
-                return sum(1 for sub in self._subscriptions if sub.is_pattern)
-        raise NotImplementedError(f"Command not supported: {args}")
-
 
 # Global singleton instance
 _broker: InMemoryEventBroker | None = None
@@ -354,7 +310,7 @@ def get_in_memory_event_broker() -> InMemoryEventBroker:
 
 
 def create_in_memory_event_broker() -> InMemoryEventBroker:
-    """Create a new in-memory event broker instance (for testing)."""
+    """Create a broker that is not the process singleton (for isolated tests)."""
     return InMemoryEventBroker()
 
 

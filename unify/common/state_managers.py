@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Dict, Callable, Optional, Type, Iterable
-import importlib
-import pkgutil
-import sys
+from typing import Dict, Callable, Optional, Type
 
 
 class BaseStateManager(ABC):
@@ -12,9 +9,7 @@ class BaseStateManager(ABC):
     Central marker base class for all state managers.
 
     This abstract base exists solely to provide a single common ancestor for
-    manager interfaces such as ContactManager, TranscriptManager, KnowledgeManager,
-    FileManager, FunctionManager, GuidanceManager, ImageManager and
-    SecretManager.
+    manager interfaces such as FunctionManager and GuidanceManager.
 
     Purpose
     -------
@@ -104,16 +99,6 @@ class BaseStateManager(ABC):
         return self._tools.get(method, {})
 
 
-def get_manager_registry() -> Dict[str, Type[BaseStateManager]]:
-    """
-    Return a snapshot of the current manager class registry.
-
-    The registry is populated via BaseStateManager.__init_subclass__ and can be
-    extended by calling `discover_manager_modules()` to import manager packages.
-    """
-    return dict(BaseStateManager._registry)
-
-
 def get_caller_description(manager_class_name: str) -> Optional[str]:
     """
     Look up the caller description for a manager by class name.
@@ -121,7 +106,7 @@ def get_caller_description(manager_class_name: str) -> Optional[str]:
     Parameters
     ----------
     manager_class_name : str
-        The class name of the manager (e.g., "ContactManager").
+        The class name of the manager (e.g., "FunctionManager").
 
     Returns
     -------
@@ -132,60 +117,3 @@ def get_caller_description(manager_class_name: str) -> Optional[str]:
     if cls is None:
         return None
     return getattr(cls, "_as_caller_description", None)
-
-
-def _iter_unity_subpackages() -> Iterable[str]:
-    """
-    Yield qualified module names for all subpackages under `unity`.
-
-    This avoids hard-coding specific manager names. We only import packages that
-    look like manager packages to keep discovery minimal and fast.
-    """
-    try:
-        import unify  # local import to resolve package path dynamically
-    except Exception:
-        return []
-
-    for mod in pkgutil.walk_packages(unify.__path__, unify.__name__ + "."):
-        name = mod.name
-        # We consider any package directly under unity whose name ends with "_manager"
-        # as a candidate (e.g., unify.function_manager, unify.guidance_manager).
-        try:
-            base = name.rsplit(".", 1)[-1]
-        except Exception:
-            base = name
-        if base.endswith("_manager"):
-            yield name
-
-
-def discover_manager_modules() -> None:
-    """
-    Import manager packages under `unify/*_manager/` to populate the registry.
-
-    This replaces brittle, hard-coded import lists with a pattern-based discovery.
-    Safe to call multiple times; repeated imports are ignored by Python's module cache.
-    """
-    for pkg_name in _iter_unity_subpackages():
-        try:
-            # Import the package itself
-            importlib.import_module(pkg_name)
-            # Prefer importing a module with the same name as the package for
-            # conventional layouts like `unify.guidance_manager.guidance_manager`.
-            leaf = pkg_name.rsplit(".", 1)[-1]
-            candidate = f"{pkg_name}.{leaf}"
-            if candidate not in sys.modules:
-                try:
-                    importlib.import_module(candidate)
-                except Exception:
-                    # Fall back: import all immediate submodules to trigger subclass registration
-                    for sm in pkgutil.iter_modules(
-                        sys.modules[pkg_name].__path__,
-                        pkg_name + ".",
-                    ):
-                        try:
-                            importlib.import_module(sm.name)
-                        except Exception:
-                            continue
-        except Exception:
-            # Best-effort discovery; individual import failures are ignored
-            continue

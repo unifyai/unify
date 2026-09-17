@@ -64,23 +64,3 @@ def create_tool_call_message(name: str, call_id: str, content: str) -> ToolCallM
         "name": name,
         "content": content,
     }
-
-
-# Optional typed event payloads exposed via the outer handle
-class ClarificationEvent(TypedDict):
-    type: Literal["clarification"]
-    call_id: str
-    tool_name: str
-    question: str
-
-
-class NotificationEvent(TypedDict, total=False):
-    type: Literal["notification"]
-    call_id: str
-    tool_name: str
-    message: str
-    percent: float
-    meta: Any
-
-
-# All image-related helpers have been moved to `images.py`.

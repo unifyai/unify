@@ -59,12 +59,11 @@ def test_filter_scope_filters_list_functions():
 
 @_handle_project
 def test_entrypoint_id_catalogue_ignores_runtime_discovery_scope():
-    """Deployment references resolve against storage, not actor visibility.
+    """Stored references resolve against storage, not actor visibility.
 
     A runtime can hide functions because an execution environment is
-    unavailable. That must affect discovery only: the custom-source reconcile
-    still needs the stored ids for functions that execute in another
-    environment.
+    unavailable. That must affect discovery only: a stored id must still
+    resolve for a function that executes in another environment.
     """
     fm_all = _FM()
     fm_all.add_functions(implementations=[_PY_ALPHA, _PY_BETA])

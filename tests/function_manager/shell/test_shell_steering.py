@@ -1,6 +1,6 @@
 """Steering at the shell RPC bridge.
 
-Every ``unity-primitive`` call round-trips through the same RPC handler the
+Every ``unify-primitive`` call round-trips through the same RPC handler the
 venv paths use, where an in-flight session memoises it and pause holds the
 reply. Shell has no functions the patch author can rewrite, so a correction
 that invalidates remaining work becomes a stop request and terminates the
@@ -25,8 +25,8 @@ from unify.function_manager.steering import (
 from unify.function_manager.steering_patcher import LLMPatchAuthor
 
 SCRIPT_SENDS_TWICE = """#!/bin/bash
-unity-primitive comms send --to eu-alpha
-unity-primitive comms send --to us-beta
+unify-primitive comms send --to eu-alpha
+unify-primitive comms send --to us-beta
 """
 
 SCRIPT_WITHOUT_DISPATCHES = """#!/bin/bash
@@ -62,8 +62,6 @@ def function_manager_factory():
     def _create():
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         fm = FunctionManager()
         managers.append(fm)
         return fm

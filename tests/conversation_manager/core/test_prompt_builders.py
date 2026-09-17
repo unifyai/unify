@@ -3,8 +3,7 @@ tests/conversation_manager/core/test_prompt_builders.py
 =======================================================
 
 Unit tests for the ConversationManager system prompt builder: section
-layout, the chat-only tool listing, boss details and the notices that keep
-the assistant from inventing contact details it does not have.
+layout, the chat-only tool listing and the user details block.
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ class TestSectionLayout:
     SECTIONS = (
         "Role",
         "Bio",
-        "Boss details",
+        "User details",
         "Input format",
         "Tool-call reasoning",
         "Action steering guidelines",
@@ -72,36 +71,26 @@ class TestSectionLayout:
 
 
 # ---------------------------------------------------------------------------
-# Tests – role and boss details
+# Tests – role and user details
 # ---------------------------------------------------------------------------
 
 
 class TestRoleBlock:
-    """Chat is the only channel, and the role block says so."""
+    """Chat is the only way to reach the user, and the role block says so."""
 
     def test_role_names_chat_as_the_only_channel(self):
         prompt = _build()
-        assert "I talk to my boss through the in-app chat" in prompt
-        assert "my one and only channel" in prompt
+        assert "I talk to the user through this chat and nothing else" in prompt
+        assert "the user is the only other person on the chat" in prompt
 
 
-class TestBossDetails:
-    """Boss details list the contact fields that are known."""
+class TestUserDetails:
+    """The user's name is listed under User details."""
 
-    def test_required_fields_always_listed(self):
+    def test_name_listed(self):
         prompt = _build()
         assert "- First Name: Alice" in prompt
         assert "- Surname: Smith" in prompt
-
-    def test_optional_fields_absent_when_unknown(self):
-        prompt = _build()
-        assert "- Phone Number:" not in prompt
-        assert "- Email Address:" not in prompt
-
-    def test_optional_fields_listed_when_known(self):
-        prompt = _build(phone_number="+441234567890", email_address="a@b.com")
-        assert "- Phone Number: +441234567890" in prompt
-        assert "- Email Address: a@b.com" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -123,23 +112,13 @@ class TestToolListing:
         comms = prompt.split("**Communication tools:**")[1].split(
             "**Action tools:**",
         )[0]
-        assert "`send_unify_message`: Send a chat message to my boss" in comms
+        assert "`send_unify_message`: Send a chat message to the user" in comms
         assert comms.count("\n- `") == 1
 
     def test_action_tools_listed(self):
         prompt = _build()
         for name in ("`act`", "`wait(delay=None)`"):
             assert f"- {name}:" in prompt
-
-    def test_direct_manager_tools_are_gone(self):
-        prompt = _build()
-        for name in (
-            "ask_about_contacts",
-            "update_contacts",
-            "query_past_transcripts",
-            "send_unify_message_to_boss",
-        ):
-            assert name not in prompt
 
     def test_action_steering_tools_listed(self):
         prompt = _build()
@@ -152,43 +131,6 @@ class TestToolListing:
             "answer_clarification_*",
         ):
             assert f"- `{name}`:" in prompt
-
-
-# ---------------------------------------------------------------------------
-# Tests – missing-detail notices
-# ---------------------------------------------------------------------------
-
-
-class TestMissingDetailNotices:
-    """The role block says when the assistant has no number or address on file."""
-
-    def test_no_notices_when_fully_configured(self):
-        prompt = _build(assistant_has_phone=True, assistant_has_email=True)
-        assert "I have no phone number configured" not in prompt
-        assert "I have no email address configured" not in prompt
-
-    def test_missing_phone_notice_present(self):
-        prompt = _build(assistant_has_phone=False, assistant_has_email=True)
-        assert "I have no phone number configured" in prompt
-        assert "rather than inventing a number" in prompt
-        assert "I have no email address configured" not in prompt
-
-    def test_missing_email_notice_present(self):
-        prompt = _build(assistant_has_phone=True, assistant_has_email=False)
-        assert "I have no email address configured" in prompt
-        assert "rather than inventing an address" in prompt
-        assert "I have no phone number configured" not in prompt
-
-    def test_both_notices_when_no_details(self):
-        prompt = _build(assistant_has_phone=False, assistant_has_email=False)
-        assert "I have no phone number configured" in prompt
-        assert "I have no email address configured" in prompt
-
-    def test_notices_render_inside_the_role_section(self):
-        prompt = _build(assistant_has_phone=False, assistant_has_email=False)
-        role = prompt.split(_heading("Role"))[1].split(_heading("Bio"))[0]
-        assert "I have no phone number configured" in role
-        assert "I have no email address configured" in role
 
 
 # ---------------------------------------------------------------------------

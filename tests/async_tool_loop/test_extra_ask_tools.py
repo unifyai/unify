@@ -86,9 +86,8 @@ async def test_extra_ask_tools_coexist_with_dynamic_and_completed():
     td._completed_ask_handles["ask_completed"] = ask_completed
 
     # Simulate a live ask closure (DynamicToolFactory.live_ask_fns) — every
-    # entry here is by construction an ask closure, so unlike the pre-steer()
-    # `_dynamic_tools_ref` (which mixed ask_* in with everything else and had
-    # to be filtered by name prefix), no filtering is needed here anymore.
+    # entry here is by construction an ask closure, so no name-prefix
+    # filtering is needed.
     td._live_ask_fns_ref = {"ask_dynamic": ask_dynamic}
 
     snapshot = td.get_ask_tools()
@@ -145,15 +144,11 @@ async def test_extra_ask_tools_precedence():
 #    not by filtering.
 # ---------------------------------------------------------------------------
 #
-# Pre-steer(), `ask_about_completed_tool` and genuine per-tool ask closures
-# lived in the same `_dynamic_tools_ref` dict (keyed by function name),
-# separated only by an explicit exclusion check in get_ask_tools() — a
-# check that could be forgotten and cause a real signature mismatch
-# downstream (fn(question=...) vs fn(tool_id=..., question=...)).
-#
-# Post-steer(), `ask_about_completed_tool` lives in DynamicToolFactory's
-# outer-visible `dynamic_tools` dict; live ask closures for recursion live
-# in the *separate* `live_ask_fns` dict that seeds `_live_ask_fns_ref`.
-# There is no shared namespace left to filter — see
-# DynamicToolFactory.generate() and test_tools_bytes_stability.py's
-# coverage of the static surface for the mechanism this now relies on.
+# `ask_about_completed_tool` lives in DynamicToolFactory's outer-visible
+# `dynamic_tools` dict; live ask closures for recursion live in the
+# *separate* `live_ask_fns` dict that seeds `_live_ask_fns_ref`. Sharing a
+# namespace would need an exclusion check in get_ask_tools() that could be
+# forgotten and cause a signature mismatch downstream
+# (fn(question=...) vs fn(tool_id=..., question=...)). There is no shared
+# namespace to filter — see DynamicToolFactory.generate() and
+# test_tools_bytes_stability.py's coverage of the static surface.

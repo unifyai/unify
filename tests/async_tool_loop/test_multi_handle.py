@@ -19,10 +19,10 @@ from unify.common._async_tool.multi_handle import (
 )
 from unify.common._async_tool.request_state import (
     RequestRegistry,
+    RequestStatus,
 )
 from unify.common._async_tool.tagging import (
     tag_message_with_request,
-    parse_request_tag,
     format_request_cancelled_notice,
 )
 
@@ -50,7 +50,7 @@ def test_request_registry_basic_operations():
     assert registry.complete(0, "answer for request 0")
     state0 = registry.get(0)
     assert state0 is not None
-    assert state0.is_completed
+    assert state0.status == RequestStatus.COMPLETED
     assert state0.result_future.done()
     assert state0.result_future.result() == "answer for request 0"
 
@@ -64,7 +64,7 @@ def test_request_registry_basic_operations():
     assert registry.cancel(1, "user requested")
     state1 = registry.get(1)
     assert state1 is not None
-    assert state1.is_cancelled
+    assert state1.status == RequestStatus.CANCELLED
     assert "cancelled" in state1.result_future.result()
 
     # Now empty
@@ -104,24 +104,6 @@ def test_tag_message_with_request():
 
     tagged = tag_message_with_request("Test message", 42)
     assert tagged == "[Request 42] Test message"
-
-
-def test_parse_request_tag():
-    """Test request tag parsing."""
-    # With tag
-    request_id, message = parse_request_tag("[Request 5] Hello")
-    assert request_id == 5
-    assert message == "Hello"
-
-    # Without tag
-    request_id, message = parse_request_tag("No tag here")
-    assert request_id is None
-    assert message == "No tag here"
-
-    # Edge cases
-    request_id, message = parse_request_tag("")
-    assert request_id is None
-    assert message == ""
 
 
 def test_format_request_cancelled_notice():

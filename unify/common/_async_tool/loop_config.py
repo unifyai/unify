@@ -44,8 +44,6 @@ class LoopConfig:
                 self._lineage[-1] = f"{self._lineage[-1]}({_suffix})"
         else:
             self._lineage = [*parent_lineage, f"{self._loop_id}({_suffix})"]
-        # hierarchy_label is now trivially derived — no separate suffix logic.
-        # TODO: remove hierarchy_label from payloads once frontend migrates.
         self._label = (
             "->".join(self._lineage) if self._lineage else f"{self._loop_id}({_suffix})"
         )

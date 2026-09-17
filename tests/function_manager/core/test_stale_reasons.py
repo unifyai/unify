@@ -67,16 +67,16 @@ def test_dependency_stale_reasons_never_flags_primitive_names():
     state, not whether the primitive actually resolves at runtime through
     the actor's injected environments -- it is never authoritative for that.
 
-    Pure unit test on the ``@staticmethod`` itself: no Orchestra/network
-    required, unlike the integration test below which needs a live backend
-    to exercise the full ``add_functions``/``reconcile_dependencies`` path.
+    Pure unit test on the ``@staticmethod`` itself: no store required,
+    unlike the integration test below which exercises the full
+    ``add_functions``/``reconcile_dependencies`` path.
     A genuinely-missing *compositional* name (something this FunctionManager
     does own outright) must still be flagged.
     """
     depends_on = [
-        "primitives.comms.send_unify_message",
-        "primitives.computer.user_desktop.files.pull",
-        "primitives.computer.user_desktop.list_linked",
+        "primitives.actor.act",
+        "primitives.actor.retired_method",
+        "primitives.retired_namespace.method",
         "deleted_helper",
     ]
     available_names = {"some_other_stored_function"}

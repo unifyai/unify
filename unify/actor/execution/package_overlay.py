@@ -31,9 +31,9 @@ class PackageOverlay:
     discovers its parent via the ``_CURRENT_PACKAGE_OVERLAY`` ContextVar and
     creates its directory as a child of the parent's directory::
 
-        /tmp/unity_act_pkgs/<root_agent_id>/
-        /tmp/unity_act_pkgs/<root_agent_id>/<child_agent_id>/
-        /tmp/unity_act_pkgs/<root_agent_id>/<child_agent_id>/<grandchild>/
+        /tmp/unify_act_pkgs/<root_agent_id>/
+        /tmp/unify_act_pkgs/<root_agent_id>/<child_agent_id>/
+        /tmp/unify_act_pkgs/<root_agent_id>/<child_agent_id>/<grandchild>/
 
     Each overlay only manages its own leaf directory.  Children always clean
     up before parents (inner actor cleanup is attached to the handle's
@@ -64,7 +64,7 @@ class PackageOverlay:
 
         if self._parent is not None:
             return os.path.join(self._parent._target_dir, self._agent_id)
-        return os.path.join(tempfile.gettempdir(), "unity_act_pkgs", self._agent_id)
+        return os.path.join(tempfile.gettempdir(), "unify_act_pkgs", self._agent_id)
 
     def install(self, packages: List[str], timeout: float = 120) -> dict:
         """Install *packages* into the overlay directory.

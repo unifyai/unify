@@ -16,7 +16,6 @@ import tempfile
 import logging
 import threading
 from pathlib import Path
-from weakref import WeakSet
 
 from secrets import token_hex
 from typing import (
@@ -35,7 +34,7 @@ from typing import (
 from unify import db
 from .shell_pool import ShellPool
 from unify.db import StoreError as _UnifyRequestError
-from ..common.log_utils import create_logs as unity_create_logs
+from ..common.log_utils import create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.federated_search import (
     SCORE_FIELD,
@@ -73,13 +72,11 @@ from .dependency_analysis import (
     detect_third_party_imports,
 )
 from .types.function import Function
-from .types.meta import FunctionsMeta
 from .types.venv import VirtualEnv
 from .types.verification import (
     Fixture,
     FunctionContract,
     SideEffectClass,
-    StaticReviewRecord,
     VerdictKind,
     VerificationPolicy,
     VerificationRow,
@@ -105,7 +102,7 @@ from .verification.source_labels import compile_function_source
 from .verification.tier0 import Tier0Checker, signature_from_source, tier0_boundary
 from .settings import VerificationSettings
 from .base import BaseFunctionManager
-from ..common.model_to_fields import model_to_fields, with_ui_editable_forced_false
+from ..common.model_to_fields import model_to_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import ContextRegistry, TableContext
 from ..common.stale_reason import (
@@ -126,8 +123,6 @@ _VENV_PREPARE_LOCKS: dict[str, asyncio.Lock] = {}
 
 FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
-FUNCTIONS_PRIMITIVES_TABLE = "Functions/Primitives"
-FUNCTIONS_META_TABLE = "Functions/Meta"
 FUNCTIONS_VERIFICATIONS_TABLE = "Functions/Verifications"
 # Ledger state the runtime maintains; hidden from catalogue reads that do not
 # hand back callables (fixtures alone can run to tens of kilobytes).
@@ -162,60 +157,6 @@ def strip_ledger_internals(
         )
         for row in rows
     ]
-
-
-def _compositional_context() -> str:
-    """The compositional functions context of the active session."""
-
-    return ContextRegistry.get_context(FunctionManager, FUNCTIONS_COMPOSITIONAL_TABLE)
-
-
-def function_id_resolves(function_id: int) -> bool:
-    """Whether a stored id still points at a compositional function.
-
-    For callers holding an id and asking only about referential integrity --
-    a task's stored ``entrypoint``, say. An id rather than a manager handle
-    because the question is asked from stores that keep one and have no
-    reason to hold a FunctionManager.
-
-    Asked per id rather than by listing every function and testing
-    membership: ``get_logs`` pages at a thousand rows, so an enumeration
-    would report perfectly good ids as missing on any deployment past that,
-    and callers reading this as "gone" would act on it.
-    """
-
-    return bool(
-        db.get_logs(
-            context=_compositional_context(),
-            filter=f"function_id == {int(function_id)}",
-            limit=1,
-        ),
-    )
-
-
-def delete_functions(function_ids: "set[int] | list[int]") -> list[int]:
-    """Delete compositional functions by id, returning the ids actually removed.
-
-    For a caller that has already decided which functions should go and needs
-    them gone -- a source being withdrawn clearing what its runs distilled.
-    Deciding *which* is the caller's problem; this only carries it out.
-    """
-
-    if not function_ids:
-        return []
-    context = _compositional_context()
-    deleted: list[int] = []
-    for function_id in function_ids:
-        logs = db.get_logs(
-            context=context,
-            filter=f"function_id == {int(function_id)}",
-            limit=1,
-        )
-        if not logs:
-            continue
-        db.delete_logs(context=context, logs=[logs[0].id])
-        deleted.append(int(function_id))
-    return deleted
 
 
 class _LineageTrackedFunction:
@@ -308,72 +249,6 @@ class _LineageTrackedFunction:
             return _await_and_finalize()
 
         return result
-
-
-class _DependencyVisitor(ast.NodeVisitor):
-    """
-    Statefully analyzes function AST to find direct calls and indirect calls
-    via variables assigned function names, specifically looking for names
-    known to the FunctionManager.
-    """
-
-    def __init__(self, known_function_names: Set[str]):
-        self.known_function_names = known_function_names
-        self.dependencies: Set[str] = set()
-        self._assignment_map: Dict[str, str] = {}
-
-    def visit_Assign(self, node: ast.Assign):
-        # Only track simple assignments: target_var = potential_func_name
-        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            target_var = node.targets[0].id
-            if isinstance(node.value, ast.Name):
-                assigned_name = node.value.id
-                # Check if the assigned name is one of the functions we manage
-                if assigned_name in self.known_function_names:
-                    # Record the mapping for the current scope
-                    self._assignment_map[target_var] = assigned_name
-                # If variable is assigned something else, remove mapping
-                elif target_var in self._assignment_map:
-                    del self._assignment_map[target_var]
-            # If variable is assigned non-Name, remove mapping
-            elif target_var in self._assignment_map:
-                del self._assignment_map[target_var]
-
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call):
-        func_node = node.func
-        called_name: Optional[str] = None
-
-        # Case 1: Direct call -> func_name()
-        if isinstance(func_node, ast.Name):
-            func_name = func_node.id
-            # Check if it's a direct call to a known library function
-            if func_name in self.known_function_names:
-                called_name = func_name
-            # Check if it's an indirect call via a mapped variable -> var()
-            elif func_name in self._assignment_map:
-                called_name = self._assignment_map[func_name]
-
-        # Case 2: Method call -> obj.method() - generally ignore for dependency injection
-        # (objects like ``primitives`` are globally available)
-
-        if called_name:
-            self.dependencies.add(called_name)
-
-        self.generic_visit(node)  # Continue traversal
-
-    def visit_Return(self, node: ast.Return):
-        # Case 3: Return statement -> return func_name or return var
-        if isinstance(node.value, ast.Name):
-            returned_name = node.value.id
-            # Check if returning a known function name directly
-            if returned_name in self.known_function_names:
-                self.dependencies.add(returned_name)
-            # Also check if returning a variable that was assigned a function
-            elif returned_name in self._assignment_map:
-                self.dependencies.add(self._assignment_map[returned_name])
-        self.generic_visit(node)
 
 
 # Pattern for shell script metadata comments
@@ -819,9 +694,6 @@ class SessionLimitError(RuntimeError):
         super().__init__(message)
         self.message = message
 
-    def to_error_dict(self) -> dict:
-        return {"error": self.message, "error_type": "resource_limit"}
-
 
 class VenvPool:
     """
@@ -835,8 +707,6 @@ class VenvPool:
     stateful sessions per venv. Each session has its own subprocess and globals.
     """
 
-    _instances = WeakSet()
-
     def __init__(self, *, max_total_sessions: int = 20) -> None:
         # Key: (venv_id, session_id) -> _VenvConnection
         self._connections: Dict[Tuple[int, int], _VenvConnection] = {}
@@ -845,15 +715,6 @@ class VenvPool:
         self._closed = False
         self._max_total_sessions = int(max_total_sessions)
         self._invalidation_generation = 0
-        self.__class__._instances.add(self)
-
-    @classmethod
-    def invalidate_all_pools(cls) -> int:
-        """Drop every live pool connection so future executions reload credentials."""
-        invalidated = 0
-        for pool in list(cls._instances):
-            invalidated += pool.invalidate_sessions()
-        return invalidated
 
     def invalidate_sessions(self) -> int:
         """Retire pooled sessions while keeping the pool reusable."""
@@ -1772,8 +1633,8 @@ class FunctionManager(BaseFunctionManager):
     Keeps a catalogue of user-supplied Python functions and system primitives.
 
     User-defined functions are stored in `Functions/Compositional` with auto-incrementing
-    IDs. System primitives (the ``primitives.*`` namespace methods) are stored in `Functions/Primitives`
-    with explicit stable IDs that are consistent across all users.
+    IDs. System primitives (the ``primitives.*`` namespace methods) live in the
+    read-only builtins catalogue with explicit stable IDs.
 
     This separation ensures:
     - User function IDs are stable (adding/removing primitives doesn't affect them)
@@ -1812,24 +1673,6 @@ class FunctionManager(BaseFunctionManager):
                 ],
             ),
             TableContext(
-                name=FUNCTIONS_PRIMITIVES_TABLE,
-                description="System action primitives with stable explicit IDs.",
-                # Primitives share the `Function` model with Compositional, but
-                # are never user-editable in place (implementation lives in Python,
-                # not in stored rows), so the allowlisted ui_editable=True
-                # annotations on `Function` (name, docstring, etc.) are
-                # overridden to False here.
-                fields=with_ui_editable_forced_false(model_to_fields(Function)),
-                unique_keys={"function_id": "int"},
-                # No auto_counting - primitives get explicit IDs from collect_primitives()
-            ),
-            TableContext(
-                name=FUNCTIONS_META_TABLE,
-                description="Metadata for primitives sync state.",
-                fields=model_to_fields(FunctionsMeta),
-                unique_keys={"meta_id": "int"},
-            ),
-            TableContext(
                 name=FUNCTIONS_VERIFICATIONS_TABLE,
                 description=(
                     "Append-only verification verdicts for compositional "
@@ -1851,7 +1694,6 @@ class FunctionManager(BaseFunctionManager):
         exclude_primitive_ids: Optional[FrozenSet[int]] = None,
         exclude_compositional_ids: Optional[FrozenSet[int]] = None,
         include_primitives: bool = True,
-        daemon: bool = True,
     ) -> None:
         # Store the scope - this FunctionManager instance is permanently scoped
         # Default to the canonical role-scoped manager set when not specified.
@@ -1865,7 +1707,6 @@ class FunctionManager(BaseFunctionManager):
         )
         self._include_primitives = include_primitives
         self._registry = get_registry()
-        self._daemon = daemon
         # ToDo: expose tools to LLM once needed
         self._tools: Dict[str, callable] = {}
 
@@ -1879,11 +1720,6 @@ class FunctionManager(BaseFunctionManager):
             self,
             FUNCTIONS_COMPOSITIONAL_TABLE,
         )
-        self._primitives_ctx = ContextRegistry.get_context(
-            self,
-            FUNCTIONS_PRIMITIVES_TABLE,
-        )
-        self._meta_ctx = ContextRegistry.get_context(self, FUNCTIONS_META_TABLE)
         self._verifications_ctx = ContextRegistry.get_context(
             self,
             FUNCTIONS_VERIFICATIONS_TABLE,
@@ -1911,7 +1747,7 @@ class FunctionManager(BaseFunctionManager):
 
     @property
     def exclude_primitive_ids(self) -> Optional[FrozenSet[int]]:
-        """Primitive function IDs excluded from ``Functions/Primitives`` queries."""
+        """Primitive function IDs excluded from primitive catalogue queries."""
         return self._exclude_primitive_ids
 
     @exclude_primitive_ids.setter
@@ -1978,27 +1814,18 @@ class FunctionManager(BaseFunctionManager):
         *,
         allowed_fields: Optional[List[str]] = None,
     ) -> List[FederatedSearchContext]:
-        """Return the federated sources holding this deployment's primitives.
+        """Return the federated source holding this runtime's primitives.
 
-        Static primitives live once platform-wide in the public-read builtins
-        catalogue project; the per-assistant ``Functions/Primitives`` context
-        holds only materialized provider-backed integration tool rows. Both
-        are scope-filtered at read time.
+        Static primitives live once in the read-only builtins catalogue,
+        scope-filtered at read time.
         """
-        scoped = self._scoped_primitive_filter()
         return [
             FederatedSearchContext(
                 context=BUILTINS_PRIMITIVES_CONTEXT,
                 source="primitives",
-                row_filter=scoped,
+                row_filter=self._scoped_primitive_filter(),
                 allowed_fields=allowed_fields,
                 project=builtins_project(),
-            ),
-            FederatedSearchContext(
-                context=self._primitives_ctx,
-                source="primitives",
-                row_filter=f'({scoped}) and metadata["source"] == "provider_backed"',
-                allowed_fields=allowed_fields,
             ),
         ]
 
@@ -2104,9 +1931,9 @@ class FunctionManager(BaseFunctionManager):
         environment_namespaces: FrozenSet[str] = frozenset(),
     ) -> Set[str]:
         """
-        Uses the stateful _DependencyVisitor to find verified direct calls,
-        indirect calls via variables, and returned function name references
-        to other known library functions.
+        Collect the other known library functions this one depends on: direct
+        calls, calls through a variable assigned a function name, and function
+        names it returns.
 
         When *environment_namespaces* is provided, dotted calls whose root segment
         matches one of the namespaces are also captured as dependencies.
@@ -2168,7 +1995,6 @@ class FunctionManager(BaseFunctionManager):
         self,
         fn_name: str,
         calls: Set[str],
-        provided_names: Set[str],
     ) -> None:
         """
         Validates function calls to prevent dangerous operations.
@@ -2790,7 +2616,7 @@ class FunctionManager(BaseFunctionManager):
         payload = row.model_dump(mode="json")
         if payload.get("created_at") is None:
             payload["created_at"] = datetime.now(timezone.utc).isoformat()
-        unity_create_logs(
+        create_logs(
             context=self._verifications_ctx,
             entries=[payload],
         )
@@ -3053,23 +2879,6 @@ class FunctionManager(BaseFunctionManager):
                 context=str(context) if context else None,
             ),
             what=f"Fixture capture for function {function_id}",
-        )
-
-    def persist_static_review_nowait(
-        self,
-        fn: Dict[str, Any],
-        record: StaticReviewRecord,
-    ) -> "concurrent.futures.Future[None]":
-        """Persist a static-review verdict onto the row without awaiting the write."""
-        function_id = int(fn["function_id"])
-        context = fn.get("_context")
-        return self._write_off_loop(
-            lambda: self._persist_verification_fields(
-                function_id=function_id,
-                fields={"static_review": record.model_dump(mode="json")},
-                context=str(context) if context else None,
-            ),
-            what=f"Static review write for function {function_id}",
         )
 
     def _tier0_checker(
@@ -3355,22 +3164,19 @@ class FunctionManager(BaseFunctionManager):
     # ------------------------------------------------------------------ #
 
     def warm_embeddings(self) -> None:
-        for ctx in (self._compositional_ctx, self._primitives_ctx):
-            try:
-                ensure_vector_column(
-                    ctx,
-                    embed_column="_embedding_text_emb",
-                    source_column="embedding_text",
-                )
-            except Exception:
-                pass
+        try:
+            ensure_vector_column(
+                self._compositional_ctx,
+                embed_column="_embedding_text_emb",
+                source_column="embedding_text",
+            )
+        except Exception:
+            pass
 
     @functools.wraps(BaseFunctionManager.clear, updated=())
     def clear(self) -> None:
         db.delete_context(self._compositional_ctx)
-        db.delete_context(self._primitives_ctx)
         db.delete_context(self._venvs_ctx)
-        db.delete_context(self._meta_ctx)
 
         # Reset any manager-local counters or caches
         try:
@@ -3383,8 +3189,6 @@ class FunctionManager(BaseFunctionManager):
         # Force re-provisioning
         ContextRegistry.refresh(self, "Functions/VirtualEnvs")
         ContextRegistry.refresh(self, "Functions/Compositional")
-        ContextRegistry.refresh(self, "Functions/Primitives")
-        ContextRegistry.refresh(self, "Functions/Meta")
 
         # Verify visibility before proceeding
         try:
@@ -3413,51 +3217,6 @@ class FunctionManager(BaseFunctionManager):
         else:
             self._in_process_sessions.clear()
 
-    # ------------------------------------------------------------------ #
-    #  Primitives sync                                                   #
-    # ------------------------------------------------------------------ #
-
-    def _get_stored_hash_map(self, field_name: str) -> Dict[str, str]:
-        """Read a hash map field from the singleton Functions/Meta row."""
-
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                return logs[0].entries.get(field_name, {}) or {}
-        except Exception:
-            pass
-        return {}
-
-    def _store_hash_map(self, field_name: str, hashes: Dict[str, str]) -> None:
-        """Store a hash map field on the singleton Functions/Meta row."""
-
-        try:
-            logs = db.get_logs(
-                context=self._meta_ctx,
-                filter="meta_id == 1",
-                limit=1,
-            )
-            if logs:
-                db.update_logs(
-                    logs=[logs[0].id],
-                    context=self._meta_ctx,
-                    entries={field_name: hashes},
-                    overwrite=True,
-                )
-            else:
-                unity_create_logs(
-                    context=self._meta_ctx,
-                    entries=[
-                        {"meta_id": 1, field_name: hashes},
-                    ],
-                )
-        except Exception as e:
-            logger.warning("Failed to store %s hash map: %s", field_name, e)
-
     @staticmethod
     def _compact_function_search_rows(
         rows: List[Dict[str, Any]],
@@ -3482,152 +3241,12 @@ class FunctionManager(BaseFunctionManager):
             compact_rows.append(compact)
         return compact_rows
 
-    def _delete_primitives_by_function_ids(self, function_ids: list[int]) -> None:
-        if not function_ids:
-            return
-        ids = sorted(set(function_ids))
-        filter_expr = (
-            f"function_id == {ids[0]}"
-            if len(ids) == 1
-            else f"function_id in [{', '.join(str(function_id) for function_id in ids)}]"
-        )
-        logs = db.get_logs(
-            context=self._primitives_ctx,
-            filter=filter_expr,
-            exclude_fields=list_private_fields(self._primitives_ctx),
-        )
-        if logs:
-            db.delete_logs(
-                context=self._primitives_ctx,
-                logs=[log.id for log in logs],
-            )
-
-    def _insert_primitives(self, primitives: List[Dict[str, Any]]) -> bool:
-        """Insert primitive rows into the Primitives context with explicit IDs.
-
-        Provider-backed primitive rows are connection-agnostic catalogue
-        entries (see ``sync_provider_integration_tools``): the same tool
-        definition is shared, not duplicated per assistant, so it may already
-        exist (e.g. seeded once system-wide) even on an assistant's first
-        sync. The delete above can't remove a row this session doesn't own,
-        so re-inserting it would otherwise collide on the ``function_id``
-        unique key. ``on_duplicate="skip"`` inserts whichever rows are
-        genuinely new and leaves already-catalogued rows alone instead of
-        failing the whole batch on the first collision.
-
-        Returns ``True`` only when every row was freshly written by this
-        call. ``False`` means one or more rows already existed under their
-        ``function_id`` and were left untouched -- this session can't
-        confirm their content still matches what was requested (it may be
-        stale, or two distinct tools may have collided on the same
-        function_id hash), so callers must not cache "fully synced" state
-        for a ``False`` result; a future sync should keep retrying instead
-        of silently trusting a row it never actually wrote.
-        """
-        if not primitives:
-            return True
-
-        entries = [
-            Function.model_validate(data).model_dump(include=set(data.keys()))
-            for data in primitives
-        ]
-
-        try:
-            self._delete_primitives_by_function_ids(
-                [
-                    entry["function_id"]
-                    for entry in entries
-                    if isinstance(entry.get("function_id"), int)
-                ],
-            )
-            created = unity_create_logs(
-                context=self._primitives_ctx,
-                entries=entries,
-                on_duplicate="skip",
-            )
-            written_ids = (
-                {log.entries.get("function_id") for log in created}
-                if isinstance(created, list)
-                else {entry.get("function_id") for entry in entries}
-            )
-            skipped = [
-                (entry.get("function_id"), entry.get("name"))
-                for entry in entries
-                if entry.get("function_id") not in written_ids
-            ]
-            if skipped:
-                # Routine and expected: a non-owning assistant's first sync
-                # of an app the shared catalogue already has (see docstring)
-                # skips every time, forever, since the hash below is
-                # deliberately never cached for it -- info, not warning, to
-                # avoid paging on the steady-state case. A genuine
-                # function_id collision between two *different* tools would
-                # show up here as the same function_id recurring under a
-                # different name across log lines -- greppable, unlike a
-                # bare count.
-                logger.info(
-                    "Provider primitive insert: %d/%d already catalogued "
-                    "under an existing function_id, left in place: %s",
-                    len(skipped),
-                    len(entries),
-                    sorted(skipped),
-                )
-            else:
-                logger.debug(f"Inserted {len(entries)} primitives")
-            return not skipped
-        except Exception as e:
-            logger.error(f"Failed to insert primitives: {e}")
-            raise
-
-    # ------------------------------------------------------------------ #
-    #  Custom Functions Sync                                              #
-    # ------------------------------------------------------------------ #
-
-    def _derived_verification_fields_for_row(
-        self,
-        data: Dict[str, Any],
-        *,
-        prior: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Ledger fields derived from a row dict that carries its implementation."""
-        source = data.get("implementation")
-        if not isinstance(source, str) or not source.strip():
-            return self._unclassifiable_verification_fields()
-        if str(data.get("language") or "python") != "python":
-            return self._unclassifiable_verification_fields()
-        stripped = source
-        fn_obj: Any = None
-        try:
-            namespace = create_base_globals()
-            self._inject_forward_ref_annotation_placeholders(
-                stripped,
-                namespace=namespace,
-            )
-            exec(stripped, namespace)
-            fn_obj = namespace.get(str(data.get("name")))
-        except Exception:
-            fn_obj = None
-        try:
-            return self._verification_fields_for_source(
-                source=stripped,
-                fn_obj=fn_obj if callable(fn_obj) else None,
-                known_function_names=self._available_dependency_names(),
-                prior=prior,
-            )
-        except (SyntaxError, ValueError):
-            return self._unclassifiable_verification_fields()
-
-    # ------------------------------------------------------------------ #
-    #  Custom Venvs Sync                                                  #
-    # ------------------------------------------------------------------ #
-
     def list_primitives(self) -> Dict[str, Dict[str, Any]]:
         """
         Return a mapping of primitive name to primitive metadata.
 
-        Only returns primitives for managers in this FunctionManager's scope,
-        combining the global builtins catalogue with materialized
-        provider-backed integration tool rows.
+        Only returns primitives for namespaces in this FunctionManager's scope,
+        read from the builtins catalogue.
 
         Returns:
             Dict mapping primitive name to metadata dict (includes function_id).
@@ -3818,7 +3437,7 @@ class FunctionManager(BaseFunctionManager):
                     )
 
                 all_calls = self._collect_function_calls(node)
-                self._validate_function_calls(name, all_calls, temp_names)
+                self._validate_function_calls(name, all_calls)
                 namespace = create_base_globals()
                 exec(source, namespace)
                 fn_obj = namespace[name]
@@ -3903,7 +3522,7 @@ class FunctionManager(BaseFunctionManager):
         # Batch create new functions
         if entries_to_create:
             try:
-                unity_create_logs(
+                create_logs(
                     context=self._compositional_ctx,
                     entries=entries_to_create,
                 )
@@ -4097,7 +3716,7 @@ class FunctionManager(BaseFunctionManager):
         # Batch create new functions
         if entries_to_create:
             try:
-                unity_create_logs(
+                create_logs(
                     context=self._compositional_ctx,
                     entries=entries_to_create,
                 )
@@ -4606,18 +4225,12 @@ class FunctionManager(BaseFunctionManager):
     # 2. Listing -------------------------------------------------------- #
 
     def list_function_name_to_ids(self) -> Dict[str, int]:
-        """Return the authoritative ``{name: function_id}`` catalogue.
+        """Return the complete ``{name: function_id}`` catalogue.
 
-        Used by deployment reconcile for guidance entrypoint resolution.
         Prefer this over :meth:`list_functions` when only ids are needed.
-
-        Deployment references are resolved independently of the current
-        runtime's discovery surface. A runtime can legitimately hide
-        environment-gated functions from actor discovery, but their stored
-        ids must still be available when reconciling references authored
-        for a different environment. Therefore compositional rows are read
-        without ``filter_scope`` or environment exclusions here; ordinary
-        list/filter/search operations remain scoped.
+        Compositional rows are read without ``filter_scope`` or environment
+        exclusions, so a reference resolves even when its function is hidden
+        from discovery; ordinary list/filter/search operations remain scoped.
         """
 
         mapping: Dict[str, int] = {}
@@ -5236,7 +4849,6 @@ class FunctionManager(BaseFunctionManager):
                 "primitive_method",
                 "metadata",
                 "venv_id",
-                "windows_os_required",
                 # The usage trace rides along so ranking can compute
                 # standing without a second read per row.
                 "created_at",
@@ -5446,11 +5058,11 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             The auto-assigned venv_id.
         """
-        result = unity_create_logs(
+        result = create_logs(
             context=self._venvs_ctx,
             entries=[{"venv": venv}],
         )
-        # unity_create_logs can return either a dict or a list of Log objects
+        # create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:
             # List of Log objects - can extract venv_id directly from entries
             log = result[0]
@@ -5623,7 +5235,7 @@ class FunctionManager(BaseFunctionManager):
         ctx_name = ctx.get("read") or ctx.get("write") or "default"
         # Sanitize context name for filesystem use
         safe_ctx = ctx_name.replace("/", "_").replace("\\", "_")
-        return Path(get_local_root()) / ".unity" / "venvs" / safe_ctx
+        return Path(get_local_root()) / ".venvs" / safe_ctx
 
     def _get_venv_dir(self, venv_id: int) -> Path:
         """Get the directory for a specific venv."""
@@ -6001,10 +5613,10 @@ class FunctionManager(BaseFunctionManager):
         # FileNotFoundError with no surrounding state.
         if not python_path.exists():
             # Walk up the path tree and note which components exist.
-            # If a high-level ancestor (e.g. `~/.unity/venvs/`) is
-            # missing, the culprit is something rmtree-ing the
-            # `unify/Local/.unity/` tree as a whole. If only the venv-
-            # id leaf is missing, suspect per-test cleanup.
+            # If a high-level ancestor (the workspace `.venvs/` tree) is
+            # missing, the culprit is something rmtree-ing the workspace
+            # as a whole. If only the venv-id leaf is missing, suspect
+            # per-test cleanup.
             ancestor_status: list[str] = []
             cursor: Path | None = python_path
             while cursor is not None and str(cursor) not in ("/", ""):
@@ -6411,7 +6023,7 @@ class FunctionManager(BaseFunctionManager):
             extra_namespaces: Named objects to inject into the function's execution
                 namespace. For in-process execution, all entries are injected into
                 globals. For venv/subprocess execution, the "primitives" entry
-                (including primitives.computer) is bridged via RPC.
+                (``primitives.actor``) is bridged via RPC.
 
         Returns:
             For composed functions: dict with keys result, error, stdout, stderr.
@@ -6509,17 +6121,12 @@ class FunctionManager(BaseFunctionManager):
         self,
         *,
         name: str,
-        provider_backed_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Look up a primitive row by exact name from readable primitive contexts."""
+        """Look up a primitive row by exact name from the primitive catalogue."""
         try:
             name_filter = normalize_filter_expr(f"name == {json.dumps(name)}")
         except Exception:
             name_filter = f"name == {json.dumps(name)}"
-        if provider_backed_only:
-            name_filter = (
-                f'({name_filter}) and (metadata["source"] == "provider_backed")'
-            )
         rows = self._primitive_logs(extra_filter=name_filter, limit=1)
         if rows:
             return dict(rows[0])
@@ -6564,14 +6171,6 @@ class FunctionManager(BaseFunctionManager):
         if inspect.isawaitable(result):
             result = await result
         return result
-
-    # ------------------------------------------------------------------ #
-    #  Remote Windows Execution Helpers                                  #
-    # ------------------------------------------------------------------ #
-
-    # Remote Windows local root (matches LOCAL_ROOT in agent-service)
-    # Both default to ~/Unity/Local; on Windows VMs this is C:\Unity\Local
-    REMOTE_WINDOWS_LOCAL_ROOT = "C:\\Unity\\Local"
 
     async def _execute_python_function(
         self,
@@ -7029,11 +6628,11 @@ class FunctionManager(BaseFunctionManager):
         Execute a shell script with access to primitives via RPC.
 
         This method runs a shell script in a subprocess while providing access
-        to the primitives (``primitives.actor``) via the `unity-primitive`
+        to the primitives (``primitives.actor``) via the `unify-primitive`
         CLI command.
 
         Shell scripts can call primitives like:
-            result=$(unity-primitive actor act --request "Summarise report.txt")
+            result=$(unify-primitive actor act --request "Summarise report.txt")
 
         Args:
             implementation: The shell script source code.
@@ -7054,7 +6653,7 @@ class FunctionManager(BaseFunctionManager):
         call_args = call_args or []
 
         # Create temporary directory for script and socket
-        with tempfile.TemporaryDirectory(prefix="unity_shell_") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="unify_shell_") as tmpdir:
             tmpdir_path = Path(tmpdir)
 
             # Write script to temporary file
@@ -7069,7 +6668,7 @@ class FunctionManager(BaseFunctionManager):
             # Create Unix domain socket for RPC
             socket_path = tmpdir_path / "rpc.sock"
 
-            # Get the path to unity-primitive CLI
+            # Get the path to unify-primitive CLI
             shell_runner_path = Path(__file__).parent / "shell_runner.py"
 
             # Build environment for the subprocess (sanitized: no raw provider
@@ -7080,15 +6679,15 @@ class FunctionManager(BaseFunctionManager):
 
             script_env = build_sandbox_env()
             script_env["UNIFY_RPC_SOCKET"] = str(socket_path)
-            # Add the shell_runner.py as unity-primitive command
+            # Add the shell_runner.py as unify-primitive command
             # We create a wrapper script that invokes python with shell_runner.py
-            wrapper_path = tmpdir_path / "unity-primitive"
+            wrapper_path = tmpdir_path / "unify-primitive"
             python_path = sys.executable
             wrapper_path.write_text(
                 f'#!/bin/sh\nexec "{python_path}" "{shell_runner_path}" "$@"\n',
             )
             wrapper_path.chmod(0o755)
-            # Prepend tmpdir to PATH so unity-primitive is available
+            # Prepend tmpdir to PATH so unify-primitive is available
             script_env["PATH"] = f"{tmpdir}:{script_env.get('PATH', '')}"
 
             # Add user-provided environment variables
@@ -7118,7 +6717,7 @@ class FunctionManager(BaseFunctionManager):
                 reader: asyncio.StreamReader,
                 writer: asyncio.StreamWriter,
             ) -> None:
-                """Answer one request from a unity-primitive invocation.
+                """Answer one request from a unify-primitive invocation.
 
                 Each invocation opens its own connection, sends one line and
                 reads one line back; the stream server owns the connection

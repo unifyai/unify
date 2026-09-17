@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# Unity test helper shell initialization
+# Unify test helper shell initialization
 #
 # Add this single line to your ~/.zshrc:
 #   source /path/to/your/unity/clone/tests/shell_init.zsh

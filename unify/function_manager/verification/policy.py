@@ -91,11 +91,6 @@ def spot_check_rate(fn: Mapping[str, Any], settings: VerificationSettings) -> fl
     return base
 
 
-def uses_llm_passes(fn: Mapping[str, Any], settings: VerificationSettings) -> bool:
-    """Whether the class runs LLM passes at all (``safe_noop`` relies on tier-0)."""
-    return required_passes(fn, settings) > 0
-
-
 def derive_verify(
     fn: Mapping[str, Any],
     *,

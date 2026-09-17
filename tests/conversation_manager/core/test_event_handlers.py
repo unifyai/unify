@@ -42,9 +42,7 @@ from unify.conversation_manager.events import (
     Event,
     InitializationComplete,
     NotificationInjectedEvent,
-    NotificationUnpinnedEvent,
     OpenSlowBrainTurn,
-    Ping,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
@@ -116,7 +114,6 @@ class TestEventHandlerRegistry:
     def test_known_events_are_registered(self):
         """Verify that expected event classes are in the registry."""
         expected_events = [
-            Ping,
             ActionStopRequested,
             UnifyMessageReceived,
             UnifyMessageSent,
@@ -128,7 +125,6 @@ class TestEventHandlerRegistry:
             ActorSessionResponse,
             ActorNotification,
             NotificationInjectedEvent,
-            NotificationUnpinnedEvent,
             OpenSlowBrainTurn,
             InitializationComplete,
             DirectMessageEvent,
@@ -218,7 +214,6 @@ class TestEventTypeToLogKey:
 
     def test_single_word(self):
         """Single-word event names convert correctly."""
-        assert _event_type_to_log_key(Ping) == "ping"
         assert _event_type_to_log_key(Error) == "error"
 
     def test_multi_word_events(self):
@@ -271,8 +266,8 @@ class TestHandleEventCore:
 
     @pytest.mark.asyncio
     async def test_handle_event_skips_non_loggable(self, mock_cm):
-        """Verify non-loggable events (like Ping) don't publish to bus."""
-        event = Ping(kind="keepalive")
+        """Verify non-loggable events (like OpenSlowBrainTurn) don't publish to bus."""
+        event = OpenSlowBrainTurn()
         assert event.loggable is False
 
         with patch(
@@ -280,26 +275,6 @@ class TestHandleEventCore:
         ) as mock_create_task:
             await EventHandler.handle_event(event, mock_cm)
             mock_create_task.assert_not_called()
-
-
-# =============================================================================
-# 3. Ping Event Handler Tests
-# =============================================================================
-
-
-class TestPingHandler:
-    """Tests for the Ping event handler."""
-
-    @pytest.mark.asyncio
-    async def test_ping_logs_debug_message(self, mock_cm):
-        """Ping handler logs debug message."""
-        event = Ping(kind="test")
-        await EventHandler.handle_event(event, mock_cm)
-
-        mock_cm._session_logger.debug.assert_called_with(
-            "ping",
-            "Ping received - keeping conversation manager alive",
-        )
 
 
 # =============================================================================
@@ -804,7 +779,7 @@ class TestActorEventHandlers:
 
 
 class TestNotificationEventHandlers:
-    """Tests for notification injection/unpinning event handlers."""
+    """Tests for the notification injection event handler."""
 
     @pytest.mark.asyncio
     async def test_notification_injected_adds_to_bar(self, mock_cm):
@@ -812,7 +787,6 @@ class TestNotificationEventHandlers:
         event = NotificationInjectedEvent(
             content="Important update from the actor",
             source="Actor",
-            target_conversation_id="conv_123",
         )
 
         await EventHandler.handle_event(event, mock_cm)
@@ -821,7 +795,6 @@ class TestNotificationEventHandlers:
         notif = mock_cm.notifications_bar.notifications[0]
         assert notif.content == "Important update from the actor"
         assert notif.type == "Actor"
-        assert notif.interjection_id == event.interjection_id
 
     @pytest.mark.asyncio
     async def test_notification_injected_preserves_pinned_flag(self, mock_cm):
@@ -829,7 +802,6 @@ class TestNotificationEventHandlers:
         event = NotificationInjectedEvent(
             content="Keep this visible",
             source="System",
-            target_conversation_id="conv_123",
             pinned=True,
         )
 
@@ -843,36 +815,11 @@ class TestNotificationEventHandlers:
         event = NotificationInjectedEvent(
             content="React to this",
             source="Actor",
-            target_conversation_id="conv_123",
         )
 
         await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.request_llm_run.assert_called_once_with(delay=0)
-
-    @pytest.mark.asyncio
-    async def test_notification_unpinned_removes_from_bar(self, mock_cm, static_now):
-        """NotificationUnpinnedEvent removes pinned notification."""
-        # First add a pinned notification
-        mock_cm.notifications_bar.push_notif(
-            "Test",
-            "Pinned content",
-            static_now,
-            pinned=True,
-            id="notif_123",
-        )
-        assert len(mock_cm.notifications_bar.notifications) == 1
-
-        event = NotificationUnpinnedEvent(
-            interjection_id="notif_123",
-            target_conversation_id="conv_123",
-        )
-
-        await EventHandler.handle_event(event, mock_cm)
-
-        # Notification should be removed
-        assert len(mock_cm.notifications_bar.notifications) == 0
-        mock_cm.request_llm_run.assert_not_called()
 
 
 # =============================================================================

@@ -213,16 +213,6 @@ class Function(BaseModel):
         json_schema_extra={"ui_editable": True},
     )
 
-    windows_os_required: bool = Field(
-        False,
-        description=(
-            "Whether this function requires Windows OS execution. When True "
-            "and desktop_mode='windows', routes to the remote Windows VM. "
-            "Used for functions depending on Windows-only libraries like xlwings."
-        ),
-        json_schema_extra={"ui_editable": True},
-    )
-
     # ── Usage trace: the memory strength behind activation-weighted
     # retrieval (see function_manager/activation.py). Written fire-and-
     # forget at the execution choke points; read at query time by

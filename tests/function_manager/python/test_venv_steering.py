@@ -121,8 +121,6 @@ def function_manager_factory():
     def _create():
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
-        ContextRegistry.forget(FunctionManager, "Functions/Primitives")
-        ContextRegistry.forget(FunctionManager, "Functions/Meta")
         fm = FunctionManager()
         managers.append(fm)
         return fm
@@ -223,7 +221,7 @@ async def test_correction_for_shell_source_does_not_fire():
     """Shell source defines nothing a patch can name, so nothing interrupts."""
     comms = _Comms()
     session = SteeringSession()
-    session.bind_source("unity-primitive comms send --to eu-alpha\n")
+    session.bind_source("unify-primitive comms send --to eu-alpha\n")
     session.interruption = InterruptionRequest(
         reason="stop",
         patches=[Patch(function_name="notify_vendors", source=EU_ONLY_PATCH)],

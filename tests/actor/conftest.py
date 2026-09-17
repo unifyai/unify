@@ -67,7 +67,7 @@ def _isolate_local_root(request, monkeypatch):
     concurrently in separate processes (parallel_run.sh) or sequentially
     in the same process.
 
-    ``get_local_root()`` defaults to ``~/Unity/Local``, so changing HOME
+    ``get_local_root()`` resolves under ``UNIFY_HOME``, so changing HOME
     is sufficient to isolate all filesystem paths that flow through it
     (prompts, LocalFileSystemAdapter, venv dirs, etc.).
 
