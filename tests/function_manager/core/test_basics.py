@@ -595,27 +595,6 @@ def test_inject_dependencies_actor_idempotent():
     assert namespace["primitives"] is first_primitives
 
 
-@_handle_project
-def test_inject_dependencies_mixed_actor_and_primitives():
-    """A function depending on both "primitives.actor.act" and "primitives.contacts.ask"
-    gets a single Primitives root injected into the namespace."""
-    from unify.function_manager.primitives.runtime import Primitives
-
-    fm = _FM()
-
-    func_data = {
-        "name": "mixed_dep",
-        "depends_on": ["primitives.actor.act", "primitives.contacts.ask"],
-    }
-    namespace = {}
-    visited = set()
-
-    fm._inject_dependencies(func_data, namespace=namespace, visited=visited)
-
-    assert "primitives" in namespace
-    assert isinstance(namespace["primitives"], Primitives)
-
-
 # --------------------------------------------------------------------------- #
 #  10. add_functions records primitives.actor.act in depends_on                 #
 # --------------------------------------------------------------------------- #
@@ -637,7 +616,7 @@ def test_add_function_with_actor_act_records_dependency():
         "    handle = await primitives.actor.act(\n"
         "        request=request,\n"
         '        guidelines="Check all fields.",\n'
-        '        prompt_functions=["primitives.contacts.ask"],\n'
+        '        prompt_functions=["summarise_report"],\n'
         "    )\n"
         "    return await handle.result()\n"
     )
@@ -652,15 +631,18 @@ def test_add_function_with_actor_act_records_dependency():
 
 
 @_handle_project
-def test_add_function_with_multiple_env_deps_records_all():
-    """A function using both primitives.actor.act and primitives.contacts.ask records all deps."""
+def test_add_function_with_env_and_compositional_deps_records_all():
+    """A function using both primitives.actor.act and a stored function records both deps."""
     fm = _FM()
+    fm.add_functions(
+        implementations="def summarise(text: str) -> str:\n    return text[:10]\n",
+    )
 
     source = (
         "async def orchestrate(query: str):\n"
-        '    """Use multiple environment namespaces."""\n'
-        "    contacts = await primitives.contacts.ask(query)\n"
-        "    handle = await primitives.actor.act(request=query)\n"
+        '    """Use the environment namespace and a stored function."""\n'
+        "    short = summarise(query)\n"
+        "    handle = await primitives.actor.act(request=short)\n"
         "    return await handle.result()\n"
     )
 
@@ -669,8 +651,7 @@ def test_add_function_with_multiple_env_deps_records_all():
 
     func_data = fm._get_function_data_by_name(name="orchestrate")
     depends_on = set(func_data.get("depends_on", []))
-    assert "primitives.actor.act" in depends_on
-    assert "primitives.contacts.ask" in depends_on
+    assert depends_on == {"primitives.actor.act", "summarise"}
 
 
 # --------------------------------------------------------------------------- #

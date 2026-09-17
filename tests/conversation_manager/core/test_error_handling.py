@@ -6,7 +6,7 @@ Tests for error handling and recovery in ConversationManager.
 
 This test file covers:
 1. Malformed events (invalid JSON, missing fields, unknown types)
-2. Event handler edge cases (unregistered handlers, missing contacts)
+2. Event handler edge cases (unregistered handlers)
 3. State recovery scenarios (duplicate events, stray results)
 4. Graceful degradation when data is missing or invalid
 
@@ -19,7 +19,6 @@ import pytest
 from datetime import datetime
 from dataclasses import dataclass
 
-from tests.conversation_manager.conftest import TEST_CONTACTS
 from unify.conversation_manager.events import (
     Event,
     UnifyMessageReceived,
@@ -79,7 +78,7 @@ class TestMalformedEvents:
 
     def test_from_json_missing_required_field(self, static_now):
         """Event.from_json should raise when required field is missing."""
-        # UnifyMessageReceived requires 'contact' and 'content'
+        # UnifyMessageReceived requires 'content'
         data = json.dumps(
             {
                 "event_name": "UnifyMessageReceived",
@@ -91,12 +90,10 @@ class TestMalformedEvents:
 
     def test_from_json_extra_fields_ignored(self, static_now):
         """Event.from_json should ignore extra fields not in dataclass."""
-        contact = TEST_CONTACTS[1]
         data = json.dumps(
             {
                 "event_name": "UnifyMessageReceived",
                 "payload": {
-                    "contact": contact,
                     "content": "test message",
                     "timestamp": static_now.isoformat(),
                     "extra_field_that_does_not_exist": "should be ignored",
@@ -140,42 +137,6 @@ class TestEventHandlerEdgeCases:
         assert result.output_events == []
 
     @pytest.mark.asyncio
-    async def test_event_with_unknown_contact_id(self, initialized_cm):
-        """A message from an unknown contact_id is handled via event.contact.
-
-        This test verifies that the event handler processes the event correctly
-        when the contact_id isn't found in ContactManager. The handler should
-        fall back to using event.contact data.
-
-        Note: We test only the event handling, not the LLM response. The LLM
-        might try to reply, which could fail for unrelated reasons.
-        """
-        cm = initialized_cm
-        from unify.conversation_manager.domains.event_handlers import EventHandler
-
-        unknown_contact = {
-            "contact_id": 9999,  # Not in TEST_CONTACTS or ContactManager
-            "first_name": "Unknown",
-            "surname": "Person",
-            "email_address": "unknown@example.com",
-            "phone_number": "+19999999999",
-        }
-
-        event = UnifyMessageReceived(
-            contact=unknown_contact,
-            content="Hello from unknown contact",
-        )
-
-        # Call the event handler directly (without running LLM)
-        await EventHandler.handle_event(event, cm.cm)
-
-        # Verify the message was added to conversations using event.contact data
-        assert 9999 in cm.contact_index.active_conversations
-        thread = cm.contact_index.get_messages_for_contact(9999)
-        assert len(thread) >= 1
-        assert thread[0].content == "Hello from unknown contact"
-
-    @pytest.mark.asyncio
     async def test_ping_event_handler(self, initialized_cm):
         """Ping events should be handled without triggering LLM."""
         cm = initialized_cm
@@ -200,18 +161,16 @@ class TestStateRecovery:
     async def test_duplicate_message_received(self, initialized_cm):
         """Duplicate message events should be handled (added to thread twice)."""
         cm = initialized_cm
-        contact = TEST_CONTACTS[1]
 
-        event = UnifyMessageReceived(contact=contact, content="Duplicate message")
+        event = UnifyMessageReceived(content="Duplicate message")
 
         # Process the same event twice
         await cm.step(event)
         await cm.step(event)
 
-        # Both messages should be in the thread (no deduplication at this level)
-        thread = cm.contact_index.get_messages_for_contact(contact["contact_id"])
+        # Both messages should be in the conversation (no deduplication at this level)
         matching = [
-            m for m in thread if getattr(m, "content", None) == "Duplicate message"
+            m for m in cm.cm.chat_history.recent() if m.content == "Duplicate message"
         ]
         assert len(matching) == 2
 
@@ -231,52 +190,6 @@ class TestStateRecovery:
 
         # Should not crash - handler uses .pop() with default
         assert result.llm_requested is True
-
-
-# =============================================================================
-# Contact Index Edge Cases
-# =============================================================================
-
-
-class TestContactIndexEdgeCases:
-    """Tests for contact_index edge cases and error handling."""
-
-    @pytest.mark.asyncio
-    async def test_get_contact_nonexistent_id(self, initialized_cm):
-        """get_contact with non-existent ID should return None."""
-        cm = initialized_cm
-
-        contact = cm.contact_index.get_contact(contact_id=99999)
-        assert contact is None
-
-    @pytest.mark.asyncio
-    async def test_get_contact_without_id(self, initialized_cm):
-        """get_contact with no contact_id should return None."""
-        cm = initialized_cm
-
-        assert cm.contact_index.get_contact() is None
-
-    @pytest.mark.asyncio
-    async def test_push_message_creates_conversation(self, initialized_cm):
-        """push_message to new contact should create active_conversation entry."""
-        cm = initialized_cm
-
-        new_contact_id = 888
-
-        # Contact 888 not in active_conversations yet
-        assert new_contact_id not in cm.contact_index.active_conversations
-
-        cm.contact_index.push_message(
-            contact_id=new_contact_id,
-            sender_name="New Person",
-            message_content="Hello",
-            role="user",
-        )
-
-        # Now contact 888 should have an active conversation
-        assert new_contact_id in cm.contact_index.active_conversations
-        thread = cm.contact_index.get_messages_for_contact(new_contact_id)
-        assert len(thread) == 1
 
 
 # =============================================================================
@@ -327,32 +240,21 @@ class TestEventSerializationEdgeCases:
 
     def test_event_round_trip_preserves_data(self):
         """Event should survive JSON round-trip with all data intact."""
-        contact = TEST_CONTACTS[1]
-        original = UnifyMessageReceived(contact=contact, content="Test message")
+        original = UnifyMessageReceived(content="Test message")
 
         # Serialize and deserialize
         json_str = original.to_json()
         restored = Event.from_json(json_str)
 
         assert isinstance(restored, UnifyMessageReceived)
-        assert restored.contact == original.contact
         assert restored.content == original.content
         # Timestamps should be equal (within serialization precision)
         assert abs((restored.timestamp - original.timestamp).total_seconds()) < 1
 
     def test_event_round_trip_preserves_attachments(self):
-        """Attachment dicts survive the JSON round-trip unchanged."""
-        contact = TEST_CONTACTS[1]
-        attachments = [
-            {
-                "filename": "report.pdf",
-                "filepath": "Attachments/att-1_report.pdf",
-                "content_type": "application/pdf",
-                "size_bytes": 1024,
-            },
-        ]
+        """Attachment paths survive the JSON round-trip unchanged."""
+        attachments = ["Attachments/att-1_report.pdf"]
         original = UnifyMessageReceived(
-            contact=contact,
             content="See attached",
             attachments=attachments,
         )
@@ -378,8 +280,8 @@ class TestEventSerializationEdgeCases:
 # =============================================================================
 
 
-class TestChatHistoryEdgeCases:
-    """Tests for chat history management edge cases."""
+class TestBrainMessagesEdgeCases:
+    """Tests for the brain's LLM message preprocessing edge cases."""
 
     @pytest.mark.asyncio
     async def test_preprocess_messages_with_string(self, initialized_cm):
@@ -469,38 +371,3 @@ class TestLLMRequestEdgeCases:
 
         # Clear for other tests
         cm.cm._pending_llm_requests.clear()
-
-
-# =============================================================================
-# Contact Fallback Tests
-# =============================================================================
-# Note: Tests for ContactIndex data freshness are in
-# tests/contact_manager/test_contact_index_freshness.py
-
-
-class TestContactFallback:
-    """Tests for contact fallback behavior when ContactManager is unavailable."""
-
-    @pytest.mark.asyncio
-    async def test_contact_manager_not_set_returns_none(
-        self,
-        initialized_cm,
-    ):
-        """When ContactManager is not set, get_contact falls back to the
-        inbound contact cache, which is empty here, so it returns None.
-        """
-        cm = initialized_cm
-
-        # Temporarily unset the contact_manager
-        original_cm = cm.contact_index._contact_manager
-        cm.contact_index._contact_manager = None
-
-        try:
-            # Without ContactManager, get_contact returns None
-            contact = cm.contact_index.get_contact(
-                contact_id=TEST_CONTACTS[1]["contact_id"],
-            )
-            assert contact is None
-        finally:
-            # Restore
-            cm.contact_index._contact_manager = original_cm

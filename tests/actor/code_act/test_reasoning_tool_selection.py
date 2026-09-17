@@ -5,11 +5,11 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from tests.actor.state_managers.utils import (
+from tests.actor.code_act.helpers import (
     extract_code_act_execute_code_snippets,
     get_code_act_tool_calls,
-    make_code_act_actor,
 )
+from unify.actor.code_act_actor import CodeActActor
 from unify.common import reasoning
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
@@ -26,6 +26,21 @@ def _coerce_query_llm_result(response_format: Any, result: dict[str, Any]) -> An
         f"needs_reply={result['needs_reply']}; "
         f"confidence={result['confidence']}"
     )
+
+
+def _execution_only_actor() -> CodeActActor:
+    """A CodeActActor with the execution tools only, no library discovery."""
+    actor = CodeActActor(environments=[], tool_policy=None, timeout=200)
+    act_tools = actor.get_tools("act")
+    actor.add_tools(
+        "act",
+        {
+            name: tool
+            for name, tool in act_tools.items()
+            if not name.startswith(("FunctionManager_", "GuidanceManager_"))
+        },
+    )
+    return actor
 
 
 @pytest.mark.asyncio
@@ -88,12 +103,18 @@ async def test_code_act_sprinkles_query_llm_into_semantic_python_loop(
         "Do not ask clarifying questions. Return only the final list of ids."
     )
 
-    async with make_code_act_actor(impl="simulated") as (actor, _primitives, _calls):
+    actor = _execution_only_actor()
+    try:
         handle = await actor.act(
             request,
             clarification_enabled=False,
         )
         result = await handle.result()
+    finally:
+        try:
+            await actor.close()
+        except Exception:
+            pass
 
     assert result is not None
     assert "execute_code" in set(get_code_act_tool_calls(handle))

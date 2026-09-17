@@ -1,8 +1,8 @@
 """Actor execution environment for CodeActActor.
 
 Provides ``primitives.actor.act()`` in the sandbox for spawning isolated
-inner CodeActActors for focused sub-tasks.  Lives under the unified
-``primitives`` namespace alongside state managers and computer control.
+inner CodeActActors for focused sub-tasks.  It is the sole occupant of the
+``primitives`` namespace.
 
 Stored functions that call ``primitives.actor.act(...)`` work through the
 standard ``depends_on`` pipeline: detected at storage time by
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from unify.common.async_tool_loop import SteerableToolHandle
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
-    from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+    from unify.function_manager.primitives import Primitives
 
 logger = logging.getLogger(__name__)
 
@@ -125,17 +125,6 @@ def _build_scoped_gm(
     return gm
 
 
-def _build_scoped_km() -> "KnowledgeManager":
-    """Build a fresh KnowledgeManager for an inner actor.
-
-    Uses ``_force_new=True`` to bypass ``SingletonABCMeta`` caching so the
-    inner actor does not share mutable filter state with the parent.
-    """
-    from unify.manager_registry import ManagerRegistry
-
-    return ManagerRegistry.get_knowledge_manager(_force_new=True)
-
-
 def _resolve_prompt_guidance(
     prompt_guidance: list[str | int] | None,
 ) -> tuple[str | None, frozenset[int]]:
@@ -174,24 +163,6 @@ def _resolve_prompt_guidance(
             parts.append(f"\n{g.content}")
             if g.function_ids:
                 parts.append(f"\nRelated functions: {g.function_ids}")
-            imgs = g.images.root if hasattr(g.images, "root") else g.images
-            if imgs:
-                img_lines = ["Images:"]
-                for img in imgs:
-                    fp = getattr(
-                        getattr(img, "raw_image_ref", None),
-                        "filepath",
-                        None,
-                    )
-                    ann = getattr(img, "annotation", "")
-                    label = (
-                        fp
-                        or f"image_id={getattr(getattr(img, 'raw_image_ref', None), 'image_id', '?')}"
-                    )
-                    img_lines.append(
-                        f"- {label}: {ann}" if ann else f"- {label}",
-                    )
-                parts.append("\n".join(img_lines))
             sections.append("\n".join(parts))
             resolved_ids.add(g.guidance_id)
 
@@ -205,17 +176,12 @@ def _build_environments_from_db(
 ) -> List[BaseEnvironment]:
     """Resolve *prompt_functions* patterns against the FunctionManager DB.
 
-    Returns a list of environments for the inner actor.  Supports all
-    primitive namespaces (state managers, actor) as well as
-    compositional functions stored in the FunctionManager.
+    Returns a list of environments for the inner actor.  Supports the
+    ``primitives.actor`` namespace as well as compositional functions
+    stored in the FunctionManager.
     """
     from unify.actor.environments.base import resolve_directly_callable
     from unify.actor.environments.function_store import FunctionStoreEnvironment
-    from unify.actor.environments.state_managers import StateManagerEnvironment
-    from unify.function_manager.primitives import (
-        Primitives,
-        PrimitiveScope,
-    )
 
     if not prompt_functions:
         return []
@@ -236,49 +202,25 @@ def _build_environments_from_db(
     matched_names = resolve_directly_callable(prompt_functions, all_known_names)
 
     # Bucket by environment type.
-    state_manager_methods: set[str] = set()
+    actor_prefix = f"primitives.{ActorEnvironment.MANAGER_ALIAS}."
     actor_methods: set[str] = set()
     fm_function_names: list[str] = []
 
     for name in matched_names:
-        if name.startswith("primitives."):
-            parts = name.split(".")
-            alias = parts[1] if len(parts) >= 2 else ""
-            if alias == "actor":
-                actor_methods.add(name)
-            else:
-                state_manager_methods.add(name)
+        if name.startswith(actor_prefix):
+            actor_methods.add(name)
         elif "." not in name:
             fm_function_names.append(name)
         else:
             logger.debug(
                 "Skipping dotted name %r in prompt_functions — only "
-                "primitives.* and bare compositional names can be resolved from DB",
+                "primitives.actor.* and bare compositional names can be "
+                "resolved from DB",
                 name,
             )
 
     # Build environments.
     envs: list[BaseEnvironment] = []
-
-    if state_manager_methods:
-        allowed_managers = default_runtime_scope().scoped_managers
-        needed_managers: set[str] = set()
-        allowed_state_manager_methods: set[str] = set()
-        for fq in state_manager_methods:
-            parts = fq.split(".")
-            if len(parts) >= 2:
-                alias = parts[1]
-                if alias in allowed_managers:
-                    needed_managers.add(alias)
-                    allowed_state_manager_methods.add(fq)
-        if needed_managers:
-            scope = PrimitiveScope(scoped_managers=frozenset(needed_managers))
-            envs.append(
-                StateManagerEnvironment(
-                    Primitives(primitive_scope=scope),
-                    allowed_methods=allowed_state_manager_methods,
-                ),
-            )
 
     if actor_methods:
         envs.append(
@@ -469,12 +411,9 @@ class _ActorRunner:
                dotted-segment matching against function names stored in
                the database:
 
-               - ``"primitives"`` — all primitives (state managers, actor)
-               - ``"primitives.contacts"`` — all contacts methods
-               - ``"primitives.contacts.ask"`` — just contacts.ask
-               - ``"primitives.data"`` — all data methods
-               - ``"primitives.data.filter"`` — just data.filter
+               - ``"primitives"`` — all primitives
                - ``"primitives.actor"`` — actor delegation
+               - ``"primitives.actor.act"`` — just actor.act
                - ``"alpha"`` — a specific stored function
 
             Any function stored in the database (primitives or
@@ -577,14 +516,11 @@ class _ActorRunner:
         if resolved_guidance_ids:
             inner_gm.exclude_ids = resolved_guidance_ids
 
-        inner_km = _build_scoped_km()
-
         # Create inner CodeActActor.
         inner_actor = CodeActActor(
             environments=inner_envs,
             function_manager=inner_fm,
             guidance_manager=inner_gm,
-            knowledge_manager=inner_km,
             can_compose=bool(can_compose),
             can_store=bool(can_store),
             timeout=effective_timeout,
@@ -634,10 +570,12 @@ class _ActorRunner:
 
 
 class ActorEnvironment(BaseEnvironment):
-    """Environment that provides actor spawning via ``primitives.actor``.
+    """The ``primitives`` environment: actor spawning via ``primitives.actor``.
 
-    Injects a ``Primitives``-scoped object into the sandbox so that
+    Injects a ``Primitives`` object into the sandbox so that
     ``primitives.actor.act(...)`` spawns isolated inner CodeActActors.
+    Its method docs are inlined in the prompt, so its tools are excluded
+    from FunctionManager search (``prompt_documented_names`` is unset).
 
     Parameters
     ----------
@@ -646,6 +584,8 @@ class ActorEnvironment(BaseEnvironment):
         ``{"primitives.actor.act"}``).  When set, only these methods
         appear in ``get_tools()`` and ``get_prompt_context()``.
         When ``None`` (default), all actor methods are exposed.
+    clarification_up_q / clarification_down_q : asyncio.Queue | None
+        Per-call clarification channel injected into sandbox calls.
     """
 
     NAMESPACE = "primitives"
@@ -661,17 +601,26 @@ class ActorEnvironment(BaseEnvironment):
         from unify.function_manager.primitives import Primitives, PrimitiveScope
 
         self._allowed_methods = frozenset(allowed_methods) if allowed_methods else None
-        primitives = Primitives(
+        self._primitives = Primitives(
             primitive_scope=PrimitiveScope(
                 scoped_managers=frozenset({self.MANAGER_ALIAS}),
             ),
         )
         super().__init__(
-            instance=primitives,
+            instance=self._primitives,
             namespace=self.NAMESPACE,
             clarification_up_q=clarification_up_q,
             clarification_down_q=clarification_down_q,
         )
+
+    @property
+    def allowed_methods(self) -> Optional[frozenset[str]]:
+        """The per-method filter, or ``None`` when every actor method is exposed."""
+        return self._allowed_methods
+
+    def get_instance(self) -> "Primitives":
+        """Return the scoped ``Primitives`` instance injected into the sandbox."""
+        return self._primitives
 
     def get_tools(self) -> Dict[str, ToolMetadata]:
         registry = get_registry()
@@ -713,7 +662,14 @@ class ActorEnvironment(BaseEnvironment):
         filtered_doc = registry._filter_internal_params_from_docstring(full_doc)
 
         fq_prefix = f"{self.NAMESPACE}.{self.MANAGER_ALIAS}"
-        lines = [f"### `{fq_prefix}` — Actor Delegation\n"]
+        lines = [
+            f"### `{fq_prefix}` — Actor Delegation\n",
+            "The one `primitives.*` surface. Calls return a "
+            "`SteerableToolHandle`: make it the last expression of "
+            "`execute_code` (or call it via `execute_function`) so the outer "
+            "loop can steer it — `await handle.result()` only when the code "
+            "itself composes on the result.\n",
+        ]
         lines.append(f"**`{fq_prefix}.act{sig_str}`**")
         if filtered_doc:
             for doc_line in filtered_doc.splitlines():

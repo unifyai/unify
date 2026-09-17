@@ -37,11 +37,11 @@ class _FakeManager:
 
 
 class _FakePrimitives:
-    """Simulates the Primitives namespace with two managers."""
+    """Simulates the Primitives namespace with two aliases."""
 
     def __init__(self):
-        self.contacts = _FakeManager()
-        self.tasks = _FakeManager()
+        self.actor = _FakeManager()
+        self.helper = _FakeManager()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -51,12 +51,12 @@ class _FakePrimitives:
 
 @pytest.mark.asyncio
 async def test_proxy_forwards_context_to_accepting_method():
-    """primitives.contacts.ask(...) receives _parent_chat_context when the
+    """primitives.actor.ask(...) receives _parent_chat_context when the
     method signature accepts it."""
     ctx = [{"role": "user", "content": "Hello"}]
     proxy = ContextForwardingProxy(_FakePrimitives(), _parent_chat_context=ctx)
 
-    result = await proxy.contacts.ask(text="Who is Alice?")
+    result = await proxy.actor.ask(text="Who is Alice?")
 
     assert result["text"] == "Who is Alice?"
     assert result["ctx"] is ctx
@@ -71,19 +71,19 @@ async def test_proxy_injection_is_selective():
     prims = _FakePrimitives()
     proxy = ContextForwardingProxy(prims, _parent_chat_context=ctx)
 
-    # Accepting method on a different manager → still injected.
-    result = await proxy.tasks.ask(text="facts")
-    assert result["ctx"] is ctx, "context not forwarded to tasks.ask"
+    # Accepting method on a different alias → still injected.
+    result = await proxy.helper.ask(text="facts")
+    assert result["ctx"] is ctx, "context not forwarded to helper.ask"
 
     # Non-accepting method → no TypeError, no injection.
-    assert await proxy.contacts.update(payload="x") == "updated:x"
+    assert await proxy.actor.update(payload="x") == "updated:x"
 
     # Explicit _parent_chat_context → not overwritten by the proxy.
     explicit = [{"role": "user", "content": "explicit"}]
-    result2 = await proxy.contacts.ask(text="t", _parent_chat_context=explicit)
+    result2 = await proxy.actor.ask(text="t", _parent_chat_context=explicit)
     assert result2["ctx"] is explicit, "proxy overwrote explicit _parent_chat_context"
 
     # None context → behaves like the unwrapped object.
     proxy_none = ContextForwardingProxy(prims, _parent_chat_context=None)
-    result3 = await proxy_none.contacts.ask(text="t2")
+    result3 = await proxy_none.actor.ask(text="t2")
     assert result3["ctx"] is None, "None context should not inject anything"

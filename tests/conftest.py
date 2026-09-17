@@ -198,13 +198,10 @@ def stub_external_deps(monkeypatch):
 
     # Patch prompt_helpers.now everywhere it's imported
     monkeypatch.setattr("unify.common.prompt_helpers.now", _static_now)
-    monkeypatch.setattr("unify.image_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unify.memory_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unify.file_manager.prompt_builders.now", _static_now)
     monkeypatch.setattr("unify.conversation_manager.prompt_builders.now", _static_now)
     monkeypatch.setattr("unify.conversation_manager.events.prompt_now", _static_now)
     monkeypatch.setattr(
-        "unify.conversation_manager.domains.contact_index.prompt_now",
+        "unify.conversation_manager.domains.chat_history.prompt_now",
         _static_now,
     )
     monkeypatch.setattr(

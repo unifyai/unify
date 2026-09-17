@@ -27,7 +27,7 @@ from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
     schema_dict_to_pydantic,
 )
-from unify.conversation_manager.domains.contact_index import ContactIndex
+from unify.conversation_manager.domains.chat_history import ChatHistory
 from unify.conversation_manager.domains.notifications import NotificationBar
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -39,12 +39,11 @@ from unify.conversation_manager.domains.notifications import NotificationBar
 def mock_cm():
     """Minimal mock ConversationManager for unit-level act tool tests."""
     cm = MagicMock()
-    cm.mode = "text"
-    cm.contact_index = ContactIndex()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.notifications_bar = NotificationBar()
-    cm.chat_history = []
+    cm.chat_history = ChatHistory()
+    cm.brain_messages = []
     cm._current_state_snapshot = None
     cm._current_snapshot_state = None
     cm._pending_steering_tasks = set()
@@ -213,8 +212,7 @@ class TestActForwardsResponseFormat:
         mock_cm.actor.act = fake_act
 
         await brain_action_tools.act(
-            query="Find contacts",
-            requesting_contact_id=1,
+            query="Find the report",
             response_format={"name": "string", "email": "string"},
         )
 
@@ -248,7 +246,7 @@ class TestActForwardsResponseFormat:
         mock_cm.actor = MagicMock()
         mock_cm.actor.act = fake_act
 
-        await brain_action_tools.act(query="Find contacts", requesting_contact_id=1)
+        await brain_action_tools.act(query="Find the report")
 
         assert captured_kwargs.get("response_format") is None
 
@@ -283,8 +281,7 @@ class TestStructuredResultPropagation:
         mock_cm.actor.act = fake_act
 
         result = await brain_action_tools.act(
-            query="Find Alice's contact info",
-            requesting_contact_id=1,
+            query="Find the Aurora report",
             response_format={"name": "string", "email": "string"},
         )
 
@@ -320,7 +317,6 @@ class TestStructuredResultPropagation:
 
         await brain_action_tools.act(
             query="Compute something",
-            requesting_contact_id=1,
             response_format={"x": "integer"},
         )
 

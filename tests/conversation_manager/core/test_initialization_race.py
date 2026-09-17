@@ -7,14 +7,13 @@ Integration tests for manager initialization race conditions.
 These tests verify the system correctly handles events that arrive BEFORE or
 DURING manager initialization:
 - Chat messages can arrive immediately after the session boots
-- ContactManager/TranscriptManager take time to initialize
+- The chat table is bound part-way through initialization
 - Multiple events can arrive in rapid succession
 
 Events arriving before initialization is complete must not fail silently.
 These tests verify:
 - queue_operation correctly defers work until after initialization
-- BackupContactsEvent correctly populates the fallback contact cache
-- Events can be handled safely during the initialization window
+- Chat messages that arrive before the chat table is bound are kept
 - Multiple rapid events don't cause race conditions
 """
 
@@ -40,28 +39,6 @@ async def event_broker():
     yield broker
     await broker.aclose()
     reset_in_memory_event_broker()
-
-
-@pytest.fixture
-def boss_contact():
-    return {
-        "contact_id": 1,
-        "first_name": "Boss",
-        "surname": "User",
-        "phone_number": "+15555550001",
-        "email_address": "boss@example.com",
-    }
-
-
-@pytest.fixture
-def alice_contact():
-    return {
-        "contact_id": 2,
-        "first_name": "Alice",
-        "surname": "Smith",
-        "phone_number": "+15555551234",
-        "email_address": "alice@example.com",
-    }
 
 
 class TestQueueOperationDuringInit:
@@ -142,7 +119,7 @@ class TestQueueOperationDuringInit:
         """
         Test that multiple queued operations execute in FIFO order.
 
-        Order matters for things like logging messages and contact updates.
+        Order matters for things like EventBus persistence.
         """
         from unify.conversation_manager.domains import managers_utils
 
@@ -185,236 +162,48 @@ class TestQueueOperationDuringInit:
         )
 
 
-class TestBackupContactsFallback:
-    """
-    Tests for the BackupContactsEvent fallback mechanism.
-
-    When inbound messages arrive with contact data, a BackupContactsEvent
-    populates a fallback cache in ContactIndex so lookups work before
-    ContactManager is initialized.
-    """
-
-    @pytest.mark.asyncio
-    async def test_contact_index_uses_fallback_before_manager(
-        self,
-        boss_contact,
-        alice_contact,
-    ):
-        """
-        Test that ContactIndex uses fallback cache when manager not set.
-
-        This is critical - without it, contact lookups fail during init.
-        """
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        ci = ContactIndex()
-
-        # Verify manager is not set
-        assert ci._contact_manager is None
-
-        # Set fallback contacts (simulates BackupContactsEvent handler)
-        ci.set_fallback_contacts([boss_contact, alice_contact])
-
-        # Lookups should work via fallback
-        boss = ci.get_contact(contact_id=1)
-        assert boss is not None, "Boss contact not found via fallback"
-        assert boss["first_name"] == "Boss"
-
-        alice = ci.get_contact(contact_id=2)
-        assert alice is not None, "Alice contact not found via fallback"
-        assert alice["first_name"] == "Alice"
-
-    @pytest.mark.asyncio
-    async def test_fallback_survives_manager_initialization(
-        self,
-        boss_contact,
-        alice_contact,
-    ):
-        """
-        Test that fallback contacts remain available after manager is set.
-
-        The fallback should NOT be cleared when ContactManager is set,
-        because contacts from recent inbounds should remain available
-        until ContactManager can look them up.
-        """
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        ci = ContactIndex()
-
-        # Set fallback first
-        ci.set_fallback_contacts([boss_contact, alice_contact])
-
-        # Create a mock ContactManager that returns nothing
-        mock_cm = MagicMock()
-        mock_cm.get_contact_info.return_value = {}
-        mock_cm.filter_contacts.return_value = {"contacts": []}
-
-        # Set the manager
-        ci.set_contact_manager(mock_cm)
-
-        # Now lookups should go through ContactManager (which returns nothing)
-        # But wait - the current implementation checks ContactManager first
-        # and fallback is only used when manager is None
-        # This is the expected behavior per the current code
-
-        # Let's verify the manager is now set
-        assert ci._contact_manager is not None
-
-    @pytest.mark.asyncio
-    async def test_backup_contacts_event_handler_populates_cache(
-        self,
-        event_broker,
-        boss_contact,
-        alice_contact,
-    ):
-        """
-        Test that BackupContactsEvent handler correctly populates fallback cache.
-
-        This tests the actual event handler code path.
-        """
-        from unify.conversation_manager.domains.event_handlers import EventHandler
-        from unify.conversation_manager.events import BackupContactsEvent
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        # Create a mock CM with real ContactIndex (uninitialized)
-        ci = ContactIndex()
-        mock_cm = MagicMock()
-        mock_cm.contact_index = ci
-        mock_cm._session_logger = MagicMock()
-
-        # Handler should only populate fallback if manager not set
-        assert ci._contact_manager is None
-
-        # Trigger the event
-        event = BackupContactsEvent(contacts=[boss_contact, alice_contact])
-        await EventHandler.handle_event(event, mock_cm)
-
-        # Fallback should now be populated
-        assert 1 in ci._fallback_contacts, "Boss contact not cached"
-        assert 2 in ci._fallback_contacts, "Alice contact not cached"
-
-    @pytest.mark.asyncio
-    async def test_backup_contacts_skipped_after_manager_init(
-        self,
-        event_broker,
-        boss_contact,
-    ):
-        """
-        Test that BackupContactsEvent is skipped once ContactManager is set.
-
-        After initialization, ContactManager is the source of truth.
-        """
-        from unify.conversation_manager.domains.event_handlers import EventHandler
-        from unify.conversation_manager.events import BackupContactsEvent
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        ci = ContactIndex()
-        mock_cm = MagicMock()
-        mock_cm.contact_index = ci
-        mock_cm._session_logger = MagicMock()
-
-        # Set a manager (simulates post-initialization)
-        ci._contact_manager = MagicMock()
-
-        # Trigger the event
-        event = BackupContactsEvent(contacts=[boss_contact])
-        await EventHandler.handle_event(event, mock_cm)
-
-        # Fallback should NOT be populated (manager is set)
-        assert 1 not in ci._fallback_contacts, (
-            "Backup contacts populated after manager set! "
-            "This could cause stale data issues."
-        )
-
-
 class TestEventsDuringInitialization:
     """
     Tests for handling events during the initialization window.
 
     Events can arrive at any time:
     - Before initialization starts
-    - During initialization (managers partially ready)
+    - During initialization (the chat table not yet bound)
     - After initialization completes
 
     The system must handle all these cases gracefully.
     """
 
     @pytest.mark.asyncio
-    async def test_message_received_before_init_uses_fallback(
-        self,
-        event_broker,
-        boss_contact,
-    ):
+    async def test_message_received_before_init_is_kept(self, event_broker):
         """
-        Test that UnifyMessageReceived before init uses the fallback contact.
+        A chat message that arrives before the chat table is bound is kept
+        in memory and wakes the brain.
 
         1. The session boots
         2. A chat message arrives immediately
-        3. ContactManager not initialized yet
-        4. Handler needs to resolve contact
+        3. The chat table is not bound yet
         """
+        from unify.conversation_manager.domains.chat_history import ChatHistory
         from unify.conversation_manager.domains.event_handlers import EventHandler
-        from unify.conversation_manager.events import (
-            BackupContactsEvent,
-            UnifyMessageReceived,
-        )
-        from unify.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.events import UnifyMessageReceived
 
-        ci = ContactIndex()
+        history = ChatHistory()
         mock_cm = MagicMock()
-        mock_cm.contact_index = ci
+        mock_cm.chat_history = history
+        mock_cm.active_ask_handle = None
         mock_cm._session_logger = MagicMock()
         mock_cm.notifications_bar = MagicMock()
         mock_cm.request_llm_run = AsyncMock()
 
-        # First, backup contacts arrive
-        backup_event = BackupContactsEvent(contacts=[boss_contact])
-        await EventHandler.handle_event(backup_event, mock_cm)
+        message = UnifyMessageReceived(content="Hello!")
 
-        # Now a message arrives (still before init)
-        message = UnifyMessageReceived(
-            contact=boss_contact,
-            content="Hello!",
-        )
-
-        # The handler resolves the contact via fallback and records it
         await EventHandler.handle_event(message, mock_cm)
 
-        assert ci.get_messages_for_contact(1)[0].content == "Hello!"
+        assert not history.is_bound
+        assert history.recent()[0].content == "Hello!"
+        assert history.recent()[0].role == "user"
         mock_cm.request_llm_run.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_sync_contacts_queued_before_init(self, event_broker):
-        """
-        Test that SyncContacts event queues operation for after init.
-
-        SyncContacts requires ContactManager to be initialized.
-        """
-        from unify.conversation_manager.domains.event_handlers import EventHandler
-        from unify.conversation_manager.domains import managers_utils
-        from unify.conversation_manager.events import SyncContacts
-
-        # Reset the queue
-        while not managers_utils._operations_queue.empty():
-            try:
-                managers_utils._operations_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-        mock_cm = MagicMock()
-        mock_cm.initialized = False
-        mock_cm._session_logger = MagicMock()
-        mock_cm.contact_manager = None  # Not initialized yet
-
-        # Handle SyncContacts
-        event = SyncContacts(reason="Test sync")
-        await EventHandler.handle_event(event, mock_cm)
-
-        # An operation should have been queued
-        assert not managers_utils._operations_queue.empty(), (
-            "SyncContacts didn't queue operation. "
-            "This would cause it to fail silently before init."
-        )
 
 
 class TestRapidEventsRaceCondition:
@@ -426,12 +215,7 @@ class TestRapidEventsRaceCondition:
     """
 
     @pytest.mark.asyncio
-    async def test_multiple_messages_during_init_window(
-        self,
-        event_broker,
-        boss_contact,
-        alice_contact,
-    ):
+    async def test_multiple_messages_during_init_window(self, event_broker):
         """
         Test that multiple chat messages during the init window are all handled.
 
@@ -447,11 +231,7 @@ class TestRapidEventsRaceCondition:
             # Send 5 messages rapidly
             tasks = []
             for i in range(5):
-                contact = boss_contact if i % 2 == 0 else alice_contact
-                message = UnifyMessageReceived(
-                    contact=contact,
-                    content=f"Message {i}",
-                )
+                message = UnifyMessageReceived(content=f"Message {i}")
                 tasks.append(
                     event_broker.publish(
                         UnifyMessageReceived.topic,
@@ -514,64 +294,3 @@ class TestInitializationTimeout:
             pytest.fail(
                 "wait_for_initialization never returned even though init completed",
             )
-
-
-class TestContactIndexInitializationState:
-    """
-    Tests for ContactIndex behavior during different initialization states.
-    """
-
-    @pytest.mark.asyncio
-    async def test_is_contact_manager_initialized_property(self):
-        """
-        Test that is_contact_manager_initialized correctly reflects state.
-        """
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        ci = ContactIndex()
-
-        # Initially not initialized
-        assert not ci.is_contact_manager_initialized
-
-        # After setting manager
-        ci._contact_manager = MagicMock()
-        assert ci.is_contact_manager_initialized
-
-    @pytest.mark.asyncio
-    async def test_contact_manager_property_raises_before_init(self):
-        """
-        Test that accessing contact_manager property raises before init.
-
-        This catches code that incorrectly assumes manager is always available.
-        """
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        ci = ContactIndex()
-
-        with pytest.raises(RuntimeError) as exc_info:
-            _ = ci.contact_manager
-
-        assert "ContactManager not set" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_get_contact_returns_none_when_not_found(
-        self,
-        boss_contact,
-    ):
-        """
-        Test that get_contact returns None (not raise) for unknown contacts.
-
-        This is important for graceful degradation during init.
-        """
-        from unify.conversation_manager.domains.contact_index import ContactIndex
-
-        ci = ContactIndex()
-
-        # No fallback, no manager
-        result = ci.get_contact(contact_id=999)
-        assert result is None, "Should return None for unknown contact"
-
-        # With fallback but contact not in fallback
-        ci.set_fallback_contacts([boss_contact])
-        result = ci.get_contact(contact_id=999)
-        assert result is None, "Should return None for contact not in fallback"

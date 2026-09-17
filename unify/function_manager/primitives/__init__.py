@@ -1,11 +1,11 @@
-"""Primitives scoping and registry for state manager primitives.
+"""Primitives scoping and registry.
 
 This subpackage provides:
-- `PrimitiveScope` - The single knob for controlling which managers are exposed
-- `VALID_MANAGER_ALIASES` - Canonical set of valid manager aliases
-- `ToolSurfaceRegistry` / `get_registry` - Central registry for manager configuration
-- `ManagerSpec` - Per-manager configuration dataclass
-- `Primitives` - Scoped runtime interface for accessing state manager primitives
+- `PrimitiveScope` - The single knob for controlling which namespaces are exposed
+- `VALID_MANAGER_ALIASES` - Canonical set of valid namespace aliases
+- `ToolSurfaceRegistry` / `get_registry` - Central registry for namespace configuration
+- `ManagerSpec` - Per-namespace configuration dataclass
+- `Primitives` - Scoped runtime interface for accessing primitives
 - `get_primitive_callable` - Resolve primitive metadata to callables
 - `collect_primitives` / `compute_primitives_hash` - Module-level convenience functions
 """
@@ -28,8 +28,6 @@ from unify.function_manager.primitives.registry import (
 from unify.function_manager.primitives.runtime import (
     Primitives,
     get_primitive_callable,
-    _AsyncPrimitiveWrapper,
-    _create_async_wrapper,
 )
 
 __all__ = [
@@ -49,6 +47,4 @@ __all__ = [
     # Runtime
     "Primitives",
     "get_primitive_callable",
-    "_AsyncPrimitiveWrapper",
-    "_create_async_wrapper",
 ]

@@ -35,8 +35,7 @@ class DependencyVisitor(ast.NodeVisitor):
     - Indirect calls via variable assignment: ``f = foo; f()``
     - Returned function references: ``return foo``
     - Callables passed as arguments: ``bar(callback=foo)``
-    - Dotted environment calls: ``primitives.contacts.ask(...)``,
-      ``primitives.computer.screenshot(...)``, ``primitives.actor.act(...)``
+    - Dotted environment calls: ``primitives.actor.act(...)``
 
     Dotted calls are only captured when the root segment matches one of the
     *environment_namespaces* provided at construction time.  The full dotted
@@ -57,7 +56,7 @@ class DependencyVisitor(ast.NodeVisitor):
 
     @staticmethod
     def _resolve_dotted_name(node: ast.AST) -> Optional[str]:
-        """Resolve an ast.Attribute chain to a dotted string like 'primitives.contacts.ask'."""
+        """Resolve an ast.Attribute chain to a dotted string like 'primitives.actor.act'."""
         parts: list[str] = []
         current = node
         while isinstance(current, ast.Attribute):
@@ -96,7 +95,7 @@ class DependencyVisitor(ast.NodeVisitor):
             elif func_name in self._assignment_map:
                 called_name = self._assignment_map[func_name]
 
-        # Dotted call -> primitives.contacts.ask(), primitives.computer.web.new_session(), etc.
+        # Dotted call -> primitives.actor.act(), etc.
         elif isinstance(func_node, ast.Attribute) and self.environment_namespaces:
             dotted = self._resolve_dotted_name(func_node)
             if dotted:
@@ -167,8 +166,8 @@ def collect_dependencies_from_function_node(
     - Annotations (e.g. `x: typing.Annotated[int, validator]`)
 
     When *environment_namespaces* is provided, dotted calls whose root segment matches
-    one of the namespaces (e.g. ``primitives.contacts.ask``, ``primitives.actor.act``) are also
-    captured as dependencies.
+    one of the namespaces (e.g. ``primitives.actor.act``) are also captured as
+    dependencies.
     """
     visitor = DependencyVisitor(
         known_function_names,

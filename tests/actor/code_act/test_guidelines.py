@@ -140,7 +140,7 @@ async def test_code_act_guidelines_forbid_execute_code():
         assert "42" in str(result)
 
         # Verify execute_code was NOT called
-        from tests.actor.state_managers.utils import get_code_act_tool_calls
+        from tests.actor.code_act.helpers import get_code_act_tool_calls
 
         tool_calls = get_code_act_tool_calls(handle)
         assert "execute_code" not in tool_calls, (

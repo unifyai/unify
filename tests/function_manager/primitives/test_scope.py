@@ -14,33 +14,23 @@ from unify.function_manager.primitives.scope import (
 
 
 def test_valid_single_manager():
-    """Can create scope with a single valid manager."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files"}))
-    assert scope.scoped_managers == frozenset({"files"})
-    assert scope.includes("files")
-    assert not scope.includes("contacts")
-
-
-def test_valid_multiple_managers():
-    """Can create scope with multiple valid managers."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "secrets"}))
-    assert len(scope.scoped_managers) == 3
-    assert scope.includes("files")
-    assert scope.includes("contacts")
-    assert scope.includes("secrets")
-    assert not scope.includes("data")
+    """Can create scope with a single valid alias."""
+    scope = PrimitiveScope(scoped_managers=frozenset({"actor"}))
+    assert scope.scoped_managers == frozenset({"actor"})
+    assert scope.includes("actor")
+    assert not scope.includes("files")
 
 
 def test_invalid_manager_raises():
-    """Invalid manager alias raises ValueError."""
+    """Invalid alias raises ValueError."""
     with pytest.raises(ValueError, match="Invalid manager aliases"):
         PrimitiveScope(scoped_managers=frozenset({"invalid_manager"}))
 
 
 def test_mixed_valid_invalid_raises():
-    """Mixing valid and invalid aliases raises ValueError."""
+    """A valid alias does not mask an invalid one in the same scope."""
     with pytest.raises(ValueError, match="Invalid manager aliases"):
-        PrimitiveScope(scoped_managers=frozenset({"files", "not_a_manager"}))
+        PrimitiveScope(scoped_managers=frozenset({"actor", "not_a_manager"}))
 
 
 def test_empty_scope_raises():
@@ -49,18 +39,10 @@ def test_empty_scope_raises():
         PrimitiveScope(scoped_managers=frozenset())
 
 
-def test_scope_key_is_deterministic():
-    """scope_key is deterministic regardless of insertion order."""
-    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts", "secrets"}))
-    scope2 = PrimitiveScope(scoped_managers=frozenset({"secrets", "files", "contacts"}))
-    assert scope1.scope_key == scope2.scope_key
-    assert scope1.scope_key == "contacts,files,secrets"
-
-
 def test_scope_key_single_manager():
-    """scope_key works for single manager."""
-    scope = PrimitiveScope.single("files")
-    assert scope.scope_key == "files"
+    """scope_key is the alias itself for a single-alias scope."""
+    scope = PrimitiveScope.single("actor")
+    assert scope.scope_key == "actor"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -69,25 +51,25 @@ def test_scope_key_single_manager():
 
 
 def test_all_managers_factory():
-    """all_managers() creates scope with all valid managers."""
+    """all_managers() creates scope with every valid alias."""
     scope = PrimitiveScope.all_managers()
     assert scope.scoped_managers == VALID_MANAGER_ALIASES
 
 
 def test_single_factory():
-    """single() creates scope with one manager."""
-    scope = PrimitiveScope.single("files")
-    assert scope.scoped_managers == frozenset({"files"})
+    """single() creates scope with one alias."""
+    scope = PrimitiveScope.single("actor")
+    assert scope.scoped_managers == frozenset({"actor"})
 
 
 def test_single_factory_invalid_raises():
-    """single() with invalid manager raises ValueError."""
+    """single() with invalid alias raises ValueError."""
     with pytest.raises(ValueError, match="Invalid manager aliases"):
         PrimitiveScope.single("not_a_manager")
 
 
 def test_single_factory_for_each_manager():
-    """single() works for every valid manager alias."""
+    """single() works for every valid alias."""
     for alias in VALID_MANAGER_ALIASES:
         scope = PrimitiveScope.single(alias)
         assert scope.scoped_managers == frozenset({alias})
@@ -107,32 +89,26 @@ def test_default_runtime_scope_exposes_every_manager():
 
 def test_frozen_immutable():
     """PrimitiveScope is frozen (immutable)."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files"}))
+    scope = PrimitiveScope(scoped_managers=frozenset({"actor"}))
     with pytest.raises(AttributeError):
-        scope.scoped_managers = frozenset({"contacts"})  # type: ignore
+        scope.scoped_managers = frozenset()  # type: ignore
 
 
 def test_scope_equality():
-    """Two scopes with same managers are equal."""
-    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
-    scope2 = PrimitiveScope(scoped_managers=frozenset({"contacts", "files"}))
+    """Two separately constructed scopes with the same aliases are equal."""
+    scope1 = PrimitiveScope(scoped_managers=frozenset({"actor"}))
+    scope2 = PrimitiveScope.single("actor")
+    assert scope1 is not scope2
     assert scope1 == scope2
 
 
-def test_scope_inequality():
-    """Two scopes with different managers are not equal."""
-    scope1 = PrimitiveScope(scoped_managers=frozenset({"files"}))
-    scope2 = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    assert scope1 != scope2
-
-
 def test_scope_hashable():
-    """PrimitiveScope can be used as dict key."""
-    scope1 = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
-    scope2 = PrimitiveScope(scoped_managers=frozenset({"contacts", "files"}))
+    """PrimitiveScope can be used as dict key, keyed by value."""
+    scope1 = PrimitiveScope(scoped_managers=frozenset({"actor"}))
+    scope2 = PrimitiveScope.single("actor")
 
     d = {scope1: "value1"}
-    assert d[scope2] == "value1"  # Same scope should retrieve same value
+    assert d[scope2] == "value1"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -141,27 +117,10 @@ def test_scope_hashable():
 
 
 def test_valid_manager_aliases_contains_expected():
-    """VALID_MANAGER_ALIASES contains expected managers."""
-    expected = {
-        "contacts",
-        "ingestion",
-        "transcripts",
-        "secrets",
-        "data",
-        "files",
-        "actor",
-    }
-    assert expected == VALID_MANAGER_ALIASES
+    """VALID_MANAGER_ALIASES is exactly the actor alias."""
+    assert VALID_MANAGER_ALIASES == {"actor"}
 
 
 def test_valid_manager_aliases_is_frozenset():
     """VALID_MANAGER_ALIASES is immutable."""
     assert isinstance(VALID_MANAGER_ALIASES, frozenset)
-
-
-def test_includes_returns_false_for_nonexistent():
-    """includes() returns False for aliases not in scope."""
-    scope = PrimitiveScope.single("files")
-    # Check all other aliases are not included
-    for alias in VALID_MANAGER_ALIASES - {"files"}:
-        assert not scope.includes(alias)

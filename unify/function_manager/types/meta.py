@@ -25,7 +25,7 @@ class FunctionsMeta(BaseModel):
         default_factory=dict,
         description=(
             "Per-manager hash of primitive signatures and docstrings. "
-            "Keys are manager aliases (e.g., 'files', 'contacts'). "
+            "Keys are primitive namespace aliases (e.g., 'actor'). "
             "Enables scoped primitive sync without global recomputation."
         ),
     )

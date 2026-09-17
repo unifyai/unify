@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import FrozenSet, List, Dict, Optional, Any, Tuple
-import base64
 import functools
 import logging
 
@@ -25,7 +24,6 @@ from .base import BaseGuidanceManager
 from .builtins_catalog import BUILTINS_GUIDANCE_CONTEXT
 from .types.guidance import Guidance
 from ..manager_registry import ManagerRegistry
-from ..image_manager.types import AnnotatedImageRefs, AnnotatedImageRef
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
@@ -52,17 +50,11 @@ class GuidanceManager(BaseGuidanceManager):
         required_contexts = [
             TableContext(
                 name=GUIDANCE_TABLE,
-                description="Table of distilled guidance entries from transcripts and images.",
+                description="Table of procedural guidance entries.",
                 fields=model_to_fields(Guidance),
                 unique_keys={"guidance_id": "int"},
                 auto_counting={"guidance_id": None},
                 foreign_keys=[
-                    {
-                        "name": "images[*].raw_image_ref.image_id",
-                        "references": "Images.image_id",
-                        "on_delete": "SET NULL",
-                        "on_update": "CASCADE",
-                    },
                     {
                         "name": "function_ids[*]",
                         "references": f"{FUNCTIONS_COMPOSITIONAL_TABLE}.function_id",
@@ -91,9 +83,6 @@ class GuidanceManager(BaseGuidanceManager):
         self._REQUIRED_COLUMNS: set[str] = set(self._BUILTIN_FIELDS)
 
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
-
-        # Get ImageManager via registry for resolving and attaching images
-        self._image_manager = ManagerRegistry.get_image_manager()
 
         # Ensure context/schema exist
         self._provision_storage()
@@ -320,9 +309,7 @@ class GuidanceManager(BaseGuidanceManager):
             self._ctx,
             unique_keys={"guidance_id": "int"},
             auto_counting={"guidance_id": None},
-            description=(
-                "Table of distilled guidance entries from transcripts and images."
-            ),
+            description="Table of procedural guidance entries.",
             fields=model_to_fields(Guidance),
         )
 
@@ -353,258 +340,21 @@ class GuidanceManager(BaseGuidanceManager):
         cols = self._get_columns()
         return cols if include_types else list(cols)
 
-    # ------------------------------- Private tools ----------------------------
-    def _get_images_for_guidance(
-        self,
-        *,
-        guidance_id: int,
-    ) -> List[Dict[str, Any]]:
-        """Return image metadata (no raw/base64) for images referenced by a guidance row.
-
-        Output schema (list of objects):
-        - image_id: int
-        - caption: str | None
-        - timestamp: str (ISO8601)
-        - annotation: str | None  → freeform explanation describing how the image relates to the text
-
-        Notes
-        -----
-        This tool is read-only and returns metadata only. It never exposes raw
-        image bytes.
-        """
-        rows = self.filter(filter=f"guidance_id == {int(guidance_id)}", limit=1)
-        if not rows:
-            return []
-        guidance_row = rows[0]
-        refs: AnnotatedImageRefs = (
-            guidance_row.images or AnnotatedImageRefs.model_validate([])
-        )
-        items = list(getattr(refs, "root", refs))
-        if not items:
-            return []
-        # Resolve handles for all referenced ids
-        image_ids: List[int] = []
-        annotations_by_id: Dict[int, List[str]] = {}
-        for r in items:
-            if not isinstance(r, AnnotatedImageRef):
-                continue
-            # Skip deleted images (SET NULL from FK policy)
-            if r.raw_image_ref.image_id is None:
-                continue
-            iid = int(r.raw_image_ref.image_id)
-            image_ids.append(iid)
-            annotations_by_id.setdefault(iid, []).append(str(r.annotation))
-        # Preserve order while de-duplicating
-        image_ids = list(dict.fromkeys(image_ids))
-        handles = self._image_manager.get_images(image_ids)
-        by_id = {h.image_id: h for h in handles}
-        out: List[Dict[str, Any]] = []
-        for iid in image_ids:
-            h = by_id.get(int(iid))
-            if h is None:
-                continue
-            try:
-                ts_str = h.timestamp.isoformat()
-            except Exception:
-                ts_str = ""
-            annotation_list = annotations_by_id.get(int(h.image_id), [])
-            annotation = annotation_list[0] if annotation_list else None
-            out.append(
-                {
-                    "image_id": int(h.image_id),
-                    "caption": h.caption,
-                    "timestamp": ts_str,
-                    "annotation": annotation,
-                },
-            )
-        return out
-
-    async def _ask_image(self, *, image_id: int, question: str) -> str:
-        """Ask a one‑off question about a specific stored image.
-
-        Mirrors :pyfunc:`ImageHandle.ask` behaviour but requires an explicit
-        ``image_id`` so the correct image is resolved first. Sends the image to
-        a vision‑capable model as an image block and returns a textual answer only.
-
-        Parameters
-        ----------
-        image_id : int
-            Identifier of the image to analyse. If the underlying ``data`` is a
-            Google Cloud Storage URL, a short‑lived signed URL is generated to
-            grant access to the model; otherwise base64 is delivered via a
-            ``data:image/...;base64,`` URL.
-        question : str
-            Natural‑language question to ask about the image.
-
-        Returns
-        -------
-        str
-            Text answer from the LLM. This does not persist visual
-            context across turns.
-        """
-        handles = self._image_manager.get_images([int(image_id)])
-        if not handles:
-            raise ValueError(f"No image found with image_id {image_id}")
-        handle = handles[0]
-        answer = await handle.ask(question)
-        if not isinstance(answer, str):
-            answer = str(answer)
-        return answer
-
-    def _attach_image_to_context(
-        self,
-        *,
-        image_id: int,
-        note: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Attach a single image (by id) as raw base64 for persistent context.
-
-        The stored ``data`` is base64 and is decoded to bytes, as in
-        :pyfunc:`ImageHandle.raw`.
-
-        Parameters
-        ----------
-        image_id : int
-            Identifier of the image to attach.
-        note : str | None
-            Optional note describing why the image is attached.
-
-        Returns
-        -------
-        dict
-            {"note": str, "image": base64_string} where ``image`` contains the
-            raw image bytes encoded as base64 (PNG or JPEG).
-        """
-        handles = self._image_manager.get_images([int(image_id)])
-        if not handles:
-            raise ValueError(f"No image found with image_id {image_id}")
-        h = handles[0]
-        try:
-            raw_bytes = h.raw()
-        except Exception as exc:
-            raise ValueError("Failed to load raw image bytes") from exc
-        b64 = base64.b64encode(raw_bytes).decode("utf-8")
-        payload: Dict[str, Any] = {
-            "note": note
-            or f"Attached image {h.image_id} for persistent context (caption={h.caption!r}).",
-            "image": b64,
-        }
-        return payload
-
-    def _attach_guidance_images_to_context(
-        self,
-        *,
-        guidance_id: int,
-        limit: int = 3,
-    ) -> Dict[str, Any]:
-        """Attach multiple images referenced by a guidance row to the loop context.
-
-        Characteristics
-        ---------------
-        - Batches attachment of several images linked via the guidance's image references.
-        - Returns metadata (including collected annotations) alongside the base64 for each image.
-        - Useful for multi‑image tasks where the loop should retain visual context.
-
-        Parameters
-        ----------
-        limit : int
-            Cap on how many images are attached (order preserved by first appearance).
-
-        Returns
-        -------
-        dict
-            { "attached_count": int, "images": [ { "meta": {...}, "image": base64 }, ... ] }
-            Each ``meta`` includes ``image_id``, ``caption``, ``timestamp``, and an ``annotations`` list.
-        """
-        rows = self.filter(filter=f"guidance_id == {int(guidance_id)}", limit=1)
-        if not rows:
-            return {"attached_count": 0, "images": []}
-        guidance_row = rows[0]
-        refs: AnnotatedImageRefs = (
-            guidance_row.images or AnnotatedImageRefs.model_validate([])
-        )
-        items = list(getattr(refs, "root", refs))
-        if not items:
-            return {"attached_count": 0, "images": []}
-        unique_ids: List[int] = []
-        annotations_by_id: Dict[int, List[str]] = {}
-        for r in items:
-            if not isinstance(r, AnnotatedImageRef):
-                continue
-            # Skip deleted images (SET NULL from FK policy)
-            if r.raw_image_ref.image_id is None:
-                continue
-            iid = int(r.raw_image_ref.image_id)
-            unique_ids.append(iid)
-            annotations_by_id.setdefault(iid, []).append(str(r.annotation))
-        # Preserve original appearance order while de-duplicating
-        unique_ids = list(dict.fromkeys(unique_ids))
-        if limit is not None:
-            try:
-                limit = int(limit)
-            except Exception:
-                limit = 3
-            if limit >= 0:
-                unique_ids = unique_ids[:limit]
-
-        handles = self._image_manager.get_images(unique_ids)
-        images: List[Dict[str, Any]] = []
-        for h in handles:
-            try:
-                raw_bytes = h.raw()
-                b64 = base64.b64encode(raw_bytes).decode("utf-8")
-            except Exception:
-                continue
-            annotations = annotations_by_id.get(int(h.image_id), [])
-            images.append(
-                {
-                    "meta": {
-                        "image_id": int(h.image_id),
-                        "caption": h.caption,
-                        "timestamp": getattr(h.timestamp, "isoformat", lambda: "")(),
-                        "annotations": annotations,
-                    },
-                    "image": b64,
-                },
-            )
-        return {"attached_count": len(images), "images": images}
-
-    def _resolve_image_refs(
-        self,
-        images: AnnotatedImageRefs | list | str,
-    ) -> AnnotatedImageRefs:
-        """Ensure every ref in *images* has a concrete ``image_id``."""
-        if isinstance(images, str):
-            import json
-
-            images = json.loads(images)
-        if not isinstance(images, AnnotatedImageRefs):
-            images = AnnotatedImageRefs.model_validate(images)
-        for ref in images.root:
-            ref.resolve_image_id(self._image_manager)
-        return images
-
     @functools.wraps(BaseGuidanceManager.add_guidance, updated=())
     def add_guidance(
         self,
         *,
         title: Optional[str] = None,
         content: Optional[str] = None,
-        images: AnnotatedImageRefs | None = None,
         function_ids: Optional[List[int]] = None,
     ) -> ToolOutcome:
-        if not title and not content and not images:
+        if not title and not content:
             raise ValueError(
-                "At least one field (title/content/images) must be provided.",
+                "At least one field (title/content) must be provided.",
             )
-        if images is not None:
-            images = self._resolve_image_refs(images)
         g = Guidance(
             title=title or "",
             content=content or "",
-            images=(
-                images if images is not None else AnnotatedImageRefs.model_validate([])
-            ),
             function_ids=function_ids or [],
         )
         payload = g.to_post_json()
@@ -628,7 +378,6 @@ class GuidanceManager(BaseGuidanceManager):
         guidance_id: int,
         title: Optional[str] = None,
         content: Optional[str] = None,
-        images: AnnotatedImageRefs | None = None,
         function_ids: Optional[List[int]] = None,
     ) -> ToolOutcome:
         updates: Dict[str, Any] = {}
@@ -636,20 +385,11 @@ class GuidanceManager(BaseGuidanceManager):
             updates["title"] = title
         if content is not None:
             updates["content"] = content
-        if images is not None:
-            images = self._resolve_image_refs(images)
-            _ = Guidance(
-                title=title or "tmp",
-                content=content or "tmp",
-                images=images,
-            )
-            updates["images"] = _.model_dump(mode="json")["images"]
         if function_ids is not None:
             # Validate via model validator
             _g = Guidance(
                 title=title or "tmp",
                 content=content or "tmp",
-                images=updates.get("images") or AnnotatedImageRefs.model_validate([]),
                 function_ids=function_ids,
             )
             updates["function_ids"] = _g.function_ids

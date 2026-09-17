@@ -36,21 +36,19 @@ def _simulated_actor():
     from unify.actor.code_act_actor import CodeActActor
     from unify.function_manager.simulated import SimulatedFunctionManager
     from unify.guidance_manager.simulated import SimulatedGuidanceManager
-    from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
 
     return CodeActActor(
         function_manager=SimulatedFunctionManager(description="token budget"),
         guidance_manager=SimulatedGuidanceManager(description="token budget"),
-        knowledge_manager=SimulatedKnowledgeManager(description="token budget"),
     )
 
 
 def _actor_system_prompt() -> str:
-    from unify.actor.environments.state_managers import StateManagerEnvironment
+    from unify.actor.environments import ActorEnvironment
     from unify.actor.prompt_builders import build_code_act_prompt
 
     return build_code_act_prompt(
-        environments={"primitives": StateManagerEnvironment()},
+        environments={"primitives": ActorEnvironment()},
         tools=dict(_simulated_actor().get_tools("act")),
         can_store=True,
         discovery_first_policy=True,
@@ -74,14 +72,14 @@ def _storage_review_doctrine() -> str:
         _STORAGE_BASE_INSTRUCTIONS,
         _STORAGE_RECURRING_DELIVERABLE,
         _STORAGE_SUB_AGENT_PATTERNS,
-        _STORAGE_THREE_STORES,
+        _STORAGE_TWO_STORES,
         _STORAGE_WHAT_CAN_BE_STORED,
     )
 
     return "".join(
         [
             _STORAGE_WHAT_CAN_BE_STORED,
-            _STORAGE_THREE_STORES,
+            _STORAGE_TWO_STORES,
             _STORAGE_SUB_AGENT_PATTERNS,
             _STORAGE_RECURRING_DELIVERABLE,
             _STORAGE_BASE_INSTRUCTIONS,
@@ -94,7 +92,6 @@ def _cm_system_prompt() -> str:
 
     return build_system_prompt(
         bio="A helpful assistant.",
-        contact_id=1,
         first_name="Alice",
         surname="Smith",
         assistant_has_phone=True,

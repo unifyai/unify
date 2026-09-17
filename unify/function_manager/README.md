@@ -2,7 +2,7 @@
 
 The `FunctionManager` maintains a catalogue of executable Python functions, split into two categories:
 
-1. **Primitives** – System action methods (state manager APIs) exposed for direct invocation
+1. **Primitives** – System action methods (the `primitives.*` namespaces) exposed for direct invocation
 2. **Compositional Functions** – User-specific functions stored with their source code
 
 ## Architecture
@@ -23,41 +23,33 @@ This separation guarantees:
 
 ### Primitive ID Stability
 
-Primitives receive stable IDs derived from a hash of their fully-qualified name (e.g., "ContactManager.ask" → deterministic integer). This means:
+Primitives receive stable IDs derived from a hash of their fully-qualified name (e.g., "_ActorRunner.act" → deterministic integer). This means:
 - IDs are consistent across all deployments
 - Adding/removing methods doesn't affect other primitives' IDs
 - No manual ID management required
 
-Primitive methods are auto-discovered from `@abstractmethod` definitions on base classes (e.g., `BaseContactManager`), minus an explicit exclusion list for non-primitive methods like `clear()`.
+Primitive methods are auto-discovered from `@abstractmethod` definitions on base classes, or from an explicit `_PRIMITIVE_METHODS` constant, minus an explicit exclusion list for non-primitive methods like `clear()`.
 
 ---
 
 ## The `primitives` Object
 
-The `primitives` object provides lazy access to all state manager primitives. Imports and instantiations only happen when accessed:
+The `primitives` object provides lazy access to the primitive namespaces. Instantiation only happens when accessed:
 
 ```python
-async def update_contacts_and_search():
-    # Only ContactManager is imported/instantiated
-    await primitives.contacts.update(text="Add Alice Smith, alice@example.com")
-
-    # Only TranscriptManager is imported/instantiated
-    result = await primitives.transcripts.ask(question="What did Alice ask for last week?")
-    return result
+async def delegate(topic: str):
+    # The actor runner is constructed on first access
+    handle = await primitives.actor.act(request=f"Research {topic}")
+    return await handle.result()
 ```
 
 ### Available Properties
 
-| Property | Manager | Methods |
-|----------|---------|---------|
-| `primitives.contacts` | ContactManager | `ask`, `update` |
-| `primitives.transcripts` | TranscriptManager | `ask` |
-| `primitives.data` | DataManager | `filter`, `search`, `reduce`, `join`, `insert`, `update`, `delete`, `vectorize`, `plot`, ... |
-| `primitives.ingestion` | IngestionManager | `submit`, `get_status`, `get_logs`, `wait`, `retry`, `cancel`, `pause`, `resume`, `reconcile`, ... |
-| `primitives.files` | FileManager | `exists`, `list`, `parse`, `ask`, `describe`, ... |
-| `primitives.secrets` | SecretManager | `ask`, `update` |
+| Property | Class | Methods |
+|----------|-------|---------|
+| `primitives.actor` | `_ActorRunner` | `act` |
 
-Knowledge and Guidance are **not** primitives. They are typed catalogues exposed as top-level Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`).
+Guidance is **not** a primitive. It is a typed catalogue exposed as top-level Actor JSON tools (`GuidanceManager_*`).
 
 ---
 
@@ -87,9 +79,10 @@ Each implementation string must contain **exactly one function definition** star
 
 ```python
 # ✓ Correct
-async def my_function():
-    result = await primitives.contacts.ask(question="Who is Alice?")
-    return result
+async def my_function(path: str):
+    import csv
+    with open(path) as fh:
+        return sum(1 for _ in csv.reader(fh))
 
 # ✗ Wrong - indented
     async def my_function():
@@ -162,7 +155,7 @@ These are always available (from `create_execution_globals()`):
 | **Modules** | `asyncio`, `re`, `json`, `datetime`, `collections`, `statistics`, `functools` |
 | **Typing** | `typing`, `Any`, `Callable`, `Dict`, `List`, `Optional`, `Tuple`, `Set`, `Union`, `Literal` |
 | **Pydantic** | `pydantic`, `BaseModel`, `Field` |
-| **Primitives** | `primitives` – lazy access to all state managers |
+| **Primitives** | `primitives` – lazy access to the primitive namespaces |
 | **Steerable** | `SteerableToolHandle` |
 
 #### Injected by Actor at Runtime
@@ -178,32 +171,26 @@ When functions are executed via an Actor (`CodeActActor`), additional objects ar
 ## Example: Complete Function
 
 ```python
-async def research_contact(contact_name: str) -> str:
+async def summarize_csv(path: str, question: str) -> str:
     """
-    Research a contact by searching the web and updating their record.
+    Answer a question about a CSV file with a focused LLM call.
 
     Args:
-        contact_name: Name of the contact to research.
+        path: Absolute path of the CSV file in the workspace.
+        question: What to answer about the rows.
 
     Returns:
-        Summary of what was found and updated.
+        The model's answer, grounded in the file's first rows.
     """
-    # Query existing contact info
-    contact_info = await primitives.contacts.ask(
-        question=f"What do we know about {contact_name}?"
-    )
+    import csv
 
-    # Look for more in past conversations
-    history = await primitives.transcripts.ask(
-        question=f"What has {contact_name} told us about their role and company?"
-    )
+    with open(path, newline="") as fh:
+        rows = list(csv.DictReader(fh))[:200]
 
-    # Update the contact with new information
-    await primitives.contacts.update(
-        text=f"Update {contact_name} with: {history}"
+    return await query_llm(
+        f"Rows:\n{json.dumps(rows)}\n\nQuestion: {question}",
+        temperature=0.0,
     )
-
-    return f"Updated {contact_name} from conversation history."
 ```
 
 ---
@@ -251,16 +238,16 @@ else:
 
 ### Writing a Steerable Function
 
-Return a handle from an existing primitive or actor workflow:
+Return a handle from a nested actor:
 
 ```python
-async def contact_lookup(text: str) -> SteerableToolHandle:
+async def research(topic: str) -> SteerableToolHandle:
     """
-    Start a contact lookup and return its handle.
+    Start a research sub-task and return its handle.
 
-    The caller can interject, pause, or stop the lookup while it runs.
+    The caller can interject, pause, or stop the research while it runs.
     """
-    return await primitives.contacts.ask(text=text)
+    return await primitives.actor.act(request=f"Research {topic}")
 ```
 
 ### Available Infrastructure
@@ -296,7 +283,7 @@ async def delegated_research(topic: str) -> SteerableToolHandle:
     """
     return await primitives.actor.act(
         request=f"Research the following topic thoroughly: {topic}",
-        prompt_functions=["primitives.transcripts.ask", "primitives.contacts.ask"],
+        prompt_functions=["summarize_csv"],
         can_store=False,
         timeout=300,
     )
@@ -307,10 +294,10 @@ async def delegated_research(topic: str) -> SteerableToolHandle:
 Regular functions that return plain values are **not** steerable:
 
 ```python
-async def simple_lookup(name: str) -> str:
+async def word_count(path: str) -> int:
     """A simple function - returns a plain value, not steerable."""
-    result = await primitives.contacts.ask(question=f"Who is {name}?")
-    return result  # Plain string, not a handle
+    with open(path) as fh:
+        return len(fh.read().split())  # Plain int, not a handle
 ```
 
 The execution layer will detect this via `isinstance` and handle it normally.
@@ -331,7 +318,7 @@ fm.sync_primitives()
 fm.list_primitives()
 
 # Search includes primitives by default
-fm.search_functions(query="navigate web", include_primitives=True)
+fm.search_functions(query="delegate a sub-task", include_primitives=True)
 ```
 
 ### Compositional Functions
@@ -344,7 +331,7 @@ fm.add_functions(implementations=["async def foo(): pass"])
 fm.list_functions(include_implementations=False)
 
 # Search by similarity
-fm.search_functions(query="contact management", n=5)
+fm.search_functions(query="csv summary", n=5)
 
 # Delete
 fm.delete_function(function_id=1)

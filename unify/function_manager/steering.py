@@ -1037,7 +1037,7 @@ async def dispatch_with_steering(
     needs no instrumentation for any of this — the suspension is a property
     of the RPC protocol itself.
 
-    ``tool`` is the RPC path (``contacts.ask``), which is the same string the
+    ``tool`` is the RPC path (``actor.act``), which is the same string the
     in-process :class:`MemoisedDispatch` records, so cache entries mean the
     same thing whichever side of the process boundary made them.
 

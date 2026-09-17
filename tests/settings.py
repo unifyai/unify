@@ -21,20 +21,12 @@ from typing import TYPE_CHECKING
 _REPO_ROOT = Path(__file__).parent.parent.resolve()
 os.environ.setdefault("UNILLM_CACHE_DIR", str(_REPO_ROOT))
 
-from pydantic import Field
 from pydantic.fields import computed_field
 
-from unify.memory_manager.settings import MemorySettings
 from unify.settings import ProductionSettings
 
 if TYPE_CHECKING:
     from typing import Any
-
-
-class TestMemorySettings(MemorySettings):
-    """Test overrides for MemorySettings - disables callbacks by default."""
-
-    REGISTER_UPDATE_CALLBACKS: bool = False
 
 
 class TestingSettings(ProductionSettings):
@@ -45,7 +37,6 @@ class TestingSettings(ProductionSettings):
     """
 
     # Override composed manager settings with test defaults
-    memory: MemorySettings = Field(default_factory=TestMemorySettings)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Test Infrastructure Settings

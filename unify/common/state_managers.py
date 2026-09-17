@@ -149,7 +149,7 @@ def _iter_unity_subpackages() -> Iterable[str]:
     for mod in pkgutil.walk_packages(unify.__path__, unify.__name__ + "."):
         name = mod.name
         # We consider any package directly under unity whose name ends with "_manager"
-        # as a candidate (e.g., unify.contact_manager, unify.file_manager, ...).
+        # as a candidate (e.g., unify.function_manager, unify.guidance_manager).
         try:
             base = name.rsplit(".", 1)[-1]
         except Exception:
@@ -170,7 +170,7 @@ def discover_manager_modules() -> None:
             # Import the package itself
             importlib.import_module(pkg_name)
             # Prefer importing a module with the same name as the package for
-            # conventional layouts like `unify.contact_manager.contact_manager`.
+            # conventional layouts like `unify.guidance_manager.guidance_manager`.
             leaf = pkg_name.rsplit(".", 1)[-1]
             candidate = f"{pkg_name}.{leaf}"
             if candidate not in sys.modules:

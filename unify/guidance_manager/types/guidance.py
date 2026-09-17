@@ -6,8 +6,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
-from ...image_manager.types import AnnotatedImageRefs
-
 UNASSIGNED = -1
 
 
@@ -24,18 +22,10 @@ class Guidance(BaseModel):
         json_schema_extra={"ui_editable": True},
     )
     content: str = Field(
-        description="Full description of the guidance; may align with images",
+        description="Full description of the guidance",
         min_length=1,
         json_schema_extra={"ui_editable": True},
     )
-    images: AnnotatedImageRefs = Field(
-        default_factory=lambda: AnnotatedImageRefs.model_validate([]),
-        description=(
-            "List of annotated image references aligned to the text. Each entry must be an AnnotatedImageRef."
-        ),
-        json_schema_extra={"ui_editable": True},
-    )
-
     function_ids: List[int] = Field(
         default_factory=list,
         description=(

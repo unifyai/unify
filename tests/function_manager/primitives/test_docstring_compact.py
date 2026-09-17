@@ -2,27 +2,51 @@
 
 from __future__ import annotations
 
-from unify.data_manager.base import BaseDataManager
 from unify.function_manager.primitives.registry import ToolSurfaceRegistry
 
+_DOCSTRING = """Count rows server-side without downloading them.
 
-def test_extract_summary_keeps_anti_patterns_for_filter():
-    doc = ToolSurfaceRegistry._extract_method_docstring(BaseDataManager, "filter")
-    compact = ToolSurfaceRegistry._extract_summary_and_params(doc)
-    assert "Anti-patterns" in compact
-    assert "reduce(metric='count')" in compact or "reduce" in compact
+A second summary paragraph that is not part of the compact form.
+
+Parameters
+----------
+context : str
+    Context to count in.
+_internal_hint : str, optional
+    Wiring detail hidden from the model.
+
+Returns
+-------
+int
+    The row count.
+
+Anti-patterns
+-------------
+- Never download a large table into Python just to count it; use
+  reduce(metric='count') instead.
+
+Examples
+--------
+>>> count("Sales")
+"""
+
+
+def test_extract_summary_keeps_anti_patterns():
+    compact = ToolSurfaceRegistry._extract_summary_and_params(_DOCSTRING)
+    assert compact.startswith("Count rows server-side without downloading them.")
     assert "Parameters" in compact
-    assert "server-side" in compact.lower() or "Never download" in compact
+    assert "context : str" in compact
+    assert "Anti-patterns" in compact
+    assert "reduce(metric='count')" in compact
+    assert "Never download" in compact
 
 
-def test_prompt_context_includes_data_efficiency_rule():
-    """The data manager's special_note is the single inline copy of the
-    data-efficiency rule; the long form lives in the data method docstrings
-    behind help(), not duplicated in the General-Rules bullets."""
-    from unify.function_manager.primitives import PrimitiveScope, get_registry
-
-    scope = PrimitiveScope(scoped_managers=frozenset({"data", "files"}))
-    context = get_registry().prompt_context(scope)
-    assert "HARD RULE" in context
-    assert "reduce" in context
-    assert "never download a large table into Python".lower() in context.lower()
+def test_extract_summary_omits_other_sections_and_internal_params():
+    compact = ToolSurfaceRegistry._extract_summary_and_params(_DOCSTRING)
+    assert "second summary paragraph" not in compact
+    assert "Returns" not in compact
+    assert "The row count" not in compact
+    assert "Examples" not in compact
+    assert ">>> count" not in compact
+    assert "_internal_hint" not in compact
+    assert "Wiring detail" not in compact

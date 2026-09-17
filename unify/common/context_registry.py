@@ -131,26 +131,12 @@ class ContextRegistry:
     @classmethod
     def _get_managers(cls) -> List[Union[BaseStateManager, Type[BaseStateManager]]]:
         """Get the list of managers that have required contexts."""
-        from unify.contact_manager.contact_manager import ContactManager
-        from unify.data_manager.data_manager import DataManager
-        from unify.file_manager.managers.file_manager import FileManager
         from unify.function_manager.function_manager import FunctionManager
         from unify.guidance_manager.guidance_manager import GuidanceManager
-        from unify.image_manager.image_manager import ImageManager
-        from unify.knowledge_manager.knowledge_manager import KnowledgeManager
-        from unify.secret_manager.secret_manager import SecretManager
-        from unify.transcript_manager.transcript_manager import TranscriptManager
 
         return [
-            ContactManager,
-            KnowledgeManager,
-            TranscriptManager,
-            ImageManager,
             GuidanceManager,
-            SecretManager,
             FunctionManager,
-            DataManager,
-            FileManager,
         ]
 
     @classmethod

@@ -35,14 +35,10 @@ class _DummyEnv:
 
 def _real_envs_mixed() -> Mapping[str, Any]:
     """Real environments that produce self-contained prompt context."""
-    from unify.actor.environments.state_managers import StateManagerEnvironment
+    from unify.actor.environments.actor import ActorEnvironment
     from unify.actor.environments.base import _CompositeEnvironment
 
-    composite = _CompositeEnvironment(
-        [
-            StateManagerEnvironment(),
-        ],
-    )
+    composite = _CompositeEnvironment([ActorEnvironment()])
     return {"primitives": composite}
 
 
@@ -121,9 +117,9 @@ def test_python_first_principle_present():
         tools=dict(actor.get_tools("act")),
     )
 
-    assert "Python-first principle" in prompt
+    assert "### Python First" in prompt
+    assert "Prefer Python packages over shell CLI tools" in prompt
     assert "install_python_packages" in prompt
-    assert "install_shell_packages" in prompt
 
 
 @pytest.mark.timeout(30)
@@ -267,7 +263,7 @@ def test_python_first_principle_absent_without_execute_code():
         tools=tools,
     )
 
-    assert "Python-first principle" not in prompt
+    assert "### Python First" not in prompt
 
 
 @pytest.mark.timeout(30)
@@ -353,7 +349,7 @@ def test_guidelines_constructor_only():
 def test_guidelines_per_invocation_only():
     """Per-invocation guidelines appear in a single ### Guidelines section."""
     actor = CodeActActor()
-    per_invocation = "Check all contact fields."
+    per_invocation = "Check every input field."
     effective = (
         "\n\n".join(filter(None, [actor._base_guidelines, per_invocation])) or None
     )
@@ -364,14 +360,14 @@ def test_guidelines_per_invocation_only():
         guidelines=effective,
     )
     assert prompt.count("### Guidelines") == 1
-    assert "Check all contact fields." in prompt
+    assert "Check every input field." in prompt
 
 
 @pytest.mark.timeout(30)
 def test_guidelines_both_compose():
     """Constructor + per-invocation guidelines compose into one ### Guidelines section."""
     actor = CodeActActor(guidelines="Always respond in formal English.")
-    per_invocation = "Check all contact fields."
+    per_invocation = "Check every input field."
     effective = (
         "\n\n".join(
             filter(None, [actor._base_guidelines, per_invocation]),
@@ -386,10 +382,10 @@ def test_guidelines_both_compose():
     )
     assert prompt.count("### Guidelines") == 1
     assert "Always respond in formal English." in prompt
-    assert "Check all contact fields." in prompt
+    assert "Check every input field." in prompt
     # Constructor guidelines come first
     idx_base = prompt.index("Always respond in formal English.")
-    idx_overlay = prompt.index("Check all contact fields.")
+    idx_overlay = prompt.index("Check every input field.")
     assert idx_base < idx_overlay
 
 

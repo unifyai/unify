@@ -42,7 +42,7 @@ async def test_actor_watch_result_publishes_success_event(monkeypatch):
     await managers_utils.actor_watch_result(
         11,
         _FakeHandle(result={"status": "ok"}),
-        action_type="ask_about_contacts",
+        action_type="act",
     )
 
     event = _single_actor_result(broker)
@@ -50,7 +50,7 @@ async def test_actor_watch_result_publishes_success_event(monkeypatch):
     assert event.success is True
     assert event.result == {"status": "ok"}
     assert event.error is None
-    assert event.action_type == "ask_about_contacts"
+    assert event.action_type == "act"
 
 
 @pytest.mark.asyncio

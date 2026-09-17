@@ -15,7 +15,6 @@ from tests.conversation_manager.cm_helpers import (
     assert_steering_called,
     filter_events_by_type,
 )
-from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     UnifyMessageReceived,
     ActorHandleStarted,
@@ -71,7 +70,6 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
 
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "I'm going to walk you through how to process returns in our "
                 "system. Bear with me while I get set up."
@@ -82,7 +80,6 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
 
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="First step: open the Returns tab at the top of the page.",
         ),
     )
@@ -106,7 +103,6 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
 
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Great, that's everything. You've got the hang of it now.",
         ),
     )

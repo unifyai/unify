@@ -27,7 +27,6 @@ from tests.conversation_manager.cm_helpers import (
     has_steering_tool_call,
 )
 from tests.assertion_helpers import assertion_failed
-from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     ActorHandleStarted,
     UnifyMessageReceived,
@@ -37,9 +36,6 @@ from unify.conversation_manager.events import (
 # Tests verify steering tools were called - actions are completed via
 # trigger_completion() in test cleanup.
 pytestmark = [pytest.mark.eval]
-
-# Note: BOSS (contact_id=1) is imported from conftest.py
-
 
 # ---------------------------------------------------------------------------
 #  Ask steering tests - querying action status
@@ -53,7 +49,7 @@ async def test_ask_task_status_after_small_talk(initialized_cm):
     User asks about task status after some small talk.
 
     Flow:
-    1. User requests a contact search (triggers act)
+    1. User requests a CSV review (triggers act)
     2. User sends small talk distractor
     3. User asks about task status
     4. Verify ask_* steering tool is called
@@ -63,8 +59,7 @@ async def test_ask_task_status_after_small_talk(initialized_cm):
     # Step 1: Start an action that triggers act
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Find all my contacts in New York and list their details.",
+            content="Go through every CSV in my workspace and list the column names.",
         ),
     )
     assert_act_triggered(
@@ -84,7 +79,6 @@ async def test_ask_task_status_after_small_talk(initialized_cm):
     # Step 2: Small talk distractor (should not affect the action)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Thanks! Crazy week so far haha.",
         ),
     )
@@ -92,8 +86,7 @@ async def test_ask_task_status_after_small_talk(initialized_cm):
     # Step 3: Ask about task status
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="How's that contact search going? Any progress?",
+            content="How's that CSV review going? Any progress?",
         ),
     )
 
@@ -128,7 +121,6 @@ async def test_ask_task_progress_mid_conversation(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's our company's refund policy? I need the details.",
         ),
     )
@@ -143,7 +135,6 @@ async def test_ask_task_progress_mid_conversation(initialized_cm):
     # Step 2: Small talk distractor
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Ugh, Mondays am I right?",
         ),
     )
@@ -151,7 +142,6 @@ async def test_ask_task_progress_mid_conversation(initialized_cm):
     # Step 3: Ask about action progress
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What have you found so far about the refund policy?",
         ),
     )
@@ -192,7 +182,6 @@ async def test_stop_task_after_small_talk(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for the latest news about AI regulations.",
         ),
     )
@@ -207,7 +196,6 @@ async def test_stop_task_after_small_talk(initialized_cm):
     # Step 2: Small talk distractor
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Man, what a long week it's been.",
         ),
     )
@@ -215,7 +203,6 @@ async def test_stop_task_after_small_talk(initialized_cm):
     # Step 3: Stop the action
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Never mind, cancel that search. I found what I needed.",
         ),
     )
@@ -240,7 +227,7 @@ async def test_stop_task_change_of_mind(initialized_cm):
     User changes their mind and stops a task.
 
     Flow:
-    1. User requests a contact lookup
+    1. User requests a vendor lookup
     2. User sends a small-talk distractor
     3. User decides to cancel
     """
@@ -249,8 +236,7 @@ async def test_stop_task_change_of_mind(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Look up Bob's phone number and email address for me.",
+            content="Look up the Acme vendor's phone number and email address in the vendors file in my workspace.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(
@@ -264,7 +250,6 @@ async def test_stop_task_change_of_mind(initialized_cm):
     # Step 2: Small talk distractor
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Sorry, got distracted for a sec there.",
         ),
     )
@@ -272,8 +257,7 @@ async def test_stop_task_change_of_mind(initialized_cm):
     # Step 3: Cancel
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="You know what, forget about that lookup. I'll just call Bob now.",
+            content="You know what, forget about that lookup. I'll just call them now.",
         ),
     )
 
@@ -313,7 +297,6 @@ async def test_pause_task_for_meeting(initialized_cm):
     # Step 1: Start a research action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Research our competitors' pricing strategies and summarize.",
         ),
     )
@@ -328,7 +311,6 @@ async def test_pause_task_for_meeting(initialized_cm):
     # Step 2: Small talk distractor
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="This coffee is terrible lol.",
         ),
     )
@@ -336,7 +318,6 @@ async def test_pause_task_for_meeting(initialized_cm):
     # Step 3: Pause request (natural language)
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Put that on hold for now. I need to step into a meeting.",
         ),
     )
@@ -361,7 +342,7 @@ async def test_pause_task_hold_on(initialized_cm):
     User says hold on, which should pause the task.
 
     Flow:
-    1. User requests a transcript search
+    1. User requests a notes search
     2. User says hold on (natural language, no "pause" word)
     """
     cm = initialized_cm
@@ -369,8 +350,7 @@ async def test_pause_task_hold_on(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Search my past conversations with Alice about the project deadline.",
+            content="Search my notes files for anything about the project deadline.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(
@@ -384,7 +364,6 @@ async def test_pause_task_hold_on(initialized_cm):
     # Step 2: Hold on (natural language)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Wait, hold on a second. Let me think about what I actually need.",
         ),
     )
@@ -422,8 +401,7 @@ async def test_resume_after_pause(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Find all contacts I haven't spoken to in over a month.",
+            content="Find every file in my workspace I haven't touched in over a month.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(
@@ -437,7 +415,6 @@ async def test_resume_after_pause(initialized_cm):
     # Step 2: Hold (natural language)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Wait, please put a pin in that request for now, I might be able to share a few more details, hold on a moment",
         ),
     )
@@ -445,7 +422,6 @@ async def test_resume_after_pause(initialized_cm):
     # Step 3: Continue (natural language)
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="OK, I'm back. Never mind there were no more details of importance, please continue as you were.",
         ),
     )
@@ -480,8 +456,7 @@ async def test_resume_continue_where_left_off(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Search for Bob's contact information and recent messages.",
+            content="Search my workspace for the Henderson notes and any recent drafts.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(
@@ -495,7 +470,6 @@ async def test_resume_continue_where_left_off(initialized_cm):
     # Step 2: Hold (natural language)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Wait, hold on a sec.",
         ),
     )
@@ -503,7 +477,6 @@ async def test_resume_continue_where_left_off(initialized_cm):
     # Step 3: Small talk
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Sorry, had to take another call.",
         ),
     )
@@ -511,8 +484,7 @@ async def test_resume_continue_where_left_off(initialized_cm):
     # Step 4: Pick up where left off (natural language)
     result4 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="OK where were we? Go ahead with that search for Bob's info.",
+            content="OK where were we? Go ahead with that search for the Henderson notes.",
         ),
     )
 
@@ -542,7 +514,7 @@ async def test_interject_additional_constraint(initialized_cm):
     User interjects with an additional constraint for the running task.
 
     Flow:
-    1. User requests a contact search
+    1. User requests a file search
     2. User mentions something else (potentially relevant context)
     3. User adds a constraint to the search
     """
@@ -551,8 +523,7 @@ async def test_interject_additional_constraint(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Find all contacts who work in engineering.",
+            content="Find every file in my workspace about engineering.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(
@@ -566,7 +537,6 @@ async def test_interject_additional_constraint(initialized_cm):
     # Step 2: Small talk distractor
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Phew, finally caught a breather.",
         ),
     )
@@ -574,7 +544,6 @@ async def test_interject_additional_constraint(initialized_cm):
     # Step 3: Interject with constraint
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Actually, for that search, only include people in the Berlin office.",
         ),
     )
@@ -608,7 +577,6 @@ async def test_interject_extension(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's the Q3 revenue report say?",
         ),
     )
@@ -623,7 +591,6 @@ async def test_interject_extension(initialized_cm):
     # Step 2: Anticipation (neutral, should not trigger pause/stop)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Looking forward to seeing the results.",
         ),
     )
@@ -631,7 +598,6 @@ async def test_interject_extension(initialized_cm):
     # Step 3: Extension via interjection (clearly adding to existing action)
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Also include any notes or comments attached to the report.",
         ),
     )
@@ -666,7 +632,6 @@ async def test_interject_new_priority(initialized_cm):
     # Step 1: Start a broad action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's the Q3 revenue report say?",
         ),
     )
@@ -681,7 +646,6 @@ async def test_interject_new_priority(initialized_cm):
     # Step 2: Conversation
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="I just got out of a meeting.",
         ),
     )
@@ -689,7 +653,6 @@ async def test_interject_new_priority(initialized_cm):
     # Step 3: Narrow focus
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="For that research, focus specifically on pricing - that's the most urgent.",
         ),
     )
@@ -726,7 +689,6 @@ async def test_pause_interject_resume_sequence(initialized_cm):
     # Step 1: Start an action (web search reliably triggers act)
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for information about project management best practices.",
         ),
     )
@@ -741,7 +703,6 @@ async def test_pause_interject_resume_sequence(initialized_cm):
     # Step 2: Pause
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Hold on, put that search on hold.",
         ),
     )
@@ -749,7 +710,6 @@ async def test_pause_interject_resume_sequence(initialized_cm):
     # Step 3: Interject while paused
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Actually, focus specifically on agile methodology.",
         ),
     )
@@ -757,7 +717,6 @@ async def test_pause_interject_resume_sequence(initialized_cm):
     # Step 4: Resume
     result4 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="OK, go ahead with the search now.",
         ),
     )
@@ -795,7 +754,6 @@ async def test_multiple_distractors_then_stop(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Generate a report on all customer interactions this month.",
         ),
     )
@@ -810,21 +768,18 @@ async def test_multiple_distractors_then_stop(initialized_cm):
     # Step 2-4: Multiple distractors
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="It's really busy today.",
         ),
     )
 
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Ugh, Mondays am I right?",
         ),
     )
 
     result4 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Anyway...",
         ),
     )
@@ -832,7 +787,6 @@ async def test_multiple_distractors_then_stop(initialized_cm):
     # Step 5: Stop after distractors
     result5 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Actually, stop that report. Someone else is already doing it.",
         ),
     )
@@ -877,8 +831,7 @@ async def test_ask_shows_pending_then_completed(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Search my transcripts for anything about the quarterly budget review.",
+            content="Search my notes files for anything about the quarterly budget review.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(
@@ -893,7 +846,6 @@ async def test_ask_shows_pending_then_completed(initialized_cm):
     # Note: With async ask, this may take more steps because:
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's the status of that search?",
         ),
     )
@@ -973,7 +925,6 @@ async def test_ask_response_triggers_llm_followup(initialized_cm):
     # Step 1: Start an action
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Look through all my past conversations for anything mentioning the Henderson account.",
         ),
     )
@@ -988,7 +939,6 @@ async def test_ask_response_triggers_llm_followup(initialized_cm):
     # Step 2: Ask about progress
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="How's it going with the Henderson search?",
         ),
     )

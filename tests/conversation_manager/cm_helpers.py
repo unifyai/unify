@@ -6,9 +6,7 @@ Shared helper functions for ConversationManager tests.
 
 These helpers are specific to the event-driven testing paradigm used by
 ConversationManager tests, where we step through events and filter output
-events by type. Other managers (ContactManager, TranscriptManager) use
-a different paradigm (direct async tool loop with single return values)
-and don't need these helpers.
+events by type.
 """
 
 from __future__ import annotations
@@ -27,31 +25,6 @@ T = TypeVar("T")
 def normalize_identifier_tokens(text: str) -> str:
     """Lowercase and treat spaces/underscores as equivalent (``email_id`` ≈ ``email id``)."""
     return re.sub(r"[\s_]+", "", text.lower())
-
-
-# =============================================================================
-# Test Setup Helpers
-# =============================================================================
-
-
-def make_contacts_visible(cm: "CMStepDriver", *contact_ids: int) -> None:
-    """Make contacts visible in the rendered state by pushing a synthetic message.
-
-    With the shared global deque model, contacts only appear in the render if
-    they have messages in the deque. This pushes a lightweight marker message
-    for each contact so the LLM can see their contact_ids and metadata.
-
-    Use this in tests that are about addressing a known contact, not about
-    contact resolution.  The contacts must already exist in the
-    ContactManager (e.g., via TEST_CONTACTS in conftest).
-    """
-    for cid in contact_ids:
-        cm.contact_index.push_message(
-            contact_id=cid,
-            sender_name="System",
-            message_content="<Contact added to conversation>",
-            role="user",
-        )
 
 
 # =============================================================================

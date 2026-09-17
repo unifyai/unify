@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Any, ClassVar
+from typing import ClassVar
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
 
@@ -114,35 +114,30 @@ class Event:
 
 @dataclass
 class UnifyMessageReceived(Event):
-    """A message was received via the in-app chat.
+    """The user sent a message in the in-app chat.
 
-    Each attachment is a dict with keys: filename, filepath, content_type,
-    size_bytes. ``filepath`` is the local path the file was saved to and can
-    be accessed via FileManager.
+    ``attachments`` are workspace paths of files sent with the message.
     """
 
     topic: ClassVar[str | None] = "app:comms:unify_message_message"
     content_logged: ClassVar[bool] = True
 
-    contact: dict
     content: str
-    attachments: list[dict] = field(default_factory=list)
+    attachments: list[str] = field(default_factory=list)
 
 
 @dataclass
 class UnifyMessageSent(Event):
-    """A message was sent via the in-app chat.
+    """The assistant sent a message in the in-app chat.
 
-    Each attachment is a dict with keys: filename, filepath, content_type,
-    size_bytes.
+    ``attachments`` are workspace paths of files sent with the message.
     """
 
     topic: ClassVar[str | None] = "app:comms:unify_message_sent"
     content_logged: ClassVar[bool] = True
 
-    contact: dict
     content: str
-    attachments: list[dict] = field(default_factory=list)
+    attachments: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -183,56 +178,6 @@ class Error(Event):
     prominent: ClassVar[bool] = True
 
     message: str
-
-
-@dataclass
-class LogMessageResponse(Event):
-    medium: str
-    exchange_id: int
-
-
-@dataclass
-class ContactInfoResponse(Event):
-    contact_details: dict[str, Any]
-
-
-@dataclass(repr=False)
-class StoreChatHistory(_TruncatedReprMixin, Event):
-    chat_history: list[dict]
-
-    def _repr_truncated(self) -> str:
-        return f"{self.__class__.__name__}(chat_history_len={len(self.chat_history)})"
-
-
-@dataclass(repr=False)
-class GetChatHistory(_TruncatedReprMixin, Event):
-    loggable: ClassVar[bool] = False
-    chat_history: list[dict]
-
-    def _repr_truncated(self) -> str:
-        return f"{self.__class__.__name__}(chat_history_len={len(self.chat_history)})"
-
-
-@dataclass(repr=False)
-class GetBusEventsResponse(_TruncatedReprMixin, Event):
-    loggable: ClassVar[bool] = False
-    events: list[dict[str, Any]]
-
-    def _repr_truncated(self) -> str:
-        return f"{self.__class__.__name__}(events_len={len(self.events)})"
-
-
-# --------------------------------------------------------------------------- #
-# LLM inference events
-# --------------------------------------------------------------------------- #
-@dataclass
-class LLMInput(Event):
-    chat_history: list[dict]
-
-
-@dataclass
-class UpdateContactRollingSummaryResponse(Event):
-    rolling_summaries: list[tuple[int, str]]
 
 
 @dataclass
@@ -377,47 +322,10 @@ class ActorHandleStarted(Event):
 
 
 @dataclass
-class SyncContacts(Event):
-    """Signal to re-sync the system contacts (assistant and user)."""
-
-    reason: str = ""
-
-
-@dataclass
-class BackupContactsEvent(Event):
-    """
-    Fallback contacts from inbound messages for use before ContactManager initializes.
-
-    When an inbound message arrives before the ContactManager is ready, this event
-    carries the contacts list so they can be cached locally in ContactIndex. Once
-    ContactManager is initialized, this local cache is cleared and all contact
-    lookups go through ContactManager.
-    """
-
-    loggable: ClassVar[bool] = False
-    contacts: list[dict[str, Any]]
-
-
-@dataclass
-class LLMUserMessage(Event):
-    content: str
-
-
-@dataclass
-class LLMAssistantMessage(Event):
-    content: str
-
-
-@dataclass
-class SummarizeContext(Event):
-    pass
-
-
-@dataclass
 class DirectMessageEvent(Event):
     """
-    Send a message directly to the user via the current medium,
-    bypassing the Main CM Brain's decision-making.
+    Send a message directly to the user, bypassing the Main CM Brain's
+    decision-making.
 
     Used by ConversationManagerHandle.ask for questions and acknowledgments
     that should be delivered verbatim without LLM processing.

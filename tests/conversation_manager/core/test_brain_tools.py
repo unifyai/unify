@@ -20,11 +20,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unify.contact_manager.simulated import SimulatedContactManager
 from unify.conversation_manager.domains.brain_tools import (
     ConversationManagerBrainTools,
 )
@@ -32,48 +31,15 @@ from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
     slow_brain_direct_outbound_active,
 )
+from unify.conversation_manager.domains.chat_history import ChatHistory
 from unify.conversation_manager.events import UnifyMessageSent
-from unify.file_manager.filesystem_adapters.local_adapter import (
-    LocalFileSystemAdapter,
-)
 from unify.conversation_manager.domains.notifications import (
     NotificationBar,
 )
-from unify.conversation_manager.domains.contact_index import (
-    ContactIndex,
-)
-from unify.session_details import SESSION_DETAILS
 
 # =============================================================================
 # Fixtures
 # =============================================================================
-
-
-def _setup_mock_contacts(
-    contact_index,
-    contacts: list[dict],
-) -> SimulatedContactManager:
-    """
-    Set up a SimulatedContactManager with the given contacts on a ContactIndex.
-
-    Returns the SimulatedContactManager for additional inspection if needed.
-    """
-    contact_manager = SimulatedContactManager()
-
-    # Populate contacts - update system contacts (0, 1) and create others
-    for contact_data in contacts:
-        contact_id = contact_data["contact_id"]
-        contact_manager.update_contact(
-            contact_id=contact_id,
-            first_name=contact_data.get("first_name"),
-            surname=contact_data.get("surname"),
-            email_address=contact_data.get("email_address"),
-            phone_number=contact_data.get("phone_number"),
-            should_respond=contact_data.get("should_respond", True),
-        )
-
-    contact_index.set_contact_manager(contact_manager)
-    return contact_manager
 
 
 def _published_sent_events(brain_action_tools) -> list[dict]:
@@ -89,18 +55,16 @@ def _published_sent_events(brain_action_tools) -> list[dict]:
 def mock_cm():
     """Create a minimal mock ConversationManager for testing."""
     cm = MagicMock()
-    cm.contact_index = ContactIndex()
+    cm.chat_history = ChatHistory()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.notifications_bar = NotificationBar()
-    cm.chat_history = []
+    cm.brain_messages = []
     cm.initialized = True
     cm.event_broker.publish = AsyncMock()
     cm._pending_steering_tasks = set()
     cm._current_state_snapshot = None
     cm._current_snapshot_state = None
-    # Set up SimulatedContactManager (starts with system contacts 0 and 1)
-    cm.contact_manager = _setup_mock_contacts(cm.contact_index, [])
     return cm
 
 
@@ -117,57 +81,18 @@ def brain_action_tools(mock_cm):
 
 
 @pytest.fixture
-def sample_contacts():
-    """Sample contacts for testing."""
-    return [
-        {
-            "contact_id": 1,
-            "first_name": "Alice",
-            "surname": "Smith",
-            "phone_number": "+15551111111",
-            "email_address": "alice@example.com",
-            "should_respond": True,
-        },
-        {
-            "contact_id": 2,
-            "first_name": "Bob",
-            "surname": "Johnson",
-            "phone_number": "+15552222222",
-            "email_address": "bob@example.com",
-            "should_respond": True,
-        },
-    ]
+def workspace_root(tmp_path, monkeypatch):
+    """Point the attachment resolver at a throwaway workspace."""
+    monkeypatch.setattr(
+        "unify.conversation_manager.domains.brain_action_tools.get_local_root",
+        lambda: str(tmp_path),
+    )
+    return tmp_path
 
 
 # =============================================================================
 # ConversationManagerBrainTools Tests
 # =============================================================================
-
-
-class TestCmGetContact:
-    """Tests for cm_get_contact tool."""
-
-    def test_returns_contact_by_id(self, brain_tools, mock_cm, sample_contacts):
-        """Returns contact when found by ID."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-        result = brain_tools.cm_get_contact(1)
-        assert result is not None
-        assert result["contact_id"] == 1
-        assert result["first_name"] == "Alice"
-
-    def test_returns_none_for_unknown_id(self, brain_tools, mock_cm, sample_contacts):
-        """Returns None when contact not found."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-        result = brain_tools.cm_get_contact(999)
-        assert result is None
-
-    def test_excludes_threads_from_contact(self, brain_tools, mock_cm, sample_contacts):
-        """Contact summary excludes thread data for efficiency."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-        result = brain_tools.cm_get_contact(1)
-        # get_contact uses model_dump(exclude={"threads", "global_thread"})
-        assert "threads" not in result
-        assert "global_thread" not in result
 
 
 class TestCmListInFlightActions:
@@ -182,13 +107,13 @@ class TestCmListInFlightActions:
     def test_returns_action_summary(self, brain_tools, mock_cm):
         """Returns summary for each in-flight action."""
         mock_cm.in_flight_actions = {
-            0: {"query": "Search for contacts", "handle_actions": []},
+            0: {"query": "Search the workspace", "handle_actions": []},
             1: {"query": "Summarise the thread", "handle_actions": [{"a": "test"}]},
         }
         result = brain_tools.cm_list_in_flight_actions()
         assert len(result) == 2
         assert result[0]["handle_id"] == 0
-        assert result[0]["query"] == "Search for contacts"
+        assert result[0]["query"] == "Search the workspace"
         assert result[0]["num_handle_actions"] == 0
         assert result[1]["handle_id"] == 1
         assert result[1]["query"] == "Summarise the thread"
@@ -255,7 +180,6 @@ class TestBrainToolsAsTools:
         """Contains all expected brain tools."""
         tools = brain_tools.as_tools()
         expected = {
-            "cm_get_contact",
             "cm_list_in_flight_actions",
             "cm_list_notifications",
         }
@@ -289,14 +213,11 @@ class TestActionToolsAsTools:
         expected = {
             "send_unify_message",
             "act",
-            "ask_about_contacts",
-            "update_contacts",
-            "query_past_transcripts",
             "wait",
         }
         assert set(tools.keys()) == expected
 
-    def test_manager_backed_tools_wait_for_initialization(self, mock_cm):
+    def test_act_waits_for_initialization(self, mock_cm):
         """Before the managers are up, only the chat and wait tools are offered."""
         mock_cm.initialized = False
         tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
@@ -311,9 +232,7 @@ class TestSlowBrainDirectOutboundMarker:
         self,
         brain_action_tools,
         mock_cm,
-        sample_contacts,
     ):
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
         active_during_publish: list[bool] = []
 
         async def capture_publish(*args, **kwargs):
@@ -321,10 +240,7 @@ class TestSlowBrainDirectOutboundMarker:
 
         mock_cm.event_broker.publish = AsyncMock(side_effect=capture_publish)
 
-        result = await brain_action_tools.send_unify_message(
-            content="Hello",
-            contact_id=1,
-        )
+        result = await brain_action_tools.send_unify_message(content="Hello")
 
         assert result == {"status": "ok"}
         assert active_during_publish == [True]
@@ -335,11 +251,8 @@ class TestSlowBrainDirectOutboundMarker:
         self,
         brain_action_tools,
         mock_cm,
-        sample_contacts,
     ):
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        await brain_action_tools.send_unify_message(content="Hello", contact_id=1)
+        await brain_action_tools.send_unify_message(content="Hello")
 
         (payload,) = _published_sent_events(brain_action_tools)
         assert payload["suppress_slow_brain_wake"] is True
@@ -375,58 +288,25 @@ class TestSendUnifyMessageTool:
         assert "attachment" in doc.lower()
 
     @pytest.mark.asyncio
-    async def test_publishes_sent_event_for_contact(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """A plain send publishes UnifyMessageSent addressed to the contact."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        result = await brain_action_tools.send_unify_message(
-            content="Hello Alice",
-            contact_id=1,
-        )
+    async def test_publishes_sent_event(self, brain_action_tools, mock_cm):
+        """A plain send publishes UnifyMessageSent with the content."""
+        result = await brain_action_tools.send_unify_message(content="Hello there")
 
         assert result == {"status": "ok"}
         (payload,) = _published_sent_events(brain_action_tools)
-        assert payload["contact"]["contact_id"] == 1
-        assert payload["content"] == "Hello Alice"
+        assert payload["content"] == "Hello there"
         assert payload["attachments"] == []
-
-    @pytest.mark.asyncio
-    async def test_returns_error_for_unknown_contact(
-        self,
-        brain_action_tools,
-        mock_cm,
-        sample_contacts,
-    ):
-        """An unknown contact_id is reported without publishing anything."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        result = await brain_action_tools.send_unify_message(
-            content="Hello",
-            contact_id=999,
-        )
-
-        assert "999" in result["error"]
-        assert _published_sent_events(brain_action_tools) == []
 
     @pytest.mark.asyncio
     async def test_returns_error_for_file_not_found(
         self,
         brain_action_tools,
-        mock_cm,
-        sample_contacts,
+        workspace_root,
     ):
         """Returns error when attachment file not found."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
         result = await brain_action_tools.send_unify_message(
             content="Here's the file",
-            contact_id=1,
-            attachment_filepath="/nonexistent/file.pdf",
+            attachment_filepath="Outputs/missing.pdf",
         )
 
         assert "not found" in result["error"].lower()
@@ -436,95 +316,61 @@ class TestSendUnifyMessageTool:
     async def test_returns_error_for_file_too_large(
         self,
         brain_action_tools,
-        mock_cm,
-        sample_contacts,
-        tmp_path,
+        workspace_root,
     ):
         """Returns error when attachment exceeds size limit."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        # Create a file larger than 25MB
-        large_file = tmp_path / "large_file.bin"
+        large_file = workspace_root / "large_file.bin"
         large_file.write_bytes(b"x" * (26 * 1024 * 1024))
 
-        # Patch the class in its home module so the deferred import inside
-        # the attachment helper picks up the rooted adapter.
-        rooted = type(
-            "RootedAdapter",
-            (LocalFileSystemAdapter,),
-            {
-                "__init__": lambda self: LocalFileSystemAdapter.__init__(
-                    self,
-                    root=str(tmp_path),
-                ),
-            },
+        result = await brain_action_tools.send_unify_message(
+            content="Here's the file",
+            attachment_filepath="large_file.bin",
         )
-        with patch(
-            "unify.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
-            rooted,
-        ):
-            result = await brain_action_tools.send_unify_message(
-                content="Here's the file",
-                contact_id=1,
-                attachment_filepath="large_file.bin",
-            )
 
         assert "too large" in result["error"].lower()
         assert "25MB" in result["error"]
         assert _published_sent_events(brain_action_tools) == []
 
     @pytest.mark.asyncio
-    async def test_send_with_attachment_success(
+    async def test_send_with_workspace_relative_attachment(
         self,
         brain_action_tools,
-        mock_cm,
-        sample_contacts,
-        tmp_path,
+        workspace_root,
     ):
-        """An existing file is described as a local attachment on the sent event."""
-        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
-
-        test_file = tmp_path / "test_document.pdf"
-        test_file.write_bytes(b"PDF content here")
+        """A workspace file travels on the sent event as its workspace path."""
+        outputs = workspace_root / "Outputs"
+        outputs.mkdir()
+        (outputs / "test_document.pdf").write_bytes(b"PDF content here")
 
         result = await brain_action_tools.send_unify_message(
             content="Here's the document",
-            contact_id=1,
-            attachment_filepath=str(test_file),
+            attachment_filepath="Outputs/test_document.pdf",
         )
 
         assert result == {"status": "ok"}
         (payload,) = _published_sent_events(brain_action_tools)
         assert payload["content"] == "Here's the document"
-        (attachment,) = payload["attachments"]
-        assert attachment == {
-            "filename": "test_document.pdf",
-            "filepath": str(test_file.resolve()),
-            "content_type": "application/pdf",
-            "size_bytes": len(b"PDF content here"),
-        }
-
-
-class TestSendUnifyMessageToBossTool:
-    """Tests for send_unify_message_to_boss tool."""
+        assert payload["attachments"] == ["Outputs/test_document.pdf"]
 
     @pytest.mark.asyncio
-    async def test_targets_boss_contact(self, brain_action_tools, mock_cm):
-        """The boss-only tool addresses the session's boss contact."""
-        result = await brain_action_tools.send_unify_message_to_boss(
-            content="Done with the report.",
+    async def test_send_with_absolute_attachment_outside_workspace(
+        self,
+        brain_action_tools,
+        workspace_root,
+        tmp_path_factory,
+    ):
+        """A file outside the workspace travels by its absolute path."""
+        elsewhere = tmp_path_factory.mktemp("elsewhere") / "notes.txt"
+        elsewhere.write_text("notes")
+
+        result = await brain_action_tools.send_unify_message(
+            content="Here's the file",
+            attachment_filepath=str(elsewhere),
         )
 
         assert result == {"status": "ok"}
         (payload,) = _published_sent_events(brain_action_tools)
-        assert payload["contact"]["contact_id"] == SESSION_DETAILS.boss_contact_id
-        assert payload["content"] == "Done with the report."
-
-    def test_docstring_restricts_recipient(self, brain_action_tools):
-        """The docstring names the boss as the only recipient."""
-        doc = brain_action_tools.send_unify_message_to_boss.__doc__
-        assert doc is not None
-        assert "boss" in doc.lower()
+        assert payload["attachments"] == [str(elsewhere.resolve())]
 
 
 class TestActTool:
@@ -850,7 +696,7 @@ class TestBuildActionSteeringTools:
         mock_cm.in_flight_actions = {}
         mock_cm.completed_actions = {
             0: {
-                "query": "Find contacts",
+                "query": "Find the report",
                 "handle": mock_handle,
                 "handle_actions": [],
             },
@@ -1338,7 +1184,7 @@ class TestCompletedActionTools:
         ask_action steering tool serves them by handle_id."""
         mock_cm.completed_actions = {
             0: {
-                "query": "Find contacts",
+                "query": "Find the report",
                 "handle": MagicMock(),
                 "handle_actions": [],
             },

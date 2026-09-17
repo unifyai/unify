@@ -14,10 +14,7 @@ from unify.session_details import SESSION_DETAILS
 from unify.manager_registry import SingletonABCMeta
 from unify.common.async_tool_loop import SteerableToolHandle
 from unify.common.hierarchical_logger import SessionLogger
-from unify.conversation_manager.domains.contact_index import (
-    ContactIndex,
-    CommsMessage,
-)
+from unify.conversation_manager.domains.chat_history import ChatHistory
 from unify.conversation_manager.domains.brain import build_brain_spec
 from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
@@ -25,7 +22,7 @@ from unify.conversation_manager.domains.brain_action_tools import (
 from unify.conversation_manager.domains.brain_tools import ConversationManagerBrainTools
 from unify.conversation_manager.domains.event_handlers import EventHandler
 from unify.conversation_manager.domains.renderer import Renderer
-from unify.conversation_manager.events import Event, OpenSlowBrainTurn, StoreChatHistory
+from unify.conversation_manager.events import Event, OpenSlowBrainTurn
 from unify.common.prompt_helpers import now as prompt_now
 
 from unify.common.llm_client import new_slow_brain_llm_client
@@ -34,10 +31,6 @@ from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.domains.utils import Debouncer
 
-from unify.memory_manager.memory_manager import MemoryManager
-from unify.contact_manager.contact_manager import ContactManager
-from unify.transcript_manager.transcript_manager import TranscriptManager
-from unify.conversation_manager.cm_types import Medium, Mode
 from unify.actor.base import BaseActor
 
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
@@ -129,25 +122,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         stop: asyncio.Event,
         project_name: str = "Assistants",
     ):
-        assistant = SESSION_DETAILS.assistant
-        user = SESSION_DETAILS.user
-
         # identity
-        self.user_id = user.id
-        self.assistant_id = assistant.agent_id
-        self.assistant_first_name = assistant.first_name
-        self.assistant_surname = assistant.surname
-        self.assistant_age = assistant.age
-        self.assistant_nationality = assistant.nationality
-        self.assistant_timezone = assistant.timezone
-        self.assistant_about = assistant.about
-        self.assistant_job_title = assistant.job_title
-        self.assistant_number = assistant.number
-        self.assistant_email = assistant.email
-        self.user_first_name = user.first_name
-        self.user_surname = user.surname
-        self.user_number = user.number
-        self.user_email = user.email
+        self.user_id = SESSION_DETAILS.user.id
+        self.assistant_id = SESSION_DETAILS.assistant.agent_id
 
         # initialization state
         self.initialized: bool = False
@@ -168,10 +145,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         self.event_broker = event_broker
 
-        # managers
-        self.transcript_manager: TranscriptManager = None
-        self.contact_manager: ContactManager = None
-        self.memory_manager: MemoryManager = None
+        # the actor that carries out actions
         self.actor: BaseActor | None = None
 
         self.debouncer = Debouncer(name="ConversationManager")
@@ -180,9 +154,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.prompt_renderer = Renderer()
 
         # state
-        self.mode: Mode = Mode.TEXT
-        self.chat_history = []
-        self.contact_index = ContactIndex()
+        # The conversation with the user, persisted to the chat table.
+        self.chat_history = ChatHistory()
+        # The brain's own LLM message list: one state snapshot and one
+        # assistant reply per turn, in memory only.
+        self.brain_messages: list[dict] = []
         self.notifications_bar = NotificationBar()
         self.in_flight_actions: dict[
             int,
@@ -206,13 +182,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             None  # SnapshotState with element tracking for incremental diff computation
         )
 
-        # Groups messages into conversation-thread exchanges. Maps a
-        # per-conversation key to its exchange_id; a contact's chat reuses a
-        # single exchange with no inactivity window. In-memory only; on a cold
-        # cache the exchange is recovered from Exchanges metadata so it
-        # survives a restart.
-        self._conversation_exchange_ids: dict[str, int] = {}
-
         # ask handles (for Actor actions)
         self.active_ask_handle: Optional["SteerableToolHandle"] = None
 
@@ -226,7 +195,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._llm_run_seq: int = 0
         self._llm_gen: int = 0
         self._active_llm_trace_meta: dict[str, Any] | None = None
-        self._last_inbound_reply_context: dict[str, Any] | None = None
         self._recent_tool_executions: list[dict[str, Any]] = []
         self._recent_commissioning_successes: dict[str, int] = {}
 
@@ -374,21 +342,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """The hierarchical session logger for this ConversationManager instance."""
         return self._session_logger
 
-    def get_active_contact(self) -> dict | None:
-        """The boss contact, who is the counterpart of every conversation."""
-        return self.contact_index.get_contact(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-        )
-
     def get_recent_transcript(
         self,
-        contact: dict | None = None,
         max_messages: int | None = None,
     ) -> tuple[list[dict], datetime | None]:
-        """Extract the recent transcript for a contact from the global thread.
+        """The tail of the conversation as role/content turns.
 
         Args:
-            contact: Contact to get transcript for. Defaults to active contact.
             max_messages: Maximum number of messages to return. None for all.
 
         Returns:
@@ -396,42 +356,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             - conversation_turns: List of {"role": "user"|"assistant", "content": str}
             - last_message_timestamp: Timestamp of the last message, or None
         """
-        conversation_turns: list[dict] = []
-        last_message_timestamp: datetime | None = None
-
-        if contact is None:
-            contact = self.get_active_contact()
-
-        if not contact:
-            return conversation_turns, last_message_timestamp
-
-        contact_id = contact.get("contact_id")
-        conv_state = self.contact_index.get_conversation_state(contact_id)
-        if not conv_state:
-            return conversation_turns, last_message_timestamp
-
-        global_thread = self.contact_index.get_messages_for_contact(contact_id)
-
-        # Optionally limit to last N messages
-        if max_messages is not None:
-            global_thread = global_thread[-max_messages:]
-
-        for msg in global_thread:
-            # Skip non-communication messages (e.g., GuidanceMessage for internal orchestration)
-            if not isinstance(msg, CommsMessage):
-                continue
-
-            content = (msg.content or "").strip()
-
-            # Skip system messages (angle-bracketed markers)
-            if content.startswith("<") and content.endswith(">"):
-                continue
-
-            conversation_turns.append({"role": msg.role, "content": content})
-
-            if hasattr(msg, "timestamp") and msg.timestamp:
-                last_message_timestamp = msg.timestamp
-
+        messages = self.chat_history.recent(max_messages)
+        conversation_turns = [
+            {"role": message.role, "content": message.content.strip()}
+            for message in messages
+        ]
+        last_message_timestamp = messages[-1].timestamp if messages else None
         return conversation_turns, last_message_timestamp
 
     def _preprocess_messages(
@@ -528,8 +458,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         A failed slow-brain turn would otherwise only produce a
         ``log_task_exc`` line in the logs, leaving the user in silence and
         re-sending the same message. This wrapper sends a throttled apology
-        over the inbound reply channel, then re-raises so the failure log is
-        preserved.
+        to the chat, then re-raises so the failure log is preserved.
         """
         try:
             return await self._run_llm(trace_meta=trace_meta)
@@ -541,9 +470,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             raise
 
     async def _send_slow_brain_failure_reply(self) -> None:
-        """Tell the user their message hit a hard failure (throttled)."""
-        reply_context = self._last_inbound_reply_context
-        if not reply_context:
+        """Tell the user their message hit a hard failure (throttled).
+
+        Only a conversation the user has spoken in gets the apology: a turn
+        that failed with nothing inbound has nobody waiting on it.
+        """
+        if not any(m.role == "user" for m in self.chat_history.recent()):
             return
         now = self.loop.time()
         last_sent = getattr(self, "_slow_brain_failure_reply_sent_at", None)
@@ -553,13 +485,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             return
         self._slow_brain_failure_reply_sent_at = now
-        await self._send_system_reply(
-            reply_context,
-            content=SLOW_BRAIN_FAILURE_RESPONSE,
-        )
-
-    def record_last_inbound_reply(self, reply_context: dict[str, Any]) -> None:
-        self._last_inbound_reply_context = reply_context
+        tools = ConversationManagerBrainActionTools(self)
+        await tools.send_unify_message(content=SLOW_BRAIN_FAILURE_RESPONSE)
 
     def _clamp_wait_poll_delay(self, delay: int) -> int:
         """Apply escalating backoff to repeated self-scheduled wait polls.
@@ -592,26 +519,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return floor
         return delay
 
-    async def _send_system_reply(
-        self,
-        reply_context: dict[str, Any],
-        *,
-        content: str,
-    ) -> bool:
-        """Deliver a canned system message back to the last inbound sender."""
-        if reply_context.get("medium") != Medium.UNIFY_MESSAGE.value:
-            return False
-        contact_id = reply_context.get("contact_id")
-        if contact_id is None:
-            return False
-        tools = ConversationManagerBrainActionTools(self)
-        await tools.send_unify_message(content=content, contact_id=contact_id)
-        return True
-
     async def request_llm_run(
         self,
         delay=0,
-        triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
         turn_id: int | None = None,
     ) -> str:
@@ -627,7 +537,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "request_id": request_id,
             "origin_event_id": event_trace.get("event_id", ""),
             "origin_event_name": event_trace.get("event_name", ""),
-            "triggering_contact_id": triggering_contact_id,
             "is_user_origin": is_user_origin,
             # Carried onto the debouncer task so ``cancel_slow_brain_run`` can
             # cancel exactly this turn's run by id. ``None`` never matches.
@@ -818,19 +727,19 @@ class ConversationManager(metaclass=SingletonABCMeta):
             (
                 "⏱️ [StartupTiming] llm_preamble.setup.detail "
                 "run_id=%s total=%.0fms metadata=%.0fms snapshot=%.0fms "
-                "global_thread=%d chat_history=%d"
+                "conversation=%d brain_messages=%d"
             ),
             run_id,
             (_rl_time.perf_counter() - _preamble_t0) * 1000,
             _run_metadata_ms,
             _snapshot_ms,
-            len(self.contact_index.global_thread),
-            len(self.chat_history),
+            len(self.chat_history.recent()),
+            len(self.brain_messages),
         )
 
         _t0 = _rl_time.perf_counter()
         snapshot_state = self.prompt_renderer.render_state(
-            self.contact_index,
+            self.chat_history,
             self.notifications_bar,
             self.in_flight_actions,
             self.completed_actions,
@@ -941,7 +850,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         client.set_prompt_caching(["system"])
         _prompt_caching_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()
-        messages = self._preprocess_messages(self.chat_history + [input_message])
+        messages = self._preprocess_messages(self.brain_messages + [input_message])
         _preprocess_messages_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_ms = (_rl_time.perf_counter() - _t0) * 1000
         log_startup_timing(
@@ -950,7 +859,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "⏱️ [StartupTiming] llm_preamble.client.detail "
                 "run_id=%s total=%.0fms new_client=%.0fms thinking_context=%.0fms "
                 "set_system=%.0fms prompt_caching=%.0fms preprocess_messages=%.0fms "
-                "state_message=%.0fms chat_history=%d "
+                "state_message=%.0fms brain_messages=%d "
                 "message_count=%d system_parts=%d state_chars=%d"
             ),
             run_id,
@@ -961,7 +870,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             _prompt_caching_ms,
             _preprocess_messages_ms,
             _state_message_ms,
-            len(self.chat_history),
+            len(self.brain_messages),
             len(messages),
             len(system_prompt.to_list()),
             len(brain_spec.state_prompt),
@@ -1077,10 +986,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._current_state_snapshot = None
         self._current_snapshot_state = None
 
-        # Build assistant message for chat history
+        # Record the turn in the brain's own message list
         assistant_content = result.text_response or ""
-        self.chat_history.append(input_message)
-        self.chat_history.append({"role": "assistant", "content": assistant_content})
+        self.brain_messages.append(input_message)
+        self.brain_messages.append({"role": "assistant", "content": assistant_content})
 
         # If the LLM called wait(delay=N), schedule a delayed follow-up turn.
         for tool_exec in result.tools:
@@ -1224,14 +1133,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.stop.set()
         await self.event_broker.aclose()
 
-    async def store_chat_history(self):
-        if len(self.chat_history) >= 2:
-            await self.event_broker.publish(
-                "app:comms:chat_history",
-                StoreChatHistory(chat_history=self.chat_history[-2:]).to_json(),
-            )
-            await asyncio.sleep(2)
-
     async def _retire_in_flight_actions(self) -> None:
         """Discard the in-flight action registry.
 
@@ -1275,9 +1176,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.completed_actions.clear()
 
     async def cleanup(self):
-        """Retire in-flight actions, persist the chat history and stop."""
+        """Retire in-flight actions and stop.
+
+        The conversation needs no flush: every message was written to the
+        chat table as it arrived.
+        """
         await self._retire_in_flight_actions()
-        await self.store_chat_history()
         self.stop.set()
 
     async def stop_in_flight_action_by_calling_id(

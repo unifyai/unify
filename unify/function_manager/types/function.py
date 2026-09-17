@@ -20,7 +20,7 @@ class Function(BaseModel):
 
     Functions can be written in multiple languages (Python, Bash, Zsh, Sh, PowerShell)
     and can be either user-defined (with implementation source code) or primitives
-    (action methods from state managers with no stored implementation).
+    (primitive namespace methods with no stored implementation).
     """
 
     function_id: Optional[int] = Field(
@@ -70,7 +70,7 @@ class Function(BaseModel):
         description=(
             "Functions this function depends on, auto-detected from the AST "
             "at storage time. Bare names (e.g. 'helper') are compositional "
-            "functions. Dotted names (e.g. 'primitives.contacts.ask') are "
+            "functions. Dotted names (e.g. 'primitives.actor.act') are "
             "environment namespaces; root segments resolve to fresh instances."
         ),
     )
@@ -178,7 +178,7 @@ class Function(BaseModel):
     is_primitive: bool = Field(
         False,
         description=(
-            "Whether this is an action primitive (state manager method) rather than "
+            "Whether this is an action primitive (primitive namespace method) rather than "
             "a user-defined function. Primitives have no stored implementation."
         ),
     )

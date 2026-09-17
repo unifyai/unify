@@ -6,7 +6,7 @@ Comprehensive tests for ConversationManagerHandle, specifically the ask() method
 
 The ask() method is the bridge between the Actor (and other managers) and the live
 conversation with the user. It enables nested tool loops that can:
-- Infer answers from recent conversation transcript (PATH 1)
+- Infer answers from the recent conversation (PATH 1)
 - Ask clarifying questions and wait for user replies (PATH 2)
 - Return structured responses (Pydantic models, Enums)
 
@@ -35,7 +35,6 @@ import pytest
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     DirectMessageEvent,
     Event,
@@ -150,22 +149,19 @@ class TestHandleInitialization:
         with pytest.raises(TypeError):
             ConversationManagerHandle(
                 conversation_id="test",
-                contact_id=1,
             )
 
     def test_handle_stores_conversation_context(self):
-        """Handle stores conversation_id and contact_id correctly."""
+        """Handle stores conversation_id and the broker correctly."""
         mock_broker = MagicMock()
 
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
-            contact_id=42,
             conversation_manager=MagicMock(),
         )
 
         assert handle.conversation_id == "conv_123"
-        assert handle.contact_id == 42
         assert handle.event_broker is mock_broker
         assert not handle._stopped
 
@@ -174,7 +170,6 @@ class TestHandleInitialization:
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -198,7 +193,6 @@ class TestInterject:
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -229,7 +223,6 @@ class TestInterject:
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
         await handle.stop(reason="test")
@@ -248,7 +241,6 @@ class TestInterject:
         handle = ConversationManagerHandle(
             event_broker=mock_broker,
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -276,7 +268,6 @@ class TestHandleLifecycle:
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -290,7 +281,6 @@ class TestHandleLifecycle:
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -305,7 +295,6 @@ class TestHandleLifecycle:
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -319,7 +308,6 @@ class TestHandleLifecycle:
         handle = ConversationManagerHandle(
             event_broker=MagicMock(),
             conversation_id="conv_123",
-            contact_id=1,
             conversation_manager=MagicMock(),
         )
 
@@ -466,12 +454,12 @@ async def test_real_ask_question_survives_unanswered_question(monkeypatch):
         0.1,
     )
 
+    conversation_manager = MagicMock()
+    conversation_manager.get_recent_transcript.return_value = ([], None)
     handle = ConversationManagerHandle(
         event_broker=AsyncMock(),
         conversation_id="conv_123",
-        contact_id=1,
-        transcript_manager=MagicMock(),
-        conversation_manager=MagicMock(),
+        conversation_manager=conversation_manager,
     )
 
     ask_handle = await handle.ask("What is the user's name?")
@@ -503,11 +491,8 @@ async def test_ask_path1_infers_from_transcript(initialized_cm):
     infer from that context without needing to ask again.
     """
     cm = initialized_cm
-    contact = BOSS
-
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="I prefer to have meetings in the morning, around 9 AM works best for me.",
         ),
     )
@@ -515,7 +500,6 @@ async def test_ask_path1_infers_from_transcript(initialized_cm):
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -548,12 +532,9 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
     the ask_question tool to ask the user directly.
     """
     cm = initialized_cm
-    contact = BOSS
-
     # User says something unrelated to the question about to be asked
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="Hello, I wanted to discuss something with you today.",
         ),
     )
@@ -561,7 +542,6 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -610,11 +590,8 @@ async def test_ask_path2_inbound_chat_message_answers_the_question(initialized_c
     ask without a brain turn in between.
     """
     cm = initialized_cm
-    contact = BOSS
-
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="Hey, quick question about tomorrow.",
         ),
     )
@@ -622,7 +599,6 @@ async def test_ask_path2_inbound_chat_message_answers_the_question(initialized_c
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -641,7 +617,7 @@ async def test_ask_path2_inbound_chat_message_answers_the_question(initialized_c
 
     # The reply arrives as an ordinary chat message, not through the handle.
     step = await cm.step(
-        UnifyMessageReceived(contact=contact, content="Let's do 2 PM"),
+        UnifyMessageReceived(content="Let's do 2 PM"),
         run_llm=False,
     )
     assert not step.llm_requested, "an open ask owns the reply; no brain turn"
@@ -667,12 +643,9 @@ async def test_ask_path2_multiple_followup_questions(initialized_cm):
     should ask a follow-up question.
     """
     cm = initialized_cm
-    contact = BOSS
-
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -723,11 +696,8 @@ async def test_ask_returns_pydantic_model(initialized_cm):
     ask() returns validated Pydantic model when response_format is specified.
     """
     cm = initialized_cm
-    contact = BOSS
-
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="I strongly prefer video calls over phone calls for all meetings.",
         ),
     )
@@ -735,7 +705,6 @@ async def test_ask_returns_pydantic_model(initialized_cm):
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -759,11 +728,8 @@ async def test_ask_returns_enum_value(initialized_cm):
     ask() returns correct Enum value when response_format is an Enum.
     """
     cm = initialized_cm
-    contact = BOSS
-
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="Can you help me understand why my payment didn't go through?",
         ),
     )
@@ -771,7 +737,6 @@ async def test_ask_returns_enum_value(initialized_cm):
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -794,11 +759,8 @@ async def test_ask_without_response_format_returns_string(initialized_cm):
     ask() without response_format returns a string summary.
     """
     cm = initialized_cm
-    contact = BOSS
-
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="The product code I'm asking about is SKU-12345-XYZ.",
         ),
     )
@@ -806,7 +768,6 @@ async def test_ask_without_response_format_returns_string(initialized_cm):
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -838,12 +799,9 @@ async def test_intercepting_handle_delegates_lifecycle_methods(initialized_cm):
     - done() returns True after the inner loop completes
     """
     cm = initialized_cm
-    contact = BOSS
-
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -875,11 +833,8 @@ async def test_intercepting_handle_clears_active_ask_handle_on_result(initialize
     When result() completes, active_ask_handle is cleared.
     """
     cm = initialized_cm
-    contact = BOSS
-
     await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="My name is Alice Johnson.",
         ),
     )
@@ -887,7 +842,6 @@ async def test_intercepting_handle_clears_active_ask_handle_on_result(initialize
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -915,12 +869,9 @@ async def test_ask_raises_when_handle_stopped(initialized_cm):
     ask() raises RuntimeError when called on a stopped handle.
     """
     cm = initialized_cm
-    contact = BOSS
-
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -940,12 +891,9 @@ async def test_ask_handles_empty_transcript(initialized_cm):
     Should fall back to PATH 2 and ask the user directly.
     """
     cm = initialized_cm
-    contact = BOSS
-
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -975,63 +923,6 @@ async def test_ask_handles_empty_transcript(initialized_cm):
     assert "bob" in result.lower()
 
 
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_ask_with_transcript_manager_tool(initialized_cm):
-    """
-    ask() provides ask_historic_transcript tool for querying older context.
-    """
-    cm = initialized_cm
-    contact = BOSS
-
-    # Current conversation
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=contact,
-            content="Can you remind me what we discussed last time?",
-        ),
-    )
-
-    handle = ConversationManagerHandle(
-        event_broker=cm.event_broker,
-        conversation_id="test_conv",
-        contact_id=contact["contact_id"],
-        conversation_manager=cm.cm,
-    )
-
-    questions_asked = _capture_questions(cm)
-
-    # This ask might trigger ask_historic_transcript tool
-    ask_handle = await handle.ask(
-        "What does the user want to be reminded about?",
-    )
-
-    # There is no earlier conversation to find, so the loop may well come back
-    # and ask the user instead. Answer whatever it asks: an ask left unanswered
-    # only reaches a final answer once every question has timed out, which is
-    # minutes of dead waiting rather than a test of the transcript tool.
-    async def _answer_questions():
-        answered = 0
-        while not ask_handle.done():
-            if len(questions_asked) > answered:
-                answered += 1
-                await ask_handle.interject("The quarterly budget review.")
-            await asyncio.sleep(0.05)
-
-    answering = asyncio.create_task(_answer_questions())
-    try:
-        result = await asyncio.wait_for(
-            ask_handle.result(),
-            timeout=_ASK_RESULT_TIMEOUT,
-        )
-    finally:
-        answering.cancel()
-
-    # Should have some response (may use transcript tool or infer)
-    assert result is not None
-
-
 # =============================================================================
 # Integration Tests: Concurrent ask() calls
 # =============================================================================
@@ -1048,12 +939,9 @@ async def test_only_one_active_ask_handle_at_a_time(initialized_cm):
     Follows established cleanup pattern: stop() + await result().
     """
     cm = initialized_cm
-    contact = BOSS
-
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
@@ -1095,29 +983,28 @@ async def test_get_full_transcript_returns_messages(initialized_cm):
     get_full_transcript returns recent conversation messages.
     """
     cm = initialized_cm
-    contact = BOSS
-
     # Create some conversation
     await cm.step_until_wait(
-        UnifyMessageReceived(contact=contact, content="First message"),
+        UnifyMessageReceived(content="First message"),
     )
     await cm.step_until_wait(
-        UnifyMessageReceived(contact=contact, content="Second message"),
+        UnifyMessageReceived(content="Second message"),
     )
 
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 
     result = await handle.get_full_transcript(max_messages=10)
 
     assert result["status"] == "ok"
-    assert "messages" in result
-    assert "count" in result
-    assert all(m["medium"] == "unify_message" for m in result["messages"])
+    assert result["count"] == len(result["messages"])
+    contents = [m["content"] for m in result["messages"]]
+    assert "First message" in contents
+    assert "Second message" in contents
+    assert all(m["role"] in {"user", "assistant"} for m in result["messages"])
 
 
 # =============================================================================
@@ -1132,8 +1019,6 @@ async def test_unpin_interjection_publishes_event(initialized_cm):
     unpin_interjection publishes NotificationUnpinnedEvent.
     """
     cm = initialized_cm
-    contact = BOSS
-
     # Track published events
     published = []
     original_publish = cm.event_broker.publish
@@ -1147,7 +1032,6 @@ async def test_unpin_interjection_publishes_event(initialized_cm):
     handle = ConversationManagerHandle(
         event_broker=cm.event_broker,
         conversation_id="test_conv",
-        contact_id=contact["contact_id"],
         conversation_manager=cm.cm,
     )
 

@@ -25,7 +25,6 @@ from tests.conversation_manager.cm_helpers import (
     get_in_flight_action_count,
     has_steering_tool_call,
 )
-from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     ActorHandleStarted,
     UnifyMessageReceived,
@@ -36,15 +35,7 @@ from unify.conversation_manager.events import (
 # trigger_completion() in test cleanup.
 pytestmark = [pytest.mark.eval]
 
-# Note: BOSS (contact_id=1) is imported from conftest.py
-
-
-_ACTION_TOOLS = {
-    "act",
-    "ask_about_contacts",
-    "update_contacts",
-    "query_past_transcripts",
-}
+_ACTION_TOOLS = {"act"}
 
 
 def _count_action_calls(cm):
@@ -65,7 +56,7 @@ async def test_two_unrelated_requests_create_two_tasks(initialized_cm):
 
     Flow:
     1. User asks for a web search about one topic
-    2. User asks for a completely unrelated contact lookup
+    2. User asks for a completely unrelated workspace task
     3. Both should trigger separate actions
     """
     cm = initialized_cm
@@ -73,7 +64,6 @@ async def test_two_unrelated_requests_create_two_tasks(initialized_cm):
     # Step 1: First task - web search
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for the latest news about climate change.",
         ),
     )
@@ -81,11 +71,10 @@ async def test_two_unrelated_requests_create_two_tasks(initialized_cm):
     assert len(actor_events1) >= 1, "Expected act to be called for first action"
     action_count_after_first = get_in_flight_action_count(cm)
 
-    # Step 2: Second task - completely unrelated contact lookup
+    # Step 2: Second task - completely unrelated workspace task
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Also, find Alice's phone number for me.",
+            content="Also, convert the sales CSV in my workspace to JSON.",
         ),
     )
     actor_events2 = filter_events_by_type(result2.output_events, ActorHandleStarted)
@@ -116,7 +105,6 @@ async def test_parallel_searches_different_topics(initialized_cm):
     # Step 1: First search - web search
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for information about renewable energy.",
         ),
     )
@@ -125,8 +113,7 @@ async def test_parallel_searches_different_topics(initialized_cm):
     # Step 2: Explicitly request a NEW task (make it very clear)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="I need a second thing: look up Bob's phone number in my contacts.",
+            content="I need a second thing: count the rows in the sales CSV in my workspace.",
         ),
     )
 
@@ -153,7 +140,7 @@ async def test_also_search_creates_new_task_not_interject(initialized_cm):
 
     Flow:
     1. User asks for a web search
-    2. User explicitly requests a different type of task (contact lookup)
+    2. User explicitly requests a different type of task (a file conversion)
     3. Should create a new action, not interject
     """
     cm = initialized_cm
@@ -161,18 +148,16 @@ async def test_also_search_creates_new_task_not_interject(initialized_cm):
     # Step 1: First task - web search
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for information about electric vehicles.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, "Expected at least one in-flight action"
     initial_act_count = _count_action_calls(cm)
 
-    # Step 2: Different task type - contact lookup (clearly not an interject)
+    # Step 2: Different task type - file conversion (clearly not an interject)
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Also, I need you to find Sarah's email address in my contacts.",
+            content="Also, I need you to convert the sales CSV in my workspace to JSON.",
         ),
     )
 
@@ -206,7 +191,6 @@ async def test_add_detail_to_same_topic_interjects(initialized_cm):
     # Step 1: Initial search
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for AI regulation news.",
         ),
     )
@@ -216,7 +200,6 @@ async def test_add_detail_to_same_topic_interjects(initialized_cm):
     # Step 2: Add constraint to the SAME search
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="For that search, focus on European regulations specifically.",
         ),
     )
@@ -248,33 +231,30 @@ async def test_two_tasks_stop_one_specifically(initialized_cm):
 
     Flow:
     1. User starts a web search task
-    2. User starts a contact lookup task
+    2. User starts a row-count task
     3. User cancels the web search specifically
-    4. Contact lookup should still be running (or at least stop_ called)
+    4. Row-count task should still be running (or at least stop_ called)
     """
     cm = initialized_cm
 
     # Step 1: First task - web search
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for the latest stock market news.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, "Expected at least one in-flight action"
 
-    # Step 2: Second task - contact lookup
+    # Step 2: Second task - row count
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Also find Bob's contact information.",
+            content="Also count the rows in the sales CSV in my workspace.",
         ),
     )
 
     # Step 3: Stop the web search specifically
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Cancel the stock market search, I don't need that anymore.",
         ),
     )
@@ -298,17 +278,16 @@ async def test_two_tasks_ask_about_one_specifically(initialized_cm):
     With two tasks running, user asks about one by name/topic.
 
     Flow:
-    1. User starts a transcript search
+    1. User starts a notes search
     2. User starts a web search
-    3. User asks about progress on the transcript search specifically
+    3. User asks about progress on the notes search specifically
     """
     cm = initialized_cm
 
-    # Step 1: First task - transcript search
+    # Step 1: First task - notes search
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Search my past conversations for anything about the Henderson deal.",
+            content="Go through the notes files in my workspace for anything about the Henderson deal.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, "Expected at least one in-flight action"
@@ -316,17 +295,15 @@ async def test_two_tasks_ask_about_one_specifically(initialized_cm):
     # Step 2: Second task - web search
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Also search the web for Henderson Company's latest quarterly report.",
         ),
     )
 
-    # Step 3: Ask about the transcript search specifically
+    # Step 3: Ask about the notes search specifically
     # Note: With async ask, this takes more steps because:
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="How's the search through my past conversations going?",
+            content="How's the search through my notes files going?",
         ),
     )
 
@@ -363,7 +340,6 @@ async def test_stop_task_then_start_new_unrelated(initialized_cm):
     # Step 1: First task
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search for information about project deadlines.",
         ),
     )
@@ -372,7 +348,6 @@ async def test_stop_task_then_start_new_unrelated(initialized_cm):
     # Step 2: Cancel it
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Never mind, cancel that search.",
         ),
     )
@@ -382,7 +357,6 @@ async def test_stop_task_then_start_new_unrelated(initialized_cm):
     # Step 3: Start new unrelated task
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Actually, look up the weather in Tokyo for next week.",
         ),
     )
@@ -405,17 +379,16 @@ async def test_sequential_tasks_after_completion_context(initialized_cm):
     After one task, user starts another that could seem related but is new.
 
     Flow:
-    1. User asks about contacts in NYC
+    1. User asks for the New York figures
     2. Small talk / acknowledgment
-    3. User asks about contacts in LA (different query, should be new action)
+    3. User asks for the Los Angeles figures (different query, should be new action)
     """
     cm = initialized_cm
 
-    # Step 1: First task - NYC contacts
+    # Step 1: First task - New York figures
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Find all my contacts who are based in New York City.",
+            content="Pull the New York City figures out of the sales CSV in my workspace.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, "Expected at least one in-flight action"
@@ -423,18 +396,16 @@ async def test_sequential_tasks_after_completion_context(initialized_cm):
     # Step 2: Small talk
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Thanks, that's helpful.",
         ),
     )
 
     act_count_midpoint = _count_action_calls(cm)
 
-    # Step 3: New request - LA contacts (similar pattern but different query)
+    # Step 3: New request - Los Angeles figures (similar pattern but different query)
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Now find all my contacts in Los Angeles.",
+            content="Now pull the Los Angeles figures out of the same CSV.",
         ),
     )
 
@@ -444,9 +415,9 @@ async def test_sequential_tasks_after_completion_context(initialized_cm):
     ), "Expected new action for different location query, not just using old results"
 
     # Efficiency assertions at end
-    assert_efficient(result1, 3, "Step 1: NYC contacts")
+    assert_efficient(result1, 3, "Step 1: New York figures")
     assert_efficient(result2, 3, "Step 2: small talk")
-    assert_efficient(result3, 3, "Step 3: LA contacts")
+    assert_efficient(result3, 3, "Step 3: Los Angeles figures")
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +442,6 @@ async def test_interject_first_then_start_second(initialized_cm):
     # Step 1: First task
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Search the web for Italian restaurant reviews in Rome for my upcoming summer trip.",
         ),
     )
@@ -480,7 +450,6 @@ async def test_interject_first_then_start_second(initialized_cm):
     # Step 2: Interject to narrow
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="For those restaurants, focus on ones near the Colosseum.",
         ),
     )
@@ -488,8 +457,7 @@ async def test_interject_first_then_start_second(initialized_cm):
     # Step 3: Start unrelated task
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="By the way, find Alice's email address.",
+            content="By the way, count the rows in the sales CSV in my workspace.",
         ),
     )
 
@@ -499,7 +467,7 @@ async def test_interject_first_then_start_second(initialized_cm):
 
     assert act_count >= 2 or (
         act_count >= 1 and has_interject
-    ), "Expected interject for narrowing search AND new action for contact lookup"
+    ), "Expected interject for narrowing search AND new action for the row count"
 
     # Efficiency assertions at end
     assert_efficient(result1, 3, "Step 1: restaurant search")
@@ -515,8 +483,8 @@ async def test_three_tasks_rapid_succession(initialized_cm):
 
     Flow:
     1. User asks for weather
-    2. User asks for contacts
-    3. User asks for transcript search
+    2. User asks for a row count
+    3. User asks for a notes search
     4. All should trigger separate actions
     """
     cm = initialized_cm
@@ -524,25 +492,22 @@ async def test_three_tasks_rapid_succession(initialized_cm):
     # Task 1: Weather
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's the weather in London?",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, "Expected at least one in-flight action"
 
-    # Task 2: Contacts
+    # Task 2: Row count
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Find Bob's phone number.",
+            content="Count the rows in the sales CSV in my workspace.",
         ),
     )
 
-    # Task 3: Transcript
+    # Task 3: Notes search
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Search my messages for anything about the budget meeting.",
+            content="Search my notes files for anything about the budget meeting.",
         ),
     )
 
@@ -553,8 +518,8 @@ async def test_three_tasks_rapid_succession(initialized_cm):
 
     # Efficiency assertions at end
     assert_efficient(result1, 3, "Task 1: weather")
-    assert_efficient(result2, 3, "Task 2: contacts")
-    assert_efficient(result3, 3, "Task 3: transcript")
+    assert_efficient(result2, 3, "Task 2: row count")
+    assert_efficient(result3, 3, "Task 3: notes search")
 
 
 @pytest.mark.asyncio
@@ -571,12 +536,11 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
     """
     cm = initialized_cm
 
-    # Step 1: First task (transcript search reliably starts an in-flight actor handle)
+    # Step 1: First task (a notes search reliably starts an in-flight actor handle)
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
-                "Search my transcripts for anything about competitor pricing information."
+                "Search my notes files for anything about competitor pricing information."
             ),
         ),
     )
@@ -585,7 +549,6 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
     # Step 2: Pause it
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Hold on that search for a moment.",
         ),
     )
@@ -593,16 +556,14 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
     # Step 3: Start different task
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="While that's on hold, find Sarah's contact info.",
+            content="While that's on hold, convert the sales CSV in my workspace to JSON.",
         ),
     )
 
     # Step 4: Resume first task
     result4 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="OK, go ahead with that competitor pricing transcript search now.",
+            content="OK, go ahead with that competitor pricing notes search now.",
         ),
     )
 

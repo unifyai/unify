@@ -2,31 +2,18 @@
 tests/conversation_manager/test_context_summarization.py
 =============================================================
 
-Tests for context summarization functionality in ConversationManager.
+Tests for the brain's own LLM message list in ConversationManager.
 
 This covers:
-1. Triggering SummarizeContext when chat_history approaches max_messages (70% threshold)
-2. The _preprocess_messages() state snapshot deduplication logic
-3. Chat history persistence via store_chat_history()
-
-Tests focus on:
-- The _preprocess_messages() deduplication logic
-- The store_chat_history() publication logic
-- Chat history growth across LLM runs
+1. The _preprocess_messages() state snapshot deduplication logic
+2. Brain message growth across LLM runs
 """
 
 from __future__ import annotations
 
 import pytest
 
-from unify.conversation_manager.events import (
-    StoreChatHistory,
-    UnifyMessageReceived,
-)
-
-# Test contact for message events (contact_id 1 is the boss/main user)
-TEST_CONTACT = {"contact_id": 1, "first_name": "Test", "surname": "Contact"}
-
+from unify.conversation_manager.events import UnifyMessageReceived
 
 # =============================================================================
 # Test _preprocess_messages() - State Snapshot Deduplication
@@ -135,169 +122,40 @@ class TestPreprocessMessages:
 
 
 # =============================================================================
-# Test store_chat_history()
+# Test Brain Message Growth During LLM Runs
 # =============================================================================
 
 
-class TestStoreChatHistory:
-    """Tests for the store_chat_history method."""
+class TestBrainMessagesGrowth:
+    """Tests for brain message growth during LLM runs."""
 
     @pytest.mark.asyncio
-    async def test_publishes_last_two_messages(self, initialized_cm):
-        """store_chat_history publishes the last 2 messages from chat_history."""
-        # Set up chat history with multiple messages
-        initialized_cm.cm.chat_history = [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "second"},
-            {"role": "user", "content": "third"},
-            {"role": "assistant", "content": "fourth"},
-        ]
-
-        published_events = []
-        original_publish = initialized_cm.cm.event_broker.publish
-
-        async def tracking_publish(channel: str, message: str) -> int:
-            published_events.append((channel, message))
-            return 0  # Don't actually publish
-
-        initialized_cm.cm.event_broker.publish = tracking_publish
-
-        try:
-            await initialized_cm.cm.store_chat_history()
-
-            # Find the StoreChatHistory event
-            chat_history_events = [
-                (ch, msg) for ch, msg in published_events if "chat_history" in ch
-            ]
-            assert len(chat_history_events) == 1
-
-            channel, message = chat_history_events[0]
-            assert channel == "app:comms:chat_history"
-
-            # Parse the event and check it contains last 2 messages
-            from unify.conversation_manager.events import Event
-
-            event = Event.from_json(message)
-            assert isinstance(event, StoreChatHistory)
-            assert len(event.chat_history) == 2
-            assert event.chat_history[0]["content"] == "third"
-            assert event.chat_history[1]["content"] == "fourth"
-        finally:
-            initialized_cm.cm.event_broker.publish = original_publish
-
-    @pytest.mark.asyncio
-    async def test_does_not_publish_when_chat_history_too_short(self, initialized_cm):
-        """store_chat_history does nothing if chat_history has fewer than 2 messages."""
-        # Chat history with only 1 message
-        initialized_cm.cm.chat_history = [
-            {"role": "user", "content": "only one"},
-        ]
-
-        published_events = []
-        original_publish = initialized_cm.cm.event_broker.publish
-
-        async def tracking_publish(channel: str, message: str) -> int:
-            published_events.append((channel, message))
-            return 0
-
-        initialized_cm.cm.event_broker.publish = tracking_publish
-
-        try:
-            await initialized_cm.cm.store_chat_history()
-
-            # Should NOT publish anything
-            assert len(published_events) == 0
-        finally:
-            initialized_cm.cm.event_broker.publish = original_publish
-
-    @pytest.mark.asyncio
-    async def test_does_not_publish_when_chat_history_empty(self, initialized_cm):
-        """store_chat_history does nothing if chat_history is empty."""
-        initialized_cm.cm.chat_history = []
-
-        published_events = []
-        original_publish = initialized_cm.cm.event_broker.publish
-
-        async def tracking_publish(channel: str, message: str) -> int:
-            published_events.append((channel, message))
-            return 0
-
-        initialized_cm.cm.event_broker.publish = tracking_publish
-
-        try:
-            await initialized_cm.cm.store_chat_history()
-            assert len(published_events) == 0
-        finally:
-            initialized_cm.cm.event_broker.publish = original_publish
-
-    @pytest.mark.asyncio
-    async def test_called_during_cleanup(self, initialized_cm):
-        """store_chat_history is called as part of cleanup()."""
-        initialized_cm.cm.chat_history = [
-            {"role": "user", "content": "msg1"},
-            {"role": "assistant", "content": "msg2"},
-        ]
-
-        published_events = []
-        original_publish = initialized_cm.cm.event_broker.publish
-
-        async def tracking_publish(channel: str, message: str) -> int:
-            published_events.append((channel, message))
-            return 0
-
-        initialized_cm.cm.event_broker.publish = tracking_publish
-
-        # We can't actually call cleanup() as it will stop the CM
-        # Instead, we verify the method integration by calling store_chat_history
-        # directly (the cleanup test is more of an integration concern)
-        try:
-            await initialized_cm.cm.store_chat_history()
-
-            chat_history_events = [
-                ch for ch, _ in published_events if "chat_history" in ch
-            ]
-            assert len(chat_history_events) == 1
-        finally:
-            initialized_cm.cm.event_broker.publish = original_publish
-
-
-# =============================================================================
-# Test Chat History Growth During LLM Runs
-# =============================================================================
-
-
-class TestChatHistoryGrowth:
-    """Tests for chat history growth during LLM runs."""
-
-    @pytest.mark.asyncio
-    async def test_chat_history_grows_by_two_per_llm_run(self, initialized_cm):
+    async def test_brain_messages_grow_by_two_per_llm_run(self, initialized_cm):
         """Each LLM run adds 2 messages: input + assistant response."""
-        initial_len = len(initialized_cm.cm.chat_history)
+        initial_len = len(initialized_cm.cm.brain_messages)
 
         event = UnifyMessageReceived(
-            contact=TEST_CONTACT,
             content="Test message",
         )
         await initialized_cm.step_until_wait(event, max_steps=1)
 
-        # Chat history should have grown by 2 (input_message + assistant_content)
-        new_len = len(initialized_cm.cm.chat_history)
+        # Brain messages should have grown by 2 (input_message + assistant_content)
+        new_len = len(initialized_cm.cm.brain_messages)
         assert new_len == initial_len + 2
 
     @pytest.mark.asyncio
-    async def test_chat_history_format(self, initialized_cm):
-        """Chat history messages have correct format."""
+    async def test_brain_messages_format(self, initialized_cm):
+        """Brain messages have correct format."""
         event = UnifyMessageReceived(
-            contact=TEST_CONTACT,
             content="Test message",
         )
         await initialized_cm.step_until_wait(event, max_steps=1)
 
         # Should have at least 2 messages
-        assert len(initialized_cm.cm.chat_history) >= 2
+        assert len(initialized_cm.cm.brain_messages) >= 2
 
         # Check structure of messages
-        for msg in initialized_cm.cm.chat_history:
+        for msg in initialized_cm.cm.brain_messages:
             assert isinstance(msg, dict)
             assert "role" in msg
             assert "content" in msg

@@ -5,8 +5,6 @@ import pytest
 from unify.guidance_manager.guidance_manager import GuidanceManager
 from unify.guidance_manager.types.guidance import Guidance
 from tests.helpers import _handle_project
-from unify.image_manager.types import AnnotatedImageRef
-from pydantic import ValidationError
 
 
 def test_guidance_legacy_null_is_builtin_normalizes_to_false():
@@ -32,10 +30,7 @@ def test_create():
     assert rows and rows[0].guidance_id == gid
     assert rows[0].title == "Setup demo"
     assert rows[0].content.startswith("Steps to set up")
-    # images now stored as AnnotatedImageRefs
-    refs = rows[0].images
-    items = getattr(refs, "root", refs)
-    assert isinstance(items, list) and len(items) == 0
+    assert rows[0].function_ids == []
 
 
 @_handle_project
@@ -49,20 +44,12 @@ def test_update():
     gm.update_guidance(
         guidance_id=gid,
         content="Updated walkthrough of onboarding steps for new users.",
-        images=[
-            {"raw_image_ref": {"image_id": 12}, "annotation": "onboarding screenshot"},
-        ],
     )
 
     rows = gm.filter(filter=f"guidance_id == {gid}")
     assert rows and rows[0].guidance_id == gid
     assert "Updated walkthrough" in rows[0].content
-    refs = rows[0].images
-    items = getattr(refs, "root", refs)
-    assert isinstance(items, list) and len(items) == 1
-    first = items[0]
-    assert isinstance(first, AnnotatedImageRef)
-    assert int(first.raw_image_ref.image_id) == 12
+    assert rows[0].title == "Onboarding Overview"
 
 
 @_handle_project
@@ -85,7 +72,7 @@ def test_list_columns_and_filter():
     gm = GuidanceManager()
     cols = gm._list_columns()
     # Basic schema keys should be present
-    for key in ("guidance_id", "title", "content", "images"):
+    for key in ("guidance_id", "title", "content", "function_ids"):
         assert key in cols
 
     gm.add_guidance(title="Comms", content="Prefer emails for updates")
@@ -96,16 +83,23 @@ def test_list_columns_and_filter():
 
 
 @_handle_project
-def test_update_images_validation():
+def test_add_requires_title_or_content():
+    gm = GuidanceManager()
+
+    with pytest.raises(ValueError):
+        gm.add_guidance()
+
+
+@_handle_project
+def test_update_requires_a_field():
     gm = GuidanceManager()
     gid = gm.add_guidance(
         title="Docs",
         content="Documentation structure and guidelines.",
     )["details"]["guidance_id"]
 
-    # Invalid images payload (not a list of annotated refs) should raise
-    with pytest.raises(ValidationError):
-        gm.update_guidance(guidance_id=gid, images={"bad": 1})
+    with pytest.raises(ValueError):
+        gm.update_guidance(guidance_id=gid)
 
 
 @_handle_project
@@ -127,7 +121,7 @@ def test_clear():
 
     # After clear: schema should be present again
     cols = gm._list_columns()
-    for key in ("guidance_id", "title", "content", "images"):
+    for key in ("guidance_id", "title", "content", "function_ids"):
         assert key in cols
 
     # All prior guidance entries should be gone

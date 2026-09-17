@@ -19,9 +19,7 @@ import pytest
 
 from tests.helpers import _handle_project
 from unify.function_manager.function_manager import FunctionManager
-from unify.file_manager.managers.local import LocalFileManager
 from unify.common.context_registry import ContextRegistry
-from unify.manager_registry import ManagerRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Functions
@@ -40,9 +38,9 @@ async def greet(name):
 """.strip()
 
 FUNCTION_WITH_PRIMITIVES = """
-async def ask_contacts(question):
-    \"\"\"Ask contacts a question via primitives.\"\"\"
-    result = await primitives.contacts.ask(question=question)
+async def delegate(question):
+    \"\"\"Hand a question to a sub-actor via primitives.\"\"\"
+    result = await primitives.actor.act(request=question)
     return result
 """.strip()
 
@@ -62,13 +60,8 @@ dependencies = []
 
 
 @pytest.fixture
-def function_manager_factory(tmp_path):
-    """Factory fixture that creates FunctionManager instances.
-
-    Uses tmp_path as the LocalFileManager root so function files are written to
-    an ephemeral directory rather than the default workspace root (which on
-    macOS's case-insensitive filesystem can collide with the repo checkout).
-    """
+def function_manager_factory():
+    """Factory fixture that creates FunctionManager instances."""
     managers = []
 
     def _create():
@@ -76,10 +69,7 @@ def function_manager_factory(tmp_path):
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
         ContextRegistry.forget(FunctionManager, "Functions/Primitives")
         ContextRegistry.forget(FunctionManager, "Functions/Meta")
-        # Clear the LocalFileManager singleton so we can create one rooted at tmp_path
-        ManagerRegistry.clear()
-        local_fm = LocalFileManager(root=str(tmp_path / "Local"))
-        fm = FunctionManager(file_manager=local_fm)
+        fm = FunctionManager()
         managers.append(fm)
         return fm
 
@@ -96,8 +86,8 @@ def function_manager_factory(tmp_path):
 def mock_primitives():
     """Create a mock primitives object for testing."""
     primitives = MagicMock()
-    primitives.contacts = MagicMock()
-    primitives.contacts.ask = AsyncMock(return_value="Alice is a test contact")
+    primitives.actor = MagicMock()
+    primitives.actor.act = AsyncMock(return_value="Alice is a test contact")
     return primitives
 
 
@@ -158,14 +148,14 @@ async def test_execute_function_with_primitives_default_env(
 
     # Execute with primitives
     result = await fm.execute_function(
-        function_name="ask_contacts",
+        function_name="delegate",
         call_kwargs={"question": "Who is Alice?"},
         extra_namespaces={"primitives": mock_primitives},
     )
 
     assert result["error"] is None, f"Unexpected error: {result['error']}"
     assert result["result"] == "Alice is a test contact"
-    mock_primitives.contacts.ask.assert_called_once_with(question="Who is Alice?")
+    mock_primitives.actor.act.assert_called_once_with(request="Who is Alice?")
 
 
 # ────────────────────────────────────────────────────────────────────────────

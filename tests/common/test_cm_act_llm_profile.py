@@ -9,7 +9,6 @@ import pytest
 
 from unify.common.llm_client import new_llm_client
 from unify.common.llm_helpers import method_to_schema
-from unify.conversation_manager.cm_types.mode import Mode
 from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
@@ -19,9 +18,6 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 def _make_mock_cm() -> MagicMock:
     cm = MagicMock()
-    cm.mode = Mode.TEXT
-    cm.contact_index = MagicMock()
-    cm.contact_index.get_contact.return_value = None
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.notifications_bar = MagicMock()

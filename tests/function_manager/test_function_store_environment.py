@@ -230,13 +230,13 @@ def test_get_prompt_context_renders_metadata_fields(fm_factory):
     env = FunctionStoreEnvironment(fm, function_names=["alpha"])
 
     env._func_metadata[0]["guidance_ids"] = [5, 12]
-    env._func_metadata[0]["depends_on"] = ["helper_func", "primitives.contacts.ask"]
+    env._func_metadata[0]["depends_on"] = ["helper_func", "primitives.actor.act"]
     env._func_metadata[0]["precondition"] = {"url": "https://example.com"}
 
     context = env.get_prompt_context()
 
     assert "Related guidance: [5, 12]" in context
-    assert "Depends on: helper_func, primitives.contacts.ask" in context
+    assert "Depends on: helper_func, primitives.actor.act" in context
     assert "Precondition:" in context
 
 

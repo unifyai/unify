@@ -83,7 +83,6 @@ async def test_code_act_can_compose_false_executes_best_matching_function():
         tool_policy=None,
     )
     actor.guidance_manager = None
-    actor.knowledge_manager = None
     try:
         handle = await actor.act(
             "Do the thing using the stored my_task function via execute_function. "
@@ -126,10 +125,9 @@ async def test_code_act_can_compose_false_no_functions_match():
         # Isolate can_compose routing from discovery-first gating.
         tool_policy=None,
     )
-    # BaseActor auto-wires GM/KM from the registry when omitted; drop them so
+    # BaseActor auto-wires a GM from the registry when omitted; drop it so
     # the agent cannot wander through discovery/read tools forever.
     actor.guidance_manager = None
-    actor.knowledge_manager = None
     try:
         handle = await actor.act(
             "Do something completely unique. No matching function will exist. "
@@ -222,7 +220,7 @@ async def test_can_store_true_defers_storage_to_review_loop():
     )
     try:
         handle = await actor.act(
-            "Write a reusable Python function called `parse_and_validate_contacts` that:\n"
+            "Write a reusable Python function called `parse_and_validate_records` that:\n"
             "1. Takes a list of dicts, each with optional keys: name, email, phone, company\n"
             "2. Validates each entry: name must be non-empty string, email must contain '@',\n"
             "   phone (if present) must be digits/dashes/spaces only and at least 7 chars\n"
@@ -254,8 +252,8 @@ async def test_can_store_true_defers_storage_to_review_loop():
             "after the storage review loop."
         )
         stored_names = {f.get("name", "") for f in stored if isinstance(f, dict)}
-        assert "parse_and_validate_contacts" in stored_names, (
-            f"Expected 'parse_and_validate_contacts' in stored functions, "
+        assert "parse_and_validate_records" in stored_names, (
+            f"Expected 'parse_and_validate_records' in stored functions, "
             f"got: {stored_names}"
         )
     finally:

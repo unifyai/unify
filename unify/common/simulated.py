@@ -598,7 +598,7 @@ def _extract_owner_method_pairs(
                     and root.id in extra_class_names
                 ):
                     owner = extra_class_names[root.id]
-                # self._contact_manager.<method> (or other mapped external refs)
+                # self._<manager>.<method> (or other mapped external refs)
                 elif (
                     isinstance(root, ast.Attribute)
                     and isinstance(root.value, ast.Name)
@@ -685,51 +685,6 @@ def _build_tool_dict(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def mirror_contact_manager_tools(kind: str) -> Dict[str, Any]:
-    """Build a tool-dict mirroring the real ContactManager's tool lists.
-
-    kind: "ask" or "update". Uses AST reflection with a static fallback.
-    """
-    from unify.contact_manager.contact_manager import ContactManager
-    from unify.common.llm_helpers import methods_to_tool_dict
-
-    target_attr = "_ask_tools" if kind == "ask" else "_update_tools"
-
-    try:
-        pairs = _extract_owner_method_pairs(
-            ContactManager,
-            target_attr,
-            self_external_map=None,
-            extra_class_names={"ContactManager": ContactManager},
-        )
-        if pairs:
-            # All ContactManager-owned methods; never include class name
-            tools = _build_tool_dict(pairs)
-            if tools:
-                return tools
-    except Exception:
-        pass
-
-    # Fallback – current canonical tool sets
-    if kind == "ask":
-        return methods_to_tool_dict(
-            ContactManager._list_columns,
-            ContactManager.filter_contacts,
-            ContactManager._search_contacts,
-            ContactManager._reduce,
-            include_class_name=False,
-        )
-    else:
-        return methods_to_tool_dict(
-            ContactManager.ask,
-            ContactManager._create_contact,
-            ContactManager.update_contact,
-            ContactManager._delete_contact,
-            ContactManager._merge_contacts,
-            include_class_name=False,
-        )
-
-
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # SecretManager mirroring
@@ -737,114 +692,14 @@ def mirror_contact_manager_tools(kind: str) -> Dict[str, Any]:
 #
 
 
-def mirror_secret_manager_tools(kind: str) -> Dict[str, Any]:
-    """Build a tool-dict mirroring the real SecretManager's tool lists.
-
-    kind: "ask" or "update". Uses AST reflection with a static fallback.
-    """
-    from unify.secret_manager.secret_manager import SecretManager
-    from unify.common.llm_helpers import methods_to_tool_dict
-
-    target_attr = "_ask_tools" if kind == "ask" else "_update_tools"
-
-    try:
-        pairs = _extract_owner_method_pairs(
-            SecretManager,
-            target_attr,
-            self_external_map=None,
-            extra_class_names={"SecretManager": SecretManager},
-        )
-        if pairs:
-            # All SecretManager-owned methods; never include class name
-            tools = _build_tool_dict(pairs)
-            if tools:
-                return tools
-    except Exception:
-        pass
-
-    # Fallback – keep in sync with SecretManager.__init__
-    if kind == "ask":
-        return methods_to_tool_dict(
-            SecretManager._list_columns,
-            SecretManager._filter_secrets,
-            SecretManager._search_secrets,
-            SecretManager._list_secret_keys,
-            include_class_name=False,
-        )
-    else:
-        return methods_to_tool_dict(
-            SecretManager.ask,
-            SecretManager._create_secret,
-            SecretManager._update_secret,
-            SecretManager._delete_secret,
-            include_class_name=False,
-        )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # TranscriptManager mirroring
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def mirror_transcript_manager_tools() -> Dict[str, Any]:
-    """Build a tool-dict mirroring the real TranscriptManager's tools.
-
-    Uses AST reflection of TranscriptManager.__init__ with a static fallback.
-    """
-    from unify.common.llm_helpers import methods_to_tool_dict
-    from unify.transcript_manager.transcript_manager import TranscriptManager
-    from unify.contact_manager.contact_manager import ContactManager
-
-    try:
-        pairs = _extract_owner_method_pairs(
-            TranscriptManager,
-            "_tools",
-            self_external_map={"_contact_manager": ContactManager},
-        )
-        if pairs:
-            tools = _build_tool_dict(pairs)
-            if tools:
-                return tools
-    except Exception:
-        pass
-
-    # Fallback – current canonical tool set
-    return methods_to_tool_dict(
-        ContactManager.filter_contacts,
-        TranscriptManager._filter_messages,
-        TranscriptManager._search_messages,
-        TranscriptManager._reduce,
-        include_class_name=False,
-    )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # KnowledgeManager mirroring
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def mirror_knowledge_manager_tools(kind: str) -> Dict[str, Any]:
-    """Build a tool-dict mirroring KnowledgeManager public CRUD methods.
-
-    ``kind`` is retained for call-site compatibility but ignored: the typed
-    claim ledger exposes the same surface for all former ask/update/refactor
-    call sites (Actor JSON tools, not primitives).
-    """
-    from unify.common.llm_helpers import methods_to_tool_dict
-    from unify.knowledge_manager.knowledge_manager import KnowledgeManager as KM
-
-    return methods_to_tool_dict(
-        KM.search,
-        KM.filter,
-        KM.get_knowledge,
-        KM.add_knowledge,
-        KM.update_knowledge,
-        KM.delete_knowledge,
-        KM.invalidate_knowledge,
-        KM.supersede_knowledge,
-        KM.reconcile_sources,
-        include_class_name=False,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -878,99 +733,3 @@ def build_followup_prompt(
 # ─────────────────────────────────────────────────────────────────────────────
 # FileManager mirroring
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def mirror_file_manager_tools(kind: str) -> Dict[str, Any]:
-    """Build a tool-dict mirroring the real FileManager's tool exposure.
-
-    kind: "ask", "ask_about_file", or "organize". Uses AST reflection with a static fallback.
-    """
-    from unify.common.llm_helpers import methods_to_tool_dict
-    from unify.file_manager.managers.local import LocalFileManager as FileManager
-
-    if kind == "ask_about_file":
-        target_attr = "_ask_about_file_tools"
-    elif kind == "organize":
-        target_attr = "_organize_tools"
-    else:
-        target_attr = "_ask_tools"
-
-    try:
-        pairs = _extract_owner_method_pairs(
-            FileManager,
-            target_attr,
-            self_external_map=None,
-            extra_class_names={"FileManager": FileManager},
-        )
-        if pairs:
-            tools = _build_tool_dict(pairs)
-            if tools:
-                return tools
-    except Exception:
-        pass
-
-    # Fallback – EXACTLY mirror FileManager.__init__ tool exposure
-    if kind == "ask":
-        return methods_to_tool_dict(
-            # Schema discovery
-            FileManager.describe,
-            FileManager.list_columns,
-            # Retrieval helpers
-            FileManager.filter_files,
-            FileManager.search_files,
-            FileManager.reduce,
-            # Join/multi-join tools (exposed via ask.multi_table and merged at call-time)
-            FileManager.filter_join,
-            FileManager.search_join,
-            FileManager.filter_multi_join,
-            FileManager.search_multi_join,
-            # Inventory listing
-            FileManager.list,
-            # Delegate to file-scoped Q&A when needed
-            FileManager.ask_about_file,
-            include_class_name=False,
-        )
-    elif kind == "ask_about_file":
-        return methods_to_tool_dict(
-            # Schema discovery
-            FileManager.describe,
-            FileManager.list_columns,
-            # Retrieval helpers
-            FileManager.filter_files,
-            FileManager.search_files,
-            FileManager.reduce,
-            # Join/multi-join tools for file-scoped analysis
-            FileManager.filter_join,
-            FileManager.search_join,
-            FileManager.filter_multi_join,
-            FileManager.search_multi_join,
-            include_class_name=False,
-        )
-    elif kind == "organize":
-        return methods_to_tool_dict(
-            # Discovery via ask
-            FileManager.ask,
-            # Mutation tools
-            FileManager.rename_file,
-            FileManager.move_file,
-            FileManager.delete_file,
-            # Sync tool (exposed under organize)
-            FileManager.sync,
-            include_class_name=False,
-        )
-    else:
-        # Default to ask tools
-        return methods_to_tool_dict(
-            FileManager.describe,
-            FileManager.list_columns,
-            FileManager.filter_files,
-            FileManager.search_files,
-            FileManager.reduce,
-            FileManager.filter_join,
-            FileManager.search_join,
-            FileManager.filter_multi_join,
-            FileManager.search_multi_join,
-            FileManager.list,
-            FileManager.ask_about_file,
-            include_class_name=False,
-        )

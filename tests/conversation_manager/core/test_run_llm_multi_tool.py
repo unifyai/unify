@@ -66,13 +66,13 @@ async def test_run_llm_returns_all_tool_names(initialized_cm):
     cm = initialized_cm.cm
 
     fake_result = _make_multi_tool_result(
-        ("ask_about_contacts", {"text": "Find Alice"}, {"status": "acting"}),
+        ("act", {"query": "Find the sales CSV"}, {"status": "acting"}),
         (
             "act",
             {"query": "Summarize the attached report", "persist": True},
             {"status": "acting"},
         ),
-        ("send_unify_message", {"content": "On it.", "contact_id": 1}, None),
+        ("send_unify_message", {"content": "On it."}, None),
     )
 
     with patch(
@@ -87,11 +87,11 @@ async def test_run_llm_returns_all_tool_names(initialized_cm):
         f"_run_llm() should return a list of tool names when multiple tools "
         f"are called, but got {type(returned).__name__}: {returned!r}"
     )
-    assert set(returned) == {
-        "ask_about_contacts",
+    assert returned == [
+        "act",
         "act",
         "send_unify_message",
-    }, f"Expected all three tool names, got: {returned}"
+    ], f"Expected all three tool names, got: {returned}"
 
 
 @pytest.mark.asyncio
@@ -100,13 +100,13 @@ async def test_step_driver_tracks_all_tool_names(initialized_cm):
     """CMStepDriver.all_tool_calls should record EVERY tool called per turn.
 
     Currently it appends only the single string returned by ``_run_llm()``,
-    so when the LLM calls ``[ask_about_contacts, act, send_unify_message]``
-    in one turn, only ``ask_about_contacts`` appears in ``all_tool_calls``.
+    so when the LLM calls ``[send_unify_message, act]`` in one turn, only
+    ``send_unify_message`` appears in ``all_tool_calls``.
     """
     cm_driver = initialized_cm
 
     fake_result = _make_multi_tool_result(
-        ("ask_about_contacts", {"text": "Find Alice"}, {"status": "acting"}),
+        ("send_unify_message", {"content": "On it."}, None),
         (
             "act",
             {"query": "Summarize the attached report", "persist": True},
@@ -145,7 +145,7 @@ async def test_run_llm_opens_follow_on_turn_without_wait(initialized_cm):
 
     fake_result = _make_multi_tool_result(
         ("act", {"query": "Summarize files"}, {"status": "acting"}),
-        ("send_unify_message", {"content": "Working on it.", "contact_id": 1}, None),
+        ("send_unify_message", {"content": "Working on it."}, None),
     )
 
     with (
@@ -174,7 +174,7 @@ async def test_run_llm_skips_follow_on_when_wait_called(initialized_cm):
     cm = initialized_cm.cm
 
     fake_result = _make_multi_tool_result(
-        ("send_unify_message", {"content": "Done.", "contact_id": 1}, None),
+        ("send_unify_message", {"content": "Done."}, None),
         ("wait", {}, None),
     )
 
@@ -292,9 +292,9 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
 
     fake_result = _make_multi_tool_result(
         (
-            "update_contacts",
-            {"text": "Add Ops HQ"},
-            {"contact_id": 11, "name": "Ops HQ"},
+            "act",
+            {"query": "Add the Ops HQ row"},
+            {"status": "acting", "query": "Add the Ops HQ row"},
         ),
     )
     with patch(
@@ -305,9 +305,9 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
 
     assert len(cm._recent_tool_executions) >= 1
     last = cm._recent_tool_executions[-1]
-    assert last["tool_name"] == "update_contacts"
+    assert last["tool_name"] == "act"
     assert last["origin_event_name"] == "UnifyMessageSent"
-    assert "contact_id" in last["result_preview"]
+    assert "Ops HQ" in last["result_preview"]
 
 
 def test_run_llm_marks_tool_commit_boundary():
@@ -340,9 +340,9 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
         if len(captured_messages) == 1:
             return _make_multi_tool_result(
                 (
-                    "update_contacts",
-                    {"text": "Add Ops HQ"},
-                    {"contact_id": 11, "name": "Ops HQ"},
+                    "act",
+                    {"query": "Add the Ops HQ row"},
+                    {"status": "acting", "query": "Add the Ops HQ row"},
                 ),
             )
         return SingleShotResult(tools=[], text_response="noop", structured_output=None)
@@ -366,7 +366,7 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
         str(message.get("content")) for message in captured_messages[1]
     )
     assert "<recent_tool_executions>" in second_turn_text
-    assert "tool=update_contacts" in second_turn_text
+    assert "tool=act" in second_turn_text
 
 
 def test_duplicate_act_suppression_only_blocks_immediate_followups():
@@ -376,7 +376,6 @@ def test_duplicate_act_suppression_only_blocks_immediate_followups():
     cm._llm_gen = 7
     tool_args = {
         "query": "Summarize the attached quarterly report",
-        "requesting_contact_id": 1,
         "response_format": None,
         "persist": False,
         "include_conversation_context": True,
@@ -410,7 +409,6 @@ def test_act_duplicate_fingerprint_normalizes_optional_defaults():
     cm = ConversationManager.__new__(ConversationManager)
     minimal_args = {
         "query": "Summarize the attached quarterly report",
-        "requesting_contact_id": 1,
     }
     expanded_args = {
         **minimal_args,

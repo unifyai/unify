@@ -23,7 +23,6 @@ pytestmark = pytest.mark.no_unify_context
 
 _BASE_KWARGS: dict = {
     "bio": "A helpful assistant.",
-    "contact_id": 1,
     "first_name": "Alice",
     "surname": "Smith",
 }
@@ -56,7 +55,6 @@ class TestSectionLayout:
         "Tool-call reasoning",
         "Action steering guidelines",
         "Uncertainty handling",
-        "Direct specialist tools",
         "Act capabilities",
         "Persistent sessions (persist=True)",
         "Concurrent action and acknowledgment",
@@ -92,7 +90,6 @@ class TestBossDetails:
 
     def test_required_fields_always_listed(self):
         prompt = _build()
-        assert "- Contact ID: 1" in prompt
         assert "- First Name: Alice" in prompt
         assert "- Surname: Smith" in prompt
 
@@ -121,28 +118,28 @@ class TestToolListing:
         assert "optional `thoughts` argument" in prompt
         assert '"thoughts": [my concise thoughts before taking actions]' not in prompt
 
-    def test_communication_tools_are_the_two_chat_senders(self):
+    def test_communication_tool_is_the_one_chat_sender(self):
         prompt = _build()
         comms = prompt.split("**Communication tools:**")[1].split(
-            "**Knowledge and action tools:**",
+            "**Action tools:**",
         )[0]
-        assert "`send_unify_message`: Send a chat message to a contact" in comms
-        assert (
-            "`send_unify_message_to_boss`: Send a chat message straight to my boss"
-            in comms
-        )
-        assert comms.count("\n- `") == 2
+        assert "`send_unify_message`: Send a chat message to my boss" in comms
+        assert comms.count("\n- `") == 1
 
-    def test_knowledge_and_action_tools_listed(self):
+    def test_action_tools_listed(self):
+        prompt = _build()
+        for name in ("`act`", "`wait(delay=None)`"):
+            assert f"- {name}:" in prompt
+
+    def test_direct_manager_tools_are_gone(self):
         prompt = _build()
         for name in (
-            "`act`",
-            "`ask_about_contacts`",
-            "`update_contacts`",
-            "`query_past_transcripts`",
-            "`wait(delay=None)`",
+            "ask_about_contacts",
+            "update_contacts",
+            "query_past_transcripts",
+            "send_unify_message_to_boss",
         ):
-            assert f"- {name}:" in prompt
+            assert name not in prompt
 
     def test_action_steering_tools_listed(self):
         prompt = _build()
@@ -206,17 +203,16 @@ def _concurrent_ack_block(prompt: str) -> str:
 
 
 class TestConcurrentActionAckBlock:
-    """Concurrent-action ack guidance names the chat tools and the boss contact."""
+    """Concurrent-action ack guidance names the chat tool and pairs it with act."""
 
-    def test_ack_block_names_both_chat_tools(self):
+    def test_ack_block_names_the_chat_tool(self):
         block = _concurrent_ack_block(_build())
         assert "`send_unify_message`" in block
-        assert "`send_unify_message_to_boss`" in block
 
-    def test_ack_block_example_targets_the_boss_contact(self):
-        block = _concurrent_ack_block(_build(contact_id=7))
-        assert 'send_unify_message(contact_id=7, content="Let me check.")' in block
-        assert 'ask_about_contacts(text="What is Sarah\'s phone number?")' in block
+    def test_ack_block_example_pairs_act_with_an_acknowledgment(self):
+        block = _concurrent_ack_block(_build())
+        assert 'send_unify_message(content="Let me check.")' in block
+        assert "act(query=" in block
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +232,8 @@ class TestActCapabilities:
     def test_conversational_messaging_stays_off_act(self):
         prompt = _build()
         assert (
-            "Ordinary conversational messaging and standing reply instructions "
-            "stay on my communication tools + `wait`"
+            "Ordinary conversational messaging stays on my communication tools "
+            "+ `wait`"
         ) in prompt
 
 

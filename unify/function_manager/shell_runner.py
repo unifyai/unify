@@ -2,22 +2,22 @@
 """
 CLI bridge for shell scripts to call primitives via RPC.
 
-This script enables shell functions to invoke Unity primitives (ContactManager.ask,
-FileManager.search_files, etc.) from within shell scripts. Communication happens
-via a Unix domain socket to the parent Python process that's executing the shell script.
+This script enables shell functions to invoke primitives (``primitives.actor.act``)
+from within shell scripts. Communication happens via a Unix domain socket to the
+parent Python process that's executing the shell script.
 
 Usage from shell scripts:
     # Call a primitive method
-    result=$(unity-primitive files search_files --references '{"query": "invoices"}' --k 5)
+    result=$(unity-primitive actor act --request "Summarise invoices.txt")
 
     # The result is JSON
-    echo "$result" | jq '.[]'
+    echo "$result" | jq '.'
 
     # List available managers
     unity-primitive --list-managers
 
     # List methods for a manager
-    unity-primitive files --list-methods
+    unity-primitive actor --list-methods
 
 Protocol:
     The CLI connects to a Unix domain socket (path in UNIFY_RPC_SOCKET env var)
@@ -304,9 +304,8 @@ def main() -> int:
             "\n"
             "Examples:\n"
             "  unity-primitive --list-managers\n"
-            "  unity-primitive files --list-methods\n"
-            '  unity-primitive files search_files --references \'{"query": "budget"}\' --k 5\n'
-            "  unity-primitive contacts ask --text 'Who is Alice?'\n",
+            "  unity-primitive actor --list-methods\n"
+            "  unity-primitive actor act --request 'Summarise budget.txt'\n",
         )
         return 0
 

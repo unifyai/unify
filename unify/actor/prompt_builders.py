@@ -16,18 +16,15 @@ if TYPE_CHECKING:
 # Static prompt content (inlined rather than wrapped in trivial functions)
 # ---------------------------------------------------------------------------
 
-_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
-    ### Function, Guidance & Knowledge Library
+_FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
+    ### Function & Guidance Library
 
-    Three complementary systems (all read + write):
+    Two complementary stores (both read + write):
 
     * **FunctionManager** — the *what*: concrete, reusable
       function implementations (results carry `guidance_ids`).
     * **GuidanceManager** — the *how*: procedures, SOPs,
       walkthroughs, composition strategies (results carry `function_ids`).
-    * **KnowledgeManager** — the *is*: durable sourced claims
-      (facts, policies, definitions, decisions, constraints, insights,
-      preferences) with provenance. Not people, not procedures, not secrets.
 
     **Discovery index scope:** Function search covers user-stored functions
     **and** the built-in `primitives.*` catalogue — primitive rows come back
@@ -38,11 +35,10 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     mean a prompt-documented callable is unavailable; call it by exact
     name via `execute_function`.
 
-    Always search **FunctionManager, GuidanceManager, and KnowledgeManager**
-    (`FunctionManager_search_functions`, `GuidanceManager_search`,
-    `KnowledgeManager_search`) before deciding how to execute, then use
-    what you find: call a relevant function via `execute_function`, follow
-    relevant guidance, use relevant claims. Prefer healthy matches (empty
+    Always search **FunctionManager and GuidanceManager**
+    (`FunctionManager_search_functions`, `GuidanceManager_search`) before
+    deciding how to execute, then use what you find: call a relevant
+    function via `execute_function`, follow relevant guidance. Prefer healthy matches (empty
     `stale_reasons`); stale entries are second-class — disclose the debt
     if used and repair via update/re-link. A no-hit is **not** permission to immediately write new code.
     Search is a discovery step, not an execution decision. After discovery,
@@ -51,8 +47,7 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     or primitive call, use `execute_function`; use `execute_code` only
     when the task genuinely requires multi-step composition. Search/filter results truncate long entries: when a
     discovered entry is actually relevant, fetch the complete body with
-    `GuidanceManager_get_guidance` / `KnowledgeManager_get_knowledge` — do
-    not act on a truncated preview.
+    `GuidanceManager_get_guidance` — do not act on a truncated preview.
 
     #### Writing to the libraries
 
@@ -62,22 +57,15 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
       stored functions apply: when the user changes such a rule, update
       the canonical entry FIRST (its `function_ids` are the authoritative
       affected set), revise every linked function, and verify none was
-      missed — never add a second copy.
-    - **Knowledge**: durable non-person, non-procedure, non-secret claims
-      go through `KnowledgeManager_add_knowledge` after searching for
-      duplicates; attach `source_refs`, and prefer `supersede_knowledge` /
-      `invalidate_knowledge` over silent overwrite.
+      missed — never add a second copy. A durable fact worth keeping (a
+      rate limit, a data quirk, a convention an API enforces) belongs in
+      the guidance entry or function docstring that acts on it.
     - **Functions**: explicit user requests to add/update/delete functions
       use `FunctionManager_add_functions` (`overwrite=True` to update) or
-      `FunctionManager_delete_function` directly. When a stored
-      function touches stored tables (`Data/*` or other
-      tabular contexts), its body **must** use `primitives.data` with
-      server-side `filter=` / `reduce` / `update_rows` / `insert_rows` /
-      `ingest` — never client-side full-table scans, which become
-      permanent production hot paths.
+      `FunctionManager_delete_function` directly.
     - For skills discovered *during* execution, use `store_skills` —
-      a dedicated review extracts functions, compositional guidance, and
-      durable claims from the trajectory.
+      a dedicated review extracts functions and compositional guidance
+      from the trajectory.
 
     #### Function Execution Modes
 
@@ -95,16 +83,16 @@ _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
     ### Discovery-First Policy (Active) — HARD REQUIREMENT
 
     A tool policy gates the full toolkit until each present library family
-    has been discovered: until then **only** FM / GM / KM discovery tools
+    has been discovered: until then **only** FM / GM discovery tools
     are available; the full tool set unlocks automatically once every
     present gate has been called.
 
     The CORRECT procedure:
     1. Your **first tool-calling assistant message** includes every present
        discovery family as parallel tool_calls in that same message:
-       `FunctionManager_search_functions` (with a non-empty `query`),
-       `GuidanceManager_search`, and `KnowledgeManager_search` — omitting
-       only families whose tools are absent. Do not answer in plain text
+       `FunctionManager_search_functions` (with a non-empty `query`) and
+       `GuidanceManager_search` — omitting only families whose tools are
+       absent. Do not answer in plain text
        first, do not serialize families across turns, and call only tools
        that appear in the current tool list.
     2. Then choose the minimal correct execution path:
@@ -128,9 +116,9 @@ _TOOL_SELECTION = textwrap.dedent("""
       adopted when it is the **last expression** — never consume a handle
       inside a code block (print it, await-and-discard it) when the loop
       needs steering.
-    - Durable knowledge claims are **not** primitives — use the
-      KnowledgeManager JSON tools (`KnowledgeManager_search`,
-      `KnowledgeManager_add_knowledge`, …) directly.
+    - Procedures are **not** primitives — use the GuidanceManager JSON
+      tools (`GuidanceManager_search`, `GuidanceManager_add_guidance`, …)
+      directly.
 
     ### Responding to a steering checkpoint
 
@@ -150,23 +138,13 @@ _TOOL_SELECTION = textwrap.dedent("""
 
 """).strip()
 
-_MANAGER_PRIMITIVE_SCOPE = textwrap.dedent("""
-    ### Manager Primitive Scope
+_PYTHON_FIRST = textwrap.dedent("""
+    ### Python First
 
-    `primitives.*` manager calls run as the current assistant: reads and
-    writes resolve through this assistant's manager scope even when an
-    instruction mentions another assistant. Do not use current-assistant
-    primitives or JSON manager tools to create, mutate, or "assign"
-    durable artifacts another assistant must own or execute — use an
-    explicit cross-assistant handoff tool if present, otherwise explain
-    the limitation or ask. Do not peek into another assistant's private
-    contexts.
-
-    **Python-first principle:** prefer Python packages over shell CLI
-    tools. Packages install via the `install_python_packages` JSON tool
-    with isolated venvs and dependency resolution; there is no
-    `install_shell_packages`. Reserve shell for tasks that genuinely
-    require it.
+    Prefer Python packages over shell CLI tools. Packages install via the
+    `install_python_packages` JSON tool with isolated venvs and dependency
+    resolution; there is no `install_shell_packages`. Reserve shell for
+    tasks that genuinely require it.
 """).strip()
 
 _EXECUTION_RULES = textwrap.dedent("""
@@ -262,7 +240,7 @@ def _build_sandbox_environment_section() -> str:
         ### Sandbox Environment
 
         Python in `execute_code` and stored functions runs with the
-        injected globals below. Find primitive methods with the
+        injected globals below. Find stored functions with the
         `FunctionManager_search_functions` JSON tool, then read live docs
         in-sandbox with `help(...)` — do not guess signatures. `help` and
         `dir` are builtins; `import inspect` first for
@@ -270,12 +248,12 @@ def _build_sandbox_environment_section() -> str:
 
         | Global | What it is |
         |--------|------------|
-        | `primitives` | Manager domains (`primitives.contacts`, …); `help(primitives.<manager>.<method>)` reads live method docs |
+        | `primitives` | `primitives.actor.act(...)` spawns a sub-actor; `help(primitives.actor.act)` reads its live docs |
         | `display` | `display(obj)` emits rich output — use it over `print(...)` for images; whatever you `display()` comes back as visual input next turn — inspect it directly, no separate vision/observe call |
         | `query_llm` / `list_llms` | Semantic LLM calls from code (doctrine below); full contract `help(query_llm)`, endpoints `list_llms()` |
         | `run_coro_sync` | Drives a coroutine factory from a sync façade under the already-running loop |
         | `unillm` | Advanced direct LLM usage beyond `query_llm` |
-        | `SteerableToolHandle` | Handle type manager calls return; make it the last expression to hand steering to the outer loop |
+        | `SteerableToolHandle` | Handle type sub-actor and stored-function calls return; make it the last expression to hand steering to the outer loop |
 
         ```python
         {query_signature}
@@ -365,11 +343,11 @@ _STORAGE_DEFERRED_NOTICE = textwrap.dedent("""
 
     **Direct writes vs trajectory storage**: user-requested "remember
     this" writes go directly to the libraries
-    (`GuidanceManager_add_guidance`, `KnowledgeManager_add_knowledge`
-    after search, `FunctionManager_add_functions` / `_delete_function`).
-    `store_skills` extracts reusable implementations, compositional
-    strategies, and durable claims from what you just did — not direct
-    user-requested mutations.
+    (`GuidanceManager_add_guidance` after search,
+    `FunctionManager_add_functions` / `_delete_function`).
+    `store_skills` extracts reusable implementations and compositional
+    strategies from what you just did — not direct user-requested
+    mutations.
 
     **Before compression**: when the context window nears capacity,
     `store_skills` and `compress_context` become the only tools available.
@@ -402,11 +380,11 @@ _STORAGE_SESSION_NOTICE = textwrap.dedent("""
 
     **Direct writes vs trajectory storage**: user-requested "remember
     this" writes go directly to the libraries
-    (`GuidanceManager_add_guidance`, `KnowledgeManager_add_knowledge`
-    after search, `FunctionManager_add_functions` / `_delete_function`).
-    `store_skills` extracts reusable implementations, compositional
-    strategies, and durable claims from what you just did — not direct
-    user-requested mutations.
+    (`GuidanceManager_add_guidance` after search,
+    `FunctionManager_add_functions` / `_delete_function`).
+    `store_skills` extracts reusable implementations and compositional
+    strategies from what you just did — not direct user-requested
+    mutations.
 
     **Before compression**: when the context window nears capacity,
     `store_skills` and `compress_context` become the only tools available.
@@ -439,7 +417,7 @@ def _build_clock_context() -> str:
 def _build_filesystem_context() -> str:
     pass
 
-    from unify.file_manager.settings import get_local_root
+    from unify.workspace import get_local_root
 
     resolved = get_local_root()
     return textwrap.dedent(f"""
@@ -455,7 +433,6 @@ def _build_filesystem_context() -> str:
         |----------|---------|
         | `{resolved}/Attachments/` | **Inbound & Outbound** — exchanged attachments as `{{attachment_id}}_{{filename}}`. Persists across sessions. |
         | `{resolved}/Outputs/` | **Outbound staging** — save generated files here so the caller can attach and send them. May be auto-cleared between sessions. |
-        | `{resolved}/.env` | Environment secrets managed by SecretManager. |
         | Everything else | Your own persistent workspace — organize however makes sense. |
 
         **File conventions:**
@@ -468,36 +445,12 @@ def _build_filesystem_context() -> str:
           your own outputs into the workspace, never into unrelated system
           paths (`/tmp`, `/var`).
 
-        **When to use the filesystem vs. primitives:** most tasks need no
-        local files — the state manager primitives are the primary way to
-        persist information.  Do not duplicate what primitives already
-        handle (contact details in a .txt file, Python functions as local
-        scripts); use the filesystem for working artifacts — data being
-        processed, intermediate results — and keep longer-lived material
-        organized.
+        **Filesystem vs. the libraries:** reusable code belongs in the
+        function library and procedures in the guidance library, never as
+        loose scripts or notes on disk. Use the filesystem for working
+        artifacts — data being processed, intermediate results, produced
+        files — and keep longer-lived material organized.
     """).strip()
-
-
-# Platform Capabilities index: one consult-path line per platform domain
-# whose teaching lives outside the base prompt (builtin guidance entries,
-# docstrings) or renders only behind a config gate. Static — gated-off
-# domains keep their line — and rendered only when discovery tools are
-# present, so it never points an assistant at tools it cannot call.
-_PLATFORM_CAPABILITIES_INDEX = textwrap.dedent("""
-    ### Platform Capabilities Index
-
-    These platform domains are documented on demand — consult the named
-    path before concluding a capability is missing:
-
-    - Semantic calls and model selection: `help(query_llm)`; endpoint
-      strings via `list_llms()`.
-    - Overlapping manager routing (data vs files vs ingestion, selection
-      priorities): `GuidanceManager_search` "choosing between overlapping
-      state managers".
-    - Storing new data: `help(primitives.ingestion.submit)`.
-    - Any `primitives.<manager>.<method>` API:
-      `FunctionManager_search_functions`, then `help(...)`.
-""").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +514,7 @@ def build_code_act_prompt(
     ----------
     discovery_first_policy:
         When ``True``, appends guidance explaining the discovery-first tool
-        policy (FM, GM, and KM must be called before other tools unlock).
+        policy (FM and GM must be called before other tools unlock).
     persist:
         When ``True``, the skill-storage notice describes the persistent
         session's schedule — automatic consolidation after each completed
@@ -576,9 +529,6 @@ def build_code_act_prompt(
     )
     has_gm_tools = bool(
         tools and any(str(k).startswith("GuidanceManager_") for k in tools.keys()),
-    )
-    has_km_tools = bool(
-        tools and any(str(k).startswith("KnowledgeManager_") for k in tools.keys()),
     )
     rules_and_examples = _build_code_act_rules_and_examples(
         environments=environments,
@@ -596,20 +546,20 @@ def build_code_act_prompt(
             "### Role\n\n"
             "You are an expert agent that solves tasks by writing and executing code. "
             "Your primary tool is a multi-language, multi-session execution environment "
-            "for running Python and shell code with access to injected tool domains.",
+            "for running Python and shell code, backed by a library of stored functions "
+            "and procedures.",
         )
 
         parts.append(_TOOLS_SECTION)
 
         parts.append(_build_sandbox_environment_section())
         parts.append(_TOOL_SELECTION)
-        parts.append(_MANAGER_PRIMITIVE_SCOPE)
+        parts.append(_PYTHON_FIRST)
         parts.append(_EXECUTION_RULES)
         parts.append(_INCREMENTAL_EXECUTION)
 
-        if has_fm_tools or has_gm_tools or has_km_tools:
-            parts.append(_PLATFORM_CAPABILITIES_INDEX)
-            parts.append(_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY)
+        if has_fm_tools or has_gm_tools:
+            parts.append(_FUNCTION_AND_GUIDANCE_LIBRARY)
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
@@ -652,8 +602,8 @@ def build_code_act_prompt(
                 f"{guidelines}",
             )
 
-        if has_fm_tools or has_gm_tools or has_km_tools:
-            parts.append(_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY)
+        if has_fm_tools or has_gm_tools:
+            parts.append(_FUNCTION_AND_GUIDANCE_LIBRARY)
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 

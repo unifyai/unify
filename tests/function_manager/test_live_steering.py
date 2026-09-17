@@ -204,7 +204,7 @@ def test_occurrences_reset_for_a_retry():
 def test_invalidation_is_by_prefix():
     session = SteeringSession()
     session.cache.put(("k1",), 1, tool="primitives.comms.send")
-    session.cache.put(("k2",), 2, tool="primitives.contacts.ask")
+    session.cache.put(("k2",), 2, tool="primitives.actor.act")
     assert session.cache.invalidate(["primitives.comms"]) == 1
     assert len(session.cache) == 1
     assert session.cache.invalidate([]) == 0

@@ -4,21 +4,13 @@ tests/conversation_manager/conftest.py
 
 Fixtures for conversation manager integration tests.
 
-Uses **direct handler testing** pattern (same as ContactManager tests):
+Uses **direct handler testing** pattern:
 - No event-driven initialization (no background task dependencies)
 - Direct calls to event handlers via CMStepDriver
 - Direct state inspection
 - Works reliably with pytest-asyncio
 
-These tests use **simulated** state managers (SimulatedActor,
-SimulatedContactManager, SimulatedTranscriptManager) to avoid real LLM
-calls beyond the slow brain itself. The brain tools route directly to
-ContactManager/TranscriptManager (ask_about_contacts, update_contacts,
-query_past_transcripts), so those must also be simulated.
-
-Parallel execution is coordinated using scenario_file_lock (same pattern as
-ContactManager tests) to prevent race conditions when multiple test processes
-try to create system contacts simultaneously.
+The actor is simulated so the only real LLM calls are the slow brain's own.
 """
 
 from __future__ import annotations
@@ -45,84 +37,8 @@ ensure_test_assistant_identity_env()
 import pytest
 import pytest_asyncio
 
-from tests.helpers import scenario_file_lock, get_or_create_contact
+from tests.helpers import scenario_file_lock
 from .cm_test_driver import CMStepDriver
-
-# Response policies matching ContactManager defaults
-# BOSS_RESPONSE_POLICY is for the user (contact_id 1) who gives commands
-# DEFAULT_RESPONSE_POLICY is for regular contacts who should NOT give commands
-# HELPFUL_RESPONSE_POLICY is for tests where contacts can make requests freely
-BOSS_RESPONSE_POLICY = (
-    "Your immediate manager, please do whatever they ask you to do within reason, "
-    "and do *not* withhold any information from them."
-)
-DEFAULT_RESPONSE_POLICY = (
-    "Please engage politely, helpfully, and respectfully, but you do not need to "
-    "take orders from them. Please also do not share **any** sensitive or personal "
-    "information with them about any other person, company or policy at all."
-)
-HELPFUL_RESPONSE_POLICY = (
-    "Please engage politely, helpfully, and respectfully. Fulfil any reasonable "
-    "requests they make. Do not share sensitive information about other people, "
-    "but otherwise be helpful and accommodating."
-)
-
-# System contacts (contact_id 0 and 1) are created by ContactManager from the database.
-# BOSS represents the boss user (contact_id 1) who gives commands to the assistant.
-# Tests should use BOSS when simulating commands from the user.
-BOSS = {
-    "contact_id": 1,
-    "first_name": "Default",
-    "surname": "User",
-    "email_address": "user@example.com",
-    "phone_number": "+15555551111",
-    "should_respond": True,
-    "is_system": True,
-    "response_policy": BOSS_RESPONSE_POLICY,
-}
-
-# Test contacts used across all tests (starting at contact_id 2)
-# should_respond=True allows outbound communication in tests
-# response_policy matches ContactManager.DEFAULT_RESPONSE_POLICY
-TEST_CONTACTS = [
-    {
-        "contact_id": 2,
-        "first_name": "Alice",
-        "surname": "Smith",
-        "email_address": "alice@example.com",
-        "phone_number": "+15555552222",
-        "should_respond": True,
-        "response_policy": DEFAULT_RESPONSE_POLICY,
-    },
-    {
-        "contact_id": 3,
-        "first_name": "Bob",
-        "surname": "Johnson",
-        "email_address": "bob@example.com",
-        "phone_number": "+15555553333",
-        "should_respond": True,
-        "response_policy": DEFAULT_RESPONSE_POLICY,
-    },
-    {
-        "contact_id": 4,
-        "first_name": "Charlie",
-        "surname": "Davis",
-        "email_address": "charlie@example.com",
-        "phone_number": "+15555554444",
-        "should_respond": True,
-        "response_policy": DEFAULT_RESPONSE_POLICY,
-    },
-    {
-        "contact_id": 5,
-        "first_name": "Diana",
-        "surname": "Evans",
-        "email_address": "diana@example.com",
-        "phone_number": "+15555555555",
-        "should_respond": True,
-        "response_policy": DEFAULT_RESPONSE_POLICY,
-    },
-]
-
 
 # =============================================================================
 # Module-level setup: Configure environment for in-process mode
@@ -131,22 +47,8 @@ TEST_CONTACTS = [
 
 def pytest_configure(config):
     """Configure environment variables before any tests run."""
-    # Actor, ContactManager, and TranscriptManager are all simulated.
-    # The brain tools route to these managers directly (ask_about_contacts,
-    # update_contacts, query_past_transcripts), so they must be simulated
-    # to avoid real LLM calls.
     os.environ["UNIFY_ACTOR_IMPL"] = "simulated"
     os.environ["UNIFY_ACTOR_SIMULATED_STEPS"] = "0"  # Allows pause+resume interactions
-    os.environ.setdefault("UNIFY_CONTACT_IMPL", "simulated")
-    os.environ.setdefault("UNIFY_TRANSCRIPT_IMPL", "simulated")
-
-    # Disable optional managers not needed for conversation manager tests
-    os.environ["UNIFY_MEMORY_ENABLED"] = "false"
-    os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "false"
-    os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNIFY_SECRET_ENABLED"] = "false"
-    os.environ["UNIFY_SKILL_ENABLED"] = "false"
-    os.environ["UNIFY_FILE_ENABLED"] = "false"
 
     # Enable incrementing timestamps for **NEW** marker comparisons
     os.environ["UNIFY_INCREMENTING_TIMESTAMPS"] = "true"
@@ -165,14 +67,9 @@ async def conversation_manager(request) -> CMStepDriver:
     Start and initialize ConversationManager in-process for the test module.
 
     Uses DIRECT initialization (not event-driven) to avoid background task
-    issues with pytest-asyncio. This follows the same pattern as ContactManager
-    tests - direct method calls, not event publishing.
+    issues with pytest-asyncio.
 
     Uses SimulatedActor explicitly for fast, deterministic testing.
-
-    Uses scenario_file_lock to coordinate initialization across parallel test
-    processes, preventing race conditions when ContactManager creates system
-    contacts (id=0, id=1).
 
     Returns a CMStepDriver that wraps the CM and provides step() and
     step_until_wait() methods for deterministic testing.
@@ -204,10 +101,6 @@ async def conversation_manager(request) -> CMStepDriver:
         emit_notifications=False,
     )
 
-    # Use file lock to coordinate manager initialization across parallel test processes.
-    # ContactManager.__init__ creates system contacts (assistant id=0, user id=1)
-    # via _sync_required_contacts(). This must be serialized to prevent duplicate
-    # contact creation when multiple pytest sessions start in parallel.
     with scenario_file_lock("cm_conversation_manager"):
         # Initialize managers DIRECTLY (not via event handler)
         # This avoids the background task / event loop interleaving issues
@@ -218,52 +111,6 @@ async def conversation_manager(request) -> CMStepDriver:
                 "ConversationManager managers failed to initialize - check logs for errors",
             )
         print("✅ Managers initialized")
-
-        # Update system contacts in ContactManager with proper names and test defaults.
-        # ContactManager is the source of truth - ContactIndex queries it directly.
-        if cm.contact_manager is not None:
-            # Update assistant (contact_id 0)
-            cm.contact_manager.update_contact(
-                contact_id=0,
-                first_name="Default",
-                surname="Assistant",
-                should_respond=True,
-            )
-            # Update boss/user (contact_id 1) with test defaults
-            cm.contact_manager.update_contact(
-                contact_id=1,
-                first_name=BOSS["first_name"],
-                surname=BOSS["surname"],
-                email_address=BOSS["email_address"],
-                phone_number=BOSS["phone_number"],
-                should_respond=True,
-                response_policy=BOSS["response_policy"],
-            )
-            print("✅ System contacts updated in ContactManager")
-
-        # Create test contacts in the database using idempotent helper.
-        # This ensures they exist with the expected contact_ids even when
-        # multiple test processes run in parallel.
-        for contact_data in TEST_CONTACTS:
-            contact_id = get_or_create_contact(
-                cm.contact_manager,
-                first_name=contact_data["first_name"],
-                surname=contact_data.get("surname"),
-                email_address=contact_data.get("email_address"),
-                phone_number=contact_data.get("phone_number"),
-            )
-            # Update should_respond and response_policy for tests
-            if contact_id and cm.contact_manager is not None:
-                cm.contact_manager.update_contact(
-                    contact_id=contact_id,
-                    should_respond=contact_data.get("should_respond", True),
-                    response_policy=contact_data.get(
-                        "response_policy",
-                        DEFAULT_RESPONSE_POLICY,
-                    ),
-                )
-
-    print(f"✅ Test contacts created: {len(TEST_CONTACTS)} + system contacts")
 
     # Wrap in CMStepDriver for deterministic testing
     driver = CMStepDriver(cm)
@@ -307,8 +154,9 @@ def initialized_cm(
     # Complete and clear in-flight actions from previous tests
     _complete_in_flight_actions(conversation_manager)
 
-    # Clear any conversation state from previous tests
-    conversation_manager.contact_index.clear_conversations()
+    # Clear the conversation from previous tests (in memory only; the
+    # per-module store keeps its rows, which nothing reads back mid-test).
+    conversation_manager.cm.chat_history.clear()
 
     # Reset handle_id counter to ensure deterministic action ids for caching.
     # Without this, handle_ids increment across tests, changing the rendered
@@ -317,8 +165,12 @@ def initialized_cm(
 
     bat._next_handle_id = 0
 
-    # Clear chat history (LLM message history)
-    conversation_manager.cm.chat_history.clear()
+    # Clear the brain's own LLM message list
+    conversation_manager.cm.brain_messages.clear()
+
+    # The recent-tool-executions pane would otherwise show the previous test's
+    # actions as work already in progress.
+    conversation_manager.cm._recent_tool_executions.clear()
 
     # Clear tool call tracking from previous tests
     conversation_manager.all_tool_calls.clear()

@@ -82,7 +82,6 @@ def test_filter_normalizes_legacy_null_is_builtin(monkeypatch):
                 "guidance_id": 1,
                 "title": "Legacy row",
                 "content": "Created before builtins.",
-                "images": [],
                 "function_ids": [],
                 "is_builtin": None,
             },

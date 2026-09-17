@@ -22,7 +22,7 @@ import pytest
 from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from unify.conversation_manager.domains.contact_index import ContactIndex
+from unify.conversation_manager.domains.chat_history import ChatHistory
 from unify.conversation_manager.domains.event_handlers import EventHandler
 from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.domains.renderer import Renderer
@@ -30,7 +30,6 @@ from unify.conversation_manager.events import (
     ActorNotification,
     ActorSessionResponse,
 )
-from unify.conversation_manager.cm_types.mode import Mode
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -41,12 +40,11 @@ from unify.conversation_manager.cm_types.mode import Mode
 def mock_cm():
     """Minimal mock ConversationManager for unit-level tests."""
     cm = MagicMock()
-    cm.mode = Mode.TEXT
-    cm.contact_index = ContactIndex()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.notifications_bar = NotificationBar()
-    cm.chat_history = []
+    cm.chat_history = ChatHistory()
+    cm.brain_messages = []
     cm._current_state_snapshot = None
     cm._current_snapshot_state = None
     cm._pending_steering_tasks = set()
@@ -110,7 +108,6 @@ class TestActPersistParameter:
 
         await brain_action_tools.act(
             query="Guide the walkthrough",
-            requesting_contact_id=1,
             persist=True,
         )
 
@@ -126,7 +123,7 @@ class TestActPersistParameter:
         actor, captured = _make_fake_actor()
         mock_cm.actor = actor
 
-        await brain_action_tools.act(query="Find contacts", requesting_contact_id=1)
+        await brain_action_tools.act(query="Find the report")
 
         assert captured.get("persist") is False
 
@@ -142,7 +139,6 @@ class TestActPersistParameter:
 
         await brain_action_tools.act(
             query="Long session",
-            requesting_contact_id=1,
             persist=True,
         )
 
@@ -160,7 +156,7 @@ class TestActPersistParameter:
         actor, _ = _make_fake_actor()
         mock_cm.actor = actor
 
-        await brain_action_tools.act(query="Quick task", requesting_contact_id=1)
+        await brain_action_tools.act(query="Quick task")
 
         action_data = next(iter(mock_cm.in_flight_actions.values()))
         assert action_data["persist"] is False
@@ -200,7 +196,6 @@ class TestActLLMProfileParameter:
 
         await brain_action_tools.act(
             query="Hard research task",
-            requesting_contact_id=1,
             llm_profile="gpt_5_5_high",
         )
 
@@ -217,7 +212,6 @@ class TestActLLMProfileParameter:
 
         await brain_action_tools.act(
             query="Hard research task",
-            requesting_contact_id=1,
             llm_profile="gpt_5_5_high",
         )
 

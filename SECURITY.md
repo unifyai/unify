@@ -41,8 +41,8 @@ listener; the only outbound connection is to the LLM provider.
 - **Operator.** The person who runs the `unify` command. The operator's
   user account is the trust envelope.
 - **Assistant.** The LLM-driven runtime the operator is talking to,
-  composed of the `ConversationManager`, `Actor`, and the back office of
-  state managers.
+  composed of the `ConversationManager`, the `Actor`, and the two skill
+  libraries.
 - **Inbound surface.** Anything that brings attacker-influenced content
   into the assistant's context — fetched web pages, search results, files
   the operator attaches, and the text of the chat itself.
@@ -73,16 +73,11 @@ of inbound surfaces and stored functions is the boundary.
 
 - **`.env`** in the checkout — the LLM provider key. Owned by the
   operator's user account; readable by anything the operator runs.
-- **`SecretManager`** — exposes a deliberately-narrow public API.
-  `primitives.secrets.ask(...)` returns metadata only (names, types,
-  placeholders), never the secret value; `primitives.secrets.update(...)`
-  is the only mutation. This is the **highest-blast-radius surface in the
-  codebase** — see [`.github/CODEOWNERS`](.github/CODEOWNERS).
 - **Actor subprocess environment** — the Python plan inherits the
   operator's `os.environ` by default. Provider keys are *not* stripped
   from the subprocess environment.
 - **`<UNIFY_HOME>/store.sqlite`** — everything the assistant remembers
-  (contacts, knowledge, transcripts, stored functions, secrets). It is an
+  (the chat history, stored functions, guidance). It is an
   ordinary file under the operator's home directory, protected only by
   file permissions.
 
@@ -92,8 +87,6 @@ The following components shape what the LLM does. They are not boundaries:
 
 - Tool docstrings, prompt builders, and primitive-level argument
   validation steer the LLM toward safer choices.
-- The `SecretManager.ask` placeholder-only contract limits what bad
-  prompts can trivially achieve through that one tool.
 - `FunctionManager` classifies every stored function's side-effect class
   and runs tier-0 contract checks around calls, but the *contents* of a
   stored function still execute as arbitrary Python under the operator's
@@ -108,8 +101,8 @@ real boundary.
 Every byte that reaches the model is attacker-influenceable the moment it
 came from outside the operator's head:
 
-- **Attached files** — `FileManager.parse` runs document parsers (PDF,
-  Office, etc.) on the operator's host.
+- **Attached files** — a path the operator names is read by whatever the
+  actor's plan does with it, on the operator's host.
 
 The supported posture for adversarial inbound surfaces is to run Unify
 inside a whole-process sandbox (container or VM). That is on the operator;
@@ -124,10 +117,8 @@ Unify does not ship one.
 - **Trust-boundary bypasses** that let content from an inbound surface
   cause Unify to run code, exfiltrate credentials, or persist data without
   the operator's involvement.
-- **`SecretManager` bugs** that expose secret material outside the
-  documented placeholder/metadata API.
 - **Parsing-surface bugs** — path traversal, command injection,
-  deserialisation in `FileManager` or the store's expression language
+  deserialisation in the store's expression language
   (`unify/db/expressions.py`).
 - **Hard-coded credentials or secrets** in the repository.
 - **Supply-chain issues** affecting `uv.lock` — lockfile tampering,

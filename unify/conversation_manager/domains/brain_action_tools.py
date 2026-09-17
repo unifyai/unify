@@ -1,9 +1,6 @@
 """
 Brain action tools for ConversationManager.
 
-All contact information is fetched from ContactManager (source of truth).
-No local caching of contact data.
-
 Context Propagation:
 - When `act` is called, the current state snapshot is passed to Actor via _parent_chat_context
 - For `interject` operations, only the incremental diff from the initial snapshot is sent
@@ -16,7 +13,7 @@ import asyncio
 from contextvars import ContextVar
 from functools import wraps
 import inspect
-import mimetypes
+from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -29,9 +26,7 @@ from unify.common.plain_text import (
     normalize_outbound_plain_text,
 )
 from unify.common.prompt_helpers import now as prompt_now
-from unify.logger import LOGGER
-from unify.common.hierarchical_logger import ICONS
-from unify.session_details import SESSION_DETAILS
+from unify.workspace import get_local_root
 
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.events import (
@@ -181,33 +176,30 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
 _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
-def _local_attachment(filepath: str) -> dict[str, Any]:
-    """Describe a workspace file as a chat attachment.
+def _attachment_path(filepath: str) -> str | dict[str, Any]:
+    """Resolve a file the assistant wants to attach to a chat message.
 
-    Returns the attachment dict (``filename``, ``filepath``, ``content_type``,
-    ``size_bytes``) or an ``{"error": ...}`` payload when the file cannot be
-    attached.
+    Relative paths resolve against the workspace root. Returns the path to
+    put on the message — workspace-relative when the file lives inside the
+    workspace, absolute otherwise — or an ``{"error": ...}`` payload when the
+    file cannot be attached.
     """
-    from unify.file_manager.filesystem_adapters.local_adapter import (
-        LocalFileSystemAdapter,
-    )
-
-    try:
-        file_ref = LocalFileSystemAdapter().get_file(filepath)
-    except FileNotFoundError:
+    root = Path(get_local_root()).resolve()
+    path = Path(filepath).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    if not path.is_file():
         return {"error": f"File not found: {filepath}"}
-    if file_ref.size_bytes > _MAX_ATTACHMENT_BYTES:
-        size_mb = file_ref.size_bytes / (1024 * 1024)
+    size_bytes = path.stat().st_size
+    if size_bytes > _MAX_ATTACHMENT_BYTES:
+        size_mb = size_bytes / (1024 * 1024)
         return {
             "error": f"File too large: {size_mb:.1f}MB exceeds 25MB attachment limit.",
         }
-    content_type, _ = mimetypes.guess_type(file_ref.name)
-    return {
-        "filename": file_ref.name,
-        "filepath": file_ref.path,
-        "content_type": content_type or "application/octet-stream",
-        "size_bytes": file_ref.size_bytes,
-    }
+    resolved = path.resolve()
+    if resolved.is_relative_to(root):
+        return resolved.relative_to(root).as_posix()
+    return str(resolved)
 
 
 # Whether the outbound send in progress is the slow brain's own direct tool
@@ -236,28 +228,20 @@ def slow_brain_direct_comms(method):
 
 
 class ConversationManagerBrainActionTools:
-    """
-    Side-effecting tools for the Main CM Brain.
-
-    All contact data is fetched from ContactManager - no local caching.
-    """
+    """Side-effecting tools for the Main CM Brain."""
 
     def __init__(self, cm: "ConversationManager"):
         self._cm = cm
         self._event_broker = cm.event_broker
-
-    def _boss_contact_id(self) -> int:
-        return int(SESSION_DETAILS.boss_contact_id)
 
     @slow_brain_direct_comms
     async def send_unify_message(
         self,
         *,
         content: str,
-        contact_id: int | str,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
-        """Send a chat message to a contact.
+        """Send a chat message to the user.
 
         Write plain text: prose as continuous lines that reflow naturally, a
         blank line between paragraphs, and each bullet or numbered item on
@@ -267,10 +251,8 @@ class ConversationManagerBrainActionTools:
         ----------
         content : str
             Message body to send.
-        contact_id : int | str
-            Contact id of the recipient.
         attachment_filepath : str | None, optional
-            Workspace-relative path of one file to attach.
+            Path of one file to attach, relative to the workspace root.
 
         Returns
         -------
@@ -278,95 +260,60 @@ class ConversationManagerBrainActionTools:
             ``{"status": "ok"}`` on success, or an ``{"error": ...}`` payload
             describing why the message was not sent.
         """
-        contact_id = int(contact_id)
         content = normalize_outbound_plain_text(content)
         if is_placeholder_outbound_content(content):
             return {"error": PLACEHOLDER_CONTENT_ERROR}
-        contact = self._cm.contact_index.get_contact(contact_id=contact_id)
-        if not contact:
-            return {"error": f"No contact with contact_id {contact_id}."}
 
-        attachments: list[dict] = []
+        attachments: list[str] = []
         if attachment_filepath:
-            attachment = _local_attachment(attachment_filepath)
-            if "error" in attachment:
+            attachment = _attachment_path(attachment_filepath)
+            if isinstance(attachment, dict):
                 return attachment
             attachments.append(attachment)
 
-        event = UnifyMessageSent(
-            contact=contact,
-            content=content,
-            attachments=attachments,
-        )
+        event = UnifyMessageSent(content=content, attachments=attachments)
         event.suppress_slow_brain_wake = slow_brain_direct_outbound_active()
         await self._event_broker.publish(UnifyMessageSent.topic, event.to_json())
         return {"status": "ok"}
-
-    @slow_brain_direct_comms
-    async def send_unify_message_to_boss(
-        self,
-        *,
-        content: str,
-        attachment_filepath: str | None = None,
-    ) -> dict[str, Any]:
-        """Send a chat message to my boss only.
-
-        This tool is restricted to the boss contact and cannot be used to
-        message anyone else. If my boss asks me to draft or send messages on
-        their behalf, route that work through ``act`` instead.
-
-        Parameters
-        ----------
-        content : str
-            Message body to send to my boss.
-        attachment_filepath : str | None, optional
-            Workspace-relative path for one attachment.
-        """
-        return await self.send_unify_message(
-            content=content,
-            contact_id=self._boss_contact_id(),
-            attachment_filepath=attachment_filepath,
-        )
 
     async def act(
         self,
         *,
         query: str,
-        requesting_contact_id: int,
         response_format: Optional[dict] = None,
         persist: bool = False,
         include_conversation_context: bool = True,
         llm_profile: Optional[str] = None,
     ) -> dict[str, Any]:
         """
-        Engage with knowledge, resources, and the world beyond immediate conversations.
+        Engage with the workspace, stored skills, and the world beyond the chat.
 
-        This is the all-purpose method for any work that requires searching, retrieving,
-        manipulating, or acting on information. Use ``act`` liberally — if it cannot
-        help, it will simply report back. There is no penalty for speculative delegation.
+        This is the all-purpose method for any work that requires computing,
+        reading, retrieving, manipulating, or acting on information. Use ``act``
+        liberally — if it cannot help, it will simply report back. There is no
+        penalty for speculative delegation.
 
         **Capabilities include:**
 
-        - **Retrieval**: Search contact records, query knowledge bases, look up past
-          conversations, find calendar events, retrieve files
-        - **Action**: Update records, modify spreadsheets, store knowledge
-        - **Combined**: Find information and act on it (e.g., "find David's email")
+        - **Retrieval**: Read files in the workspace (attachments the user sent
+          arrive there as paths), look up stored procedures and functions,
+          fetch data from the web and APIs through code
+        - **Action**: Write and run code, produce files, call stored functions,
+          store new functions and procedures for next time
+        - **Combined**: Find information and act on it (e.g., "read the attached
+          CSV and chart the monthly totals")
 
-        **When uncertain, call ``act``**: If you need information you don't have (like
-        a contact's email address), call ``act`` to search for it. If ``act`` can't find
-        it, it will tell you, and you can then ask the user.
+        **When uncertain, call ``act``**: If you need information you don't have,
+        call ``act`` to find it. If ``act`` can't find it, it will tell you, and
+        you can then ask the user.
 
         Args:
             query: Natural language request specifying what to do or find,
                 written in English whatever language the conversation is
                 in; the actor works in English. Quote the user's own words
                 only where they are the payload (a name, an address, the
-                text of a message to send).
-            requesting_contact_id: The contact_id of the person whose request or
-                needs this action serves.  For responses to a contact's message,
-                use that contact's ID.  For proactive actions benefiting a
-                specific person, use their contact_id.  In ambiguous cases,
-                choose the contact who most directly benefits from the action.
+                text of a message to send). Quote attachment paths from the
+                conversation verbatim so the actor can open the files.
             response_format: An optional structured schema describing the shape of
                 the result you need back.  When provided, the action is required to
                 return a JSON object conforming to this schema (via a dedicated
@@ -453,7 +400,6 @@ class ConversationManagerBrainActionTools:
             tool_name="act",
             tool_args={
                 "query": query,
-                "requesting_contact_id": requesting_contact_id,
                 "response_format": response_format,
                 "persist": persist,
                 "include_conversation_context": include_conversation_context,
@@ -537,243 +483,6 @@ class ConversationManagerBrainActionTools:
 
         return {"status": "acting", "query": query}
 
-    async def _invoke_manager_action(
-        self,
-        *,
-        manager: Any,
-        method_name: str,
-        text: str,
-        action_type: str,
-        response_format: Optional[dict] = None,
-        include_conversation_context: bool = True,
-    ) -> dict[str, Any]:
-        """Shared lifecycle for direct manager tools (contact and transcript actions).
-
-        Follows the same pattern as ``act``: store handle in
-        ``in_flight_actions``, spawn watcher tasks, publish started event.
-        """
-        global _next_handle_id
-        LOGGER.info(
-            f"{ICONS['fast_path']} [DirectManagerTool] {action_type}: {text}",
-        )
-
-        parent_context = None
-        if include_conversation_context:
-            parent_context = (
-                [_filter_cm_state_for_actor(self._cm._current_state_snapshot)]
-                if self._cm._current_state_snapshot
-                else None
-            )
-
-        pydantic_response_format = None
-        if response_format is not None:
-            pydantic_response_format = schema_dict_to_pydantic(response_format)
-
-        cm = self._cm
-
-        handle_id = _next_handle_id
-        _next_handle_id += 1
-
-        method = getattr(manager, method_name)
-        handle = await method(
-            text,
-            response_format=pydantic_response_format,
-            _parent_chat_context=parent_context,
-        )
-
-        initial_snapshot_state: SnapshotState | None = None
-        if hasattr(cm, "_current_snapshot_state"):
-            initial_snapshot_state = cm._current_snapshot_state
-
-        cm.in_flight_actions[handle_id] = {
-            "handle": handle,
-            "query": text,
-            "persist": False,
-            "action_type": action_type,
-            "calling_id": getattr(handle, "_manager_call_id", None),
-            "handle_actions": [
-                {
-                    "action_name": f"{action_type}_started",
-                    "query": text,
-                    "timestamp": prompt_now(),
-                },
-            ],
-            "initial_snapshot_state": initial_snapshot_state,
-            "context_opted_in": include_conversation_context,
-        }
-        asyncio.create_task(
-            managers_utils.actor_watch_result(
-                handle_id,
-                handle,
-                action_type=action_type,
-            ),
-        )
-        asyncio.create_task(
-            managers_utils.actor_watch_notifications(handle_id, handle),
-        )
-        asyncio.create_task(
-            managers_utils.actor_watch_clarifications(handle_id, handle),
-        )
-
-        await self._event_broker.publish(
-            f"app:actor:actor_started_handle_{handle_id}",
-            ActorHandleStarted(
-                handle_id=handle_id,
-                action_name=action_type,
-                query=text,
-                response_format=response_format,
-            ).to_json(),
-        )
-
-        return {"status": "acting", "query": text}
-
-    async def ask_about_contacts(
-        self,
-        *,
-        text: str,
-        response_format: Optional[dict] = None,
-    ) -> dict[str, Any]:
-        """
-        Query contact records directly — names, emails, phone numbers, roles,
-        relationships, and any other stored contact attributes.
-
-        This is a **direct channel** to the contact management system, bypassing
-        the general ``act`` pathway. Use it for any purely contact-related
-        questions:
-
-        - Looking up a specific contact's details
-        - Finding contacts by attribute (role, location, company, etc.)
-        - Checking if a contact exists
-        - Listing or filtering contacts
-        - Comparing contact records
-
-        **Route here instead of ``act`` when the question is purely about
-        contact data** — including "find Alice's contact_id so I can
-        message her." Looking up a contact to send them a message is still
-        a contact query; after this action returns the contact_id, call
-        ``send_unify_message`` yourself. If the question also involves
-        non-contact information (knowledge, transcripts, web, files,
-        etc.) or requires cross-domain reasoning, use ``act`` instead.
-
-        Args:
-            text: Natural language question about contacts
-                (e.g. "What is Sarah's email address?",
-                "Find Alice's contact_id so I can message her").
-            response_format: Optional structured schema describing the shape of
-                the result you need back. Same format as ``act``'s
-                ``response_format`` — keys are field names, values are type
-                strings (``"string"``, ``"integer"``, etc.), nested dicts, or
-                single-element lists for arrays. When omitted, a free-form text
-                answer is returned.
-        """
-        return await self._invoke_manager_action(
-            manager=self._cm.contact_manager,
-            method_name="ask",
-            text=text,
-            action_type="ask_about_contacts",
-            response_format=response_format,
-        )
-
-    async def update_contacts(
-        self,
-        *,
-        text: str,
-        response_format: Optional[dict] = None,
-    ) -> dict[str, Any]:
-        """
-        Create, edit, delete, or merge contact records directly.
-
-        This is a **direct channel** to the contact management system, bypassing
-        the general ``act`` pathway. Use it for any purely contact-related
-        mutations:
-
-        - Creating new contacts
-        - Updating contact details (phone, email, address, role, bio, etc.)
-        - Deleting contacts
-        - Merging duplicate contacts
-
-        **Route here instead of ``act`` when the request is purely about
-        modifying contacts.** If the request also involves non-contact work
-        or cross-domain operations, use ``act`` instead.
-
-        Args:
-            text: Natural language description of the contact change
-                (e.g. "Add a new contact for John Smith, email john@acme.com").
-            response_format: Optional structured schema describing the shape of
-                the result you need back. Same format as ``act``'s
-                ``response_format``. When omitted, a free-form text summary of
-                the mutation is returned.
-        """
-        return await self._invoke_manager_action(
-            manager=self._cm.contact_manager,
-            method_name="update",
-            text=text,
-            action_type="update_contacts",
-            response_format=response_format,
-        )
-
-    async def query_past_transcripts(
-        self,
-        *,
-        text: str,
-        response_format: Optional[dict] = None,
-    ) -> dict[str, Any]:
-        """
-        Search and analyse past messages and conversation history directly.
-
-        This is a **direct channel** to the transcript store, bypassing the
-        general ``act`` pathway. Use it for any purely transcript-related
-        questions:
-
-        - Retrieving recent messages from a specific contact
-        - Searching past conversations for a keyword or topic
-        - Summarising what was discussed in a previous exchange
-        - Checking what someone said or when they last messaged
-        - Comparing or filtering messages by date or sender
-
-        **Route here instead of ``act`` when the question is purely about
-        past messages or conversation history.** If the question also involves
-        non-transcript information (contacts, knowledge, web, files,
-        etc.) or requires cross-domain reasoning, use ``act`` instead.
-
-        Args:
-            text: Natural language question about past transcripts
-                (e.g. "What did Bob say about the deadline yesterday?").
-            response_format: Optional structured schema describing the shape of
-                the result you need back. Same format as ``act``'s
-                ``response_format`` — keys are field names, values are type
-                strings (``"string"``, ``"integer"``, etc.), nested dicts, or
-                single-element lists for arrays. When omitted, a free-form text
-                answer is returned.
-        """
-        return await self._invoke_manager_action(
-            manager=self._cm.transcript_manager,
-            method_name="ask",
-            text=text,
-            action_type="query_past_transcripts",
-            response_format=response_format,
-        )
-
-    async def _silent_interject_act_sessions(
-        self,
-        message: str,
-    ) -> None:
-        """Send a silent interjection to every in-flight ``act`` session,
-        keeping the Actor informed without triggering an immediate LLM turn."""
-        for hid, data in list(self._cm.in_flight_actions.items()):
-            if data.get("action_type") != "act":
-                continue
-            handle = data.get("handle")
-            if handle and not handle.done():
-                try:
-                    await handle.interject(
-                        message,
-                        trigger_immediate_llm_turn=False,
-                        suppress_response_notification=True,
-                    )
-                except TypeError:
-                    await handle.interject(message)
-
     async def wait(
         self,
         delay: int | None = None,
@@ -818,9 +527,6 @@ class ConversationManagerBrainActionTools:
         }
         if self._cm.initialized:
             tools["act"] = self.act
-            tools["ask_about_contacts"] = self.ask_about_contacts
-            tools["update_contacts"] = self.update_contacts
-            tools["query_past_transcripts"] = self.query_past_transcripts
         return tools
 
     def build_action_steering_tools(self) -> dict[str, "Callable[..., Any]"]:

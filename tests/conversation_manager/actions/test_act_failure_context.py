@@ -25,7 +25,6 @@ from tests.conversation_manager.cm_helpers import (
     assert_act_triggered,
     filter_events_by_type,
 )
-from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     get_actor_started_event,
     inject_actor_result,
@@ -58,21 +57,13 @@ async def test_second_act_includes_failure_context(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "Could you please take these properties in the attached image "
                 "and put them all into an Excel spreadsheet for me, with each "
                 "of their postcodes listed? Could you also please plot them all "
                 "on a map?"
             ),
-            attachments=[
-                {
-                    "filename": "IMG_1019.png",
-                    "filepath": "Attachments/att-img-1_IMG_1019.png",
-                    "content_type": "image/png",
-                    "size_bytes": 13330552,
-                },
-            ],
+            attachments=["Attachments/att-img-1_IMG_1019.png"],
         ),
     )
 

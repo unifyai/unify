@@ -583,12 +583,19 @@ def test_custom_call_discovery_ignores_internal_introspection_methods():
     """
     from unify.common.async_tool_loop import SteerableToolHandle
     from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unify.common.handle_wrappers import HandleWrapperMixin
 
-    # A custom handle that mixes in wrapper functionality and defines introspection-like methods
-    class IntrospectiveHandle(SteerableToolHandle, HandleWrapperMixin):
+    # A custom handle that carries introspection-style plumbing of its own
+    class IntrospectiveHandle(SteerableToolHandle):
         def __init__(self):
             self._done_ev = asyncio.Event()
+            self._wrapped: list = []
+
+        # Wrapper plumbing - SHOULD NOT be exposed
+        def _get_wrapped_handles(self) -> list:
+            return list(self._wrapped)
+
+        def _wrap_handle(self, handle) -> None:
+            self._wrapped.append(handle)
 
         # Valid public method - SHOULD be exposed
         def public_action(self, arg: str) -> str:
@@ -635,8 +642,7 @@ def test_custom_call_discovery_ignores_internal_introspection_methods():
     # Check 1: public_action should be discoverable
     assert "public_action" in custom_methods, sorted(custom_methods)
 
-    # Check 2: introspection methods (private, or from the wrapper mixin)
-    # should NOT be discoverable.
+    # Check 2: private introspection methods should NOT be discoverable.
     assert "_internal_method" not in custom_methods
     assert not any(
         "get_wrapped_handles" in name for name in custom_methods

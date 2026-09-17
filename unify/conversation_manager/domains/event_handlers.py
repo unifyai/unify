@@ -12,24 +12,19 @@ from unify.conversation_manager.events import (
     ActorResponse,
     ActorResult,
     ActorSessionResponse,
-    BackupContactsEvent,
     DirectMessageEvent,
     Error,
     Event,
-    GetChatHistory,
     InitializationComplete,
     NotificationInjectedEvent,
     NotificationUnpinnedEvent,
     OpenSlowBrainTurn,
     Ping,
-    SyncContacts,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
 from unify.conversation_manager.domains import managers_utils
-from unify.conversation_manager.cm_types import Medium
 from unify.logger import LOGGER
-from unify.session_details import SESSION_DETAILS
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -41,16 +36,6 @@ def _event_type_to_log_key(event_cls) -> str:
 
     s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
-
-
-def _get_sender_name(contact: dict | None, fallback: str = "Unknown") -> str:
-    """Get display name from contact dict."""
-    if not contact:
-        return fallback
-    first = contact.get("first_name") or ""
-    last = contact.get("surname") or ""
-    name = f"{first} {last}".strip()
-    return name or fallback
 
 
 class EventHandler:
@@ -185,55 +170,37 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
 
 @EventHandler.register((UnifyMessageSent, UnifyMessageReceived))
 async def _(event, cm: "ConversationManager", *args, **kwargs):
-    await managers_utils.queue_operation(managers_utils.log_message, cm, event)
-
-    contact_id = event.contact.get("contact_id") if event.contact else None
-    contact = cm.contact_index.get_contact(contact_id) if contact_id else None
-    if contact is None:
-        contact = event.contact or {}
-    contact_id = contact.get("contact_id")
-    sender_name = _get_sender_name(contact)
-
     match event:
         case UnifyMessageSent():
-            notif_content = f"Unify message sent to {sender_name}"
+            notif_content = "Message sent"
             role = "assistant"
-            cm._session_logger.info(
-                "unify_message_sent",
-                f"Message to {sender_name}: {event.content}",
-            )
+            cm._session_logger.info("unify_message_sent", f"Sent: {event.content}")
         case UnifyMessageReceived():
-            notif_content = f"Unify message from {sender_name}"
+            notif_content = "Message received"
             role = "user"
             cm._session_logger.info(
                 "unify_message_received",
-                f"Message from {sender_name}: {event.content}",
+                f"Received: {event.content}",
             )
 
-    if contact_id is not None:
-        cm.contact_index.push_message(
-            contact_id=contact_id,
-            sender_name=sender_name,
-            message_content=event.content,
-            attachments=event.attachments,
-            timestamp=event.timestamp,
-            role=role,
-        )
+    cm.chat_history.append(
+        role=role,
+        content=event.content,
+        attachments=event.attachments,
+        timestamp=event.timestamp,
+    )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
 
     if role == "user":
-        cm.record_last_inbound_reply(
-            {"medium": Medium.UNIFY_MESSAGE.value, "contact_id": contact_id},
-        )
         # A question posed through the handle's ``ask`` owns the next user
         # turn: the reply answers it directly instead of waking the brain.
         ask_handle = cm.active_ask_handle
         if ask_handle is not None and not ask_handle.done():
             await ask_handle.interject(event.content)
             return
-        await cm.request_llm_run(triggering_contact_id=contact_id)
+        await cm.request_llm_run(is_user_origin=True)
     elif not event.suppress_slow_brain_wake:
-        await cm.request_llm_run(triggering_contact_id=contact_id)
+        await cm.request_llm_run()
 
 
 @EventHandler.register(Error)
@@ -251,34 +218,6 @@ async def _(event: Error, cm: "ConversationManager", *args, **kwargs):
     """
     cm.notifications_bar.push_notif("Error", event.message, event.timestamp)
     await cm.request_llm_run(delay=0)
-
-
-@EventHandler.register(BackupContactsEvent)
-async def _(event: BackupContactsEvent, cm: "ConversationManager", *args, **kwargs):
-    """
-    Cache contacts from inbound messages for quick lookup.
-
-    This handler is triggered when inbound messages arrive with contact data.
-    Contacts are cached in ContactIndex and checked first in get_contact(),
-    ensuring contacts from recent inbounds are always available even before
-    or during ContactManager initialization.
-    """
-    if cm.contact_index._contact_manager:
-        return
-    cm._session_logger.debug(
-        "backup_contacts",
-        f"Caching {len(event.contacts)} contacts from inbound",
-    )
-    cm.contact_index.set_fallback_contacts(event.contacts)
-
-
-@EventHandler.register(GetChatHistory)
-async def _(event: GetChatHistory, cm: "ConversationManager", *args, **kwargs):
-    cm._session_logger.debug(
-        "state_update",
-        f"Received chat history ({len(event.chat_history)} messages)",
-    )
-    cm.chat_history = event.chat_history + cm.chat_history
 
 
 @EventHandler.register(ActorHandleStarted)
@@ -405,33 +344,6 @@ async def _(event: ActorNotification, cm: "ConversationManager", *args, **kwargs
         action_data["handle_actions"].append(entry)
 
 
-@EventHandler.register(SyncContacts)
-async def _(
-    event: SyncContacts,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    cm._session_logger.info(
-        "state_update",
-        f"SyncContacts: {event.reason or 'no reason'}",
-    )
-
-    async def _sync_contacts():
-        try:
-            await asyncio.to_thread(cm.contact_manager._sync_required_contacts)
-            cm._session_logger.info("state_update", "Contacts synced successfully")
-        except Exception as e:
-            cm._session_logger.error("state_update", f"Error syncing contacts: {e}")
-        cm.notifications_bar.push_notif(
-            "System",
-            f"Contacts synced: {event.reason or 'manual sync'}",
-            event.timestamp,
-        )
-
-    await managers_utils.queue_operation(_sync_contacts)
-
-
 OPEN_SLOW_BRAIN_TURN_NOTIFICATION = (
     "Open slow-brain turn — your previous turn finished without calling "
     "`wait`. You have another thinking turn now. Continue any outstanding "
@@ -461,19 +373,19 @@ async def _(
 #
 # Wording is deliberately strong about preferring `wait` over a follow-up
 # message: in cold-start flows where the brain already replied to a user
-# message during pre-init, the original "review … and follow up if needed
-# (correct, elaborate, or confirm)" wording was being interpreted as
-# permission to send a rephrased duplicate. We still need to allow the
-# brain to follow up legitimately when it deferred work, gave an
-# incomplete/incorrect answer due to missing context, or has new history
-# from hydration — so the directive enumerates those cases explicitly and
-# tells the brain to call `wait` otherwise.
+# message during pre-init, a looser "review … and follow up if needed
+# (correct, elaborate, or confirm)" wording gets interpreted as permission
+# to send a rephrased duplicate. The brain must still be allowed to follow
+# up legitimately when it deferred work, gave an incomplete/incorrect answer
+# due to missing context, or has new history from hydration — so the
+# directive enumerates those cases explicitly and tells the brain to call
+# `wait` otherwise.
 INITIALIZATION_COMPLETE_NOTIFICATION = (
-    "Initialization complete — all actions are now available and full "
+    "Initialization complete — all actions are now available and the "
     "conversation history has been loaded. If your previous reply during "
     "initialization (a) deferred work you can now perform, (b) was "
     "incorrect or incomplete because of missing context now revealed by "
-    "hydrated history, or (c) needs a concrete update, follow up now "
+    "the loaded history, or (c) needs a concrete update, follow up now "
     "(act, correct, or elaborate). Otherwise call wait — do NOT send a "
     "message that simply rephrases, restates, or confirms a reply you "
     "already gave."
@@ -483,11 +395,12 @@ INITIALIZATION_COMPLETE_NOTIFICATION = (
 # The truthful variant for a boot whose hydration restored nothing because
 # there is no prior conversation. Claiming "history has been loaded" on such
 # a boot sends the brain hunting for context that is not there: told history
-# was loaded while the thread render was empty, an assistant went searching
-# elsewhere for a spec that only ever existed in the unrendered conversation.
+# was loaded while the conversation render was empty, an assistant went
+# searching elsewhere for a spec that only ever existed in the unrendered
+# conversation.
 INITIALIZATION_COMPLETE_NO_HISTORY_NOTIFICATION = (
     "Initialization complete — all actions are now available. No prior "
-    "conversation history was found to load, so the rendered threads are "
+    "conversation history was found to load, so the rendered conversation is "
     "the whole of what is known here. If your previous reply during "
     "initialization deferred work you can now perform or needs a concrete "
     "update, follow up now. Otherwise call wait — do NOT send a message "
@@ -519,21 +432,14 @@ async def _(
 
 @EventHandler.register(DirectMessageEvent)
 async def _(event: DirectMessageEvent, cm: "ConversationManager", *args, **kwargs):
+    """A message delivered to the user verbatim is still part of the chat."""
     cm._session_logger.info(
         "direct_message",
         f"Direct message: {event.content[:50]}...",
     )
 
-    contact = cm.get_active_contact()
-    contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
-    )
-    sender_name = _get_sender_name(contact)
-
-    cm.contact_index.push_message(
-        contact_id=contact_id,
-        sender_name=sender_name,
-        message_content=event.content,
+    cm.chat_history.append(
         role="assistant",
+        content=event.content,
         timestamp=event.timestamp,
     )

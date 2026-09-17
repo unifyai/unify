@@ -12,7 +12,6 @@ from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import (
     has_steering_tool_call,
 )
-from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     get_actor_started_event,
@@ -39,10 +38,9 @@ async def test_memoize_signal_triggers_interject(initialized_cm_codeact):
 
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "I'm going to show you how to process a refund in our CRM. "
-                "First, look up the customer John Smith in my contacts."
+                "First, open the refunds spreadsheet in my workspace and find the order for John Smith."
             ),
         ),
     )
@@ -50,14 +48,12 @@ async def test_memoize_signal_triggers_interject(initialized_cm_codeact):
 
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Now search the transcripts for any previous refund discussions with John.",
+            content="Now add a refund row for John's order with today's date.",
         ),
     )
 
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Perfect, remember this workflow for next time.",
         ),
     )
@@ -92,10 +88,9 @@ async def test_save_workflow_signal_triggers_interject(initialized_cm_codeact):
 
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "Let me walk you through how we onboard a new vendor. "
-                "Start by looking up all contacts who work at Acme Corp."
+                "Start by creating a vendor folder for Acme Corp in my workspace."
             ),
         ),
     )
@@ -103,7 +98,6 @@ async def test_save_workflow_signal_triggers_interject(initialized_cm_codeact):
 
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "Great, save this. I want you to be able to do this on your own next time."
             ),

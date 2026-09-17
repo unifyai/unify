@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field
 from tests.helpers import _handle_project
 from unify.common.context_store import TableStore
 from unify.common.model_to_fields import model_to_fields
-from unify.transcript_manager.types.message import Message
 
 import unify.common.llm_helpers as llmh
 from unify.common.tool_spec import ToolSpec
@@ -55,6 +54,30 @@ class _SimpleModel(BaseModel):
     tags: list[str]
     metadata: dict[str, str]
     maybe_count: int | None = None
+
+
+class _ImageRef(BaseModel):
+    image_id: int | None = None
+
+
+class _AnnotatedImage(BaseModel):
+    raw_image_ref: _ImageRef
+    annotation: str | None = None
+
+
+class Message(BaseModel):
+    """A row model with a nested list-of-models field, the shape the store
+    must record as a nested JSON Schema."""
+
+    message_id: int = -1
+    exchange_id: int = -1
+    medium: str
+    sender_id: int
+    receiver_ids: list[int]
+    timestamp: datetime
+    content: str
+    images: list[_AnnotatedImage] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class _OverrideModel(BaseModel):

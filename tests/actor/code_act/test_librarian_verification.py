@@ -53,8 +53,10 @@ def _verification_enabled(monkeypatch):
 
 
 _PURE = "def add(a: int, b: int) -> int:\n    return a + b\n"
-_READ = (
-    "async def lookup(q: str) -> str:\n    return await primitives.contacts.ask(q)\n"
+_DELEGATE = (
+    "async def lookup(q: str) -> str:\n"
+    "    handle = await primitives.actor.act(q)\n"
+    "    return await handle.result()\n"
 )
 _THIRD_PARTY = "def s3(x: str) -> str:\n    import boto3\n    return x\n"
 
@@ -66,7 +68,7 @@ def _row(fm, name):
 @_handle_project
 def test_confirm_side_effect_class_is_bounded_below_by_detection():
     fm = FunctionManager()
-    fm.add_functions(implementations=[_PURE, _READ])
+    fm.add_functions(implementations=[_PURE, _DELEGATE])
     venv_id = fm.add_venv(
         venv="[project]\nname='s3'\nversion='0'\ndependencies=['boto3']\n",
     )
@@ -90,18 +92,18 @@ def test_confirm_side_effect_class_is_bounded_below_by_detection():
     )
     assert row["side_effect_class_detected"] == "safe_noop"
 
-    # Lowering stops at the detected bound.
-    out = fm.confirm_side_effect_class(
-        function_id=lookup_id,
-        side_effect_class="safe_noop",
-        rationale="looks pure",
-    )
-    assert out["outcome"] == "rejected" and out["detected"] == "read_only"
-    assert _row(fm, "lookup")["side_effect_class"] == "read_only"
+    # Lowering stops at the detected bound: a sub-agent may do anything.
     out = fm.confirm_side_effect_class(
         function_id=lookup_id,
         side_effect_class="read_only",
-        rationale="reads contacts",
+        rationale="only asks a question",
+    )
+    assert out["outcome"] == "rejected" and out["detected"] == "unsafe_effectful"
+    assert _row(fm, "lookup")["side_effect_class"] == "unsafe_effectful"
+    out = fm.confirm_side_effect_class(
+        function_id=lookup_id,
+        side_effect_class="unsafe_effectful",
+        rationale="delegates to a sub-agent",
     )
     assert out["outcome"] == "confirmed"
 
@@ -142,26 +144,26 @@ def test_confirm_side_effect_class_is_bounded_below_by_detection():
 @_handle_project
 def test_set_verification_policy_only_raises():
     fm = FunctionManager()
-    fm.add_functions(implementations=[_PURE, _READ])
+    fm.add_functions(implementations=[_PURE, _DELEGATE])
     add_id = _row(fm, "add")["function_id"]
     lookup_id = _row(fm, "lookup")["function_id"]
 
-    # read_only class default is 3 passes / 2 inputs; equal or lower is rejected.
-    out = fm.set_verification_policy(function_id=lookup_id, required_passes=3)
+    # unsafe_effectful class default is 5 passes / 3 inputs; equal or lower is rejected.
+    out = fm.set_verification_policy(function_id=lookup_id, required_passes=5)
     assert out["outcome"] == "rejected"
     out = fm.set_verification_policy(
         function_id=lookup_id,
-        required_passes=5,
+        required_passes=7,
         min_distinct_inputs=4,
     )
     assert out["outcome"] == "raised"
-    assert _row(fm, "lookup")["verification_policy"]["required_passes"] == 5
+    assert _row(fm, "lookup")["verification_policy"]["required_passes"] == 7
     assert (
-        fm.set_verification_policy(function_id=lookup_id, required_passes=4)["outcome"]
+        fm.set_verification_policy(function_id=lookup_id, required_passes=6)["outcome"]
         == "rejected"
     )
     assert (
-        fm.set_verification_policy(function_id=lookup_id, required_passes=6)["outcome"]
+        fm.set_verification_policy(function_id=lookup_id, required_passes=8)["outcome"]
         == "raised"
     )
 
@@ -177,7 +179,8 @@ def test_set_verification_policy_only_raises():
         == "rejected"
     )
 
-    # spot checks: read_only has none; the rate must exceed the current one.
+    # spot checks: a declared return type means no class-level sampling, so
+    # the floor is the current rate, and any rate set must exceed it.
     assert (
         fm.set_verification_policy(function_id=lookup_id, spot_check_rate=1.5)[
             "outcome"

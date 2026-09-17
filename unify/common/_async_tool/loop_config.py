@@ -18,18 +18,13 @@ _PENDING_LOOP_SUFFIX: ContextVar[str | None] = ContextVar(
     default=None,
 )
 
-from . import images as _images
 
 # Public re-exports
-LIVE_IMAGES_REGISTRY = _images.LIVE_IMAGES_REGISTRY
-LIVE_IMAGES_LOG = _images.LIVE_IMAGES_LOG
 
 __all__ = [
     "TOOL_LOOP_LINEAGE",
     "_PENDING_LOOP_SUFFIX",
     "LoopConfig",
-    "LIVE_IMAGES_REGISTRY",
-    "LIVE_IMAGES_LOG",
 ]
 
 

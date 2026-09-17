@@ -1,4 +1,4 @@
-"""PrimitiveScope: the single knob for controlling which managers are exposed."""
+"""PrimitiveScope: the single knob for controlling which primitive namespaces are exposed."""
 
 from __future__ import annotations
 
@@ -8,16 +8,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import FrozenSet
 
-# Canonical manager aliases - the only valid values for scoped_managers.
+# Canonical namespace aliases - the only valid values for scoped_managers.
 # This is the authoritative list; ToolSurfaceRegistry.MANAGERS must match.
 VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
     {
-        "contacts",
-        "ingestion",
-        "transcripts",
-        "secrets",
-        "data",
-        "files",
         "actor",
     },
 )
@@ -26,25 +20,20 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
 @dataclass(frozen=True, slots=True)
 class PrimitiveScope:
     """
-    Defines which managers are exposed in a deployment.
+    Defines which primitive namespaces are exposed in a deployment.
 
     This is the single source of truth for scoping. All downstream consumers
-    (Primitives, StateManagerEnvironment, FunctionManager, prompt builders)
-    read from this object.
+    (Primitives, ActorEnvironment, FunctionManager) read from this object.
 
     Attributes
     ----------
     scoped_managers : frozenset[str]
-        Set of manager aliases to expose. Must be non-empty and contain only
-        valid manager aliases from VALID_MANAGER_ALIASES.
+        Set of namespace aliases to expose. Must be non-empty and contain only
+        valid aliases from VALID_MANAGER_ALIASES.
 
     Examples
     --------
-    # Files-only deployment
-    scope = PrimitiveScope(scoped_managers=frozenset({"files"}))
-
-    # Full deployment
-    scope = PrimitiveScope(scoped_managers=VALID_MANAGER_ALIASES)
+    scope = PrimitiveScope(scoped_managers=frozenset({"actor"}))
     """
 
     scoped_managers: "FrozenSet[str]"
@@ -71,17 +60,17 @@ class PrimitiveScope:
         return ",".join(sorted(self.scoped_managers))
 
     def includes(self, manager_alias: str) -> bool:
-        """Check if a manager alias is in scope."""
+        """Check if a namespace alias is in scope."""
         return manager_alias in self.scoped_managers
 
     @classmethod
     def all_managers(cls) -> "PrimitiveScope":
-        """Create a scope with all managers exposed."""
+        """Create a scope with every namespace exposed."""
         return cls(scoped_managers=VALID_MANAGER_ALIASES)
 
     @classmethod
     def single(cls, manager_alias: str) -> "PrimitiveScope":
-        """Create a scope with a single manager exposed."""
+        """Create a scope with a single namespace exposed."""
         return cls(scoped_managers=frozenset({manager_alias}))
 
 

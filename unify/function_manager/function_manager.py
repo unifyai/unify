@@ -106,9 +106,6 @@ from .verification.tier0 import Tier0Checker, signature_from_source, tier0_bound
 from .settings import VerificationSettings
 from .base import BaseFunctionManager
 from ..common.model_to_fields import model_to_fields, with_ui_editable_forced_false
-from ..file_manager.managers.local import LocalFileManager
-from ..image_manager.image_manager import ImageHandle
-from ..manager_registry import ManagerRegistry
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import ContextRegistry, TableContext
 from ..common.stale_reason import (
@@ -226,7 +223,7 @@ class _LineageTrackedFunction:
 
     This wrapper preserves hierarchical lineage across mixed execution, e.g.:
 
-        CodeActActor.act -> execute_code -> <function> -> primitives.contacts.ask -> ...
+        CodeActActor.act -> execute_code -> <function> -> primitives.actor.act -> ...
 
     It is injected into the Python namespace **in place of** the raw callable so that
     inter-function calls (function A calling function B) still pass through a boundary that:
@@ -1775,7 +1772,7 @@ class FunctionManager(BaseFunctionManager):
     Keeps a catalogue of user-supplied Python functions and system primitives.
 
     User-defined functions are stored in `Functions/Compositional` with auto-incrementing
-    IDs. System primitives (state manager methods) are stored in `Functions/Primitives`
+    IDs. System primitives (the ``primitives.*`` namespace methods) are stored in `Functions/Primitives`
     with explicit stable IDs that are consistent across all users.
 
     This separation ensures:
@@ -1855,7 +1852,6 @@ class FunctionManager(BaseFunctionManager):
         exclude_compositional_ids: Optional[FrozenSet[int]] = None,
         include_primitives: bool = True,
         daemon: bool = True,
-        file_manager: Optional[LocalFileManager] = None,
     ) -> None:
         # Store the scope - this FunctionManager instance is permanently scoped
         # Default to the canonical role-scoped manager set when not specified.
@@ -1892,16 +1888,6 @@ class FunctionManager(BaseFunctionManager):
             self,
             FUNCTIONS_VERIFICATIONS_TABLE,
         )
-
-        # ------------------------------------------------------------------ #
-        #  LocalFileManager reference (for VM sync manager access)           #
-        # ------------------------------------------------------------------ #
-        try:
-            self._fm: Optional[LocalFileManager] = (
-                file_manager if file_manager is not None else LocalFileManager()
-            )
-        except Exception:
-            self._fm = None
 
         # ------------------------------------------------------------------ #
         #  In-process session state (for stateful/read_only modes)           #
@@ -4435,8 +4421,8 @@ class FunctionManager(BaseFunctionManager):
         The stored implementation is exec'd into the namespace so inter-
         function calls resolve naturally.
 
-        **Dotted names** (e.g. ``"primitives.actor.act"``,
-        ``"primitives.contacts.ask"``) — environment-provided namespaces.
+        **Dotted names** (e.g. ``"primitives.actor.act"``) —
+        environment-provided namespaces.
         Only the *root* segment matters for injection (``"primitives"``).
         If the root is not already present in the namespace,
         ``construct_sandbox_root()`` from the primitive registry constructs
@@ -4459,7 +4445,7 @@ class FunctionManager(BaseFunctionManager):
                 continue
             visited.add(dep_name)
 
-            # ── Dotted dependency (e.g. "primitives.actor.act", "primitives.contacts.ask") ──
+            # ── Dotted dependency (e.g. "primitives.actor.act") ──
             if "." in dep_name:
                 root = dep_name.split(".")[0]
                 if root not in namespace:
@@ -5368,12 +5354,11 @@ class FunctionManager(BaseFunctionManager):
         self,
         *,
         function_id: int,
-        include_images: bool = True,
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Return guidance records linked to the function.
 
-        Each dict includes: guidance_id, title, content, images (optional).
+        Each dict includes: guidance_id, title, content.
         """
         gids = self._get_guidance_ids_for_function(function_id=function_id)
         if not gids:
@@ -5395,107 +5380,14 @@ class FunctionManager(BaseFunctionManager):
         out: List[Dict[str, Any]] = []
         for lg in rows:
             ent = lg.entries
-            rec: Dict[str, Any] = {
-                "guidance_id": ent.get("guidance_id"),
-                "title": ent.get("title"),
-                "content": ent.get("content"),
-            }
-            if include_images:
-                rec["images"] = ent.get("images") or []
-            out.append(rec)
-        return out
-
-    def _get_image_handles_for_function_guidance(
-        self,
-        *,
-        function_id: int,
-        limit: Optional[int] = None,
-    ) -> List[ImageHandle]:
-        """Return ImageHandle objects for images referenced by guidance linked to the function."""
-        guids = self._get_guidance_for_function(
-            function_id=function_id,
-            include_images=True,
-        )
-        image_ids: List[int] = []
-        for g in guids:
-            imgs = g.get("images") or []
-            # Support either raw list (ImageRefs) or a dict with root
-            if isinstance(imgs, dict) and "root" in imgs:
-                imgs = imgs.get("root") or []
-            if not isinstance(imgs, list):
-                continue
-            for ref in imgs:
-                try:
-                    if isinstance(ref, dict):
-                        # AnnotatedImageRef shape: {"raw_image_ref": {"image_id": X}, "annotation": ...}
-                        if "raw_image_ref" in ref and isinstance(
-                            ref["raw_image_ref"],
-                            dict,
-                        ):
-                            iid = int(ref["raw_image_ref"].get("image_id"))
-                            image_ids.append(iid)
-                        elif "image_id" in ref:
-                            image_ids.append(int(ref.get("image_id")))
-                    else:
-                        # If objects leaked through, try attribute access
-                        iid = getattr(
-                            getattr(ref, "raw_image_ref", ref),
-                            "image_id",
-                            None,
-                        )
-                        if iid is not None:
-                            image_ids.append(int(iid))
-                except Exception:
-                    continue
-        # Preserve order while de-duplicating
-        image_ids = list(dict.fromkeys(image_ids))
-        if limit is not None:
-            try:
-                limit = int(limit)
-            except Exception:
-                limit = None
-            if isinstance(limit, int) and limit >= 0:
-                image_ids = image_ids[:limit]
-
-        im = ManagerRegistry.get_image_manager()
-        return im.get_images(image_ids)
-
-    def _attach_guidance_images_for_function_to_context(
-        self,
-        *,
-        function_id: int,
-        limit: Optional[int] = 3,
-    ) -> Dict[str, Any]:
-        """Attach images referenced by related guidance into the loop context.
-
-        Returns a dict with keys:
-            attached_count: int
-            images: list of { meta: {...}, image: <base64> }
-        """
-        handles = self._get_image_handles_for_function_guidance(
-            function_id=function_id,
-            limit=limit,
-        )
-        images: List[Dict[str, Any]] = []
-        for h in handles:
-            try:
-                raw_bytes = h.raw()
-            except Exception:
-                continue
-            import base64
-
-            b64 = base64.b64encode(raw_bytes).decode("utf-8")
-            images.append(
+            out.append(
                 {
-                    "meta": {
-                        "image_id": int(h.image_id),
-                        "caption": h.caption,
-                        "timestamp": getattr(h.timestamp, "isoformat", lambda: "")(),
-                    },
-                    "image": b64,
+                    "guidance_id": ent.get("guidance_id"),
+                    "title": ent.get("title"),
+                    "content": ent.get("content"),
                 },
             )
-        return {"attached_count": len(images), "images": images}
+        return out
 
     # ------------------------------------------------------------------ #
     #  Virtual Environment Management                                    #
@@ -5724,7 +5616,7 @@ class FunctionManager(BaseFunctionManager):
         The path includes the Unify context name to ensure isolation between
         different assistants/users and during parallel test runs.
         """
-        from unify.file_manager.settings import get_local_root
+        from unify.workspace import get_local_root
 
         # Get current context for isolation
         ctx = db.get_active_context()
@@ -5982,9 +5874,9 @@ class FunctionManager(BaseFunctionManager):
         ``rpc_interrupt`` message.
 
         Args:
-            path: The RPC path (e.g., "contacts.ask", "computer.click")
+            path: The RPC path (e.g., "actor.act")
             kwargs: The keyword arguments for the call
-            primitives: The Primitives instance for state manager access
+            primitives: The Primitives instance the path resolves against
 
         Returns:
             The result of the RPC call
@@ -6028,7 +5920,7 @@ class FunctionManager(BaseFunctionManager):
 
             return list_llms(provider=kwargs.get("provider"))
 
-        # Handle state manager primitives
+        # Handle primitive namespace methods
         if primitives is None:
             raise RuntimeError("primitives not available")
 
@@ -6078,7 +5970,7 @@ class FunctionManager(BaseFunctionManager):
             is_async: Whether the function is async (default True).
             initial_state: Optional serialized state to inject before execution.
                 Used for read_only mode to inherit state from a persistent session.
-            primitives: The Primitives instance for RPC access to state managers.
+            primitives: The Primitives instance the RPC paths resolve against.
 
         Returns:
             Dict with keys: result, error, stdout, stderr
@@ -7087,14 +6979,12 @@ class FunctionManager(BaseFunctionManager):
             Dict with structure:
             {
                 "managers": {
-                    "files": {
+                    "actor": {
                         "description": "...",
                         "methods": {
-                            "search_files": {"signature": "...", "docstring": "..."},
-                            ...
+                            "act": {"signature": "...", "docstring": "..."},
                         }
                     },
-                    ...
                 }
             }
         """
@@ -7103,9 +6993,7 @@ class FunctionManager(BaseFunctionManager):
         # Use the scoped primitive_scope from this FunctionManager
         for spec in self._registry.manager_specs(self._primitive_scope):
             manager_name = spec.manager_alias
-            description = spec.prompt_text(
-                self._primitive_scope.scoped_managers,
-            ).description
+            description = spec.description
 
             # Get primitive rows which contain signature and docstring
             single_scope = PrimitiveScope(scoped_managers=frozenset({manager_name}))
@@ -7138,15 +7026,14 @@ class FunctionManager(BaseFunctionManager):
         timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """
-        Execute a shell script with access to Unity primitives via RPC.
+        Execute a shell script with access to primitives via RPC.
 
         This method runs a shell script in a subprocess while providing access
-        to all Unity primitives (ContactManager, FileManager, etc.) via the
-        `unity-primitive` CLI command.
+        to the primitives (``primitives.actor``) via the `unity-primitive`
+        CLI command.
 
         Shell scripts can call primitives like:
-            result=$(unity-primitive files search_files --references '{"query": "budget"}')
-            contacts=$(unity-primitive contacts ask --text "Find Alice")
+            result=$(unity-primitive actor act --request "Summarise report.txt")
 
         Args:
             implementation: The shell script source code.
@@ -7154,7 +7041,7 @@ class FunctionManager(BaseFunctionManager):
             call_args: Optional list of positional arguments to pass to the script.
             env: Optional environment variables to add to the script's environment.
             cwd: Optional working directory for the script.
-            primitives: The Primitives instance for RPC access to state managers.
+            primitives: The Primitives instance for RPC access.
             timeout: Maximum execution time in seconds (default 5 minutes).
 
         Returns:

@@ -272,12 +272,11 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
 
     CodeActActor.__init__ collects function_ids from environments and sets
     them on the FM via setters. This must not crash for SimulatedFunctionManager.
-    A filtered environment inlines its method docs, so the actor excludes
-    exactly those tools from search; an unfiltered one documents nothing
-    inline and leaves every primitive discoverable.
+    The actor environment inlines its method docs whether or not it is
+    filtered, so the actor excludes its tool from search either way.
     """
     from unify.actor.code_act_actor import CodeActActor
-    from unify.actor.environments.state_managers import StateManagerEnvironment
+    from unify.actor.environments import ActorEnvironment
 
     fm = SimulatedFunctionManager(description="test")
 
@@ -285,12 +284,7 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
     # exclusions on the FM via setters, not replace it.
     actor = CodeActActor(
         environments=[
-            StateManagerEnvironment(
-                allowed_methods={
-                    "primitives.contacts.ask",
-                    "primitives.transcripts.ask",
-                },
-            ),
+            ActorEnvironment(allowed_methods={"primitives.actor.act"}),
         ],
         function_manager=fm,
         timeout=30,
@@ -301,18 +295,18 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
 
     # Exclusion IDs should have been set via the setter.
     assert fm.exclude_primitive_ids is not None
-    assert len(fm.exclude_primitive_ids) > 0
+    assert len(fm.exclude_primitive_ids) == 1
 
-    # An unfiltered environment documents nothing inline, so nothing is
-    # excluded and the setter is never called.
+    # An unfiltered environment documents its whole surface inline, so the
+    # same exclusion is set through the same setter.
     fm_unfiltered = SimulatedFunctionManager(description="test")
     actor_unfiltered = CodeActActor(
-        environments=[StateManagerEnvironment()],
+        environments=[ActorEnvironment()],
         function_manager=fm_unfiltered,
         timeout=30,
     )
     assert actor_unfiltered.function_manager is fm_unfiltered
-    assert fm_unfiltered.exclude_primitive_ids is None
+    assert fm_unfiltered.exclude_primitive_ids == fm.exclude_primitive_ids
 
 
 def test_setters_update_system_message():

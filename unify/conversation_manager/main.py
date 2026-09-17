@@ -26,7 +26,7 @@ import asyncio
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from unify.session_details import SESSION_DETAILS
-from unify.file_manager.settings import get_local_root
+from unify.workspace import get_local_root
 from unify.conversation_manager.event_broker import get_event_broker
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.utils import log_task_exc
@@ -110,9 +110,9 @@ async def run_conversation_manager(
     """
     SESSION_DETAILS.populate_from_env()
 
-    # Set the process working directory to the local file root so that relative
+    # Set the process working directory to the workspace root so that relative
     # file paths in CodeActActor-generated code (e.g. "Attachments/abc123_report.pdf")
-    # resolve against the same root used by LocalFileSystemAdapter.  This must
+    # and on chat attachments resolve against the same root.  This must
     # happen after settings/env are loaded but before any concurrent tasks are
     # created, since os.chdir() is process-global.
     local_root = Path(get_local_root())

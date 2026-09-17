@@ -1,12 +1,12 @@
 """Steered-mode introspection smoke test.
 
-The prompt no longer inlines primitive method docs — models are pointed at
-``help()`` / ``inspect.signature`` / ``dir()`` inside ``execute_code``. In
-steered execution the sandbox swaps ``primitives`` for a proxy stack
-(``MemoisedDispatch`` → ``_MemoisedNamespace``, optionally
-``ContextForwardingProxy`` → ``_ManagerProxy``), and those wrappers used to
-swallow introspection: a bare-sandbox test would pass while steered mode
-returned ``(*args, **kwargs)`` signatures and empty ``dir()`` listings.
+Models are pointed at ``help()`` / ``inspect.signature`` / ``dir()`` inside
+``execute_code`` to read live primitive docs. In steered execution the
+sandbox swaps ``primitives`` for a proxy stack (``MemoisedDispatch`` →
+``_MemoisedNamespace``, optionally ``ContextForwardingProxy`` →
+``_ManagerProxy``), and those wrappers can swallow introspection: a
+bare-sandbox test would pass while steered mode returned
+``(*args, **kwargs)`` signatures and empty ``dir()`` listings.
 
 So this test runs the introspection calls *through the steered path*: a
 ``PythonExecutionSession`` with an active ``SteeringSession`` and a parent
@@ -19,51 +19,13 @@ import textwrap
 
 import pytest
 
-from unify.manager_registry import ManagerRegistry
-
-
-@pytest.fixture
-def simulated_managers(monkeypatch: pytest.MonkeyPatch):
-    """Switch state managers to simulated impls so no backend is touched."""
-    from unify.settings import SETTINGS
-
-    for name in (
-        "CONTACT",
-        "TRANSCRIPT",
-        "KNOWLEDGE",
-        "GUIDANCE",
-        "SECRET",
-        "WEB",
-        "FILE",
-        "DATA",
-    ):
-        monkeypatch.setenv(f"UNIFY_{name}_IMPL", "simulated")
-        attr = name.lower()
-        if hasattr(SETTINGS, attr):
-            monkeypatch.setattr(
-                getattr(SETTINGS, attr),
-                "IMPL",
-                "simulated",
-                raising=False,
-            )
-
-    ManagerRegistry.clear()
-    yield
-    ManagerRegistry.clear()
-
 
 def _steered_environments():
-    """State-manager environment exposed under ``primitives``."""
+    """The actor environment exposed under ``primitives``."""
+    from unify.actor.environments.actor import ActorEnvironment
     from unify.actor.environments.base import _CompositeEnvironment
-    from unify.actor.environments.state_managers import StateManagerEnvironment
-    from unify.function_manager.primitives import Primitives, PrimitiveScope
 
-    scope = PrimitiveScope(
-        scoped_managers=frozenset({"contacts", "data"}),
-    )
-    composite = _CompositeEnvironment(
-        [StateManagerEnvironment(Primitives(primitive_scope=scope))],
-    )
+    composite = _CompositeEnvironment([ActorEnvironment()])
     return {"primitives": composite}
 
 
@@ -73,10 +35,9 @@ _INTROSPECTION_CODE = textwrap.dedent(
     import pydoc
 
     info = {}
-    info["help_contacts_ask"] = pydoc.render_doc(primitives.contacts.ask)
-    info["sig_data_filter"] = str(inspect.signature(primitives.data.filter))
-    info["dir_contacts"] = dir(primitives.contacts)
-    info["dir_data"] = dir(primitives.data)
+    info["help_actor_act"] = pydoc.render_doc(primitives.actor.act)
+    info["sig_actor_act"] = str(inspect.signature(primitives.actor.act))
+    info["dir_actor"] = dir(primitives.actor)
     info
     """,
 ).strip()
@@ -104,9 +65,7 @@ async def _run_steered(code: str) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
-async def test_steered_sandbox_introspection_renders_real_docs(
-    simulated_managers,
-):
+async def test_steered_sandbox_introspection_renders_real_docs():
     """help/inspect.signature/dir resolve real metadata through the steered
     proxy stack (MemoisedDispatch → _MemoisedNamespace → _ManagerProxy)."""
     outcome = await _run_steered(_INTROSPECTION_CODE)
@@ -114,19 +73,16 @@ async def test_steered_sandbox_introspection_renders_real_docs(
     info = outcome["result"]
     assert isinstance(info, dict), f"unexpected sandbox result: {info!r}"
 
-    # help(primitives.contacts.ask) shows the real contract docstring.
-    help_text = info["help_contacts_ask"]
-    assert "text" in help_text
-    assert "existing contact" in help_text, help_text[:500]
+    # help(primitives.actor.act) shows the real contract docstring.
+    help_text = info["help_actor_act"]
+    assert "request" in help_text
+    assert "Spawn an actor to work on a focused sub-task" in help_text, help_text[:500]
 
-    # inspect.signature(primitives.data.filter) — sync manager behind
-    # _AsyncPrimitiveWrapper — shows the real parameters, not (*args, **kwargs).
-    sig_filter = info["sig_data_filter"]
-    assert "*args" not in sig_filter, sig_filter
-    assert "context" in sig_filter and "filter" in sig_filter, sig_filter
+    # inspect.signature(primitives.actor.act) shows the real parameters,
+    # not (*args, **kwargs).
+    sig = info["sig_actor_act"]
+    assert "*args" not in sig, sig
+    assert "request" in sig and "prompt_functions" in sig, sig
 
-    # dir(primitives.<manager>) lists the primitive method surface.
-    assert "ask" in info["dir_contacts"], info["dir_contacts"]
-    assert "update" in info["dir_contacts"], info["dir_contacts"]
-    assert "filter" in info["dir_data"], info["dir_data"]
-    assert "reduce" in info["dir_data"], info["dir_data"]
+    # dir(primitives.actor) lists the primitive method surface.
+    assert "act" in info["dir_actor"], info["dir_actor"]

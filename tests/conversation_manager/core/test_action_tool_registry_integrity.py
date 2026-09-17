@@ -49,16 +49,11 @@ def _registered_tool_attributes() -> dict[str, str]:
 def test_registrations_were_found() -> None:
     """Guard the guard: a parser that finds nothing would pass vacuously.
 
-    The tools registered once the managers are initialized are pinned by
+    The tool registered once the managers are initialized is pinned by
     name, so a parse that silently found nothing cannot pass.
     """
     registered = _registered_tool_attributes()
-    assert {
-        "act",
-        "ask_about_contacts",
-        "update_contacts",
-        "query_past_transcripts",
-    } <= set(registered)
+    assert {"act"} <= set(registered)
 
 
 def test_every_registered_tool_exists() -> None:

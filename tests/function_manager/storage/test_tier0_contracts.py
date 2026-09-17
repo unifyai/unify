@@ -369,7 +369,7 @@ def test_authored_fixtures_only_for_pure_functions():
     assert [f["result"] for f in row["fixtures"]] == [3]
     with pytest.raises(ValueError, match="safe_noop"):
         fm.add_functions(
-            implementations="async def ping(q: str) -> str:\n    return await primitives.contacts.ask(q)\n",
+            implementations="async def ping(q: str) -> str:\n    return await primitives.actor.act(q)\n",
             fixtures={"ping": [{"args": {"q": "x"}, "result": "y"}]},
         )
 

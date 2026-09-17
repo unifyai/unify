@@ -7,7 +7,7 @@ user message → ConversationManager → CodeActActor → real state managers �
 Testing philosophy (high-signal constraints):
 - No fixed sleeps; all waits are condition-driven with explicit timeouts.
 - Prefer verifying durable side effects (DB rows, emitted events) over brittle wording.
-- Use unique/unguessable tokens for tasks/contacts so “correct” answers require real lookups.
+- Use unique/unguessable tokens for tasks so “correct” answers require real lookups.
 
 Gotchas we account for:
 - Some LLM/provider stacks bind background logging workers to an event loop; we reset per test.

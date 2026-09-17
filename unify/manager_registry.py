@@ -12,27 +12,19 @@ This module is the single source of truth for:
 
 Usage:
     # Get a manager via typed method (auto-resolves IMPL, returns singleton):
-    contact_manager = ManagerRegistry.get_contact_manager()
+    function_manager = ManagerRegistry.get_function_manager()
 
     # For simulated managers, pass description:
-    ManagerRegistry.get_contact_manager(description="test scenario")
+    ManagerRegistry.get_guidance_manager(description="test scenario")
 
     # Clear all singletons (for test isolation):
     ManagerRegistry.clear()
 
 Available typed methods:
     - get_actor()
-    - get_contact_manager()
     - get_conversation_manager_handle()
-    - get_data_manager()
-    - get_file_manager()
     - get_function_manager()
     - get_guidance_manager()
-    - get_image_manager()
-    - get_knowledge_manager()
-    - get_memory_manager()
-    - get_secret_manager()
-    - get_transcript_manager()
 """
 
 from __future__ import annotations
@@ -43,18 +35,9 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
 
 if TYPE_CHECKING:
     from .actor.base import BaseActor
-    from .contact_manager.base import BaseContactManager
     from .conversation_manager.base import BaseConversationManagerHandle
-    from .ingestion_manager.base import BaseIngestionManager
-    from .data_manager.base import BaseDataManager
-    from .file_manager.managers.base import BaseFileManager
     from .function_manager.base import BaseFunctionManager
     from .guidance_manager.base import BaseGuidanceManager
-    from .image_manager.base import BaseImageManager
-    from .knowledge_manager.base import BaseKnowledgeManager
-    from .memory_manager.base import BaseMemoryManager
-    from .secret_manager.base import BaseSecretManager
-    from .transcript_manager.base import BaseTranscriptManager
     from .function_manager.primitives.scope import PrimitiveScope
 
 __all__ = [
@@ -381,24 +364,6 @@ class ManagerRegistry:
         )
 
     @classmethod
-    def get_contact_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseContactManager":
-        """Get the ContactManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "contacts",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
     def get_conversation_manager_handle(
         cls,
         *,
@@ -410,61 +375,6 @@ class ManagerRegistry:
         """Get the ConversationManagerHandle singleton (respects IMPL settings)."""
         return cls.get(
             "conversation",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_ingestion_manager(
-        cls,
-        *,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseIngestionManager":
-        """Get the IngestionManager singleton (respects IMPL settings).
-
-        IngestionManager stores data and files from any source. It owns the
-        Ingestion/* namespace.
-        """
-        return cls.get(
-            "ingestion",
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_data_manager(
-        cls,
-        *,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseDataManager":
-        """Get the DataManager singleton (respects IMPL settings).
-
-        DataManager provides canonical data operations (filter, search, reduce,
-        join, vectorize, plot) that work on any Unify context. It owns the
-        Data/* namespace but can operate on any context including Files/*.
-        """
-        return cls.get(
-            "data",
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_file_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseFileManager":
-        """Get the FileManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "files",
             description=description,
             simulation_guidance=simulation_guidance,
             _force_new=_force_new,
@@ -525,96 +435,6 @@ class ManagerRegistry:
             **kwargs,
         )
 
-    @classmethod
-    def get_image_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseImageManager":
-        """Get the ImageManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "images",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_knowledge_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseKnowledgeManager":
-        """Get the KnowledgeManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "knowledge",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_memory_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseMemoryManager":
-        """Get the MemoryManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "memory",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_secret_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseSecretManager":
-        """Get the SecretManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "secrets",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
-    @classmethod
-    def get_transcript_manager(
-        cls,
-        *,
-        description: str | None = None,
-        simulation_guidance: str | None = None,
-        _force_new: bool = False,
-        **kwargs: Any,
-    ) -> "BaseTranscriptManager":
-        """Get the TranscriptManager singleton (respects IMPL settings)."""
-        return cls.get(
-            "transcripts",
-            description=description,
-            simulation_guidance=simulation_guidance,
-            _force_new=_force_new,
-            **kwargs,
-        )
-
 
 class SingletonABCMeta(ABCMeta):
     """Metaclass that enforces the Singleton pattern via ManagerRegistry.
@@ -624,9 +444,9 @@ class SingletonABCMeta(ABCMeta):
     constructor calls return the existing instance without calling __init__
     again.
 
-    Note: This supports direct class instantiation (e.g., `ContactManager()`).
+    Note: This supports direct class instantiation (e.g., `FunctionManager()`).
     For settings-aware instantiation that respects IMPL, use the typed methods
-    like `ManagerRegistry.get_contact_manager()` instead.
+    like `ManagerRegistry.get_function_manager()` instead.
     """
 
     def __call__(cls, *args: Any, **kwargs: Any) -> Any:
@@ -656,18 +476,9 @@ def _populate_registry() -> None:
     from .settings import SETTINGS
 
     ManagerRegistry.register_settings("actor", lambda: SETTINGS.actor)
-    ManagerRegistry.register_settings("contacts", lambda: SETTINGS.contact)
-    ManagerRegistry.register_settings("transcripts", lambda: SETTINGS.transcript)
     ManagerRegistry.register_settings("conversation", lambda: SETTINGS.conversation)
-    ManagerRegistry.register_settings("knowledge", lambda: SETTINGS.knowledge)
     ManagerRegistry.register_settings("guidance", lambda: SETTINGS.guidance)
-    ManagerRegistry.register_settings("secrets", lambda: SETTINGS.secret)
-    ManagerRegistry.register_settings("data", lambda: SETTINGS.data)
-    ManagerRegistry.register_settings("files", lambda: SETTINGS.file)
     ManagerRegistry.register_settings("functions", lambda: SETTINGS.function)
-    ManagerRegistry.register_settings("images", lambda: SETTINGS.image)
-    ManagerRegistry.register_settings("ingestion", lambda: SETTINGS.ingestion)
-    ManagerRegistry.register_settings("memory", lambda: SETTINGS.memory)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Actor implementations
@@ -677,28 +488,6 @@ def _populate_registry() -> None:
 
     ManagerRegistry.register_class("actor", "code_act", CodeActActor)
     ManagerRegistry.register_class("actor", "simulated", SimulatedActor)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # ContactManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .contact_manager.contact_manager import ContactManager
-    from .contact_manager.simulated import SimulatedContactManager
-
-    ManagerRegistry.register_class("contacts", "real", ContactManager)
-    ManagerRegistry.register_class("contacts", "simulated", SimulatedContactManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # TranscriptManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .transcript_manager.transcript_manager import TranscriptManager
-    from .transcript_manager.simulated import SimulatedTranscriptManager
-
-    ManagerRegistry.register_class("transcripts", "real", TranscriptManager)
-    ManagerRegistry.register_class(
-        "transcripts",
-        "simulated",
-        SimulatedTranscriptManager,
-    )
 
     # ─────────────────────────────────────────────────────────────────────────
     # ConversationManager implementations
@@ -714,15 +503,6 @@ def _populate_registry() -> None:
     )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # KnowledgeManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .knowledge_manager.knowledge_manager import KnowledgeManager
-    from .knowledge_manager.simulated import SimulatedKnowledgeManager
-
-    ManagerRegistry.register_class("knowledge", "real", KnowledgeManager)
-    ManagerRegistry.register_class("knowledge", "simulated", SimulatedKnowledgeManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
     # GuidanceManager implementations
     # ─────────────────────────────────────────────────────────────────────────
     from .guidance_manager.guidance_manager import GuidanceManager
@@ -732,47 +512,6 @@ def _populate_registry() -> None:
     ManagerRegistry.register_class("guidance", "simulated", SimulatedGuidanceManager)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # SecretManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .secret_manager.secret_manager import SecretManager
-    from .secret_manager.simulated import SimulatedSecretManager
-
-    ManagerRegistry.register_class("secrets", "real", SecretManager)
-    ManagerRegistry.register_class("secrets", "simulated", SimulatedSecretManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # IngestionManager implementations
-    from .ingestion_manager.ingestion_manager import IngestionManager
-
-    ManagerRegistry.register_class("ingestion", "real", IngestionManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # DataManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .data_manager.data_manager import DataManager
-    from .data_manager.simulated import SimulatedDataManager
-
-    ManagerRegistry.register_class("data", "real", DataManager)
-    ManagerRegistry.register_class("data", "simulated", SimulatedDataManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # FileManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .file_manager.managers.file_manager import FileManager
-    from .file_manager.simulated import SimulatedFileManager
-
-    ManagerRegistry.register_class("files", "real", FileManager)
-    ManagerRegistry.register_class("files", "simulated", SimulatedFileManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # MemoryManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .memory_manager.memory_manager import MemoryManager
-    from .memory_manager.simulated import SimulatedMemoryManager
-
-    ManagerRegistry.register_class("memory", "real", MemoryManager)
-    ManagerRegistry.register_class("memory", "simulated", SimulatedMemoryManager)
-
     # FunctionManager implementations
     # ─────────────────────────────────────────────────────────────────────────
     from .function_manager.function_manager import FunctionManager
@@ -780,11 +519,3 @@ def _populate_registry() -> None:
 
     ManagerRegistry.register_class("functions", "real", FunctionManager)
     ManagerRegistry.register_class("functions", "simulated", SimulatedFunctionManager)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # ImageManager implementations
-    # ─────────────────────────────────────────────────────────────────────────
-    from .image_manager.image_manager import ImageManager
-
-    ManagerRegistry.register_class("images", "real", ImageManager)
-    # Note: No simulated implementation exists for ImageManager

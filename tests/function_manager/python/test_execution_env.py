@@ -165,12 +165,11 @@ def test_execution_globals():
     # Should include the primitives object
     assert "primitives" in execution
 
-    # Primitives object should provide lazy access to managers
+    # Primitives object should provide lazy access to the actor namespace only
     primitives = execution["primitives"]
-    assert hasattr(primitives, "contacts")
-    assert hasattr(primitives, "transcripts")
-    assert hasattr(primitives, "files")
-    assert not hasattr(primitives, "knowledge")
+    assert hasattr(primitives, "actor")
+    assert callable(primitives.actor.act)
+    assert not hasattr(primitives, "files")
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -32,30 +32,18 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class PromptText:
-    """The overview fields rendered for one manager in the actor prompt."""
-
-    domain: str
-    description: str
-    use_when: str
-    examples: str
-    special_note: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class ManagerSpec:
     """
-    Configuration for a single manager in the tool surface.
+    Configuration for a single primitive namespace in the tool surface.
 
-    This is the authoritative specification for each manager, containing:
-    - Identity (alias, registry key, class path)
+    This is the authoritative specification for each namespace, containing:
+    - Identity (alias, class path)
     - Method exclusions
-    - Prompt metadata (domain, description, use_when, examples, priority)
+    - Prompt metadata (domain, description)
     - Sandbox namespace root (the top-level key in the sandbox's global_state)
     """
 
     manager_alias: str
-    manager_registry_key: str
     primitive_class_path: str
     # The top-level key under which this manager's methods appear in a
     # CodeActActor sandbox's global_state.  All managers live under
@@ -64,40 +52,12 @@ class ManagerSpec:
     # back to the class that provides them.
     sandbox_root: str = "primitives"
     excluded_methods: frozenset[str] = field(default_factory=frozenset)
-    priority: int = 99
     domain: str = ""
     description: str = ""
-    use_when: str = ""
-    examples: str = ""
-    special_note: str | None = None
-    # A manager that replaces this one for new work. The primary prompt fields
-    # above may steer authoring toward that replacement, so they only render
-    # while the replacement is exposed in the same scope; when it is absent,
-    # ``standalone`` renders instead. A prompt must never route to a tool the
-    # session cannot call — an actor told "author over there" with no "there"
-    # in scope refuses work its visible tools fully support.
-    superseded_by: str | None = None
-    standalone: PromptText | None = None
-
-    def prompt_text(self, exposed_aliases: frozenset[str]) -> PromptText:
-        """The overview text to render given which managers are exposed."""
-        if (
-            self.superseded_by is not None
-            and self.superseded_by not in exposed_aliases
-            and self.standalone is not None
-        ):
-            return self.standalone
-        return PromptText(
-            domain=self.domain,
-            description=self.description,
-            use_when=self.use_when,
-            examples=self.examples,
-            special_note=self.special_note,
-        )
 
 
 # =============================================================================
-# Common excluded methods (applies to all managers)
+# Common excluded methods (applies to every primitive namespace)
 # =============================================================================
 
 _COMMON_EXCLUDED_METHODS: frozenset[str] = frozenset(
@@ -112,183 +72,16 @@ _COMMON_EXCLUDED_METHODS: frozenset[str] = frozenset(
 
 
 # =============================================================================
-# Canonical Manager Registry (SINGLE SOURCE OF TRUTH)
+# Canonical Primitive Registry (SINGLE SOURCE OF TRUTH)
 # =============================================================================
 
 _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
     ManagerSpec(
-        manager_alias="contacts",
-        manager_registry_key="contacts",
-        primitive_class_path="unify.contact_manager.contact_manager.ContactManager",
-        excluded_methods=frozenset({"filter_contacts", "update_contact"}),
-        priority=3,
-        domain="People & Relationships",
-        description="People, organizations, contact records (names, emails, phones, roles, locations)",
-        use_when="Questions about specific people, contact info, 'who is X?'",
-        examples="'Who is our contact at Acme Corp?', 'Find Alice's email', 'Contacts in Berlin?'",
-    ),
-    ManagerSpec(
-        manager_alias="data",
-        manager_registry_key="data",
-        primitive_class_path="unify.data_manager.data_manager.DataManager",
-        # `ingest` is deliberately not exposed here. Storing anything goes
-        # through `primitives.ingestion.submit`, which records a run, checkpoints
-        # it and can resume it. A direct ingest call has none of that: it blocks
-        # the plan for as long as the write takes and leaves nothing to inspect
-        # if it dies part-way.
-        excluded_methods=frozenset({"ingest"}),
-        priority=9,
-        domain="Data Operations",
-        description=(
-            "Read and reshape data already stored in any Unify context "
-            "(filter, search, reduce, join, update_rows, vectorize)"
-        ),
-        use_when=(
-            "Querying, aggregating or joining stored tables; updating rows in "
-            "place. To *store* new data from anywhere, use primitives.ingestion"
-        ),
-        examples=(
-            "'Filter rows where amount > 1000', 'Join repairs with telematics', "
-            "'Sum revenue by region', 'Mark these rows reviewed'"
-        ),
-        special_note=(
-            "DataManager operates on any Unify context path. "
-            "Use `describe_table` and `list_tables` to discover schemas. "
-            "HARD RULE: push predicates and aggregations into "
-            "`filter` / `reduce` / `filter_join` / `reduce_join` / "
-            "`update_rows` — never download a large table into Python to "
-            "count, aggregate, or decide updates. Prefer one selective "
-            "`update_rows(..., filter=...)` over fetch-all then per-row "
-            "updates. "
-            "STORING new data is not here: use `primitives.ingestion.submit` "
-            "for rows from an API or connected app, for files, and for "
-            "reshaping one table into another."
-        ),
-    ),
-    ManagerSpec(
-        manager_alias="ingestion",
-        manager_registry_key="ingestion",
-        primitive_class_path=(
-            "unify.ingestion_manager.ingestion_manager.IngestionManager"
-        ),
-        excluded_methods=frozenset(),
-        priority=9,
-        domain="Storing Data & Files",
-        description=(
-            "Store data from anywhere into queryable tables or document "
-            "collections: rows fetched from an API or connected app, uploaded "
-            "and attached files, a whole folder, or a reshape of a stored table"
-        ),
-        use_when=(
-            "Anything that puts NEW data somewhere queryable — API responses, "
-            "connected-app pulls, attachments, uploads, folder syncs, table "
-            "reshapes"
-        ),
-        examples=(
-            "'Pull my HubSpot deals in and chart them', 'Ingest this PDF', "
-            "'Load the whole exports folder', 'Store these API results', "
-            "'Make a current-state table out of that event log'"
-        ),
-        special_note=(
-            "ONE VERB: `submit(source, target)` — sources (`RowsSource`, "
-            "`FilesSource`, `FolderSource`, `TableSource`) say where data "
-            "comes from; targets say where it lands (`TableTarget` for one "
-            "queryable table, `CollectionTarget` to keep documents whole, "
-            "inner tables extracted alongside); full contract via "
-            "help(primitives.ingestion.submit). MANY FILES ARE ONE RUN: "
-            "fifteen files each wanting their own table is one "
-            "`CollectionTarget(extract_tables=True)`, not fifteen submits — "
-            "which throw away the run id that makes the batch answerable. "
-            "NOTHING BLOCKS: submit "
-            "returns a run handle immediately — poll `get_status(run_id)` "
-            "and follow its `next_step`; call `wait(run_id)` only when the "
-            "plan genuinely cannot continue. `status.contexts` reports the "
-            "exact paths written — query those rather than "
-            "guessing. PER-FILE PROGRESS is `status.files`, never "
-            "`status.stages`, which counts stages and so says two of fifteen "
-            "parsed without saying which two; never report expected rows as "
-            "ingested ones. Where it runs is not a caller's choice; every run "
-            "checkpoints and is resumable (`retry(run_id)` re-attempts only "
-            "what was parked, `pause`/`resume` continue from the last "
-            "checkpoint). RE-INGESTING THE SAME SOURCE: declare "
-            "`unique_keys` on the `TableTarget` and a second submit updates "
-            "those rows in place; without them a re-run appends a second "
-            "copy — right for an event log, wrong for current state. IF "
-            "INGESTION CANNOT DO IT, SAY SO: on failure read "
-            "`get_logs(run_id)`, fix the cause, submit again — never store "
-            "the data another way (`primitives.data.create_table` plus "
-            "`insert_rows`, or a hand-written loop, writes rows nothing "
-            "checkpoints, verifies, or can resume). FOR ROWS FETCHED FROM "
-            "AN API the shape is always: fetch → "
-            "`submit(RowsSource(rows=...), TableTarget(...))` → `wait` → "
-            "read from that table; also the only way to combine two sources, "
-            "since API responses cannot be joined directly."
-        ),
-    ),
-    ManagerSpec(
-        manager_alias="transcripts",
-        manager_registry_key="transcripts",
-        primitive_class_path="unify.transcript_manager.transcript_manager.TranscriptManager",
-        excluded_methods=frozenset(),
-        priority=2,
-        domain="Conversation History",
-        description="Past messages, conversation history, chat records",
-        use_when="Questions about past communications, 'what did X say?'",
-        examples="'What did Bob say yesterday?', 'Last message from Alice?', 'Messages mentioning budget?'",
-    ),
-    ManagerSpec(
-        manager_alias="secrets",
-        manager_registry_key="secrets",
-        primitive_class_path="unify.secret_manager.secret_manager.SecretManager",
-        excluded_methods=frozenset(),
-        priority=8,
-        domain="Credentials & Secrets",
-        description="API keys, passwords, tokens, credentials",
-        use_when="Managing credentials, API keys, secrets (rarely used in plans)",
-        examples="Rarely used directly in plans",
-    ),
-    ManagerSpec(
-        manager_alias="files",
-        manager_registry_key="files",
-        primitive_class_path="unify.file_manager.managers.file_manager.FileManager",
-        excluded_methods=frozenset(
-            {
-                "exists",
-                "list",
-                "ingest_files",
-                "export_file",
-                "export_directory",
-                "rename_file",
-                "move_file",
-                "delete_file",
-                "sync",
-            },
-        ),
-        priority=7,
-        domain="File Operations & Document Parsing",
-        description=(
-            "File-specific operations: describing storage layout, listing files, "
-            "parsing documents, rendering PDFs/Excel sheets as images"
-        ),
-        use_when=(
-            "Questions about files themselves (metadata, layout, parsing), "
-            "document rendering"
-        ),
-        examples=(
-            "'Parse the attached PDF', 'What's in document X?', "
-            "'Describe the schema of report.xlsx', 'Render page 3 of the report'"
-        ),
-    ),
-    ManagerSpec(
         manager_alias="actor",
-        manager_registry_key="",  # No ManagerRegistry getter - stateless, constructed directly
         primitive_class_path="unify.actor.environments.actor._ActorRunner",
         excluded_methods=frozenset(),
-        priority=11,
         domain="Actor Delegation",
         description="Spawn focused sub-actors for isolated multi-step sub-tasks",
-        use_when="Task decomposition, isolated reasoning, parallel sub-tasks, context isolation",
-        examples="'Delegate research to a sub-actor', 'Spawn an actor to handle data processing'",
     ),
 )
 
@@ -320,10 +113,10 @@ def construct_sandbox_root(
 
     This is the factory used by ``FunctionManager._inject_dependencies``
     to satisfy *dotted* entries in a stored function's ``depends_on`` list.
-    When a function declares a dependency like ``"primitives.actor.act"`` or
-    ``"primitives.contacts.ask"``, ``_inject_dependencies`` extracts the
-    root segment (``"primitives"``) and calls this function to obtain a
-    live ``Primitives`` instance that provides those methods.
+    When a function declares a dependency like ``"primitives.actor.act"``,
+    ``_inject_dependencies`` extracts the root segment (``"primitives"``)
+    and calls this function to obtain a live ``Primitives`` instance that
+    provides those methods.
 
     The returned object is **stateless** — it does not require any ambient
     ContextVars or parent actor state.  This is essential because stored
@@ -343,60 +136,6 @@ def construct_sandbox_root(
 
 
 # =============================================================================
-# Routing Guidance for Commonly Confused Manager Pairs
-# =============================================================================
-
-_ROUTING_GUIDANCE: List[Dict[str, Any]] = [
-    {
-        "managers": {"data", "files"},
-        "title": "`primitives.data.*` vs `primitives.files.*`",
-        "guidance": [
-            (
-                "data",
-                "Use for **ALL analytical and data operations** -- filtering, searching, "
-                "aggregating, joining, and data ingestion. Works on "
-                "any Unify context (`Data/*`, `Files/*`, `Knowledge/*`). Use when the question "
-                "is about DATA INSIDE tables, regardless of where those tables came from. "
-                "Also use for ingesting data from APIs/warehouses. Always prefer "
-                "server-side `filter=` / `reduce` / join variants over fetching "
-                "rows into Python loops.",
-            ),
-            (
-                "files",
-                "Use for **file-specific operations** -- describing the storage layout of "
-                "an uploaded/received file, listing files in the file registry, parsing "
-                "documents, rendering PDFs/Excel sheets as images for visual inspection. "
-                "Use when the question is about FILES themselves (metadata, layout, parsing) "
-                "or when you need file-path-based context resolution.",
-            ),
-        ],
-        "examples": [
-            (
-                "What tables exist under Data/examplehousing?",
-                "data",
-                "primitives.data.list_tables(prefix=...)",
-            ),
-            (
-                "Describe the schema of the repairs table",
-                "data",
-                "primitives.data.describe_table(...)",
-            ),
-            (
-                "What's in the uploaded PDF?",
-                "files",
-                "primitives.files.describe(file_path=...)",
-            ),
-            (
-                "Render page 3 of the report as an image",
-                "files",
-                "primitives.files.render_pdf(...)",
-            ),
-        ],
-    },
-]
-
-
-# =============================================================================
 # Stable ID Generation (Matching Old Format)
 # =============================================================================
 
@@ -411,8 +150,8 @@ def _get_stable_id(class_name: str, method_name: str) -> int:
     - Unique (collision-resistant within practical limits)
 
     Args:
-        class_name: Short class name (e.g., "ContactManager")
-        method_name: Method name (e.g., "ask")
+        class_name: Short class name (e.g., "_ActorRunner")
+        method_name: Method name (e.g., "act")
 
     Returns:
         A stable non-negative integer ID within signed 32-bit range.
@@ -490,14 +229,12 @@ class ToolSurfaceRegistry:
     This class provides the API for:
     - Getting manager specs filtered by scope
     - Discovering primitive methods for a manager
-    - Generating prompt context and examples
     - Collecting primitive rows for FunctionManager indexing
     - Building row filters for scoped queries
     """
 
-    # Class-level references to canonical data
+    # Class-level reference to canonical data
     MANAGERS = _MANAGER_SPECS
-    ROUTING_GUIDANCE = _ROUTING_GUIDANCE
 
     def __init__(self) -> None:
         """Initialize the registry."""
@@ -506,23 +243,22 @@ class ToolSurfaceRegistry:
 
     def manager_specs(self, primitive_scope: PrimitiveScope) -> List[ManagerSpec]:
         """
-        Get manager specs for a given scope, sorted by priority.
+        Get manager specs for a given scope, in registry order.
 
         Args:
             primitive_scope: The scope defining which managers are exposed.
 
         Returns:
-            List of ManagerSpec for exposed managers, sorted by priority.
+            List of ManagerSpec for exposed managers.
         """
-        specs = [
+        return [
             spec
             for spec in _MANAGER_SPECS
             if spec.manager_alias in primitive_scope.scoped_managers
         ]
-        return sorted(specs, key=lambda s: s.priority)
 
     def get_manager_spec(self, manager_alias: str) -> Optional[ManagerSpec]:
-        """Get a single manager spec by alias (includes ComputerPrimitives)."""
+        """Get a single manager spec by alias."""
         return _MANAGER_BY_ALIAS.get(manager_alias)
 
     def get_function_id(self, manager_alias: str, method_name: str) -> int:
@@ -533,8 +269,8 @@ class ToolSurfaceRegistry:
         round-trip.
 
         Args:
-            manager_alias: Canonical manager alias (e.g., ``"contacts"``).
-            method_name: Method name (e.g., ``"ask"``).
+            manager_alias: Canonical manager alias (e.g., ``"actor"``).
+            method_name: Method name (e.g., ``"act"``).
 
         Returns:
             Stable non-negative integer ID (deterministic, hash-based).
@@ -570,10 +306,8 @@ class ToolSurfaceRegistry:
         Get the list of primitive methods for a manager.
 
         Discovers methods from @abstractmethod definitions on Base* classes,
-        minus common exclusions and per-manager exclusions.
-
-        For ComputerPrimitives, uses the class's _PRIMITIVE_METHODS constant
-        since methods are dynamically created via setattr in __init__.
+        minus common exclusions and per-manager exclusions. A class that
+        declares ``_PRIMITIVE_METHODS`` uses that constant instead.
 
         Args:
             manager_alias: The canonical manager alias.
@@ -604,7 +338,7 @@ class ToolSurfaceRegistry:
         # Standard case: find @abstractmethod definitions in Base* classes
         for base in cls.__mro__:
             base_name = base.__name__
-            # Look for Base* classes (e.g., BaseContactManager, BaseFileManager)
+            # Look for Base* classes (e.g., BaseFunctionManager)
             if not base_name.startswith("Base"):
                 continue
             # Skip the root BaseStateManager - we want the specific manager's base
@@ -630,35 +364,13 @@ class ToolSurfaceRegistry:
             primitive_scope: The scope defining which managers are exposed.
 
         Returns:
-            List of tool names like "primitives.contacts.ask".
+            List of tool names like "primitives.actor.act".
         """
         names = []
         for alias in sorted(primitive_scope.scoped_managers):
             for method in self.primitive_methods(manager_alias=alias):
                 names.append(f"primitives.{alias}.{method}")
         return names
-
-    def tool_metadata(
-        self,
-        primitive_scope: PrimitiveScope,
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Get metadata for all tools in scope.
-
-        Args:
-            primitive_scope: The scope defining which managers are exposed.
-
-        Returns:
-            Dict mapping tool name to metadata (is_impure, is_steerable).
-        """
-        metadata = {}
-        for name in self.tool_names(primitive_scope):
-            # Conservative: all state manager primitives are impure and steerable
-            metadata[name] = {
-                "is_impure": True,
-                "is_steerable": True,
-            }
-        return metadata
 
     @staticmethod
     def _resolve_base_method(cls: Optional[Type], method_name: str):
@@ -750,9 +462,8 @@ class ToolSurfaceRegistry:
 
         Returns a compact version containing the summary (up to the first
         blank line), the NumPy-style ``Parameters`` section, and
-        ``Anti-patterns`` when present (critical for DataManager
-        efficiency). Omits Returns, Raises, Examples, Notes, and internal
-        ``_``-prefixed parameters.
+        ``Anti-patterns`` when present. Omits Returns, Raises, Examples,
+        Notes, and internal ``_``-prefixed parameters.
         """
         if not docstring:
             return ""
@@ -879,81 +590,6 @@ class ToolSurfaceRegistry:
 
         return "\n".join(result_lines)
 
-    def prompt_context(self, primitive_scope: PrimitiveScope) -> str:
-        """
-        Generate prompt context for exposed managers.
-
-        Structure: routing guidance only (which manager to pick). Method
-        docs are not inlined — they are discovered at run time through
-        ``FunctionManager_search_functions`` and read via ``help()`` /
-        ``inspect.signature`` inside the sandbox.
-
-        Args:
-            primitive_scope: The scope defining which managers are exposed.
-
-        Returns:
-            Formatted prompt context string.
-        """
-        specs = self.manager_specs(primitive_scope)
-        if not specs:
-            return ""
-
-        lines = ["### State manager primitives (`primitives.*`)\n"]
-        lines.append(
-            "Always available — call by exact name via `execute_function` or "
-            "inside `execute_code`. The **Methods** line under each manager "
-            "is its complete callable surface (also indexed by FunctionManager "
-            "search; read a signature with `help()` / `inspect.signature`): a "
-            "name that is not listed does not exist on that manager. Each "
-            "manager owns one domain of the assistant's durable state:\n",
-        )
-
-        exposed_aliases = primitive_scope.scoped_managers
-
-        # ── Section 1: Brief manager overview (routing-focused) ──
-        # Compact by design: one description bullet (+ use-when, + note where
-        # a contract demands it) plus the bare method names, so the model
-        # never has to guess a manager's verbs from another manager's.
-        # Deeper routing between overlapping managers lives in builtin
-        # guidance ("choosing between overlapping state managers"); method
-        # docs live behind search + help().
-        for spec in specs:
-            text = spec.prompt_text(exposed_aliases)
-            lines.append(f"\n**{text.domain}** → `primitives.{spec.manager_alias}`")
-            description = text.description
-            if text.use_when:
-                description = f"{description}. **Use when**: {text.use_when}"
-            lines.append(f"- {description}")
-            methods = self.primitive_methods(manager_alias=spec.manager_alias)
-            lines.append(
-                "- **Methods**: " + ", ".join(f"`{name}`" for name in methods),
-            )
-            if text.special_note:
-                lines.append(f"- **Note**: {text.special_note}")
-
-        # ── Section 2: General rules ──
-        # Routing-only by design: handle, mutation and notification doctrine
-        # lives once, in the StateManagerEnvironment rules block.
-        if len(specs) > 1:
-            lines.append("\n**General Rules**:")
-            lines.append(
-                "- When in doubt between managers, prefer the most specific "
-                "domain match; for overlapping pairs (data vs files vs "
-                "ingestion) search guidance for "
-                '"choosing between overlapping state managers"',
-            )
-            lines.append(
-                "- Typed claim / procedure catalogues (`KnowledgeManager_*`, "
-                "`GuidanceManager_*`) are top-level Actor JSON tools, not "
-                "`primitives.*`",
-            )
-
-        # No per-method docs and no discovery pointer are inlined here:
-        # the base prompt's "Sandbox Environment" section carries the
-        # FunctionManager-search → help()/inspect introspection bridge.
-
-        return "\n".join(lines)
-
     def _get_method_metadata(
         self,
         cls: Type,
@@ -965,13 +601,12 @@ class ToolSurfaceRegistry:
         Extract metadata (signature, docstring) from a class method.
 
         Handles functools.wraps by looking for __wrapped__ attribute.
-        For ComputerPrimitives dynamic methods, looks up docstrings from backend classes.
 
         Args:
             cls: The class containing the method.
             method_name: Name of the method to introspect.
             class_name: Short class name (used for stable ID generation).
-            manager_alias: The canonical alias (e.g. "contacts") for
+            manager_alias: The canonical alias (e.g. "actor") for
                 building the qualified name ``primitives.{alias}.{method}``.
 
         Returns:
@@ -1028,17 +663,17 @@ class ToolSurfaceRegistry:
         signature and docstring information.
 
         Each primitive receives a stable `function_id` derived from a hash of its
-        fully-qualified name (e.g., "ContactManager.ask"). This ensures IDs are:
+        fully-qualified name (e.g., "_ActorRunner.act"). This ensures IDs are:
         - Deterministic across runs
         - Stable when methods are added/removed (no positional dependencies)
         - Consistent across all deployments
 
         Args:
             primitive_scope: Optional scope to filter managers. If None, collects all
-                           primitives (state managers and ComputerPrimitives).
+                           primitives.
 
         Returns:
-            Dict mapping qualified_name (e.g. "primitives.contacts.ask") to primitive
+            Dict mapping qualified_name (e.g. "primitives.actor.act") to primitive
             metadata suitable for insertion into the Functions/Primitives context.
         """
         primitives: Dict[str, Dict[str, Any]] = {}
@@ -1156,7 +791,7 @@ def collect_primitives() -> Dict[str, Dict[str, Any]]:
     Delegates to ToolSurfaceRegistry.collect_primitives().
 
     Returns:
-        Dict mapping qualified_name (e.g. "primitives.contacts.ask") to primitive
+        Dict mapping qualified_name (e.g. "primitives.actor.act") to primitive
         metadata suitable for insertion into the Functions/Primitives context.
     """
     return get_registry().collect_primitives()

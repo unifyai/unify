@@ -7,7 +7,6 @@ from ..manager_registry import SingletonABCMeta
 from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
 from ..common.state_managers import BaseStateManager
 from ..common.tool_outcome import ToolOutcome
-from ..image_manager.types import AnnotatedImageRefs
 from .types.guidance import Guidance
 
 
@@ -150,7 +149,6 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         *,
         title: Optional[str] = None,
         content: Optional[str] = None,
-        images: Optional[AnnotatedImageRefs] = None,
         function_ids: Optional[List[int]] = None,
     ) -> "ToolOutcome":
         """Create a new guidance entry for procedural or operational how-to
@@ -158,7 +156,7 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         software usage walkthroughs, composition strategies for combining
         functions, or any other actionable "how to do X" content.
 
-        At least one of ``title``, ``content``, or ``images`` must be provided.
+        At least one of ``title`` or ``content`` must be provided.
 
         Parameters
         ----------
@@ -166,12 +164,6 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
             Short human-readable title for the guidance entry.
         content : str | None
             Longer freeform guidance text describing the procedure.
-        images : AnnotatedImageRefs | None
-            Annotated image references to attach.  Each entry pairs a
-            ``RawImageRef`` (identified by ``image_id`` and/or ``filepath``)
-            with a freeform ``annotation`` explaining relevance.  When a ref
-            carries only a ``filepath``, the implementation resolves it to an
-            ``image_id`` via ``ImageManager`` before persisting.
         function_ids : list[int] | None
             Optional ids of related functions to cross-reference.
 
@@ -190,7 +182,6 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         guidance_id: int,
         title: Optional[str] = None,
         content: Optional[str] = None,
-        images: Optional[AnnotatedImageRefs] = None,
         function_ids: Optional[List[int]] = None,
     ) -> "ToolOutcome":
         """Update fields of an existing guidance entry by id.
@@ -209,12 +200,6 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
             New title (omit to keep existing value).
         content : str | None
             New content (omit to keep existing value).
-        images : AnnotatedImageRefs | None
-            Replacement image references.  Each entry pairs a
-            ``RawImageRef`` (identified by ``image_id`` and/or ``filepath``)
-            with a freeform ``annotation``.  Filepath-only refs are resolved
-            to ``image_id`` values via ``ImageManager`` before persisting.
-            Omit to keep existing images.
         function_ids : list[int] | None
             Replacement list of related function ids.
 

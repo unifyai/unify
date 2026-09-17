@@ -1,8 +1,8 @@
 """
 Renderer: Renders conversation state for the ConversationManager LLM.
 
-Contact information is fetched from ContactManager (source of truth).
-Conversation state (threads) is fetched from ContactIndex.
+The conversation comes from ChatHistory; notifications and actions from the
+ConversationManager's live state.
 
 SnapshotState: Tracks constituent elements of a rendered snapshot with identity,
 enabling incremental diff computation for context propagation to Actor interjections.
@@ -16,15 +16,8 @@ from time import perf_counter
 from typing import Any
 
 from unify.common._async_tool.utils import get_handle_paused_state
-from unify.common.prompt_helpers import get_assistant_timezone
 from unify.common.startup_timing import log_startup_timing
-from unify.conversation_manager.domains.contact_index import (
-    UnifyMessage,
-    GuidanceMessage,
-    ConversationState,
-    ContactIndex,
-    GlobalThreadEntry,
-)
+from unify.conversation_manager.domains.chat_history import ChatHistory, ChatMessage
 from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.task_actions import (
     derive_short_name,
@@ -32,234 +25,12 @@ from unify.conversation_manager.task_actions import (
     iter_steering_tools_for_completed_action,
 )
 from unify.logger import LOGGER
-from unify.session_details import is_boss_contact
-
-# =============================================================================
-# Timezone Helpers for Participant Awareness
-# =============================================================================
+from unify.session_details import PLACEHOLDER_USER_FIRST_NAME, SESSION_DETAILS
 
 
-def _get_current_time_in_timezone(tz_name: str) -> str:
-    """Get the current time formatted for a specific timezone.
-
-    Reads the clock through ``prompt_helpers.now`` like every other prompt
-    surface rather than calling ``datetime.now`` directly. That is the seam the
-    test suite freezes, and this block renders into the transcript once per
-    participant group, so a raw clock here alone is enough to make a prompt
-    differ between runs and miss the LLM cache.
-
-    Args:
-        tz_name: IANA timezone identifier (e.g., "America/New_York")
-
-    Returns:
-        Formatted time string like "3:45 PM"
-    """
-    from zoneinfo import ZoneInfo
-
-    from unify.common.prompt_helpers import now as prompt_now
-
-    _timing_t0 = perf_counter()
-    current_dt = prompt_now(as_string=False)
-    _utc_now_ms = (perf_counter() - _timing_t0) * 1000
-    _step_t0 = perf_counter()
-    success = True
-    try:
-        tz_info = ZoneInfo(tz_name)
-        _zoneinfo_ms = (perf_counter() - _step_t0) * 1000
-        _step_t0 = perf_counter()
-        local_dt = current_dt.astimezone(tz_info)
-        _astimezone_ms = (perf_counter() - _step_t0) * 1000
-        _step_t0 = perf_counter()
-        result = local_dt.strftime("%I:%M %p").lstrip("0")
-    except Exception:
-        success = False
-        _zoneinfo_ms = (perf_counter() - _step_t0) * 1000
-        _astimezone_ms = 0.0
-        _step_t0 = perf_counter()
-        result = "unknown"
-    _format_ms = (perf_counter() - _step_t0) * 1000
-    log_startup_timing(
-        LOGGER,
-        (
-            "⏱️ [StartupTiming] timezone.current_time.detail "
-            "total=%.0fms utc_now=%.0fms zoneinfo=%.0fms astimezone=%.0fms "
-            "format=%.0fms tz=%s success=%s"
-        ),
-        (perf_counter() - _timing_t0) * 1000,
-        _utc_now_ms,
-        _zoneinfo_ms,
-        _astimezone_ms,
-        _format_ms,
-        tz_name,
-        success,
-    )
-    return result
-
-
-def _format_timezone_block(
-    assistant_tz: str | None,
-    participants: list[tuple[str, str | None]],
-) -> str | None:
-    """Format a timezone block showing current local times for all participants.
-
-    Groups participants by timezone and avoids duplication.
-
-    Format examples:
-    - Same timezone: "[Now: You and Alice 2:00 PM (America/New_York)]"
-    - Different: "[Now: You 2:00 PM (America/New_York) | Alice 11:00 AM (America/Los_Angeles)]"
-    - Multiple same: "[Now: You, Alice, and Bob 2:00 PM (America/New_York)]"
-
-    Args:
-        assistant_tz: Assistant's timezone (IANA identifier) or None
-        participants: List of (name, timezone) tuples for other participants
-
-    Returns:
-        Formatted timezone block string, or None if no timezone data
-    """
-    _timing_t0 = perf_counter()
-    if not assistant_tz and not any(tz for _, tz in participants):
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] timezone.format_block.detail "
-                "total=%.0fms early_return=True build_map=0ms current_times=0ms "
-                "format_names=0ms join=0ms participants=%d timezones=0 unknown=%d"
-            ),
-            (perf_counter() - _timing_t0) * 1000,
-            len(participants),
-            len(participants) + 1,
-        )
-        return None
-
-    # Build timezone -> list of names mapping
-    # Include "You" (assistant) in the mapping
-    tz_to_names: dict[str, list[str]] = {}
-    unknown_names: list[str] = []
-    _build_map_t0 = perf_counter()
-
-    if assistant_tz:
-        tz_to_names[assistant_tz] = ["You"]
-    else:
-        unknown_names.append("You")
-
-    for name, tz in participants:
-        if tz:
-            if tz not in tz_to_names:
-                tz_to_names[tz] = []
-            tz_to_names[tz].append(name)
-        else:
-            unknown_names.append(name)
-
-    if not tz_to_names and not unknown_names:
-        _build_map_ms = (perf_counter() - _build_map_t0) * 1000
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] timezone.format_block.detail "
-                "total=%.0fms early_return=True build_map=%.0fms "
-                "current_times=0ms format_names=0ms join=0ms participants=%d "
-                "timezones=0 unknown=0"
-            ),
-            (perf_counter() - _timing_t0) * 1000,
-            _build_map_ms,
-            len(participants),
-        )
-        return None
-    _build_map_ms = (perf_counter() - _build_map_t0) * 1000
-
-    # Format each timezone group
-    parts: list[str] = []
-    _current_times_ms = 0.0
-    _format_names_ms = 0.0
-    for tz_name in sorted(tz_to_names.keys()):
-        names = tz_to_names[tz_name]
-        _current_time_t0 = perf_counter()
-        current_time = _get_current_time_in_timezone(tz_name)
-        _current_times_ms += (perf_counter() - _current_time_t0) * 1000
-        _format_names_t0 = perf_counter()
-        # Format names: "You", "You and Alice", "You, Alice, and Bob"
-        if len(names) == 1:
-            names_str = names[0]
-        elif len(names) == 2:
-            names_str = f"{names[0]} and {names[1]}"
-        else:
-            names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
-        parts.append(f"{names_str} {current_time} ({tz_name})")
-        _format_names_ms += (perf_counter() - _format_names_t0) * 1000
-
-    _unknown_format_t0 = perf_counter()
-    if unknown_names:
-        if len(unknown_names) == 1:
-            names_str = unknown_names[0]
-        elif len(unknown_names) == 2:
-            names_str = f"{unknown_names[0]} and {unknown_names[1]}"
-        else:
-            names_str = ", ".join(unknown_names[:-1]) + f", and {unknown_names[-1]}"
-        parts.append(f"{names_str} (unknown timezone)")
-    _format_names_ms += (perf_counter() - _unknown_format_t0) * 1000
-
-    if not parts:
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] timezone.format_block.detail "
-                "total=%.0fms early_return=True build_map=%.0fms "
-                "current_times=%.0fms format_names=%.0fms join=0ms "
-                "participants=%d timezones=%d unknown=%d"
-            ),
-            (perf_counter() - _timing_t0) * 1000,
-            _build_map_ms,
-            _current_times_ms,
-            _format_names_ms,
-            len(participants),
-            len(tz_to_names),
-            len(unknown_names),
-        )
-        return None
-
-    _join_t0 = perf_counter()
-    rendered = "[Now: " + " | ".join(parts) + "]"
-    _join_ms = (perf_counter() - _join_t0) * 1000
-    log_startup_timing(
-        LOGGER,
-        (
-            "⏱️ [StartupTiming] timezone.format_block.detail "
-            "total=%.0fms early_return=False build_map=%.0fms "
-            "current_times=%.0fms format_names=%.0fms join=%.0fms "
-            "participants=%d timezones=%d unknown=%d chars=%d"
-        ),
-        (perf_counter() - _timing_t0) * 1000,
-        _build_map_ms,
-        _current_times_ms,
-        _format_names_ms,
-        _join_ms,
-        len(participants),
-        len(tz_to_names),
-        len(unknown_names),
-        len(rendered),
-    )
-    return rendered
-
-
-def _get_message_timezone_block(
-    contact_name: str,
-    contact_timezone: str | None,
-    assistant_timezone: str | None,
-) -> str | None:
-    """Get the timezone block for a chat message.
-
-    Args:
-        contact_name: Name of the contact
-        contact_timezone: Contact's timezone (IANA identifier) or None
-        assistant_timezone: Assistant's timezone or None
-
-    Returns:
-        Formatted timezone block or None
-    """
-    return _format_timezone_block(
-        assistant_tz=assistant_timezone,
-        participants=[(contact_name, contact_timezone)],
-    )
+def user_display_name() -> str:
+    """The user's name as it appears on their lines of the conversation."""
+    return SESSION_DETAILS.user.name or PLACEHOLDER_USER_FIRST_NAME
 
 
 # =============================================================================
@@ -271,12 +42,10 @@ def _get_message_timezone_block(
 class MessageElement:
     """A message element with identity for diff tracking.
 
-    Identity is based on (contact_id, thread_name, index_in_thread, timestamp).
+    Identity is based on (index_in_conversation, timestamp).
     """
 
-    contact_id: int
-    thread_name: str
-    index_in_thread: int
+    index_in_conversation: int
     timestamp: datetime
     rendered: str
 
@@ -316,7 +85,7 @@ class SnapshotState:
     This enables computing diffs between snapshots for incremental context
     propagation. Each element type has identity tracking:
 
-    - Messages: (contact_id, thread_name, index, timestamp)
+    - Messages: (index_in_conversation, timestamp)
     - Notifications: (timestamp, content_hash, pinned)
     - Actions: (handle_id, with status/history tracking for state changes)
 
@@ -334,12 +103,9 @@ class SnapshotState:
     # Snapshot metadata
     snapshot_time: datetime | None = None
 
-    def message_ids(self) -> set[tuple[int, str, int, datetime]]:
+    def message_ids(self) -> set[tuple[int, datetime]]:
         """Return set of message identity tuples for diff comparison."""
-        return {
-            (m.contact_id, m.thread_name, m.index_in_thread, m.timestamp)
-            for m in self.messages
-        }
+        return {(m.index_in_conversation, m.timestamp) for m in self.messages}
 
     def notification_ids(self) -> set[tuple[datetime, int, bool]]:
         """Return set of notification identity tuples for diff comparison."""
@@ -381,8 +147,7 @@ def compute_snapshot_diff(
     new_messages = [
         m
         for m in new_snapshot.messages
-        if (m.contact_id, m.thread_name, m.index_in_thread, m.timestamp)
-        not in old_msg_ids
+        if (m.index_in_conversation, m.timestamp) not in old_msg_ids
     ]
     if new_messages:
         msg_renders = [m.rendered for m in new_messages]
@@ -427,31 +192,18 @@ def compute_snapshot_diff(
     return "\n\n".join(diff_parts)
 
 
-def _attachment_detail(att: Any) -> str:
-    """One attachment as ``filename (filepath)``.
-
-    Attachments are local files whichever direction they travelled, so the
-    path is what the Actor needs to open one.
-    """
-    if isinstance(att, dict):
-        fname = att.get("filename") or "attachment"
-        fpath = att.get("filepath")
-        return f"{fname} ({fpath})" if fpath else str(fname)
-    return str(att)
-
-
 class Renderer:
 
     def render_state(
         self,
-        contact_index: ContactIndex,
+        chat_history: ChatHistory,
         notification_bar: NotificationBar = None,
         in_flight_actions: dict = None,
         completed_actions: dict = None,
         last_snapshot: datetime = None,
         recent_tool_executions: list[dict[str, Any]] | None = None,
         max_pinned_notifications: int = 50,
-        max_contact_medium_messages: int = 25,
+        max_messages: int = 25,
         max_action_history_events: int = 20,
         max_completed_actions: int = 20,
         max_completed_action_history_events: int = 5,
@@ -499,13 +251,13 @@ class Renderer:
         recent_tools_render = self.render_recent_tool_executions(
             recent_tool_executions,
         )
-        convs_render = self.render_active_conversations(
-            contact_index,
+        conversation_render = self.render_conversation(
+            chat_history,
             last_snapshot=last_snapshot,
-            max_contact_medium_messages=max_contact_medium_messages,
+            max_messages=max_messages,
             elements_out=message_elements,
         )
-        _conversations_ms = _mark_step()
+        _conversation_ms = _mark_step()
 
         # The wall clock closes the snapshot rather than living in the system
         # prompt: a minute rollover then only re-tokenizes the snapshot tail
@@ -519,7 +271,7 @@ class Renderer:
                 actions_render,
                 completed_render,
                 recent_tools_render,
-                convs_render,
+                conversation_render,
                 time_render,
             ]
             if s
@@ -541,7 +293,7 @@ class Renderer:
             (
                 "⏱️ [StartupTiming] llm_preamble.render_state.detail "
                 "total=%.0fms notifications=%.0fms in_flight=%.0fms "
-                "completed=%.0fms conversations=%.0fms join=%.0fms "
+                "completed=%.0fms conversation=%.0fms join=%.0fms "
                 "snapshot=%.0fms chars=%d messages=%d notifications_count=%d "
                 "actions=%d sections=%d"
             ),
@@ -549,7 +301,7 @@ class Renderer:
             _notifications_ms,
             _in_flight_ms,
             _completed_ms,
-            _conversations_ms,
+            _conversation_ms,
             _join_ms,
             _snapshot_ms,
             len(full_render),
@@ -748,247 +500,53 @@ class Renderer:
         out += "</recent_tool_executions>"
         return out
 
-    def render_active_conversations(
+    def render_conversation(
         self,
-        contact_index: ContactIndex,
+        chat_history: ChatHistory,
         last_snapshot: datetime = None,
-        max_contact_medium_messages: int = 25,
-        elements_out: list[MessageElement] | None = None,
-    ) -> str:
-        """Render active conversations derived from the shared global thread.
-
-        Only contacts with messages in the global thread are rendered. Per-contact
-        views are derived from the shared deque at render time.
-        """
-        _render_t0 = perf_counter()
-        # Fetch assistant's timezone once for all contacts
-        assistant_timezone = get_assistant_timezone()
-        _timezone_ms = (perf_counter() - _render_t0) * 1000
-
-        # Group global thread entries by contact_id
-        _group_t0 = perf_counter()
-        grouped = contact_index.get_messages_grouped_by_contact()
-        _group_ms = (perf_counter() - _group_t0) * 1000
-
-        contacts = []
-        _contacts_t0 = perf_counter()
-        for contact_id, entries in grouped.items():
-            contact_info = contact_index.get_contact(contact_id) or {}
-            conv_state = contact_index.get_or_create_conversation(contact_id)
-            rendered = self.render_contact(
-                contact_info=contact_info,
-                conv_state=conv_state,
-                entries=entries,
-                max_contact_medium_messages=max_contact_medium_messages,
-                last_snapshot=last_snapshot,
-                elements_out=elements_out,
-                assistant_timezone=assistant_timezone,
-            )
-            contacts.append(rendered)
-        _contacts_ms = (perf_counter() - _contacts_t0) * 1000
-
-        _join_t0 = perf_counter()
-        contacts_str = "\n\n".join(contacts)
-        rendered = f"<active_conversations>\n{contacts_str}\n</active_conversations>"
-        _join_ms = (perf_counter() - _join_t0) * 1000
-
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] llm_preamble.render_state.conversations "
-                "total=%.0fms timezone=%.0fms group=%.0fms contacts=%.0fms "
-                "join=%.0fms contact_count=%d entry_count=%d chars=%d "
-                "assistant_timezone_cached=%s"
-            ),
-            (perf_counter() - _render_t0) * 1000,
-            _timezone_ms,
-            _group_ms,
-            _contacts_ms,
-            _join_ms,
-            len(grouped),
-            sum(len(entries) for entries in grouped.values()),
-            len(rendered),
-            assistant_timezone is not None,
-        )
-
-        return rendered
-
-    def render_contact(
-        self,
-        contact_info: dict,
-        conv_state: ConversationState,
-        entries: list[GlobalThreadEntry] | None = None,
-        max_contact_medium_messages: int = 25,
-        last_snapshot: datetime = None,
-        elements_out: list[MessageElement] | None = None,
-        assistant_timezone: str | None = None,
-    ) -> str:
-        """Render a single contact's conversation.
-
-        Entries are grouped by medium and each medium's thread is capped, so
-        the contact block reads as one thread per medium the contact used.
-        """
-        _contact_t0 = perf_counter()
-        contact_id = conv_state.contact_id
-        first_name = contact_info.get("first_name") or ""
-        surname = contact_info.get("surname") or ""
-        phone_number = contact_info.get("phone_number") or ""
-        email_address = contact_info.get("email_address") or ""
-        timezone = contact_info.get("timezone") or ""
-        bio = contact_info.get("bio") or ""
-        rolling_summary = contact_info.get("rolling_summary") or ""
-        response_policy = contact_info.get("response_policy") or ""
-        should_respond = contact_info.get("should_respond", True)
-        is_boss = is_boss_contact(contact_id)
-
-        # Compute contact name for timezone display
-        contact_name = f"{first_name} {surname}".strip() or f"Contact #{contact_id}"
-        contact_timezone = contact_info.get("timezone")
-
-        if entries is None:
-            entries = []
-        _metadata_ms = (perf_counter() - _contact_t0) * 1000
-
-        _medium_group_t0 = perf_counter()
-        medium_messages: dict[str, list] = {}
-        for entry in entries:
-            medium_key = str(entry.medium)
-            if medium_key not in medium_messages:
-                medium_messages[medium_key] = []
-            medium_messages[medium_key].append(entry.message)
-        _medium_group_ms = (perf_counter() - _medium_group_t0) * 1000
-
-        _medium_render_t0 = perf_counter()
-        threads_content = "\n\n".join(
-            self.render_thread(
-                medium_name,
-                msgs,
-                contact_id=contact_id,
-                max_messages=max_contact_medium_messages,
-                last_snapshot=last_snapshot,
-                elements_out=elements_out,
-                contact_name=contact_name,
-                contact_timezone=contact_timezone,
-                assistant_timezone=assistant_timezone,
-            )
-            for medium_name, msgs in medium_messages.items()
-            if msgs
-        )
-        _medium_render_ms = (perf_counter() - _medium_render_t0) * 1000
-        _join_t0 = perf_counter()
-        rendered = (
-            f'<contact contact_id="{contact_id}" first_name="{first_name}" surname="{surname}" '
-            f'is_boss="{is_boss}" phone_number="{phone_number}" email_address="{email_address}" '
-            f'timezone="{timezone}" should_respond="{should_respond}">\n'
-            f"<bio>{bio}</bio>\n"
-            f"<rolling_summary>{rolling_summary}</rolling_summary>\n"
-            f"<response_policy>{response_policy}</response_policy>\n"
-            f"<threads>\n{threads_content}\n</threads>\n"
-            f"</contact>"
-        )
-        _format_ms = (perf_counter() - _join_t0) * 1000
-
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] llm_preamble.render_state.contact "
-                "contact_id=%s total=%.0fms metadata=%.0fms "
-                "medium_group=%.0fms medium_render=%.0fms format=%.0fms "
-                "entries=%d mediums=%d chars=%d"
-            ),
-            contact_id,
-            (perf_counter() - _contact_t0) * 1000,
-            _metadata_ms,
-            _medium_group_ms,
-            _medium_render_ms,
-            _format_ms,
-            len(entries),
-            len(medium_messages),
-            len(rendered),
-        )
-
-        return rendered
-
-    def render_thread(
-        self,
-        thread_name: str,
-        thread,
-        contact_id: int = None,
         max_messages: int = 25,
-        last_snapshot: datetime = None,
         elements_out: list[MessageElement] | None = None,
-        contact_name: str | None = None,
-        contact_timezone: str | None = None,
-        assistant_timezone: str | None = None,
     ) -> str:
-        """Render a thread."""
-        thread_list = list(thread)
-        displayed_messages = thread_list[-max_messages:]
-        start_index = len(thread_list) - len(displayed_messages)
+        """Render the tail of the conversation, most recent messages last."""
+        messages = chat_history.recent()
+        displayed = messages[-max_messages:]
+        start_index = len(messages) - len(displayed)
 
         rendered_messages = []
-        for i, m in enumerate(displayed_messages):
-            rendered = self.render_message(
-                m,
-                last_snapshot,
-                contact_name=contact_name,
-                contact_timezone=contact_timezone,
-                assistant_timezone=assistant_timezone,
-            )
+        for i, message in enumerate(displayed):
+            rendered = self.render_message(message, last_snapshot)
             rendered_messages.append(rendered)
 
             if elements_out is not None:
                 elements_out.append(
                     MessageElement(
-                        contact_id=contact_id,
-                        thread_name=thread_name,
-                        index_in_thread=start_index + i,
-                        timestamp=m.timestamp,
+                        index_in_conversation=start_index + i,
+                        timestamp=message.timestamp,
                         rendered=rendered,
                     ),
                 )
 
-        return (
-            f"<{thread_name}>\n" + "\n".join(rendered_messages) + f"\n</{thread_name}>"
-        )
+        return "<conversation>\n" + "\n".join(rendered_messages) + "\n</conversation>"
 
     def render_message(
         self,
-        message: UnifyMessage | GuidanceMessage,
+        message: ChatMessage,
         last_snapshot: datetime = None,
-        contact_name: str | None = None,
-        contact_timezone: str | None = None,
-        assistant_timezone: str | None = None,
-    ):
-        # Mark all recent messages as NEW (both incoming and outbound)
+    ) -> str:
+        """One conversation line: ``[Name @ time]: content [Attachments: ...]``.
+
+        Messages newer than the last snapshot carry a **NEW** marker.
+        """
         is_new = last_snapshot < message.timestamp
         new_marker = "**NEW** " if is_new else ""
         timestamp_str = message.timestamp.strftime("%A, %B %d, %Y at %I:%M %p")
-
-        if isinstance(message, GuidanceMessage):
-            # Silent awareness guidance the assistant issued to itself; already
-            # delivered, so it carries no attachments or timezone block.
-            return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}"
+        name = "You" if message.role == "assistant" else user_display_name()
 
         attachments_line = ""
         if message.attachments:
-            attachment_details = [
-                _attachment_detail(att) for att in message.attachments
-            ]
-            attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
+            attachments_line = f" [Attachments: {', '.join(message.attachments)}]"
 
-        # Show timezone info for the contact
-        tz_block_line = ""
-        if contact_name:
-            tz_block = _get_message_timezone_block(
-                contact_name,
-                contact_timezone,
-                assistant_timezone,
-            )
-            if tz_block:
-                tz_block_line = f"\n{tz_block}"
-
-        return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}{attachments_line}{tz_block_line}"
+        return f"{new_marker}[{name} @ {timestamp_str}]: {message.content}{attachments_line}"
 
     def render_completed_actions(
         self,

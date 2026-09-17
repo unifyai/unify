@@ -6,6 +6,12 @@ table; a policy raise blocks it; source, dependency, venv and guidance
 changes invalidate; a repair invalidates and fixture replay re-trusts a pure
 function immediately (bar its static review).
 
+Only ``unsafe_effectful`` is detectable from a primitive call, so the other
+effectful classes reach the policy table the way they do in practice: a
+librarian confirmation at (``read_only``, inferred from a third-party
+import) or above (``idempotent_effectful``, raised from pure) the detected
+bound.
+
 No LLM is involved anywhere in this file.
 """
 
@@ -35,16 +41,16 @@ def _verification_enabled(monkeypatch):
 
 
 _PURE = "def add(a: int, b: int) -> int:\n    return a + b\n"
-_READ = (
-    "async def lookup(q: str) -> str:\n    return await primitives.contacts.ask(q)\n"
+_LOOKUP = (
+    "async def lookup(q: str) -> str:\n"
+    "    handle = await primitives.actor.act(q)\n"
+    "    return await handle.result()\n"
 )
-_UPSERT = (
-    "async def save(rows: list) -> None:\n"
-    "    await primitives.data.update_rows('T', rows)\n"
-)
+_READ = "def s3_keys(bucket: str) -> list:\n    import boto3\n    return [bucket]\n"
+_CACHE = "def remember(k: str, v: str) -> dict:\n    return {k: v}\n"
 _SEND = (
     "async def notify(to: str, body: str) -> None:\n"
-    "    await primitives.comms.send_email(to=to, subject='hi', body=body)\n"
+    "    await primitives.actor.act(f'Tell {to}: {body}')\n"
 )
 
 
@@ -54,6 +60,18 @@ def _fid(fm: FunctionManager, name: str) -> int:
 
 def _current_hash(fm: FunctionManager, name: str) -> str:
     return fm.function_trust_hash(fm._get_function_data_by_name(name=name))
+
+
+def _confirm(fm: FunctionManager, name: str, klass: SideEffectClass) -> None:
+    """Record a librarian confirmation of ``klass`` for ``name``."""
+    fm._persist_verification_fields(
+        function_id=_fid(fm, name),
+        fields={
+            "side_effect_class": klass.value,
+            "class_source": "librarian",
+            "class_rationale": f"confirmed {klass.value}",
+        },
+    )
 
 
 def _pass_static(fm: FunctionManager, name: str) -> None:
@@ -102,17 +120,28 @@ def _ramp(fm: FunctionManager, name: str, *, passes: int, inputs: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "source, name, klass, passes, inputs",
+    "source, name, klass, confirmed, passes, inputs",
     [
-        (_READ, "lookup", SideEffectClass.read_only, 3, 2),
-        (_UPSERT, "save", SideEffectClass.idempotent_effectful, 3, 2),
-        (_SEND, "notify", SideEffectClass.unsafe_effectful, 5, 3),
+        (_READ, "s3_keys", SideEffectClass.read_only, True, 3, 2),
+        (_CACHE, "remember", SideEffectClass.idempotent_effectful, True, 3, 2),
+        (_SEND, "notify", SideEffectClass.unsafe_effectful, False, 5, 3),
     ],
 )
 @_handle_project
-def test_ramp_to_trust_flips_at_exact_counts(source, name, klass, passes, inputs):
+def test_ramp_to_trust_flips_at_exact_counts(
+    source,
+    name,
+    klass,
+    confirmed,
+    passes,
+    inputs,
+):
     fm = FunctionManager()
-    fm.add_functions(implementations=source)
+    # A third-party import is only storable against a venv that provides it.
+    venv_id = fm.add_venv(venv="[project]\nname='deps'\nversion='0'\n")
+    fm.add_functions(implementations=source, venv_id=venv_id)
+    if confirmed:
+        _confirm(fm, name, klass)
     assert fm._get_function_data_by_name(name=name)["side_effect_class"] == klass.value
     _pass_static(fm, name)
 
@@ -135,31 +164,31 @@ def test_ramp_to_trust_flips_at_exact_counts(source, name, klass, passes, inputs
 @_handle_project
 def test_ramp_needs_distinct_inputs_and_static_pass():
     fm = FunctionManager()
-    fm.add_functions(implementations=_READ)
+    fm.add_functions(implementations=_LOOKUP)
     _pass_static(fm, "lookup")
-    _ramp(fm, "lookup", passes=3, inputs=1)  # enough passes, one input
+    _ramp(fm, "lookup", passes=5, inputs=2)  # enough passes, too few inputs
     assert fm._get_function_data_by_name(name="lookup")["verify"] is True
     _record(fm, "lookup", VerdictKind.args, "PASS", "other")
     assert _record(fm, "lookup", VerdictKind.post, "PASS", "other") is False
 
-    fm.add_functions(implementations=_UPSERT)
-    _ramp(fm, "save", passes=3, inputs=2)  # no static review yet
-    assert fm._get_function_data_by_name(name="save")["verify"] is True
-    _pass_static(fm, "save")
-    fm.refresh_trust(_fid(fm, "save"))
-    assert fm._get_function_data_by_name(name="save")["verify"] is False
+    fm.add_functions(implementations=_SEND)
+    _ramp(fm, "notify", passes=5, inputs=3)  # no static review yet
+    assert fm._get_function_data_by_name(name="notify")["verify"] is True
+    _pass_static(fm, "notify")
+    fm.refresh_trust(_fid(fm, "notify"))
+    assert fm._get_function_data_by_name(name="notify")["verify"] is False
 
 
 @_handle_project
 def test_policy_raise_blocks_trust_and_fail_keeps_it_blocked():
     fm = FunctionManager()
-    fm.add_functions(implementations=_READ)
+    fm.add_functions(implementations=_LOOKUP)
     fm._persist_verification_fields(
         function_id=_fid(fm, "lookup"),
-        fields={"verification_policy": {"required_passes": 4}},
+        fields={"verification_policy": {"required_passes": 6}},
     )
     _pass_static(fm, "lookup")
-    _ramp(fm, "lookup", passes=3, inputs=2)
+    _ramp(fm, "lookup", passes=5, inputs=3)
     assert fm._get_function_data_by_name(name="lookup")["verify"] is True
     _record(fm, "lookup", VerdictKind.args, "PASS", "sig0")
     assert _record(fm, "lookup", VerdictKind.post, "PASS", "sig0") is False
@@ -279,18 +308,18 @@ def test_repair_invalidates_and_fixture_replay_retrusts_pure_leaf():
 @_handle_project
 def test_stale_hash_rows_are_history_not_evidence():
     fm = FunctionManager()
-    fm.add_functions(implementations=_READ)
+    fm.add_functions(implementations=_LOOKUP)
     _pass_static(fm, "lookup")
-    _ramp(fm, "lookup", passes=3, inputs=2)
+    _ramp(fm, "lookup", passes=5, inputs=3)
     assert fm._get_function_data_by_name(name="lookup")["verify"] is False
     fm.add_functions(
-        implementations=_READ.replace("ask(q)", "ask(q.strip())"),
+        implementations=_LOOKUP.replace("act(q)", "act(q.strip())"),
         overwrite=True,
     )
     row = fm._get_function_data_by_name(name="lookup")
     assert row["verify"] is True
     fid = _fid(fm, "lookup")
-    assert len(fm.list_verifications(function_id=fid)) == 6  # history kept
+    assert len(fm.list_verifications(function_id=fid)) == 10  # history kept
     fm.refresh_trust(fid)
     row = fm._get_function_data_by_name(name="lookup")
     assert row["ledger"]["passes"] == {}

@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING
 
 from unify.common.prompt_helpers import PromptParts
 from unify.conversation_manager.prompt_builders import build_system_prompt
-from unify.session_details import SESSION_DETAILS
+from unify.session_details import (
+    PLACEHOLDER_USER_FIRST_NAME,
+    PLACEHOLDER_USER_SURNAME,
+    SESSION_DETAILS,
+)
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -43,7 +47,8 @@ def build_brain_spec(
     """
     Build the prompt inputs for a single Main CM Brain run.
 
-    The returned spec is *pure* (no side effects).
+    The returned spec is *pure* (no side effects). The user's and the
+    assistant's identities come from ``SESSION_DETAILS``.
 
     Parameters
     ----------
@@ -55,10 +60,8 @@ def build_brain_spec(
     """
     prompt = snapshot_state.full_render
 
-    boss_contact_id = SESSION_DETAILS.boss_contact_id
-    boss_contact = cm.contact_index.get_contact(boss_contact_id) or {}
-
     assistant = SESSION_DETAILS.assistant
+    user = SESSION_DETAILS.user
     bio_parts: list[str] = []
     job_title = assistant.job_title.strip()
     if job_title:
@@ -68,11 +71,10 @@ def build_brain_spec(
 
     system_prompt = build_system_prompt(
         bio="\n".join(bio_parts),
-        contact_id=boss_contact_id,
-        first_name=boss_contact.get("first_name") or "",
-        surname=boss_contact.get("surname") or "",
-        phone_number=boss_contact.get("phone_number"),
-        email_address=boss_contact.get("email_address"),
+        first_name=user.first_name or PLACEHOLDER_USER_FIRST_NAME,
+        surname=user.surname or PLACEHOLDER_USER_SURNAME,
+        phone_number=user.number or None,
+        email_address=user.email or None,
         assistant_has_phone=bool(assistant.number),
         assistant_has_email=bool(assistant.email),
     )

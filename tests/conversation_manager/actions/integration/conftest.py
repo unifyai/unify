@@ -19,22 +19,16 @@ from typing import AsyncIterator, Iterator
 import pytest
 import pytest_asyncio
 
-from tests.helpers import scenario_file_lock, get_or_create_contact
+from tests.helpers import scenario_file_lock
 from tests.conversation_manager.cm_test_driver import CMStepDriver
-from tests.conversation_manager.conftest import (
-    BOSS,
-    TEST_CONTACTS,
-    DEFAULT_RESPONSE_POLICY,
-)
 
 
 def pytest_configure(config) -> None:
     """
     Configure environment variables for CodeActActor integration tests.
 
-    Note: parent CM tests' conftest sets UNIFY_ACTOR_IMPL="simulated" and disables
-    several optional managers. We inject CodeActActor directly, so we do NOT rely
-    on UNIFY_ACTOR_IMPL, but we DO override manager enablement as needed.
+    Note: parent CM tests' conftest sets UNIFY_ACTOR_IMPL="simulated". We
+    inject CodeActActor directly, so we do NOT rely on UNIFY_ACTOR_IMPL.
     """
     os.environ["UNIFY_PRETEST_CONTEXT_CREATE"] = "true"
     import tests.settings as test_settings_module
@@ -43,23 +37,9 @@ def pytest_configure(config) -> None:
 
     os.environ.setdefault("TEST", "true")
 
-    # These tests validate direct manager behavior (including fast-path tools),
-    # so they need concrete manager implementations.
-    os.environ["UNIFY_CONTACT_IMPL"] = "real"
-    os.environ["UNIFY_TRANSCRIPT_IMPL"] = "real"
+    # These tests exercise the production actor over real stored skills.
     os.environ["UNIFY_FUNCTION_IMPL"] = "real"
-
-    # Enable FileManager for attachment/file flows.
-    os.environ["UNIFY_FILE_ENABLED"] = "true"
-
-    # Keep KnowledgeManager disabled for determinism/performance in this suite.
-    os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "false"
-
-    # Keep optional managers disabled for focus + determinism.
-    os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNIFY_SECRET_ENABLED"] = "false"
-    os.environ["UNIFY_SKILL_ENABLED"] = "false"
-    os.environ["UNIFY_MEMORY_ENABLED"] = "false"
+    os.environ["UNIFY_GUIDANCE_IMPL"] = "real"
 
     # Production actor/model defaults (openai/gpt-5.6-sol@openrouter) come from SETTINGS.
 
@@ -82,16 +62,15 @@ def _isolate_local_workspace_home(
     LLM cache keys that embed the workspace root), matching the actor
     suite's isolation fixture.
 
-    After switching the root, clear manager singletons (so FileManager
-    adapters are not left bound to the session-wide workspace) and create
-    the directory the actor prompt embeds via ``get_local_root()``.
+    After switching the root, clear manager singletons and create the
+    directory the actor prompt embeds via ``get_local_root()``.
     """
     import hashlib
     import shutil
     import tempfile
     from pathlib import Path
 
-    from unify.file_manager.settings import get_local_root
+    from unify.workspace import get_local_root
     from unify.manager_registry import ManagerRegistry
     from unify.settings import SETTINGS
 
@@ -179,19 +158,8 @@ async def conversation_manager_codeact(
 
     from unify.common.context_registry import ContextRegistry
     from unify.common.runtime_context import bind_runtime_context_root
-    from unify.contact_manager.contact_manager import ContactManager
-    from unify.file_manager.managers.file_manager import FileManager
-    from unify.transcript_manager.transcript_manager import TranscriptManager
 
     bind_runtime_context_root(strict=True)
-    ContextRegistry.setup_for_managers(
-        [
-            ContactManager,
-            TranscriptManager,
-            FileManager,
-        ],
-        base_context=test_ctx,
-    )
 
     original_init_managers = managers_utils._init_managers
 
@@ -218,45 +186,6 @@ async def conversation_manager_codeact(
         db.set_context(test_ctx, relative=False, skip_create=True)
         bind_runtime_context_root(strict=True)
         ContextRegistry.set_base_context(test_ctx)
-
-        # Ensure system contacts are well-formed for tests.
-        if cm.contact_manager is not None:
-            cm.contact_manager._sync_required_contacts()
-            cm.contact_manager.update_contact(
-                contact_id=0,
-                first_name="Default",
-                surname="Assistant",
-                should_respond=True,
-            )
-            cm.contact_manager.update_contact(
-                contact_id=1,
-                first_name=BOSS["first_name"],
-                surname=BOSS["surname"],
-                email_address=BOSS["email_address"],
-                phone_number=BOSS["phone_number"],
-                should_respond=True,
-                response_policy=BOSS["response_policy"],
-            )
-
-        # Ensure baseline test contacts exist idempotently (safe under parallel pytest).
-        for contact_data in TEST_CONTACTS:
-            contact_id = get_or_create_contact(
-                cm.contact_manager,
-                first_name=contact_data["first_name"],
-                surname=contact_data.get("surname"),
-                email_address=contact_data.get("email_address"),
-                phone_number=contact_data.get("phone_number"),
-            )
-            if contact_id and cm.contact_manager is not None:
-                cm.contact_manager.update_contact(
-                    contact_id=contact_id,
-                    should_respond=contact_data.get("should_respond", True),
-                    response_policy=contact_data.get(
-                        "response_policy",
-                        DEFAULT_RESPONSE_POLICY,
-                    ),
-                )
-
     finally:
         managers_utils._init_managers = original_init_managers
 
@@ -274,22 +203,14 @@ async def conversation_manager_codeact(
 async def code_act_actor() -> AsyncIterator[object]:
     """Create a production-wired CodeActActor for CM integration tests."""
     from unify.actor.code_act_actor import CodeActActor
-    from unify.actor.environments import ActorEnvironment, StateManagerEnvironment
-    from unify.function_manager.primitives import Primitives, default_runtime_scope
+    from unify.actor.environments import ActorEnvironment
     from unify.manager_registry import ManagerRegistry
 
     ManagerRegistry.clear()
     # Built directly rather than through the registry: the parent suite pins
     # the registry's actor implementation to the simulated one, and these
     # tests exercise the production actor.
-    actor = CodeActActor(
-        environments=[
-            StateManagerEnvironment(
-                Primitives(primitive_scope=default_runtime_scope()),
-            ),
-            ActorEnvironment(),
-        ],
-    )
+    actor = CodeActActor(environments=[ActorEnvironment()])
 
     try:
         yield actor
@@ -313,10 +234,10 @@ def initialized_cm_codeact(
     driver = conversation_manager_codeact
 
     # Clear any conversation state from previous tests.
-    driver.contact_index.clear_conversations()
+    driver.cm.chat_history.clear()
     driver.cm.in_flight_actions.clear()
     driver.cm.completed_actions.clear()
-    driver.cm.chat_history.clear()
+    driver.cm.brain_messages.clear()
 
     # Bind per-test actor.
     driver.cm.actor = code_act_actor

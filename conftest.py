@@ -87,7 +87,7 @@ def _path_to_name(path: str) -> str:
     """Convert a test path to a filename-safe string.
 
     Examples:
-        tests/contact_manager/test_ask.py → contact_manager-test_ask
+        tests/function_manager/storage/test_venvs.py → function_manager-storage-test_venvs
         test_foo.py → test_foo
         /abs/path/to/workspace/tests/foo.py → foo
     """
@@ -248,12 +248,12 @@ def _derive_log_name_from_args(args: list) -> str:
     """Derive a semantic log filename from pytest command-line args.
 
     Examples:
-        ['tests/contact_manager/test_ask.py']
-            → 'contact_manager-test_ask'
-        ['tests/contact_manager/test_ask.py::test_foo']
-            → 'contact_manager-test_ask--test_foo'
-        ['tests/contact_manager/']
-            → 'contact_manager'
+        ['tests/function_manager/storage/test_venvs.py']
+            → 'function_manager-storage-test_venvs'
+        ['tests/function_manager/storage/test_venvs.py::test_foo']
+            → 'function_manager-storage-test_venvs--test_foo'
+        ['tests/function_manager/']
+            → 'function_manager'
         ['tests/']
             → 'tests'
         [] (no args)
@@ -261,7 +261,7 @@ def _derive_log_name_from_args(args: list) -> str:
         Multiple from same file:
             → 'test_session_behavior--TestA-test_x+1more'
         Multiple from same directory:
-            → 'contact_manager--test_ask+2more'
+            → 'function_manager--storage-test_venvs+2more'
     """
     if not args:
         return "all"

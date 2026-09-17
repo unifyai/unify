@@ -82,9 +82,8 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 
 - **Chat** with one assistant in the terminal. Every message you send is a normal inbound event; every reply is a normal outbound one, so the same loop drives any front end you put on it.
 - **Work in the background.** "Look into X" dispatches a code-writing actor; the conversation keeps going while it runs, and you can ask it how it is doing, redirect it, pause it, or stop it.
-- **Memory.** Contacts, knowledge claims, transcripts, files, images and secrets are typed tables in the local store, consolidated from conversations every fifty messages.
 - **Skills.** Functions and guidance the assistant stored after a job that went well, discovered before it writes new code.
-- **Files.** Drop a file path into the chat and the assistant parses it, stores tables it finds, and can answer questions about it.
+- **Files.** Name a file path in the chat and the actor reads it where it is; anything it produces lands in the workspace.
 
 ---
 
@@ -146,10 +145,10 @@ You ──► ConversationManager (slow brain: event-driven, single-shot tool de
             │
             │  act(...) / interject / ask / pause / resume / stop
             ▼
-        CodeActActor (writes one Python program per turn over primitives.*)
+        CodeActActor (writes one Python program per turn in a persistent sandbox)
             │
             ▼
-        State managers (each runs its own async LLM tool loop, returns a handle)
+        Skill libraries (stored functions + procedures, discovered before writing code)
             │
             ▼
         unify.db (in-process SQLite store: contexts, rows, derived vector columns)
@@ -171,30 +170,27 @@ await handle.interject("Only ones with Rust bindings")   # mid-flight redirect
 await handle.pause(); ...; await handle.resume()         # freeze and resume
 ```
 
-When the Actor calls `primitives.contacts.ask(...)`, the `ContactManager` returns its own handle, nested inside the Actor's, which is nested inside the `ConversationManager`'s. Steering at any level propagates down through the live call stack as a typed signal any inner loop can act on, not as an abort or a queued prompt.
+When the Actor calls `primitives.actor.act(...)`, the nested actor returns its own handle, nested inside the Actor's, which is nested inside the `ConversationManager`'s. Steering at any level propagates down through the live call stack as a typed signal any inner loop can act on, not as an abort or a queued prompt.
 
 ### CodeAct: the Actor writes Python programs
 
-Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. unify's Actor writes a single sandboxed Python program per turn over typed `primitives.*`:
+Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. unify's Actor writes a single Python program per turn in a persistent sandbox, calling stored functions and nested actors from code:
 
 ```python
-contacts = await primitives.contacts.ask(
-    "Which vendors am I tracking for security updates?"
-)
-for contact in contacts:
-    latest = await primitives.transcripts.ask(
-        f"What did {contact} last tell us about security updates?"
-    )
-    print(latest)
+rows = load_orders("~/exports/orders.csv")          # a stored function, discovered first
+by_status = {}
+for row in rows:
+    by_status[row["status"]] = by_status.get(row["status"], 0) + row["amount"]
+note = await primitives.actor.act(f"Write a short note explaining {by_status}")
 ```
 
-A contacts lookup → transcript check becomes one coherent plan with real variables, loops, and control flow, rather than separate tool-selection turns round-tripping through tool messages. Durable domain claims are stored via top-level `KnowledgeManager_*` JSON tools (typed claim ledger), not `primitives.knowledge.*`.
+A load → reshape → delegate sequence becomes one coherent plan with real variables, loops, and control flow, rather than separate tool-selection turns round-tripping through tool messages.
 
 ### The local store
 
 `unify.db` is an in-process SQLite engine with the shape of a document store: **projects** hold **contexts** (tables), contexts hold **rows** of JSON with typed **fields**, and a context can declare unique keys, auto-counted ids and **derived columns** whose equations are evaluated on write. Filters and sort keys are ordinary Python expressions evaluated per row (`age > 30 and 'berlin' in city.lower()`), with `embed()` and `cosine()` available so a derived vector column and a nearest-neighbour sort need no external service. Embeddings come from a local `fastembed` model by default and are cached on disk.
 
-Every manager reads and writes through this one API, so the whole assistant is one file you can back up, inspect, or delete.
+Everything the assistant keeps — chat history, functions, procedures — goes through this one API, so the whole assistant is one file you can back up, inspect, or delete.
 
 ### Functions and Guidance: a dual library
 
@@ -208,10 +204,6 @@ After a successful trajectory, a reviewer loop (`store_skills`) can extract *bot
 ### Stored functions carry a verification ledger
 
 A stored function is not trusted because it was stored. Its **effect class** is read deterministically off its code (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`), a **contract** is derived from its type hints plus whatever the reviewer wrote down, and tier-0 checks validate the arguments before every call and the result after it. Any change to the source, its dependencies, its environment or its linked guidance invalidates that trust.
-
-### Memory consolidation: every fifty messages
-
-`MemoryManager` runs a background extraction pass over each new transcript window, distilling **contact profiles**, **per-contact summaries**, **response policies**, and **domain knowledge** into the typed manager tables.
 
 ### Concurrent steerable actions
 
@@ -243,21 +235,12 @@ ConversationManager (interaction loop, event-driven scheduling)
 CodeActActor (generates Python plans, calls primitives.* APIs)
     │
     ▼
-State Managers (each runs its own async LLM tool loop)
+Skill libraries (discovered before the Actor writes code)
     │
-    ├── ContactManager       : people and relationships
-    ├── KnowledgeManager     : typed claim ledger (facts, policies, decisions, …)
-    ├── TranscriptManager    : conversation history and search
-    ├── GuidanceManager      : procedures, SOPs, how-to knowledge
-    ├── FunctionManager      : user-defined functions, primitives registry
-    ├── FileManager          : file parsing and registry
-    ├── IngestionManager     : checkpointed, resumable data and file ingestion
-    ├── ImageManager         : image storage, vision queries
-    ├── SecretManager        : encrypted secret storage
-    └── DataManager          : low-level data operations
+    ├── FunctionManager      : stored functions, venvs, verification ledger
+    └── GuidanceManager      : procedures, how-to knowledge
     │
-    ├── EventBus             : typed pub/sub backbone (Pydantic events)
-    └── MemoryManager        : offline consolidation every 50 messages
+    └── EventBus             : typed pub/sub backbone (Pydantic events)
 ```
 
 ---
@@ -287,7 +270,7 @@ Because *every* operation, at every level of the call stack, returns the same li
 <details>
 <summary><b>1. Course-correct a task that's running three loops deep, live</b></summary>
 
-Kick off work that nests `ConversationManager → Actor → ContactManager → TranscriptManager`. Halfway through, say *"use their work email, not personal."* The correction travels **down the live call stack** into the innermost loop and changes its behaviour, no restart, no second prompt appended, no waiting for the next tool boundary. A monolithic loop can only hard-interrupt the child and start it over from scratch.
+Kick off work that nests `ConversationManager → Actor → nested Actor`. Halfway through, say *"use the March export, not February."* The correction travels **down the live call stack** into the innermost loop and changes its behaviour, no restart, no second prompt appended, no waiting for the next tool boundary. A monolithic loop can only hard-interrupt the child and start it over from scratch.
 
 </details>
 
@@ -348,7 +331,7 @@ uv sync --all-groups
 
 tests/parallel_run.sh tests/                    # everything
 tests/parallel_run.sh tests/actor/              # one module
-tests/parallel_run.sh tests/contact_manager/    # another
+tests/parallel_run.sh tests/function_manager/   # another
 ```
 
 See [tests/README.md](tests/README.md) for the full philosophy: responses are cached, not mocked. Delete the cache and you're re-evaluating against live models.
@@ -376,7 +359,7 @@ See [tests/README.md](tests/README.md) for the full philosophy: responses are ca
 
 ```text
 unify/
-├── unify/             # Main package: cli, actor, conversation_manager, db, common, and one folder per state manager
+├── unify/             # Main package: cli, actor, conversation_manager, function_manager, guidance_manager, db, common
 ├── tests/             # Pytest suite (cached LLM responses, per-process SQLite store)
 ├── scripts/           # Skill import, builtins seeding, dev tooling
 └── docs/              # Design writeups

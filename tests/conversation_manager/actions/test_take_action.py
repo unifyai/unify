@@ -5,10 +5,6 @@ tests/conversation_manager/test_take_action.py
 Tests that verify ConversationManager correctly delegates to ``act`` for
 requests that require the general-purpose Actor (knowledge, web search,
 guidance, files, combined/research).
-
-Contact-specific routing (``ask_about_contacts``, ``update_contacts``) and
-transcript-specific routing (``query_past_transcripts``) are tested in their
-own dedicated modules under this directory.
 """
 
 import pytest
@@ -19,16 +15,12 @@ from tests.conversation_manager.cm_helpers import (
     assert_efficient,
     filter_events_by_type,
 )
-from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     ActorHandleStarted,
     UnifyMessageReceived,
 )
 
 pytestmark = pytest.mark.eval
-
-# Note: BOSS (contact_id=1) is imported from conftest.py
-
 
 # ---------------------------------------------------------------------------
 #  Knowledge-related requests -> should trigger act
@@ -47,7 +39,6 @@ async def test_knowledge_query_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What are our office hours again?",
         ),
     )
@@ -75,7 +66,6 @@ async def test_knowledge_about_product_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="A customer is asking about Tesla warranty. What do we have on file?",
         ),
     )
@@ -103,7 +93,6 @@ async def test_store_knowledge_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Make a note that our refund window is 30 days for unopened items.",
         ),
     )
@@ -136,7 +125,6 @@ async def test_weather_query_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's the weather like in Berlin today?",
         ),
     )
@@ -164,7 +152,6 @@ async def test_news_query_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="What's happening in the news today? Any major headlines?",
         ),
     )
@@ -192,7 +179,6 @@ async def test_current_events_query_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Any notable AI announcements this week I should know about?",
         ),
     )
@@ -225,7 +211,6 @@ async def test_guidance_query_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="We might have a security incident. What's the protocol?",
         ),
     )
@@ -258,7 +243,6 @@ async def test_find_and_action_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Find Bob's latest invoice and let me know if it's been paid.",
         ),
     )
@@ -286,7 +270,6 @@ async def test_research_request_triggers_act(initialized_cm):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="I'm meeting with Contoso tomorrow. Can you pull together some background on them?",
         ),
     )
@@ -319,23 +302,15 @@ async def test_unify_message_summarize_attachment_triggers_act_with_filepath(
     assistant to summarize it. The assistant should call `act` with the
     attachment's filepath so the Actor can access and process the file.
 
-    The rendered message shows: "[Attachments: quarterly_report.pdf (Attachments/att-1_quarterly_report.pdf)]"
+    The rendered message shows: "[Attachments: Attachments/att-1_quarterly_report.pdf]"
     so the LLM should know the file location and include it in the act query.
     """
     cm = initialized_cm
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Please summarize this PDF for me.",
-            attachments=[
-                {
-                    "filename": "quarterly_report.pdf",
-                    "filepath": "Attachments/att-1_quarterly_report.pdf",
-                    "content_type": "application/pdf",
-                    "size_bytes": 2048,
-                },
-            ],
+            attachments=["Attachments/att-1_quarterly_report.pdf"],
         ),
     )
 

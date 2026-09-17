@@ -1,8 +1,8 @@
 """Pluggable execution environments for Actors.
 
-Environments expose domain-specific tool providers (state managers, the
-function store, nested actors) in a consistent way so an Actor can inject multiple namespaces
-into its execution sandbox.
+Environments expose tool providers (the function store, nested actors,
+caller-supplied services) in a consistent way so an Actor can inject
+multiple namespaces into its execution sandbox.
 
 This package intentionally contains only lightweight adapters and metadata.
 The Actor owns proxying/caching/logging behavior.
@@ -13,7 +13,6 @@ from typing import Any, Dict
 
 from unify.actor.environments.base import BaseEnvironment, ToolMetadata
 from unify.actor.environments.function_store import FunctionStoreEnvironment
-from unify.actor.environments.state_managers import StateManagerEnvironment
 from unify.actor.environments.actor import ActorEnvironment
 from unify.function_manager.primitives.registry import get_registry
 
@@ -93,7 +92,6 @@ __all__ = [
     "BaseEnvironment",
     "ToolMetadata",
     "FunctionStoreEnvironment",
-    "StateManagerEnvironment",
     "ActorEnvironment",
     "create_env",
 ]

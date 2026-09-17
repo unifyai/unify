@@ -44,39 +44,28 @@ exit 42
 """
 
 SCRIPT_CALLS_PRIMITIVE = """#!/bin/sh
-# Call the contacts primitive
-result=$(unity-primitive contacts ask --text "Who is Alice?")
+# Call the actor primitive
+result=$(unity-primitive actor act --request "Who is Alice?")
 echo "Primitive result: $result"
 """
 
 SCRIPT_CALLS_MULTIPLE_PRIMITIVES = """#!/bin/sh
-# Call multiple primitives
-contacts=$(unity-primitive contacts ask --text "Who is Alice?")
-secrets=$(unity-primitive secrets ask --text "What is 2+2?")
-echo "Contacts: $contacts"
-echo "Secrets: $secrets"
+# Call the primitive more than once
+first=$(unity-primitive actor act --request "Who is Alice?")
+second=$(unity-primitive actor act --request "What is 2+2?")
+echo "First: $first"
+echo "Second: $second"
 """
 
 SCRIPT_WITH_JSON_ARG = """#!/bin/sh
-# Call primitive with JSON argument
-result=$(unity-primitive files search_files --references '{"query": "budget reports"}' --k 5)
-echo "Search result: $result"
-"""
-
-SCRIPT_PARSES_JSON_RESULT = """#!/bin/sh
-# Call primitive and parse JSON result
-result=$(unity-primitive contacts ask --text "list all")
-# Check if result is valid JSON by using a simple grep
-if echo "$result" | grep -q '^{\\|^\\['; then
-    echo "Got JSON result"
-else
-    echo "Got plain result: $result"
-fi
+# Call primitive with JSON and numeric arguments
+result=$(unity-primitive actor act --request "find budget reports" --prompt_functions '["summarise", "rank"]' --timeout 5)
+echo "Act result: $result"
 """
 
 SCRIPT_WITH_ERROR_HANDLING = """#!/bin/sh
 # Handle errors from primitives
-result=$(unity-primitive contacts ask --text "error please" 2>&1)
+result=$(unity-primitive actor act --request "error please" 2>&1)
 exit_code=$?
 if [ $exit_code -ne 0 ]; then
     echo "Primitive failed with code $exit_code"
@@ -130,8 +119,8 @@ unity-primitive --list-managers
 """
 
 SCRIPT_LIST_METHODS = """#!/bin/sh
-# List methods for files manager
-unity-primitive files --list-methods
+# List methods for the actor manager
+unity-primitive actor --list-methods
 """
 
 
@@ -167,27 +156,8 @@ def function_manager_factory():
 def mock_primitives():
     """Create a mock primitives object for testing RPC."""
     primitives = MagicMock()
-    primitives.contacts = MagicMock()
-    primitives.contacts.ask = AsyncMock(return_value="Alice is a test contact")
-    primitives.secrets = MagicMock()
-    primitives.secrets.ask = AsyncMock(return_value="4")
-    primitives.files = MagicMock()
-    primitives.files.search_files = AsyncMock(
-        return_value=[
-            {"file_path": "/reports/budget_2024.csv", "score": 0.95},
-            {"file_path": "/reports/budget_2023.csv", "score": 0.87},
-        ],
-    )
-    primitives.files.filter_files = AsyncMock(
-        return_value=[
-            {"file_id": 1, "file_path": "/data/file1.txt"},
-            {"file_id": 2, "file_path": "/data/file2.txt"},
-        ],
-    )
-    primitives.transcripts = MagicMock()
-    primitives.transcripts.ask = AsyncMock(
-        return_value=[{"id": 1, "summary": "Exchange 1"}],
-    )
+    primitives.actor = MagicMock()
+    primitives.actor.act = AsyncMock(return_value="Alice is a test contact")
     return primitives
 
 
@@ -195,8 +165,8 @@ def mock_primitives():
 def mock_primitives_with_error():
     """Create a mock primitives that raises errors."""
     primitives = MagicMock()
-    primitives.contacts = MagicMock()
-    primitives.contacts.ask = AsyncMock(
+    primitives.actor = MagicMock()
+    primitives.actor.act = AsyncMock(
         side_effect=ValueError("Contact not found: error please"),
     )
     return primitives
@@ -307,7 +277,7 @@ async def test_shell_calls_primitive(function_manager_factory, mock_primitives):
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
     assert "Alice is a test contact" in result["stdout"]
-    mock_primitives.contacts.ask.assert_called_once()
+    mock_primitives.actor.act.assert_called_once_with(request="Who is Alice?")
 
 
 @_handle_project
@@ -326,10 +296,10 @@ async def test_shell_calls_multiple_primitives(
     )
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
-    assert "Alice is a test contact" in result["stdout"]
-    assert "4" in result["stdout"]
-    mock_primitives.contacts.ask.assert_called_once()
-    mock_primitives.secrets.ask.assert_called_once()
+    # Each invocation prints the JSON-encoded result on its own line.
+    assert result["stdout"].count("Alice is a test contact") == 2
+    assert "First: " in result["stdout"] and "Second: " in result["stdout"]
+    assert mock_primitives.actor.act.call_count == 2
 
 
 @_handle_project
@@ -348,11 +318,12 @@ async def test_shell_calls_primitive_with_json_arg(
     )
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
-    # Check that search_files was called with the JSON references
-    mock_primitives.files.search_files.assert_called_once()
-    call_kwargs = mock_primitives.files.search_files.call_args.kwargs
-    assert call_kwargs["references"] == {"query": "budget reports"}
-    assert call_kwargs["k"] == 5
+    # JSON and numeric arguments reach the primitive as parsed values.
+    mock_primitives.actor.act.assert_called_once()
+    call_kwargs = mock_primitives.actor.act.call_args.kwargs
+    assert call_kwargs["request"] == "find budget reports"
+    assert call_kwargs["prompt_functions"] == ["summarise", "rank"]
+    assert call_kwargs["timeout"] == 5
 
 
 @_handle_project
@@ -397,7 +368,7 @@ async def test_list_managers_introspection(function_manager_factory, mock_primit
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
     # Should list available managers
-    assert "contacts" in result["stdout"].lower() or "files" in result["stdout"].lower()
+    assert "actor" in result["stdout"].lower()
 
 
 @_handle_project
@@ -413,9 +384,8 @@ async def test_list_methods_introspection(function_manager_factory, mock_primiti
     )
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
-    # Should list methods for files manager
-    output = result["stdout"].lower()
-    assert "search" in output or "filter" in output or "tables" in output
+    # Should list methods for the actor manager
+    assert "act" in result["stdout"].lower()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -547,19 +517,23 @@ echo "Running in zsh: $ZSH_VERSION"
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_primitive_returns_list(function_manager_factory, mock_primitives):
+async def test_primitive_returns_list(function_manager_factory):
     """Test primitive returning a list is handled correctly."""
     fm = function_manager_factory()
 
+    mock_p = MagicMock()
+    mock_p.actor = MagicMock()
+    mock_p.actor.act = AsyncMock(return_value=[{"id": 1, "summary": "Exchange 1"}])
+
     script = """#!/bin/sh
-result=$(unity-primitive transcripts ask --text "list all")
+result=$(unity-primitive actor act --request "list all")
 echo "Exchanges: $result"
 """
 
     result = await fm.execute_shell_script(
         implementation=script,
         language="sh",
-        primitives=mock_primitives,
+        primitives=mock_p,
     )
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
@@ -574,13 +548,13 @@ async def test_primitive_returns_dict(function_manager_factory):
     fm = function_manager_factory()
 
     mock_p = MagicMock()
-    mock_p.contacts = MagicMock()
-    mock_p.contacts.ask = AsyncMock(
+    mock_p.actor = MagicMock()
+    mock_p.actor.act = AsyncMock(
         return_value={"name": "Alice", "email": "alice@example.com"},
     )
 
     script = """#!/bin/sh
-result=$(unity-primitive contacts ask --text "get Alice")
+result=$(unity-primitive actor act --request "get Alice")
 echo "Contact: $result"
 """
 
@@ -601,11 +575,11 @@ async def test_unicode_handling(function_manager_factory):
     fm = function_manager_factory()
 
     mock_p = MagicMock()
-    mock_p.contacts = MagicMock()
-    mock_p.contacts.ask = AsyncMock(return_value="Hello 世界! 🌍 äöü")
+    mock_p.actor = MagicMock()
+    mock_p.actor.act = AsyncMock(return_value="Hello 世界! 🌍 äöü")
 
     script = """#!/bin/sh
-result=$(unity-primitive contacts ask --text "unicode test")
+result=$(unity-primitive actor act --request "unicode test")
 echo "Result: $result"
 """
 
@@ -633,17 +607,17 @@ async def test_concurrent_shell_executions(function_manager_factory, mock_primit
     scripts = [
         """#!/bin/sh
 echo "Script 1"
-result=$(unity-primitive contacts ask --text "q1")
+result=$(unity-primitive actor act --request "q1")
 echo "Result: $result"
 """,
         """#!/bin/sh
 echo "Script 2"
-result=$(unity-primitive contacts ask --text "q2")
+result=$(unity-primitive actor act --request "q2")
 echo "Result: $result"
 """,
         """#!/bin/sh
 echo "Script 3"
-result=$(unity-primitive contacts ask --text "q3")
+result=$(unity-primitive actor act --request "q3")
 echo "Result: $result"
 """,
     ]
@@ -664,4 +638,4 @@ echo "Result: $result"
         assert f"Script {i}" in result["stdout"]
 
     # All three calls should have been made
-    assert mock_primitives.contacts.ask.call_count == 3
+    assert mock_primitives.actor.act.call_count == 3

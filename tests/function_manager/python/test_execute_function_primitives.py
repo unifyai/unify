@@ -63,18 +63,18 @@ async def test_execute_function_primitive_async(function_manager_factory):
     fm = function_manager_factory()
 
     mock_primitives = MagicMock()
-    mock_primitives.contacts = MagicMock()
-    mock_primitives.contacts.ask = AsyncMock(return_value="Alice is a contact")
+    mock_primitives.actor = MagicMock()
+    mock_primitives.actor.act = AsyncMock(return_value="Report summarised")
 
     result = await fm.execute_function(
-        function_name="primitives.contacts.ask",
-        call_kwargs={"text": "Who is Alice?"},
+        function_name="primitives.actor.act",
+        call_kwargs={"request": "Summarise the report"},
         extra_namespaces={"primitives": mock_primitives},
     )
 
     # Primitive returns the raw result, not a dict envelope.
-    assert result == "Alice is a contact"
-    mock_primitives.contacts.ask.assert_called_once_with(text="Who is Alice?")
+    assert result == "Report summarised"
+    mock_primitives.actor.act.assert_called_once_with(request="Summarise the report")
 
 
 @_handle_project
@@ -84,19 +84,19 @@ async def test_execute_function_primitive_sync(function_manager_factory):
     fm = function_manager_factory()
 
     mock_primitives = MagicMock()
-    mock_primitives.transcripts = MagicMock()
+    mock_primitives.actor = MagicMock()
     # Sync callable (non-coroutine)
-    mock_primitives.transcripts.ask = MagicMock(return_value="The sky is blue")
+    mock_primitives.actor.act = MagicMock(return_value="The sky is blue")
 
     result = await fm.execute_function(
-        function_name="primitives.transcripts.ask",
-        call_kwargs={"text": "What colour is the sky?"},
+        function_name="primitives.actor.act",
+        call_kwargs={"request": "What colour is the sky?"},
         extra_namespaces={"primitives": mock_primitives},
     )
 
     assert result == "The sky is blue"
-    mock_primitives.transcripts.ask.assert_called_once_with(
-        text="What colour is the sky?",
+    mock_primitives.actor.act.assert_called_once_with(
+        request="What colour is the sky?",
     )
 
 
@@ -147,12 +147,12 @@ async def test_execute_function_primitive_returns_handle(function_manager_factor
     fake_handle = FakeHandle()
 
     mock_primitives = MagicMock()
-    mock_primitives.contacts = MagicMock()
-    mock_primitives.contacts.ask = AsyncMock(return_value=fake_handle)
+    mock_primitives.actor = MagicMock()
+    mock_primitives.actor.act = AsyncMock(return_value=fake_handle)
 
     result = await fm.execute_function(
-        function_name="primitives.contacts.ask",
-        call_kwargs={"text": "Find Bob"},
+        function_name="primitives.actor.act",
+        call_kwargs={"request": "Find Bob"},
         extra_namespaces={"primitives": mock_primitives},
     )
 
@@ -175,19 +175,19 @@ async def test_execute_primitive_forwards_parent_chat_context(function_manager_f
 
     received = {}
 
-    async def fake_ask(text: str, _parent_chat_context: list[dict] | None = None):
+    async def fake_act(request: str, _parent_chat_context: list[dict] | None = None):
         received["ctx"] = _parent_chat_context
-        return f"Answered: {text}"
+        return f"Answered: {request}"
 
     mock_primitives = MagicMock()
-    mock_primitives.contacts = MagicMock()
-    mock_primitives.contacts.ask = fake_ask
+    mock_primitives.actor = MagicMock()
+    mock_primitives.actor.act = fake_act
 
     parent_ctx = [{"role": "user", "content": "Hello"}]
 
     result = await fm.execute_function(
-        function_name="primitives.contacts.ask",
-        call_kwargs={"text": "Who is Alice?"},
+        function_name="primitives.actor.act",
+        call_kwargs={"request": "Who is Alice?"},
         extra_namespaces={"primitives": mock_primitives},
         _parent_chat_context=parent_ctx,
     )
@@ -205,17 +205,17 @@ async def test_execute_function_primitive_no_kwargs(function_manager_factory):
     fm = function_manager_factory()
 
     mock_primitives = MagicMock()
-    mock_primitives.transcripts = MagicMock()
-    mock_primitives.transcripts.ask = AsyncMock(return_value="All web results")
+    mock_primitives.actor = MagicMock()
+    mock_primitives.actor.act = AsyncMock(return_value="Nothing to do")
 
     result = await fm.execute_function(
-        function_name="primitives.transcripts.ask",
+        function_name="primitives.actor.act",
         # No call_kwargs provided
         extra_namespaces={"primitives": mock_primitives},
     )
 
-    assert result == "All web results"
-    mock_primitives.transcripts.ask.assert_called_once_with()
+    assert result == "Nothing to do"
+    mock_primitives.actor.act.assert_called_once_with()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -249,8 +249,8 @@ async def test_execute_function_primitive_callable_resolution_failure(
     ):
         with pytest.raises(ValueError, match="Could not resolve primitive callable"):
             await fm.execute_function(
-                function_name="primitives.contacts.ask",
-                call_kwargs={"text": "Hello"},
+                function_name="primitives.actor.act",
+                call_kwargs={"request": "Hello"},
             )
 
 
@@ -261,8 +261,8 @@ async def test_execute_function_primitive_callable_resolution_failure(
 
 
 FUNCTION_THAT_CALLS_PRIMITIVES = """
-async def ask_contacts_with_context(question: str):
-    return await primitives.contacts.ask(text=question)
+async def delegate_with_context(question: str):
+    return await primitives.actor.act(request=question)
 """.strip()
 
 
@@ -280,21 +280,21 @@ async def test_execute_function_composed_forwards_parent_chat_context(
 
     received_ctx = {}
 
-    async def fake_ask(
-        text: str,
+    async def fake_act(
+        request: str,
         _parent_chat_context: list[dict] | None = None,
     ):
         received_ctx["value"] = _parent_chat_context
-        return f"Answer: {text}"
+        return f"Answer: {request}"
 
     mock_primitives = MagicMock()
-    mock_primitives.contacts = MagicMock()
-    mock_primitives.contacts.ask = fake_ask
+    mock_primitives.actor = MagicMock()
+    mock_primitives.actor.act = fake_act
 
     parent_ctx = [{"role": "user", "content": "Hello"}]
 
     result = await fm.execute_function(
-        function_name="ask_contacts_with_context",
+        function_name="delegate_with_context",
         call_kwargs={"question": "Who is Alice?"},
         extra_namespaces={"primitives": mock_primitives},
         _parent_chat_context=parent_ctx,

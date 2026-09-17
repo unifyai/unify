@@ -57,69 +57,9 @@ CONTENT_EMBED_HEAD_CHARS = 24000
 
 SNAPSHOT_PATH = Path(__file__).with_name("builtins_guidance.json")
 
-_MANAGER_ROUTING_CONTENT = """\
-Which state manager to use when two overlap: `primitives.data` vs
-`primitives.files`, and data vs `primitives.ingestion` (reading vs storing).
-
-CRITICAL: `primitives.data.*` vs `primitives.files.*` — these serve
-DIFFERENT purposes, do not confuse them:
-- `primitives.data.*`: ALL analytical and data operations — filtering,
-  searching, aggregating, joining. Works on any Unify context (`Data/*`,
-  `Files/*`, `Knowledge/*`). Use when the question is about DATA INSIDE
-  tables, regardless of where those tables came from. Always prefer
-  server-side `filter=` / `reduce` / join variants over fetching rows into
-  Python loops.
-- `primitives.files.*`: file-specific operations — describing the storage
-  layout of an uploaded/received file, listing files in the file registry,
-  parsing documents, rendering PDFs/Excel sheets as images for visual
-  inspection. Use when the question is about FILES themselves (metadata,
-  layout, parsing) or when you need file-path-based context resolution.
-  (Worked examples at the end.)
-
-Reading vs storing: `primitives.data.*` vs `primitives.ingestion.*`
-- `data` reads and reshapes what is already stored (filter, search, reduce,
-  join, update_rows). STORING new data is not data's job: anything that puts
-  NEW data somewhere queryable — API responses, connected-app pulls, files,
-  folders, table reshapes — goes through `primitives.ingestion.submit`.
-- If an ingestion run fails, read `get_logs(run_id)`, fix the cause, and
-  submit again. Do not store the data another way (`create_table` +
-  `insert_rows`, hand-written loops): those write rows nothing checkpoints,
-  verifies against a declared count, or can resume, so a part-way failure
-  leaves a table that looks complete. Report the limitation instead.
-
-Manager selection priorities (when in doubt, the most specific domain wins):
-1. `transcripts` for historical communications (what was said/written)
-2. `contacts` for people/relationship information
-3. `web` for current external information (weather, news, real-time data)
-4. `files` when dealing with specific documents or file-level operations
-5. `data` for tabular contexts (`Data/*` and other tables):
-   filter, reduce, join, update_rows — never client-scan large tables in
-   Python
-
-Typed claim / procedure catalogues (`KnowledgeManager_*`,
-`GuidanceManager_*`) are top-level Actor JSON tools, not `primitives.*` —
-use them for durable domain claims and SOPs.
-
-Worked examples (data vs files):
-- "What tables exist under Data/examplehousing?" ->
-  `primitives.data.list_tables(prefix=...)` (data)
-- "Describe the schema of the repairs table" ->
-  `primitives.data.describe_table(...)` (data)
-- "What's in the uploaded PDF?" ->
-  `primitives.files.describe(file_path=...)` (files)
-- "Render page 3 of the report as an image" ->
-  `primitives.files.render_pdf(...)` (files)
-"""
-
-PLATFORM_GUIDANCE_ENTRIES: Dict[str, Dict[str, str]] = {
-    "platform/manager-routing": {
-        "title": (
-            "[platform] Choosing between overlapping state managers: data vs "
-            "files vs ingestion"
-        ),
-        "content": _MANAGER_ROUTING_CONTENT,
-    },
-}
+# Platform-authored entries versioned directly in code. Empty at present:
+# every builtin entry comes from the imported snapshot.
+PLATFORM_GUIDANCE_ENTRIES: Dict[str, Dict[str, str]] = {}
 
 
 def default_guidance_entries() -> Dict[str, Dict[str, str]]:
@@ -158,8 +98,8 @@ def _ensure_catalog_storage(project: str) -> None:
     """Create the catalogue project and contexts (idempotent).
 
     The context is created without the per-assistant Guidance foreign keys
-    (cross-project FKs do not exist); builtin entries have empty ``images``
-    and ``function_ids``.
+    (cross-project FKs do not exist); builtin entries have empty
+    ``function_ids``.
     """
     ensure_builtins_project(project)
     db.create_context(

@@ -57,7 +57,6 @@ def test_docstrings_match_base():
 async def test_start_and_ask():
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
     # The 'ask' method on the main handle returns another handle
     answer_handle = await cm_handle.ask("Hello, who is this?")
@@ -82,7 +81,6 @@ async def test_stateful_memory_serial_asks():
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     token = _unique_token("MARKER")
@@ -115,7 +113,6 @@ async def test_stateful_interject_then_ask():
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     # 1) Tell the manager about a schedule change
@@ -143,7 +140,6 @@ async def test_description_and_guidance():
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="pirate_assistant",
-        contact_id="captain_contact",
         description="A conversation with a pirate captain who has lost his treasure.",
         simulation_guidance="You must always respond in pirate slang. Refer to the user as 'matey'.",
     )
@@ -189,7 +185,6 @@ async def test_ask_with_structured_output():
 
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
         simulation_guidance="The user's name is John Doe, he is 30 years old, and he is happy.",
     )
 
@@ -223,7 +218,6 @@ async def test_interject(monkeypatch):
     """Verify that interject is called and influences the conversation state."""
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     # Interject with new information
@@ -244,7 +238,6 @@ async def test_interject(monkeypatch):
 async def test_stop():
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
     # The main handle's result will block until stop() is called
     result_task = asyncio.create_task(cm_handle.result())
@@ -290,7 +283,6 @@ async def test_pause_and_resume(monkeypatch):
 
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     pause_reply = await cm_handle.pause()
@@ -323,7 +315,6 @@ async def test_handle_ask():
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     # Start an initial ask to obtain a live handle
@@ -347,12 +338,10 @@ async def test_stop_while_paused():
     """
     Calling stop() while paused should unblock result() and complete promptly.
 
-    This follows the gold standard pattern from ContactManager/TranscriptManager
-    simulated tests.
+    This follows the gold standard pattern of the simulated manager tests.
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     # Enter paused state
@@ -386,7 +375,6 @@ async def test_result_blocks_until_stopped():
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
-        contact_id="test_contact",
     )
 
     # Start result() - it should block

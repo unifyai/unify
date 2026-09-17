@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,13 +19,13 @@ class CommsPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     # Common fields across most Comms events
-    contact: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Contact info dict",
-    )
     content: Optional[str] = Field(
         default=None,
         description="Message content if applicable",
+    )
+    attachments: Optional[list[str]] = Field(
+        default=None,
+        description="Workspace paths of files sent with the message",
     )
     timestamp: Optional[datetime] = Field(
         default=None,

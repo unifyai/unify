@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .base import BaseGuidanceManager
 from .types.guidance import Guidance
-from ..image_manager.types import AnnotatedImageRefs
 from ..common.simulated import (
     maybe_tool_log_scheduled,
     maybe_tool_log_completed,
@@ -84,12 +83,11 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
         *,
         title: Optional[str] = None,
         content: Optional[str] = None,
-        images: Optional[AnnotatedImageRefs] = None,
         function_ids: Optional[List[int]] = None,
     ) -> "ToolOutcome":
-        if not title and not content and not images:
+        if not title and not content:
             raise ValueError(
-                "At least one field (title/content/images) must be provided.",
+                "At least one field (title/content) must be provided.",
             )
         gid = self._next_id
         self._next_id += 1
@@ -97,7 +95,6 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
             guidance_id=gid,
             title=title or "",
             content=content or "",
-            images=images or AnnotatedImageRefs.model_validate([]),
             function_ids=function_ids or [],
         )
         return {
@@ -112,7 +109,6 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
         guidance_id: int,
         title: Optional[str] = None,
         content: Optional[str] = None,
-        images: Optional[AnnotatedImageRefs] = None,
         function_ids: Optional[List[int]] = None,
     ) -> "ToolOutcome":
         existing = self._entries.get(guidance_id)
@@ -125,8 +121,6 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
             updates["title"] = title
         if content is not None:
             updates["content"] = content
-        if images is not None:
-            updates["images"] = images
         if function_ids is not None:
             updates["function_ids"] = function_ids
             updates["stale_reasons"] = [

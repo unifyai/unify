@@ -77,7 +77,7 @@ class TestActContextPropagation:
         try:
             # Create brain action tools and call act directly
             brain_tools = ConversationManagerBrainActionTools(cm)
-            await brain_tools.act(query="test query", requesting_contact_id=1)
+            await brain_tools.act(query="test query")
 
             # Verify context was captured
             assert len(captured_context) == 1, "act() should have been called once"
@@ -126,7 +126,7 @@ class TestActContextPropagation:
 
         try:
             brain_tools = ConversationManagerBrainActionTools(cm)
-            await brain_tools.act(query="test query", requesting_contact_id=1)
+            await brain_tools.act(query="test query")
 
             assert len(captured_context) == 1
             assert (
@@ -152,8 +152,7 @@ class TestActStartedInHistory:
 
         brain_tools = ConversationManagerBrainActionTools(cm)
         await brain_tools.act(
-            query="Find all contacts in New York",
-            requesting_contact_id=1,
+            query="Find every CSV in the workspace",
         )
 
         # Exactly one in-flight action should exist.
@@ -187,12 +186,11 @@ class TestActStartedInHistory:
         brain_tools = ConversationManagerBrainActionTools(cm)
         await brain_tools.act(
             query="Search the web for weather",
-            requesting_contact_id=1,
         )
 
         renderer = Renderer()
         snapshot = renderer.render_state(
-            contact_index=cm.contact_index,
+            cm.chat_history,
             in_flight_actions=cm.in_flight_actions,
         )
         rendered = snapshot.full_render
@@ -230,8 +228,7 @@ class TestActCompletionInHistory:
 
         brain_tools = ConversationManagerBrainActionTools(cm)
         await brain_tools.act(
-            query="Find all contacts in New York",
-            requesting_contact_id=1,
+            query="Find every CSV in the workspace",
         )
 
         assert len(cm.in_flight_actions) == 1
@@ -242,7 +239,7 @@ class TestActCompletionInHistory:
         result_event = ActorResult(
             handle_id=handle_id,
             success=True,
-            result="Found 3 contacts in New York.",
+            result="Found 3 CSV files in the workspace.",
         )
         await EventHandler.handle_event(result_event, cm)
 
@@ -320,9 +317,7 @@ class TestSteeringContextPropagation:
             full_render="<initial>state</initial>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=initial_ts,
                     rendered="[User @ ...]: Hello",
                 ),
@@ -343,16 +338,12 @@ class TestSteeringContextPropagation:
             full_render="<current>state with new message</current>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=initial_ts,
                     rendered="[User @ ...]: Hello",
                 ),
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=1,
+                    index_in_conversation=1,
                     timestamp=new_ts,
                     rendered="[User @ ...]: Please also check the calendar",
                 ),
@@ -441,9 +432,7 @@ class TestSteeringContextPropagation:
             full_render="<state>unchanged</state>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts,
                     rendered="[User @ ...]: Hello",
                 ),
@@ -638,7 +627,6 @@ class TestContextContent:
 
         This tests that context is fresh and includes the current turn.
         """
-        from tests.conversation_manager.conftest import BOSS
         from unify.conversation_manager.events import UnifyMessageReceived
 
         cm_driver = initialized_cm
@@ -658,7 +646,6 @@ class TestContextContent:
             # Send a message with distinctive content
             await cm_driver.step_until_wait(
                 UnifyMessageReceived(
-                    contact=BOSS,
                     content="Please find the XYZZY123 document for me.",
                 ),
             )
@@ -696,7 +683,7 @@ class TestContextContent:
         from unify.conversation_manager.domains.brain import build_brain_spec
 
         snapshot_state = cm.prompt_renderer.render_state(
-            cm.contact_index,
+            cm.chat_history,
             cm.notifications_bar,
             cm.in_flight_actions,
             cm.completed_actions,
@@ -710,9 +697,7 @@ class TestContextContent:
         assert (
             "<in_flight_actions>" in state_content
         ), "Should have in_flight_actions section"
-        assert (
-            "<active_conversations>" in state_content
-        ), "Should have active_conversations section"
+        assert "<conversation>" in state_content, "Should have conversation section"
 
     @pytest.mark.asyncio
     @_handle_project
@@ -726,7 +711,6 @@ class TestContextContent:
 
         This tests that the context is fresh and includes relevant action information.
         """
-        from tests.conversation_manager.conftest import BOSS
         from unify.conversation_manager.events import (
             UnifyMessageReceived,
             ActorHandleStarted,
@@ -739,8 +723,7 @@ class TestContextContent:
         # Step 1: Start an action
         result1 = await cm_driver.step_until_wait(
             UnifyMessageReceived(
-                contact=BOSS,
-                content="Search for all engineering contacts.",
+                content="Search my workspace for the engineering notes.",
             ),
         )
 
@@ -768,8 +751,7 @@ class TestContextContent:
             # Send a message that should trigger interject
             await cm_driver.step_until_wait(
                 UnifyMessageReceived(
-                    contact=BOSS,
-                    content="Also include their phone numbers.",
+                    content="Also include the file sizes.",
                 ),
             )
 
@@ -835,15 +817,9 @@ class TestContextContent:
 </action>
 </in_flight_actions>
 
-<active_conversations>
-<contact contact_id="1" first_name="User">
-<threads>
-<global>
+<conversation>
 [User @ Wednesday, February 04, 2026]: Search for frontend engineer roles instead.
-</global>
-</threads>
-</contact>
-</active_conversations>""",
+</conversation>""",
             "_cm_state_snapshot": True,
         }
         cm._current_state_snapshot = test_snapshot
@@ -864,7 +840,6 @@ class TestContextContent:
             brain_tools = ConversationManagerBrainActionTools(cm)
             await brain_tools.act(
                 query="Search for frontend engineer roles",
-                requesting_contact_id=1,
             )
 
             # Verify context was captured
@@ -894,8 +869,7 @@ class TestContextContent:
 
             # Verify useful context IS preserved (conversation content)
             assert (
-                "frontend engineer" in content.lower()
-                or "<active_conversations>" in content
+                "frontend engineer" in content.lower() or "<conversation>" in content
             ), "Useful conversation context should still be present"
 
         finally:

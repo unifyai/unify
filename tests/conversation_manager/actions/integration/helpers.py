@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeVar
 
-from unify import db
 from tests.conversation_manager.cm_helpers import filter_events_by_type
 from unify.conversation_manager.events import (
     ActorHandleStarted,
@@ -295,7 +294,7 @@ async def inject_actor_result(
     - In these integration tests, we drive CM via `CMStepDriver.step_until_wait()`,
       which patches the event broker and does not always forward background events.
     - Some smoke flows need the CM brain to observe the actor's completion result
-      before it can take the next step (e.g., "find contact → send message").
+      before it can take the next step (e.g., "read file → send summary").
     """
     from unify.conversation_manager.domains.event_handlers import EventHandler
 
@@ -521,83 +520,6 @@ async def answer_clarification_and_continue(
         timeout=timeout,
         poll=0.05,
         timeout_message="Timed out waiting for handle to progress after answering clarification.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Database verification helpers
-# ---------------------------------------------------------------------------
-
-
-def verify_contact_in_db(
-    cm: Any,
-    contact_id: int,
-    expected_fields: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Verify ContactManager has the expected fields for contact_id.
-
-    Note: ContactManager.get_contact_info() returns dict[int, dict], keyed by contact_id.
-    """
-    mgr = cm.cm.contact_manager
-    assert mgr is not None, "ConversationManager has no ContactManager"
-    contact_dict = mgr.get_contact_info(contact_id)
-    contact = (contact_dict or {}).get(contact_id)
-    assert contact is not None, f"Contact {contact_id} not found in ContactManager"
-    for k, v in expected_fields.items():
-        assert (
-            contact.get(k) == v
-        ), f"Contact {contact_id} field {k!r}: expected {v!r}, got {contact.get(k)!r}"
-    return contact
-
-
-def verify_transcript_logged(
-    cm: Any,
-    *,
-    expected_substring: str,
-    contact_id: int | None = None,
-    limit: int = 25,
-) -> dict[str, Any]:
-    """
-    Verify TranscriptManager logged a message containing expected_substring.
-
-    We query the underlying transcripts context directly for robustness.
-    """
-    tm = cm.cm.transcript_manager
-    assert tm is not None, "ConversationManager has no TranscriptManager"
-    ctx = getattr(tm, "_transcripts_ctx", None)
-    assert isinstance(ctx, str) and ctx, "TranscriptManager missing _transcripts_ctx"
-
-    fields = [
-        "message_id",
-        "timestamp",
-        "content",
-        "sender_id",
-        "receiver_ids",
-        "exchange_id",
-    ]
-    logs = db.get_logs(
-        context=ctx,
-        limit=limit,
-        sorting={"timestamp": "descending"},
-        from_fields=fields,
-    )
-    expected_lower = expected_substring.lower()
-    for lg in logs or []:
-        content = str((lg.entries or {}).get("content") or "")
-        if expected_lower in content.lower():
-            if contact_id is None:
-                return dict(lg.entries or {})
-            sender = (lg.entries or {}).get("sender_id")
-            receivers = (lg.entries or {}).get("receiver_ids") or []
-            if int(contact_id) == int(sender) or int(contact_id) in [
-                int(x) for x in receivers
-            ]:
-                return dict(lg.entries or {})
-
-    raise AssertionError(
-        f"Did not find transcript message containing {expected_substring!r} "
-        f"(contact_id={contact_id}) in last {limit} messages.",
     )
 
 

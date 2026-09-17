@@ -1,14 +1,14 @@
 # Unify
 
 The brain of a local AI assistant: a persistent conversation loop above a
-code-writing actor, a back office of state managers, and one SQLite store.
+code-writing actor, two skill libraries, and one SQLite store.
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first for the system design. This file
 covers *how to work on the code*, not *what the code does*.
 
 ## What Unify is
 
-Unify implements an AI assistant's brain as a **back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, `FileManager`, `DataManager`, `IngestionManager`, `ImageManager`, `SecretManager`) through code-first plans, and a `ConversationManager` sits above the actor as the persistent interaction loop. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
+Unify implements an AI assistant's brain as a persistent **conversation loop** above a code-writing **`Actor`**, with two **skill libraries** behind it: `FunctionManager` (stored Python functions, the *what*) and `GuidanceManager` (procedures, the *how*). The actor discovers skills before it writes code, runs plans in a persistent Python sandbox, and a storage review after each run distils what worked back into the libraries. Manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. The skill libraries expose direct CRUD methods as Actor JSON tools (`FunctionManager_*`, `GuidanceManager_*`).
 
 Everything persists in an in-process SQLite store, `unify/db/` (imported as `from unify import db`). There is no backend service, no accounts and no infrastructure: the only external dependency is an LLM provider reached through the sibling `unillm` repo (editable install via `[tool.uv.sources]` in `pyproject.toml`).
 
@@ -44,16 +44,16 @@ Tests run in tmux sessions, each test in its own session against its own SQLite 
 
 ```bash
 # Default — one session per test, max concurrency
-tests/parallel_run.sh tests/contact_manager/
+tests/parallel_run.sh tests/function_manager/
 
 # Specific test
-tests/parallel_run.sh tests/contact_manager/test_ask.py::test_name
+tests/parallel_run.sh tests/function_manager/storage/test_venvs.py::test_name
 
 # Serial mode (one session per file) for large suites
 tests/parallel_run.sh -s tests/
 
 # With timeout
-tests/parallel_run.sh --timeout 300 tests/contact_manager/
+tests/parallel_run.sh --timeout 300 tests/function_manager/
 ```
 
 Each agent (or terminal) gets an **isolated tmux server automatically**, so concurrent agents don't collide.
@@ -118,26 +118,17 @@ The public API of each state manager is defined by the abstract methods on `Base
 - **Tool-specific guidance lives in the tool's own docstring** — never in the prompt builder.
 - **Compositional guidance (when to use tool A vs B, multi-tool patterns) lives in the prompt builder** — never in individual tool docstrings.
 
-### Routing playbook (which manager owns what)
+### Routing playbook (who owns what)
 
-| Concern | Manager / primitive |
+| Concern | Owner |
 |---|---|
-| People, contact records | `primitives.contacts.*` |
-| Conversation history search | `primitives.transcripts.*` |
-| Domain facts, typed knowledge claims | `KnowledgeManager_*` (top-level JSON tools, not primitives) |
-| Files (parse, query) | `primitives.files.*` |
-| Storing new data or files, from any source | `primitives.ingestion.*` (`submit` — there is no `primitives.data.ingest`) |
-| Querying and reshaping stored tables | `primitives.data.*` |
-| Secrets (metadata only via `ask`) | `primitives.secrets.*` |
-| Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
-| Stored functions | `FunctionManager_*` (top-level JSON tools) and `execute_function` |
+| Stored functions (find, run, store) | `FunctionManager_*` JSON tools and `execute_function` |
+| Procedures, how-tos | `GuidanceManager_*` JSON tools |
+| Anything else the request needs | `execute_code` (plain Python in the sandbox) |
+| Parallel or delegated work | `primitives.actor.act` |
 | Live action from chat | `Actor.act` (via ConversationManager) |
 
 Full role descriptions are in [`.agents/rules/state-manager-roles.md`](.agents/rules/state-manager-roles.md).
-
-### Cross-manager images
-
-Images flow between managers **by filesystem path**, not by `image_id`. Receiving managers resolve to persistent storage via `ImageManager.filter_images(filter="filepath == '...'")` when needed. Managers with first-class image fields (e.g. `GuidanceManager`) accept structured `ImageRefs` types at their own API boundary.
 
 ## Additional git constraints
 
@@ -154,17 +145,9 @@ unify/
 │   ├── actor/               # CodeAct Actor, central orchestrator
 │   ├── conversation_manager/ # The persistent interaction loop (slow brain)
 │   ├── db/                  # The local SQLite store and its expression language
-│   ├── contact_manager/     # People + relationships
-│   ├── knowledge_manager/   # Typed claim ledger (facts, policies, …)
-│   ├── transcript_manager/  # Conversation history
 │   ├── guidance_manager/    # Procedures, SOPs
-│   ├── function_manager/    # Stored Python functions + primitives registry
-│   ├── file_manager/        # File parsing and registry
-│   ├── ingestion_manager/   # Checkpointed data and file ingestion
-│   ├── image_manager/       # Image storage and vision queries
-│   ├── secret_manager/      # Encrypted secrets
-│   ├── data_manager/        # Low-level data ops
-│   ├── memory_manager/      # Offline consolidation
+│   ├── function_manager/    # Stored Python functions, venvs, verification
+│   ├── workspace.py         # The assistant's working directory
 │   ├── events/              # Typed event bus
 │   └── common/              # Async tool loop, shared infra
 ├── tests/                   # Pytest suite

@@ -1,16 +1,16 @@
 """
-Tests for execute_code output propagation with state manager primitives.
+Tests for execute_code output propagation across primitive handles.
 
-These tests verify that when execute_code runs code that calls primitives
-(e.g., primitives.contacts.ask) and awaits their results, the stdout and
+These tests verify that when execute_code runs code that calls a primitive
+(``primitives.actor.act``) and awaits the handle's result, the stdout and
 result fields are properly captured and returned to the caller.
 
-This is a critical integration point that is NOT covered by:
-- test_sandbox.py (tests PythonExecutionSession but not primitives)
-- tests/actor/state_managers/* (tests full actor.act() flow where LLM compensates)
+The primitive is a ``StaticActorRunner`` stand-in installed on the
+``ActorEnvironment``'s ``Primitives`` instance, so no LLM is involved: the
+subject is the sandbox's capture of values that come back through a handle.
 
 The bug this catches: execute_code running `print(await handle.result())` but
-returning empty stdout because the nested async tool loop result wasn't captured.
+returning empty stdout because the nested result wasn't captured.
 """
 
 from __future__ import annotations
@@ -20,63 +20,28 @@ from typing import Any, AsyncIterator
 import pytest
 import pytest_asyncio
 
+from tests.actor.code_act.helpers import StaticActorRunner
 from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments.actor import ActorEnvironment
 from unify.actor.execution import ExecutionResult, parts_to_text
-from unify.actor.environments import StateManagerEnvironment
-from unify.function_manager.primitives import Primitives
-from unify.manager_registry import ManagerRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configure all managers to use simulated implementations."""
-    from unify.settings import SETTINGS
-
-    for impl_attr in [
-        "contact",
-        "transcript",
-        "knowledge",
-        "guidance",
-    ]:
-        monkeypatch.setenv(f"UNIFY_{impl_attr.upper()}_IMPL", "simulated")
-        if hasattr(SETTINGS, impl_attr):
-            monkeypatch.setattr(
-                getattr(SETTINGS, impl_attr),
-                "IMPL",
-                "simulated",
-                raising=False,
-            )
-
-    # Enable optional managers
-    for enabled_attr in ["guidance", "knowledge"]:
-        monkeypatch.setenv(f"UNIFY_{enabled_attr.upper()}_ENABLED", "true")
-        if hasattr(SETTINGS, enabled_attr):
-            monkeypatch.setattr(
-                getattr(SETTINGS, enabled_attr),
-                "ENABLED",
-                True,
-                raising=False,
-            )
-
-    ManagerRegistry.clear()
+def _answer_for(request: str) -> str:
+    return f"delegated answer for: {request}"
 
 
 @pytest_asyncio.fixture
-async def actor_with_primitives(
-    configure_simulated_managers,
-) -> AsyncIterator[tuple[CodeActActor, Primitives]]:
-    """Create a CodeActActor with primitives environment for direct execute_code testing."""
-    from unify.function_manager.primitives import PrimitiveScope
-
-    scope = PrimitiveScope(
-        scoped_managers=frozenset({"contacts", "transcripts"}),
-    )
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
+async def actor_with_primitives() -> (
+    AsyncIterator[tuple[CodeActActor, StaticActorRunner]]
+):
+    """A CodeActActor whose ``primitives.actor`` is a static stand-in runner."""
+    env = ActorEnvironment()
+    runner = StaticActorRunner(_answer_for)
+    env.get_instance()._managers["actor"] = runner
     actor = CodeActActor(environments=[env], function_manager=None)
 
     # Strip FunctionManager tools to focus on primitives
@@ -84,20 +49,17 @@ async def actor_with_primitives(
     actor.add_tools("act", {"execute_code": act_tools["execute_code"]})
 
     try:
-        yield actor, primitives
+        yield actor, runner
     finally:
-        try:
-            await actor.close()
-        except Exception:
-            pass
+        await actor.close()
 
 
 @pytest_asyncio.fixture
-async def execute_code_tool(actor_with_primitives) -> tuple[Any, Primitives]:
+async def execute_code_tool(actor_with_primitives) -> tuple[Any, StaticActorRunner]:
     """Get the execute_code tool directly for isolated testing."""
-    actor, primitives = actor_with_primitives
+    actor, runner = actor_with_primitives
     tools = actor.get_tools("act")
-    return tools["execute_code"], primitives
+    return tools["execute_code"], runner
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +95,7 @@ def get_result(out: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Test: Basic stdout capture from primitives.*.ask().result()
+# Test: query_llm structured output inside control flow
 # ---------------------------------------------------------------------------
 
 
@@ -144,7 +106,7 @@ async def test_execute_code_can_branch_on_query_llm_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """execute_code can use typed semantic judgments in symbolic control flow."""
-    execute_code, _primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     async def fake_query_llm(prompt: str, *, response_format=None, **kwargs):
         assert "Classify" in prompt
@@ -181,25 +143,26 @@ decision = await query_llm(
     assert get_result(out) == "queue_reply"
 
 
+# ---------------------------------------------------------------------------
+# Test: Basic stdout capture from primitives.actor.act().result()
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execute_code_captures_stdout_from_primitive_result(
     execute_code_tool,
 ):
     """
-    CRITICAL TEST: Verifies stdout is captured when code prints a primitive result.
+    Verifies stdout is captured when code prints a primitive result.
 
-    This is the exact bug from the CI failure:
-    - Code runs: handle = await primitives.contacts.ask(...); result = await handle.result(); print(result)
-    - Expected: stdout contains the answer from ContactManager.ask
-    - Bug: stdout was empty because result propagation failed
+    - Code runs: handle = await primitives.actor.act(...); result = await handle.result(); print(result)
+    - Expected: stdout contains the answer the handle carried
     """
-    execute_code, primitives = execute_code_tool
+    execute_code, runner = execute_code_tool
 
-    # Use a generic question that doesn't require seeded data
     code = """
-handle = await primitives.contacts.ask("How many contacts are in the system?")
+handle = await primitives.actor.act("How many records are in the system?")
 result = await handle.result()
 print(f"ANSWER: {result}")
 """
@@ -215,20 +178,16 @@ print(f"ANSWER: {result}")
     assert error is None, f"Execution failed: {error}"
 
     stdout_text = get_stdout_text(out)
-
-    # The stdout should contain the answer prefix
-    assert (
-        "ANSWER:" in stdout_text
-    ), f"Expected 'ANSWER:' prefix in stdout, got: {stdout_text!r}"
-    # The actual answer should be present (simulated manager returns something)
-    assert len(stdout_text.strip()) > len(
-        "ANSWER:",
-    ), f"Expected stdout to contain actual result after 'ANSWER:', got: {stdout_text!r}"
+    assert stdout_text.strip() == (
+        "ANSWER: " + _answer_for("How many records are in the system?")
+    ), f"Unexpected stdout: {stdout_text!r}"
+    assert [c["request"] for c in runner.act_calls] == [
+        "How many records are in the system?",
+    ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execute_code_result_field_populated_from_primitive(
     execute_code_tool,
 ):
@@ -240,10 +199,10 @@ async def test_execute_code_result_field_populated_from_primitive(
 
     When code ends with `await handle.result()`, that should be captured.
     """
-    execute_code, primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     code = """
-handle = await primitives.contacts.ask("List all contacts")
+handle = await primitives.actor.act("List all records")
 await handle.result()
 """
 
@@ -256,26 +215,20 @@ await handle.result()
 
     error = get_error(out)
     assert error is None, f"Execution failed: {error}"
-
-    # The result field should contain the primitive's answer
-    result = get_result(out)
-    assert (
-        result is not None
-    ), f"Expected 'result' field to be populated, got None. Full output: {out}"
+    assert get_result(out) == _answer_for("List all records")
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execute_code_captures_stdout_with_multiple_prints(
     execute_code_tool,
 ):
-    """Verifies multiple print statements are all captured in stdout."""
-    execute_code, primitives = execute_code_tool
+    """Verifies multiple print statements are all captured in stdout, in order."""
+    execute_code, _runner = execute_code_tool
 
     code = """
 print("BEFORE")
-handle = await primitives.contacts.ask("How many contacts do we have?")
+handle = await primitives.actor.act("How many records do we have?")
 result = await handle.result()
 print(f"RESULT: {result}")
 print("AFTER")
@@ -291,35 +244,33 @@ print("AFTER")
     error = get_error(out)
     assert error is None, f"Execution failed: {error}"
 
-    stdout_text = get_stdout_text(out)
-
-    assert "BEFORE" in stdout_text, f"Missing 'BEFORE' in stdout: {stdout_text!r}"
-    assert "RESULT:" in stdout_text, f"Missing 'RESULT:' in stdout: {stdout_text!r}"
-    assert "AFTER" in stdout_text, f"Missing 'AFTER' in stdout: {stdout_text!r}"
+    lines = get_stdout_text(out).splitlines()
+    assert lines == [
+        "BEFORE",
+        "RESULT: " + _answer_for("How many records do we have?"),
+        "AFTER",
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Test: Sequential primitive calls
+# Test: Sequential and concurrent primitive calls
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(30)
 async def test_execute_code_sequential_primitive_calls(
     execute_code_tool,
 ):
     """Verifies two sequential primitive calls both have their results captured."""
-    execute_code, primitives = execute_code_tool
+    execute_code, runner = execute_code_tool
 
     code = """
-# First call
-h1 = await primitives.contacts.ask("How many contacts exist?")
+h1 = await primitives.actor.act("How many records exist?")
 r1 = await h1.result()
 print(f"FIRST: {r1}")
 
-# Second call
-h2 = await primitives.contacts.ask("List all contact names")
+h2 = await primitives.actor.act("List all record names")
 r2 = await h2.result()
 print(f"SECOND: {r2}")
 """
@@ -335,30 +286,27 @@ print(f"SECOND: {r2}")
     assert error is None, f"Execution failed: {error}"
 
     stdout_text = get_stdout_text(out)
-
-    assert "FIRST:" in stdout_text, f"Missing first result in stdout: {stdout_text!r}"
-    assert "SECOND:" in stdout_text, f"Missing second result in stdout: {stdout_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# Test: Concurrent primitive calls
-# ---------------------------------------------------------------------------
+    assert "FIRST: " + _answer_for("How many records exist?") in stdout_text
+    assert "SECOND: " + _answer_for("List all record names") in stdout_text
+    assert [c["request"] for c in runner.act_calls] == [
+        "How many records exist?",
+        "List all record names",
+    ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(30)
 async def test_execute_code_concurrent_primitive_calls(
     execute_code_tool,
 ):
     """Verifies concurrent primitive calls via asyncio.gather work correctly."""
-    execute_code, primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     code = """
 import asyncio
 
-h1 = await primitives.contacts.ask("Question 1: How many contacts?")
-h2 = await primitives.contacts.ask("Question 2: List contact names")
+h1 = await primitives.actor.act("Question 1: How many records?")
+h2 = await primitives.actor.act("Question 2: List record names")
 
 # Wait for both concurrently
 r1, r2 = await asyncio.gather(h1.result(), h2.result())
@@ -378,86 +326,8 @@ print(f"RESULT2: {r2}")
     assert error is None, f"Execution failed: {error}"
 
     stdout_text = get_stdout_text(out)
-
-    assert "RESULT1:" in stdout_text, f"Missing RESULT1 in stdout: {stdout_text!r}"
-    assert "RESULT2:" in stdout_text, f"Missing RESULT2 in stdout: {stdout_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# Test: Different state managers
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
-async def test_execute_code_transcripts_manager_output(
-    execute_code_tool,
-):
-    """Verifies stdout capture works with TranscriptManager primitives."""
-    execute_code, primitives = execute_code_tool
-
-    code = """
-handle = await primitives.transcripts.ask("What conversations happened today?")
-result = await handle.result()
-print(f"TRANSCRIPTS: {result}")
-"""
-
-    out = await execute_code(
-        "test transcripts manager",
-        code,
-        language="python",
-        state_mode="stateless",
-    )
-
-    error = get_error(out)
-    assert error is None, f"Execution failed: {error}"
-
-    stdout_text = get_stdout_text(out)
-
-    assert (
-        "TRANSCRIPTS:" in stdout_text
-    ), f"Missing 'TRANSCRIPTS:' in stdout: {stdout_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# Test: Return value vs print
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
-async def test_execute_code_return_value_captured(
-    execute_code_tool,
-):
-    """
-    Verifies that when code returns a value (last expression), it's captured in 'result'.
-
-    This tests the alternative pattern where code doesn't print but returns the value.
-    """
-    execute_code, primitives = execute_code_tool
-
-    code = """
-handle = await primitives.contacts.ask("List contacts")
-await handle.result()  # This is the last expression, should be captured as result
-"""
-
-    out = await execute_code(
-        "test return value",
-        code,
-        language="python",
-        state_mode="stateless",
-    )
-
-    error = get_error(out)
-    assert error is None, f"Execution failed: {error}"
-
-    # The result field should capture the last expression's value
-    result = get_result(out)
-    assert (
-        result is not None
-    ), f"Expected 'result' to capture last expression value, got None"
+    assert "RESULT1: " + _answer_for("Question 1: How many records?") in stdout_text
+    assert "RESULT2: " + _answer_for("Question 2: List record names") in stdout_text
 
 
 # ---------------------------------------------------------------------------
@@ -466,17 +336,17 @@ await handle.result()  # This is the last expression, should be captured as resu
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execute_code_primitive_error_propagates(
     execute_code_tool,
 ):
-    """Verifies that errors from primitive calls are properly captured."""
-    execute_code, primitives = execute_code_tool
+    """Verifies that errors from primitive access are properly captured."""
+    execute_code, _runner = execute_code_tool
 
-    # This code intentionally accesses a non-existent manager attribute
+    # This code intentionally accesses a non-existent primitive namespace
     code = """
 try:
-    handle = await primitives.nonexistent_manager.ask("test")
+    handle = await primitives.nonexistent_manager.act("test")
     result = await handle.result()
     print(f"RESULT: {result}")
 except AttributeError as e:
@@ -501,16 +371,16 @@ except AttributeError as e:
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execute_code_unhandled_error_captured(
     execute_code_tool,
 ):
     """Verifies unhandled exceptions are captured in the error field."""
-    execute_code, primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     code = """
 # This will raise an AttributeError
-handle = await primitives.nonexistent_manager.ask("test")
+handle = await primitives.nonexistent_manager.act("test")
 """
 
     out = await execute_code(
@@ -524,35 +394,33 @@ handle = await primitives.nonexistent_manager.ask("test")
     error = get_error(out)
     assert (
         error is not None
-    ), f"Expected error to be captured for invalid primitive access"
+    ), "Expected error to be captured for invalid primitive access"
     assert "AttributeError" in str(
         error,
     ), f"Expected AttributeError in error field: {error}"
 
 
 # ---------------------------------------------------------------------------
-# Test: Stdout isolation (inner loop stdout shouldn't leak)
+# Test: Stdout isolation (only the cell's own prints reach stdout)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
-async def test_execute_code_stdout_isolation_from_inner_loops(
+@pytest.mark.timeout(30)
+async def test_execute_code_stdout_isolation_from_primitive_calls(
     execute_code_tool,
 ):
     """
-    Verifies that stdout from inner async tool loops doesn't leak to outer sandbox.
+    Verifies that only explicit print() calls in the cell reach stdout.
 
-    When primitives.contacts.ask runs, it has its own async tool loop that may
-    produce internal logging or output. This should NOT appear in the sandbox's
-    stdout - only explicit print() calls in the user code should.
+    Awaiting a primitive handle must not inject anything of its own into the
+    sandbox's captured output.
     """
-    execute_code, primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     code = """
 print("START")
-handle = await primitives.contacts.ask("List contacts")
+handle = await primitives.actor.act("List records")
 result = await handle.result()
 print("END")
 """
@@ -567,25 +435,7 @@ print("END")
     error = get_error(out)
     assert error is None, f"Execution failed: {error}"
 
-    stdout_text = get_stdout_text(out)
-
-    # Should have START and END
-    assert "START" in stdout_text, f"Missing 'START' in stdout: {stdout_text!r}"
-    assert "END" in stdout_text, f"Missing 'END' in stdout: {stdout_text!r}"
-
-    # Should NOT have internal async tool loop artifacts like tool call IDs,
-    # LLM thinking, or internal logging markers
-    internal_markers = [
-        "toolu_",  # Anthropic tool call IDs
-        "call_",  # OpenAI tool call IDs
-        "[Tool",  # Internal logging
-        "🔧",  # Internal emoji markers
-        "🛠️",
-    ]
-    for marker in internal_markers:
-        assert (
-            marker not in stdout_text
-        ), f"Found internal marker '{marker}' in stdout - inner loop leaking: {stdout_text!r}"
+    assert get_stdout_text(out).splitlines() == ["START", "END"]
 
 
 # ---------------------------------------------------------------------------
@@ -594,19 +444,18 @@ print("END")
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execute_code_stateful_session_with_primitives(
     execute_code_tool,
 ):
     """Verifies stateful sessions maintain access to primitives across calls."""
-    execute_code, primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     # First call: store result in a variable
     out1 = await execute_code(
         "first call",
         """
-handle = await primitives.contacts.ask("How many contacts?")
+handle = await primitives.actor.act("How many records?")
 stored_result = await handle.result()
 print(f"STORED: {stored_result}")
 """,
@@ -632,11 +481,9 @@ print(f"RETRIEVED: {stored_result}")
     error2 = get_error(out2)
     assert error2 is None, f"Second call failed: {error2}"
 
-    stdout_text = get_stdout_text(out2)
-
-    assert (
-        "RETRIEVED:" in stdout_text
-    ), f"Missing 'RETRIEVED:' in second call stdout: {stdout_text!r}"
+    assert get_stdout_text(out2).strip() == (
+        "RETRIEVED: " + _answer_for("How many records?")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -645,8 +492,7 @@ print(f"RETRIEVED: {stored_result}")
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 async def test_execution_result_includes_stdout_in_llm_content(
     execute_code_tool,
 ):
@@ -655,10 +501,10 @@ async def test_execution_result_includes_stdout_in_llm_content(
 
     This is critical for the outer LLM to see the primitive results.
     """
-    execute_code, primitives = execute_code_tool
+    execute_code, _runner = execute_code_tool
 
     code = """
-handle = await primitives.contacts.ask("List contacts")
+handle = await primitives.actor.act("List records")
 result = await handle.result()
 print(f"ANSWER: {result}")
 """
@@ -673,25 +519,7 @@ print(f"ANSWER: {result}")
     error = get_error(out)
     assert error is None, f"Execution failed: {error}"
 
-    # If out is already an ExecutionResult, use it directly
-    # Otherwise wrap it
-    if isinstance(out, ExecutionResult):
-        exec_result = out
-    elif isinstance(out, dict):
-        stdout = out.get("stdout", [])
-        if isinstance(stdout, list):
-            exec_result = ExecutionResult(**out)
-        else:
-            pytest.skip("Output not in expected format for ExecutionResult test")
-            return
-    else:
-        # Try to use it directly if it has to_llm_content
-        if hasattr(out, "to_llm_content"):
-            exec_result = out
-        else:
-            pytest.skip("Output not in expected format for ExecutionResult test")
-            return
-
+    exec_result = out if isinstance(out, ExecutionResult) else ExecutionResult(**out)
     llm_content = exec_result.to_llm_content()
 
     # Should have content blocks
@@ -704,88 +532,5 @@ print(f"ANSWER: {result}")
     )
 
     assert (
-        "ANSWER:" in all_text
-    ), f"Expected 'ANSWER:' in LLM content, got: {all_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# Test: Handle result contains actual primitive answer
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
-async def test_primitive_handle_result_contains_answer(
-    actor_with_primitives,
-):
-    """
-    Direct test that primitive handles return actual answers, not None.
-
-    This bypasses execute_code entirely to verify the primitives work correctly.
-    If this passes but execute_code tests fail, the bug is in execute_code.
-    """
-    actor, primitives = actor_with_primitives
-
-    # Use a generic question that doesn't require seeded data
-    # Call primitive directly (not through execute_code)
-    handle = await primitives.contacts.ask("How many contacts are in the system?")
-    result = await handle.result()
-
-    # The result should be a non-empty string
-    assert result is not None, "Primitive handle.result() returned None"
-    assert isinstance(result, str), f"Expected string, got {type(result)}"
-    assert len(result) > 0, "Primitive handle.result() returned empty string"
-
-
-# ---------------------------------------------------------------------------
-# Test: Verify the exact bug scenario from CI failure
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@pytest.mark.timeout(120)
-async def test_exact_ci_failure_scenario(
-    execute_code_tool,
-):
-    """
-    Reproduces the exact scenario from the CI failure:
-    test_contact_lookup_by_email_returns_phone
-
-    The test expected Alice's phone number (15555552222) but got a hallucinated
-    number (5551234567) because execute_code didn't propagate the actual result.
-    """
-    execute_code, primitives = execute_code_tool
-
-    # The exact code pattern from the CI failure (using generic question since
-    # we can't seed contacts in async context without special handling)
-    code = """
-handle = await primitives.contacts.ask(
-    "How many contacts are in the system? Please provide a count."
-)
-result = await handle.result()
-print(result)
-"""
-
-    out = await execute_code(
-        "CI failure reproduction",
-        code,
-        language="python",
-        state_mode="stateless",
-    )
-
-    error = get_error(out)
-    assert error is None, f"Execution failed: {error}"
-
-    stdout_text = get_stdout_text(out)
-
-    # The stdout should contain SOMETHING (not be empty)
-    assert (
-        stdout_text.strip()
-    ), f"stdout is empty - this is the bug! Expected primitive result, got nothing."
-
-    # Note: We can't assert the exact content because simulated managers
-    # may return different data. But stdout should NOT be empty.
-    # If this test passes with non-empty stdout, the basic propagation works.
-    # The CI failure happened because stdout was empty and the LLM hallucinated.
+        "ANSWER: " + _answer_for("List records") in all_text
+    ), f"Expected the answer in LLM content, got: {all_text!r}"

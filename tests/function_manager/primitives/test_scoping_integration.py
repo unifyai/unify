@@ -2,30 +2,29 @@
 Integration tests for PrimitiveScope across all system layers.
 
 These tests verify that the scoping mechanism works consistently at ALL levels:
-- Prompts (prompt_context)
-- Tool list (tool_names, get_tools)
-- Semantic search results (search_functions filtering)
-- Primitives syncing (per-manager hash tracking, batched sync)
-- Sandbox runtime vars (StateManagerEnvironment)
+- Tool list (tool_names, ActorEnvironment.get_tools)
+- Catalogue reads and semantic search (FunctionManager)
+- Primitives syncing (collect_primitives, per-manager hash tracking)
+- Sandbox runtime vars (Primitives, ActorEnvironment)
 
 This ensures the single source of truth (PrimitiveScope) controls what the model sees.
 """
-
-import os
 
 import pytest
 
 from unify.function_manager.primitives import (
     PrimitiveScope,
+    Primitives,
     get_registry,
-    VALID_MANAGER_ALIASES,
 )
 from unify.function_manager.primitives.registry import get_primitive_sources
 from unify.function_manager.function_manager import FunctionManager
-from unify.actor.environments.state_managers import StateManagerEnvironment
-from unify.function_manager.primitives import Primitives
+from unify.actor.environments import ActorEnvironment
 from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
+
+_ACTOR_ACT = "primitives.actor.act"
+_ACTOR_CLASS_PATH = "unify.actor.environments.actor._ActorRunner"
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -36,13 +35,8 @@ from tests.helpers import _handle_project
 def scoped_function_manager_factory():
     """Factory that creates FunctionManager with specific scope."""
     managers = []
-    previous_impl = os.environ.get("UNIFY_FUNCTION_IMPL")
-    previous_base_context = getattr(ContextRegistry, "_base_context", None)
-    os.environ["UNIFY_FUNCTION_IMPL"] = "simulated"
-    ContextRegistry.set_base_context("UnityTests/PrimitiveScope")
 
     def _create(scope: PrimitiveScope):
-        ContextRegistry.set_base_context("UnityTests/PrimitiveScope")
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
         ContextRegistry.forget(FunctionManager, "Functions/Primitives")
@@ -58,223 +52,112 @@ def scoped_function_manager_factory():
             fm.clear()
         except Exception:
             pass
-    if previous_impl is None:
-        os.environ.pop("UNIFY_FUNCTION_IMPL", None)
-    else:
-        os.environ["UNIFY_FUNCTION_IMPL"] = previous_impl
-    ContextRegistry.clear()
-    if previous_base_context:
-        ContextRegistry.set_base_context(previous_base_context)
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 1. Prompt Context Scoping
+# 1. Tool List Scoping
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_prompt_context_only_includes_scoped_managers():
-    """prompt_context() must NOT mention unscoped managers."""
-    registry = get_registry()
-    scope = PrimitiveScope(scoped_managers=frozenset({"files"}))
-    context = registry.prompt_context(scope)
-
-    # Should include files
-    assert "primitives.files" in context
-
-    # Should NOT include any other managers
-    for alias in VALID_MANAGER_ALIASES - {"files"}:
-        assert (
-            f"primitives.{alias}" not in context
-        ), f"Unscoped manager '{alias}' should not appear in prompt context"
+def test_actor_env_get_tools_exposes_actor_primitives():
+    """ActorEnvironment.get_tools() exposes exactly the actor primitives."""
+    env = ActorEnvironment()
+    assert set(env.get_tools()) == {_ACTOR_ACT}
+    assert env.get_instance().primitive_scope == PrimitiveScope.single("actor")
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# 2. Tool List Scoping
-# ────────────────────────────────────────────────────────────────────────────
+def test_actor_env_allowed_methods_filters_tools_and_prompt():
+    """allowed_methods narrows both get_tools() and get_prompt_context()."""
+    kept = ActorEnvironment(allowed_methods={_ACTOR_ACT})
+    assert kept.allowed_methods == frozenset({_ACTOR_ACT})
+    assert set(kept.get_tools()) == {_ACTOR_ACT}
+    kept_context = kept.get_prompt_context()
+    assert "#### `primitives.actor`" in kept_context
+    assert "**`.act(" in kept_context
 
+    dropped = ActorEnvironment(allowed_methods={"primitives.actor.nonexistent"})
+    assert dropped.get_tools() == {}
+    assert "**`.act(" not in dropped.get_prompt_context()
 
-def test_tool_names_strictly_scoped():
-    """tool_names() must return ONLY tools for scoped managers."""
-    registry = get_registry()
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "data"}))
-    names = registry.tool_names(scope)
-
-    for name in names:
-        # Must start with primitives.files. or primitives.data.
-        valid_prefixes = ["primitives.files.", "primitives.data."]
-        assert any(
-            name.startswith(p) for p in valid_prefixes
-        ), f"Tool '{name}' should not be exposed for scope {scope.scoped_managers}"
-
-
-def test_state_manager_env_get_tools_respects_scope():
-    """StateManagerEnvironment.get_tools() must respect primitive_scope."""
-    scope = PrimitiveScope.single("files")
-    env = StateManagerEnvironment(Primitives(primitive_scope=scope))
-    tools = env.get_tools()
-
-    for tool_name in tools:
-        assert tool_name.startswith(
-            "primitives.files.",
-        ), f"Tool '{tool_name}' should not be exposed for files-only scope"
-
-
-def test_state_manager_env_excludes_actor_primitives():
-    """StateManagerEnvironment respects the scope it is given.
-
-    When the scope excludes actor, no actor primitives appear.
-    When the scope includes actor, they flow through like any other manager.
-    """
-    # Scope without actor → no actor primitives.
-    sm_only = frozenset(VALID_MANAGER_ALIASES - {"actor"})
-    scope = PrimitiveScope(scoped_managers=sm_only)
-    env = StateManagerEnvironment(Primitives(primitive_scope=scope))
-    tools = env.get_tools()
-
-    for tool_name in tools:
-        assert not tool_name.startswith(
-            "primitives.actor",
-        ), "ActorPrimitives should not appear when excluded from scope"
-
-    # Scope with actor → actor primitives included.
-    full_scope = PrimitiveScope.all_managers()
-    full_env = StateManagerEnvironment(Primitives(primitive_scope=full_scope))
-    full_tools = full_env.get_tools()
-    actor_tools = [t for t in full_tools if t.startswith("primitives.actor")]
-    assert len(actor_tools) > 0, "Actor primitives should appear when in scope"
+    unfiltered = ActorEnvironment()
+    assert unfiltered.allowed_methods is None
+    assert "**`primitives.actor.act(" in unfiltered.get_prompt_context()
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 3. Semantic Search Scoping
-# ────────────────────────────────────────────────────────────────────────────
-
-
-@_handle_project
-def test_search_functions_respects_scope(scoped_function_manager_factory):
-    """search_functions() should only return primitives for scoped managers."""
-    scope = PrimitiveScope.single("files")
-    fm = scoped_function_manager_factory(scope)
-
-    # Search for something generic
-    results = fm.search_functions(query="data operations", n=20)
-
-    # All primitive results should be from files manager
-    for r in results:
-        if r.get("is_primitive"):
-            assert "FileManager" in r.get(
-                "primitive_class",
-                "",
-            ), f"Primitive {r.get('name')} should be from FileManager for files-only scope"
-
-
-@_handle_project
-def test_list_primitives_respects_scope(scoped_function_manager_factory):
-    """list_primitives() should only return primitives for scoped managers."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
-    fm = scoped_function_manager_factory(scope)
-
-    primitives = fm.list_primitives()
-
-    # All primitives should be from files or contacts
-    for name, data in primitives.items():
-        primitive_class = data.get("primitive_class", "")
-        assert (
-            "FileManager" in primitive_class or "ContactManager" in primitive_class
-        ), f"Primitive {name} should be from FileManager or ContactManager"
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 4. Catalogue Read Scoping
+# 2. Catalogue Read and Semantic Search Scoping
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
 def test_catalog_reads_only_scoped_managers(scoped_function_manager_factory):
-    """Catalogue reads should be filtered to scoped managers."""
-    # Create FM with files-only scope
-    scope = PrimitiveScope.single("files")
-    fm = scoped_function_manager_factory(scope)
+    """Catalogue reads are filtered to the scoped primitive classes."""
+    fm = scoped_function_manager_factory(PrimitiveScope.single("actor"))
 
     primitives = fm.list_primitives()
 
-    # Should only see FileManager primitives despite the catalogue holding all
-    assert len(primitives) > 0, "Should read some primitives from the catalogue"
-    for name, data in primitives.items():
-        assert "FileManager" in data.get(
-            "primitive_class",
-            "",
-        ), f"Primitive {name} should be from FileManager"
+    assert set(primitives) == {_ACTOR_ACT}
+    assert primitives[_ACTOR_ACT]["primitive_class"] == _ACTOR_CLASS_PATH
+
+
+@_handle_project
+def test_search_functions_respects_scope(scoped_function_manager_factory):
+    """search_functions() only returns primitives for scoped classes."""
+    fm = scoped_function_manager_factory(PrimitiveScope.single("actor"))
+
+    results = fm.search_functions(query="delegate work to a sub-actor", n=20)
+
+    primitive_hits = [r for r in results if r.get("is_primitive")]
+    assert primitive_hits, "the scoped primitive should be searchable"
+    for r in primitive_hits:
+        assert r["primitive_class"] == _ACTOR_CLASS_PATH
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 5. Sandbox Runtime Scoping
+# 3. Sandbox Runtime Scoping
 # ────────────────────────────────────────────────────────────────────────────
 
 
 def test_primitives_instance_respects_scope():
-    """Primitives instance should only expose scoped managers."""
-    from unify.function_manager.primitives import Primitives
-
-    scope = PrimitiveScope.single("files")
+    """Primitives instance only exposes aliases in its scope."""
+    scope = PrimitiveScope.single("actor")
     primitives = Primitives(primitive_scope=scope)
 
-    assert primitives.primitive_scope.scoped_managers == frozenset({"files"})
+    assert primitives.primitive_scope.scoped_managers == frozenset({"actor"})
+    assert primitives.actor.__class__.__name__ == "_ActorRunner"
+    assert primitives.actor is primitives.actor, "namespace objects are cached"
 
     with pytest.raises(AttributeError):
-        _ = primitives.contacts
+        _ = primitives.files
 
 
-def test_state_manager_env_get_prompt_context_respects_scope():
-    """StateManagerEnvironment.get_prompt_context() must respect scope."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
-    env = StateManagerEnvironment(Primitives(primitive_scope=scope))
-    context = env.get_prompt_context()
+def test_primitives_default_scope_is_runtime_scope():
+    """Primitives() without an explicit scope uses the default runtime scope."""
+    from unify.function_manager.primitives import default_runtime_scope
 
-    # Scoped managers appear in the routing overview
-    assert "→ `primitives.files`" in context
-    assert "→ `primitives.contacts`" in context
-
-    # No method docs are inlined for any manager — discovery goes through
-    # FunctionManager search + runtime introspection, taught by the base
-    # prompt's Sandbox Environment section, not per-environment.
-    assert "### Method Discovery & Introspection" not in context
-    assert "#### `primitives.contacts`" not in context
-    assert "#### `primitives.files`" not in context
-
-    # Unscoped managers do not appear in the routing overview
-    assert "→ `primitives.secrets`" not in context
-    assert "#### `primitives.secrets`" not in context
+    assert Primitives().primitive_scope is default_runtime_scope()
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 6. Cross-Layer Consistency
+# 4. Cross-Layer Consistency
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_scope_consistency_across_layers():
-    """All layers should expose the same set of managers for a given scope."""
+@_handle_project
+def test_scope_consistency_across_layers(scoped_function_manager_factory):
+    """Every layer exposes the same tool names for a given scope."""
     registry = get_registry()
-    scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
+    scope = PrimitiveScope.single("actor")
 
-    # Get managers from each layer
-    tool_names_managers = {name.split(".")[1] for name in registry.tool_names(scope)}
+    registry_names = set(registry.tool_names(scope))
+    collected_names = set(registry.collect_primitives(scope))
+    env_names = set(ActorEnvironment().get_tools())
+    catalog_names = set(scoped_function_manager_factory(scope).list_primitives())
 
-    env = StateManagerEnvironment(Primitives(primitive_scope=scope))
-    env_tools_managers = {name.split(".")[1] for name in env.get_tools().keys()}
-
-    prompt_context = registry.prompt_context(scope)
-    # Extract managers mentioned in prompt
-    context_managers = {
-        alias
-        for alias in VALID_MANAGER_ALIASES
-        if f"primitives.{alias}" in prompt_context
-    }
-
-    # All layers should expose exactly the scoped managers
-    expected = {"files", "contacts"}
-    assert tool_names_managers == expected, f"tool_names exposed {tool_names_managers}"
-    assert env_tools_managers == expected, f"env.get_tools exposed {env_tools_managers}"
-    assert context_managers == expected, f"prompt_context mentioned {context_managers}"
+    assert registry_names == {_ACTOR_ACT}
+    assert collected_names == registry_names
+    assert env_names == registry_names
+    assert catalog_names == registry_names
 
 
 def test_primitive_discovery_complete():
@@ -283,9 +166,8 @@ def test_primitive_discovery_complete():
     scope = PrimitiveScope.all_managers()
     collected = registry.collect_primitives(scope)
 
-    # Verify against get_primitive_sources.
-    # Build a lookup by (class_name_suffix, method) since names are now
-    # in ``primitives.{alias}.{method}`` format.
+    # Verify against get_primitive_sources, keyed by (class name, method)
+    # since names are in ``primitives.{alias}.{method}`` format.
     method_to_name = {
         (row["primitive_class"].rsplit(".", 1)[-1], row["primitive_method"]): name
         for name, row in collected.items()

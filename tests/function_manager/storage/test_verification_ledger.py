@@ -62,16 +62,9 @@ def test_every_primitive_has_an_explicit_effect_class():
 # ────────────────────────────────────────────────────────────────────────────
 
 _PURE = "def add(a: int, b: int) -> int:\n    return a + b\n"
-_READ = (
-    "async def lookup(q: str) -> str:\n    return await primitives.contacts.ask(q)\n"
-)
 _SEND = (
     "async def notify(to: str, body: str) -> None:\n"
-    "    await primitives.contacts.update(f'note for {to}: {body}')\n"
-)
-_UPSERT = (
-    "async def save(rows: list) -> None:\n"
-    "    await primitives.data.update_rows('T', rows)\n"
+    "    await primitives.actor.act(f'Tell {to}: {body}')\n"
 )
 _THIRD_PARTY_HTTP = (
     "def fetch(url: str):\n    import requests\n    return requests.get(url)\n"
@@ -89,9 +82,7 @@ _CALLS_DEP = "def outer(x):\n    return inner(x)\n"
     "source, expected_class, expected_source",
     [
         (_PURE, SideEffectClass.safe_noop, "pure"),
-        (_READ, SideEffectClass.read_only, "primitives"),
         (_SEND, SideEffectClass.unsafe_effectful, "primitives"),
-        (_UPSERT, SideEffectClass.idempotent_effectful, "primitives"),
         (_THIRD_PARTY_HTTP, SideEffectClass.unsafe_effectful, "inferred_third_party"),
         (_THIRD_PARTY_PURE, SideEffectClass.safe_noop, "pure"),
         (_THIRD_PARTY_OTHER, SideEffectClass.read_only, "inferred_third_party"),
@@ -512,7 +503,7 @@ def test_overwrite_reclassifies_and_keeps_policy():
     fm.add_functions(
         implementations=(
             "async def add(a: int, b: int) -> int:\n"
-            "    await primitives.contacts.update('rename x to y')\n"
+            "    await primitives.actor.act('rename x to y')\n"
             "    return a + b\n"
         ),
         overwrite=True,
@@ -526,8 +517,8 @@ def test_overwrite_reclassifies_and_keeps_policy():
 @_handle_project
 def test_librarian_confirmation_survives_overwrite_only_within_bounds():
     fm = FunctionManager()
-    fm.add_functions(implementations=_READ)
-    fid = fm._get_function_data_by_name(name="lookup")["function_id"]
+    fm.add_functions(implementations=_PURE)
+    fid = fm._get_function_data_by_name(name="add")["function_id"]
     fm._persist_verification_fields(
         function_id=fid,
         fields={
@@ -538,23 +529,23 @@ def test_librarian_confirmation_survives_overwrite_only_within_bounds():
     )
     # Same detected bound: the confirmation stands.
     fm.add_functions(
-        implementations=_READ.replace("ask(q)", "ask(q + '?')"),
+        implementations=_PURE.replace("a + b", "b + a"),
         overwrite=True,
     )
-    row = fm._get_function_data_by_name(name="lookup")
+    row = fm._get_function_data_by_name(name="add")
     assert row["side_effect_class"] == "idempotent_effectful"
     assert row["class_source"] == "librarian"
     assert row["class_rationale"] == "writes a cache"
     # Detected bound rises above the confirmation: detection wins.
     fm.add_functions(
         implementations=(
-            "async def lookup(q: str) -> str:\n"
-            "    await primitives.contacts.update(q)\n"
-            "    return q\n"
+            "async def add(a: int, b: int) -> int:\n"
+            "    await primitives.actor.act(f'add {a} and {b}')\n"
+            "    return a + b\n"
         ),
         overwrite=True,
     )
-    row = fm._get_function_data_by_name(name="lookup")
+    row = fm._get_function_data_by_name(name="add")
     assert row["side_effect_class"] == "unsafe_effectful"
     assert row["class_source"] == "primitives"
     assert row["class_rationale"] is None

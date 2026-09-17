@@ -22,7 +22,7 @@ import pytest
 
 from tests.helpers import _handle_project
 from unify.events.event_bus import Event, EventBus
-from unify.transcript_manager.types.message import Message
+from unify.events.types.comms import CommsPayload
 
 
 async def _arm(bus: EventBus) -> None:
@@ -31,9 +31,9 @@ async def _arm(bus: EventBus) -> None:
 
 def _make_event() -> Event:
     return Event(
-        type="Message",
+        type="Comms",
         timestamp=dt.datetime.now(dt.UTC).isoformat(),
-        payload=Message.model_construct(),
+        payload=CommsPayload(),
     )
 
 
@@ -111,7 +111,6 @@ async def test_comms_row_lands_in_store_after_flush():
 
     bus = EventBus()
     ev = UnifyMessageReceived(
-        contact={"contact_id": 2, "first_name": "Alice", "surname": "Smith"},
         content="persist probe",
     ).to_bus_event()
 

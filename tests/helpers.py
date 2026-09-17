@@ -6,10 +6,8 @@ import time
 import os
 from os import sep
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, List
+from typing import Any, Callable, List
 
-if TYPE_CHECKING:
-    from unify.contact_manager.contact_manager import ContactManager
 from unify.events.event_bus import EVENT_BUS
 from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
@@ -420,135 +418,6 @@ async def capture_events(
 # - rebuild_id_mapping: Reconstructs local state from existing shared data
 # - is_scenario_seeded: Checks if scenario data already exists
 # --------------------------------------------------------------------------
-
-
-def get_or_create_contact(
-    cm: "ContactManager",
-    *,
-    email_address: str,
-    **fields,
-) -> int:
-    """
-    Idempotent contact creation - handles parallel race conditions.
-
-    Strategy: Check first (fast path), then try create. If creation fails
-    due to unique constraint (another process won the race), query again.
-    This is race-safe because the unique constraint is enforced by the DB.
-
-    Args:
-        cm: ContactManager instance to use
-        email_address: Unique email for the contact (used for deduplication)
-        **fields: Additional contact fields (first_name, surname, etc.)
-
-    Returns:
-        The contact_id (either existing or newly created)
-
-    Raises:
-        Exception: If creation fails for reasons other than unique constraint
-    """
-    # Fast path: check if it already exists
-    existing = cm.filter_contacts(
-        filter=f"email_address == '{email_address}'",
-    )["contacts"]
-    if existing:
-        return existing[0].contact_id
-
-    # Try to create
-    try:
-        from unify.contact_manager.ops import partition_create_kwargs
-
-        result = cm._create_contact(
-            email_address=email_address,
-            **partition_create_kwargs(fields),
-        )
-        return result["details"]["contact_id"]
-    except (ValueError, Exception) as e:
-        # Unique constraint violation - another process won the race
-        err_str = str(e).lower()
-        if "unique" in err_str or "already exists" in err_str:
-            existing = cm.filter_contacts(
-                filter=f"email_address == '{email_address}'",
-            )["contacts"]
-            if existing:
-                return existing[0].contact_id
-        raise
-
-
-def rebuild_id_mapping(
-    cm: "ContactManager",
-    contact_defs: list[dict],
-) -> dict[str, int]:
-    """
-    Rebuild first_name -> contact_id mapping from existing contacts.
-
-    Used by processes that find the scenario already seeded and need to
-    reconstruct consistent ID mappings to work with the shared data.
-
-    Args:
-        cm: ContactManager instance to query
-        contact_defs: List of contact definitions (dicts with email_address, first_name)
-
-    Returns:
-        Dict mapping lowercase first_name to contact_id
-    """
-    id_by_name: dict[str, int] = {}
-    for c in contact_defs:
-        email = c.get("email_address")
-        first_name = c.get("first_name", "").lower()
-        if email and first_name:
-            existing = cm.filter_contacts(
-                filter=f"email_address == '{email}'",
-            )["contacts"]
-            if existing:
-                id_by_name[first_name] = existing[0].contact_id
-    return id_by_name
-
-
-def is_scenario_seeded(
-    cm: "ContactManager",
-    contact_defs: list[dict],
-    transcript_context: str | None = None,
-) -> bool:
-    """
-    Check if scenario data already exists (seeded by another process).
-
-    Checks both contacts AND transcripts (if specified) to avoid race conditions
-    where contacts are created but transcript seeding is still in progress.
-
-    Args:
-        cm: ContactManager instance to query
-        contact_defs: List of contact definitions to check
-        transcript_context: Optional transcript context path to check for logs
-
-    Returns:
-        True if scenario appears to be seeded (contacts AND transcripts exist)
-    """
-    # Check for contacts
-    contacts_exist = False
-    for c in contact_defs:
-        email = c.get("email_address")
-        if email:
-            existing = cm.filter_contacts(
-                filter=f"email_address == '{email}'",
-            )["contacts"]
-            if existing:
-                contacts_exist = True
-                break
-
-    if not contacts_exist:
-        return False
-
-    # If no transcript context specified, just check contacts
-    if not transcript_context:
-        return True
-
-    # Check for transcripts - scenario is only fully seeded if both exist
-    try:
-        logs = db.get_logs(context=transcript_context, limit=1)
-        return bool(logs)
-    except Exception:
-        # If we can't check transcripts, fall back to contacts-only check
-        return True
 
 
 # ---------- File-Based Scenario Lock for Parallel Tests ----------

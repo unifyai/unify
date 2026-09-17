@@ -114,19 +114,19 @@ async def test_sandbox_pydantic_model_with_typing_annotations():
 from pydantic import BaseModel
 from typing import List, Optional
 
-class ContactItem(BaseModel):
-    contact_id: int
+class RecordItem(BaseModel):
+    record_id: int
     first_name: str
     surname: str
     phone_number: str = ""
     email_address: str = ""
 
-class ContactListResponse(BaseModel):
-    contacts: List[ContactItem]
+class RecordListResponse(BaseModel):
+    records: List[RecordItem]
     total_count: int
 
-result = ContactListResponse(
-    contacts=[ContactItem(contact_id=1, first_name="Alice", surname="Smith")],
+result = RecordListResponse(
+    records=[RecordItem(record_id=1, first_name="Alice", surname="Smith")],
     total_count=1,
 )
 print(result.model_dump_json())
@@ -134,7 +134,7 @@ print(result.model_dump_json())
     result = await sandbox.execute(code)
     assert (
         result["error"] is None
-    ), f"Pydantic model with List[ContactItem] failed in sandbox:\n{result['error']}"
+    ), f"Pydantic model with List[RecordItem] failed in sandbox:\n{result['error']}"
     stdout = parts_to_text(result["stdout"]).strip()
     assert '"total_count": 1' in stdout or '"total_count":1' in stdout
 

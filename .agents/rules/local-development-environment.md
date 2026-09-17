@@ -44,7 +44,7 @@ The script **always blocks** until all tests complete (or timeout), streaming pa
 **Examples:**
 ```bash
 # Single test file with multiple tests (default: runs all tests concurrently)
-tests/parallel_run.sh tests/contact_manager/test_ask.py
+tests/parallel_run.sh tests/function_manager/storage/test_venvs.py
 
 # Specific test functions
 tests/parallel_run.sh tests/test_foo.py::test_one tests/test_bar.py::test_two
@@ -56,7 +56,7 @@ tests/parallel_run.sh tests/actor/
 tests/parallel_run.sh -s tests/
 
 # With timeout (abort after 5 minutes)
-tests/parallel_run.sh --timeout 300 tests/contact_manager/
+tests/parallel_run.sh --timeout 300 tests/function_manager/
 ```
 
 ### Failure Handling

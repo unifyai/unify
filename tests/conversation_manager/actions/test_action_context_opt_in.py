@@ -49,7 +49,7 @@ class TestActIncludeConversationContext:
 
         try:
             brain_tools = ConversationManagerBrainActionTools(cm)
-            await brain_tools.act(query="test query", requesting_contact_id=1)
+            await brain_tools.act(query="test query")
 
             assert len(captured) == 1
             assert captured[0] is not None
@@ -85,7 +85,6 @@ class TestActIncludeConversationContext:
             brain_tools = ConversationManagerBrainActionTools(cm)
             await brain_tools.act(
                 query="what time is it",
-                requesting_contact_id=1,
                 include_conversation_context=False,
             )
 
@@ -104,7 +103,6 @@ class TestActIncludeConversationContext:
         brain_tools = ConversationManagerBrainActionTools(cm)
         await brain_tools.act(
             query="simple lookup",
-            requesting_contact_id=1,
             include_conversation_context=False,
         )
 
@@ -119,7 +117,7 @@ class TestActIncludeConversationContext:
         cm = initialized_cm.cm
 
         brain_tools = ConversationManagerBrainActionTools(cm)
-        await brain_tools.act(query="find contacts in London", requesting_contact_id=1)
+        await brain_tools.act(query="find the London report")
 
         assert len(cm.in_flight_actions) == 1
         handle_data = next(iter(cm.in_flight_actions.values()))
@@ -153,9 +151,7 @@ class TestSteeringRespectsOptOut:
             full_render="<initial/>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts,
                     rendered="[User]: Hello",
                 ),
@@ -177,16 +173,12 @@ class TestSteeringRespectsOptOut:
             full_render="<current/>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts,
                     rendered="[User]: Hello",
                 ),
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=1,
+                    index_in_conversation=1,
                     timestamp=new_ts,
                     rendered="[User]: New message that would normally be a diff",
                 ),
@@ -233,9 +225,7 @@ class TestSteeringRespectsOptOut:
             full_render="<initial/>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts,
                     rendered="[User]: Hello",
                 ),
@@ -256,16 +246,12 @@ class TestSteeringRespectsOptOut:
             full_render="<current/>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts,
                     rendered="[User]: Hello",
                 ),
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=1,
+                    index_in_conversation=1,
                     timestamp=new_ts,
                     rendered="[User]: Please also check the calendar",
                 ),

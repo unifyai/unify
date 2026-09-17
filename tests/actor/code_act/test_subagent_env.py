@@ -190,10 +190,10 @@ class TestResolveParentEnvironments:
     def test_no_parent_envs_returns_all_as_remaining(self):
         """When no parent environments are set, everything goes to remaining."""
         forwarded, remaining = _resolve_parent_environments(
-            ["examplecorp", "primitives.files"],
+            ["examplecorp", "primitives.actor"],
         )
         assert forwarded == []
-        assert remaining == ["examplecorp", "primitives.files"]
+        assert remaining == ["examplecorp", "primitives.actor"]
 
     def test_matches_parent_namespace(self):
         """Custom parent namespaces should be forwarded."""
@@ -201,11 +201,11 @@ class TestResolveParentEnvironments:
         token = _CURRENT_ENVIRONMENTS.set({"examplecorp": examplecorp_env})
         try:
             forwarded, remaining = _resolve_parent_environments(
-                ["examplecorp", "primitives.files"],
+                ["examplecorp", "primitives.actor"],
             )
             assert len(forwarded) == 1
             assert forwarded[0] is examplecorp_env
-            assert remaining == ["primitives.files"]
+            assert remaining == ["primitives.actor"]
         finally:
             _CURRENT_ENVIRONMENTS.reset(token)
 
@@ -216,10 +216,10 @@ class TestResolveParentEnvironments:
         token = _CURRENT_ENVIRONMENTS.set({"primitives": prim_env})
         try:
             forwarded, remaining = _resolve_parent_environments(
-                ["primitives", "primitives.contacts"],
+                ["primitives", "primitives.actor"],
             )
             assert forwarded == []
-            assert remaining == ["primitives", "primitives.contacts"]
+            assert remaining == ["primitives", "primitives.actor"]
         finally:
             _CURRENT_ENVIRONMENTS.reset(token)
 
@@ -249,12 +249,12 @@ class TestResolveParentEnvironments:
         )
         try:
             forwarded, remaining = _resolve_parent_environments(
-                ["examplecorp", "primitives.contacts.ask", "rendering", "my_function"],
+                ["examplecorp", "primitives.actor.act", "rendering", "my_function"],
             )
             assert len(forwarded) == 2
             assert examplecorp_env in forwarded
             assert rendering_env in forwarded
-            assert remaining == ["primitives.contacts.ask", "my_function"]
+            assert remaining == ["primitives.actor.act", "my_function"]
         finally:
             _CURRENT_ENVIRONMENTS.reset(token)
 

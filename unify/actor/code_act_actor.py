@@ -68,7 +68,6 @@ if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
-    from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +97,6 @@ _DISCOVERY_GATE_TOOLS: frozenset[str] = frozenset(
         "GuidanceManager_search",
         "GuidanceManager_filter",
         "GuidanceManager_get_guidance",
-        "KnowledgeManager_search",
-        "KnowledgeManager_filter",
-        "KnowledgeManager_get_knowledge",
     },
 )
 
@@ -109,7 +105,6 @@ _DISCOVERY_GATE_TOOLS: frozenset[str] = frozenset(
 _DISCOVERY_PREFERRED_TOOLS: dict[str, str] = {
     "FunctionManager_": "FunctionManager_search_functions",
     "GuidanceManager_": "GuidanceManager_search",
-    "KnowledgeManager_": "KnowledgeManager_search",
 }
 
 _UNSET: object = object()
@@ -165,7 +160,6 @@ def _discovery_tools_for_prefix(
 _DISCOVERY_PREFERRED_ARGS: dict[str, dict[str, Any]] = {
     "FunctionManager_search_functions": {"query": "relevant functions", "n": 5},
     "GuidanceManager_search": {"query": "relevant guidance", "n": 5},
-    "KnowledgeManager_search": {"query": "relevant knowledge", "n": 5},
 }
 
 
@@ -286,12 +280,11 @@ def _default_tool_policy(
     has_fm_tools: bool,
     has_gm_tools: bool,
     filter_tools: Callable[[Dict[str, Any]], Dict[str, Any]],
-    has_km_tools: bool = False,
 ) -> ToolPolicyFn:
     """Build the default *discovery-first* tool policy.
 
-    Until each present gate among ``FunctionManager_*``, ``GuidanceManager_*``,
-    and ``KnowledgeManager_*`` has been called at least once, the LLM is
+    Until each present gate among ``FunctionManager_*`` and
+    ``GuidanceManager_*`` has been called at least once, the LLM is
     restricted to only those families' discovery/read tools (with
     ``tool_choice="required"``). Write tools and non-library tools such as
     ``execute_code`` stay hidden. Once all present gates are satisfied the
@@ -316,8 +309,6 @@ def _default_tool_policy(
     filter_tools:
         The static-filter callable (``_filter_tools``) that enforces
         ``can_compose`` / ``can_store`` / ``can_spawn_sub_agents``.
-    has_km_tools:
-        Whether the base tool set contains any ``KnowledgeManager_*`` tools.
     """
 
     def _policy(
@@ -333,11 +324,8 @@ def _default_tool_policy(
         gm_satisfied = (not has_gm_tools) or any(
             t.startswith("GuidanceManager_") for t in called_tools
         )
-        km_satisfied = (not has_km_tools) or any(
-            t.startswith("KnowledgeManager_") for t in called_tools
-        )
 
-        if fm_satisfied and gm_satisfied and km_satisfied:
+        if fm_satisfied and gm_satisfied:
             return "auto", filtered
 
         # Expose one preferred discovery tool per unsatisfied gate family.
@@ -346,8 +334,6 @@ def _default_tool_policy(
             gated.update(_discovery_tools_for_prefix(filtered, "FunctionManager_"))
         if not gm_satisfied:
             gated.update(_discovery_tools_for_prefix(filtered, "GuidanceManager_"))
-        if not km_satisfied:
-            gated.update(_discovery_tools_for_prefix(filtered, "KnowledgeManager_"))
 
         if gated:
             return "required", gated, {"eager": True}
@@ -478,8 +464,8 @@ def _verification_librarian_tools(fm: Any) -> Dict[str, Callable]:
 
 _DEFAULT_STORAGE_REVIEW_LABEL = "Storing reusable skills"
 _DEFAULT_STORAGE_REVIEW_INSTRUCTIONS = (
-    "Review the trajectory and store any reusable functions, "
-    "compositional guidance, and durable knowledge claims."
+    "Review the trajectory and store any reusable functions and "
+    "compositional guidance."
 )
 
 
@@ -739,8 +725,8 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "instead.\n\n"
 )
 
-_STORAGE_THREE_STORES = (
-    "## Three Stores\n\n"
+_STORAGE_TWO_STORES = (
+    "## Two Stores\n\n"
     "### Function Store — the *what*\n\n"
     "The FunctionManager stores concrete reusable callables. Add a "
     "genuinely new function with `FunctionManager_add_functions` "
@@ -803,29 +789,15 @@ _STORAGE_THREE_STORES = (
     "changes later, the entry's `function_ids` enumerate exactly which "
     "functions must be revised — complete links at storage time are what "
     "make that maintenance reliable.\n\n"
-    "### Knowledge Store — the *is*\n\n"
-    "The KnowledgeManager stores durable sourced claims: facts, "
-    "policies, definitions, decisions, constraints, insights, and "
-    "preferences, carrying provenance (`source_refs`) when known. "
-    "Search/filter before writing (`KnowledgeManager_search` / "
-    "`KnowledgeManager_filter`); add with "
-    "`KnowledgeManager_add_knowledge`; revise in place with "
-    "`KnowledgeManager_update_knowledge`; retire with "
-    "`KnowledgeManager_invalidate_knowledge` / "
-    "`KnowledgeManager_supersede_knowledge`, or "
-    "`KnowledgeManager_delete_knowledge` when hard removal is "
-    "appropriate. The bar is high: only durable non-person, "
-    "non-procedure, non-secret claims future sessions would otherwise "
-    "rediscover — contact attributes belong in ContactManager, "
-    "procedures in GuidanceManager, credentials in SecretManager. A "
-    "no-op is fine; most trajectories yield no new claims.\n\n"
     "### Composing the stores\n\n"
     "Function = executable *what*; guidance = natural-language *how* "
-    "referencing functions; knowledge = sourced *is*. When a trajectory "
-    "reveals both a useful function and a non-trivial procedure using "
-    "it, store the function first, then a guidance entry referencing it "
-    "via `function_ids`. Store claims only when durable domain facts "
-    "matter independently of how to act on them.\n\n"
+    "referencing functions. When a trajectory reveals both a useful "
+    "function and a non-trivial procedure using it, store the function "
+    "first, then a guidance entry referencing it via `function_ids`. A "
+    "durable domain fact worth keeping (a rate limit, a data quirk, a "
+    "convention an API enforces) lives in the guidance entry or the "
+    "function docstring that acts on it — there is no separate fact "
+    "store.\n\n"
 )
 
 _STORAGE_SUB_AGENT_PATTERNS = (
@@ -851,7 +823,7 @@ _STORAGE_SUB_AGENT_PATTERNS = (
     "originally invoked for.\n\n"
     "### When to store\n\n"
     "Not every `primitives.actor.act` call is worth storing. Use this spectrum:\n\n"
-    "- **Low value** — broad, unscoped delegation: all state managers "
+    "- **Low value** — broad, unscoped delegation: every stored function "
     "in `prompt_functions`, generic or no `guidelines`, no "
     "`discovery_scope`, trivial `request`. This is just a passthrough "
     "that any future agent could reconstruct trivially.\n"
@@ -962,8 +934,7 @@ dict
 # re-derive live with its own tools. Write operations (add/update/delete/…)
 # stay verbatim — their results are small and record what changed.
 _STORE_READ_TOOL_RE = re.compile(
-    r"^(?:FunctionManager|GuidanceManager|KnowledgeManager)"
-    r"_(?:search|filter|list|get)",
+    r"^(?:FunctionManager|GuidanceManager)" r"_(?:search|filter|list|get)",
 )
 _TRAJ_SYSTEM_STUB_THRESHOLD = 2_000
 _TRAJ_STORE_READ_STUB_THRESHOLD = 300
@@ -984,8 +955,8 @@ def _prepare_trajectory_for_storage_review(
     * Large system messages collapse to a one-line stub — the review
       prompt's own storage doctrine is authoritative. Small system
       messages (e.g. parent-chat context) stay verbatim.
-    * Large results of store *reads* (FunctionManager / GuidanceManager /
-      KnowledgeManager search/filter/list/get, including results
+    * Large results of store *reads* (FunctionManager / GuidanceManager
+      search/filter/list/get, including results
       delivered through ``check_status_*`` placeholders) collapse to an
       entry count. The call and its arguments stay visible: "searched
       the store, found nothing, built it by hand" is exactly the signal
@@ -1124,7 +1095,6 @@ def _build_storage_tools(
     """
     fm = actor.function_manager
     gm = actor.guidance_manager
-    km = actor.knowledge_manager
 
     storage_methods: list[Any] = [
         fm.search_functions,
@@ -1148,19 +1118,6 @@ def _build_storage_tools(
         gm.delete_guidance,
         gm.reconcile_dependencies,
     ]
-    if km is not None:
-        storage_methods.extend(
-            [
-                km.search,
-                km.filter,
-                km.get_knowledge,
-                km.add_knowledge,
-                km.update_knowledge,
-                km.delete_knowledge,
-                km.invalidate_knowledge,
-                km.supersede_knowledge,
-            ],
-        )
 
     tools: Dict[str, Callable] = {
         **methods_to_tool_dict(
@@ -1322,19 +1279,15 @@ def _start_storage_check_loop(
     librarian's summary is delivered back into the live session as a
     background note.
 
-    The loop maintains three complementary stores:
+    The loop maintains two complementary stores:
 
     * **FunctionManager** — stores the *what*: concrete, reusable function
       implementations (the building blocks).
     * **GuidanceManager** — stores the *how*: high-level guidance on
       composing multiple functions together to accomplish broader tasks
       (the recipes / playbooks).
-    * **KnowledgeManager** — stores the *is*: durable sourced claims
-      (optional; included when present on the actor).
 
-    FunctionManager and GuidanceManager are required. Returns ``None``
-    when either is missing. KnowledgeManager tools are included when
-    present; absence of KnowledgeManager does not block the loop.
+    Both are required. Returns ``None`` when either is missing.
     """
     fm = actor.function_manager
     gm = actor.guidance_manager
@@ -1398,7 +1351,7 @@ def _start_storage_check_loop(
             "this run via the `store_skills` tool. Below are the summaries "
             "from each proactive storage pass:\n\n"
             f"{summaries_text}\n\n"
-            "Check the function, guidance, and knowledge stores to confirm "
+            "Check the function and guidance stores to confirm "
             "what was already added. Do not duplicate existing entries. "
             "Focus on any additional reusable patterns — especially from "
             "sections of the trajectory *after* the last `store_skills` "
@@ -1411,7 +1364,7 @@ def _start_storage_check_loop(
             "## Instructions\n\n"
             "1. Skill storage was proactively triggered during this run. "
             "Start by reviewing the proactive storage summaries below and "
-            "checking the function, guidance, and knowledge stores to see "
+            "checking the function and guidance stores to see "
             "what was already added.\n"
             "2. Search the existing stores to confirm exactly what was stored "
             "(use the search/filter tools for each store).\n"
@@ -1502,7 +1455,7 @@ def _start_storage_check_loop(
     system_prompt = (
         f"{role_line}"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
-        f"{_STORAGE_THREE_STORES}"
+        f"{_STORAGE_TWO_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
         f"{_STORAGE_RECURRING_DELIVERABLE}"
         f"{instructions}"
@@ -1524,8 +1477,8 @@ def _start_storage_check_loop(
     return start_async_tool_loop(
         client=client,
         message=(
-            "Review the trajectory and store any reusable functions, "
-            "compositional guidance, and durable knowledge claims."
+            "Review the trajectory and store any reusable functions and "
+            "compositional guidance."
         ),
         tools=tools,
         loop_id="StorageCheck(CodeActActor.act)",
@@ -1617,7 +1570,7 @@ def _start_proactive_storage_loop(
         "a large one.\n"
         "4. When done (or if there is nothing worth storing), respond "
         "with a brief, concrete summary of what you stored (function names, "
-        "guidance titles, knowledge claim titles) or that nothing was needed. "
+        "guidance titles) or that nothing was needed. "
         "This summary will be visible to both the executing agent and a "
         "follow-up storage review, so be specific."
     )
@@ -1631,7 +1584,7 @@ def _start_proactive_storage_loop(
         "requested skill(s) for future reuse. Often nothing is worth "
         "storing — that is perfectly fine.\n\n"
         f"{_STORAGE_WHAT_CAN_BE_STORED}"
-        f"{_STORAGE_THREE_STORES}"
+        f"{_STORAGE_TWO_STORES}"
         f"{_STORAGE_SUB_AGENT_PATTERNS}"
         f"{instructions}"
         "\n\n"
@@ -1651,7 +1604,7 @@ def _start_proactive_storage_loop(
         message=(
             f"The executing agent has proactively requested skill storage: "
             f"{request!r}. Review the trajectory so far and store the "
-            f"relevant functions, guidance, and knowledge claims."
+            f"relevant functions and guidance."
         ),
         tools=tools,
         loop_id="ProactiveStorage(CodeActActor.act)",
@@ -2506,7 +2459,6 @@ class CodeActActor(BaseCodeActActor):
         environments: Optional[list["BaseEnvironment"]] = None,
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
-        knowledge_manager: Optional["KnowledgeManager"] = None,
         can_compose: object = _UNSET,
         can_store: object = _UNSET,
         timeout: object = _UNSET,
@@ -2530,9 +2482,6 @@ class CodeActActor(BaseCodeActActor):
             guidance_manager: Manages high-level guidance entries that describe *how* to
                 compose functions together for tasks. Exposes read/write tools in the
                 post-completion storage check loop alongside FunctionManager tools.
-            knowledge_manager: Manages durable sourced knowledge claims (the *is*).
-                Exposes JSON CRUD/lifecycle tools on the main loop and in the
-                post-completion storage check loop when present.
             can_compose: Whether the LLM can write and execute arbitrary code via
                 ``execute_code``. Set to False for function-execution-only mode.
             can_store: Whether a post-completion review loop should run to
@@ -2568,7 +2517,6 @@ class CodeActActor(BaseCodeActActor):
             environments=environments or [],
             function_manager=function_manager,
             guidance_manager=guidance_manager,
-            knowledge_manager=knowledge_manager,
         )
 
         can_compose = can_compose if can_compose is not _UNSET else True
@@ -2596,10 +2544,7 @@ class CodeActActor(BaseCodeActActor):
                 # The exclusion deduplicates search results against what the
                 # prompt documents. When an environment declares
                 # `prompt_documented_names`, only that subset is excluded —
-                # undocumented primitives must stay searchable. State manager
-                # primitives declare an empty set (their method docs are not
-                # inlined), so core methods like `ask`/`update` are
-                # searchable.
+                # undocumented callables must stay searchable.
                 _documented = getattr(env, "prompt_documented_names", None)
                 for tool_name, tool_meta in env.get_tools().items():
                     if tool_meta.function_id is not None:
@@ -3092,7 +3037,7 @@ class CodeActActor(BaseCodeActActor):
             _parent_lineage = list(_parent) if isinstance(_parent, list) else []
             _hierarchy = [*_parent_lineage, f"execute_code({_suffix})"]
             # Establish a boundary lineage frame so nested calls (e.g., FunctionManager-injected
-            # functions calling state managers) keep a consistent parent->child chain.
+            # functions calling primitives) keep a consistent parent->child chain.
             _lineage_token = TOOL_LOOP_LINEAGE.set(_hierarchy)
 
             async def _pub_safe(**payload: Any) -> None:
@@ -3465,50 +3410,6 @@ class CodeActActor(BaseCodeActActor):
                 ),
             )
 
-        if self.knowledge_manager:
-            km = self.knowledge_manager
-            tools.update(
-                methods_to_tool_dict(
-                    ToolSpec(
-                        fn=km.search,
-                        display_label="Searching for relevant knowledge claims",
-                    ),
-                    ToolSpec(
-                        fn=km.filter,
-                        display_label="Filtering saved knowledge claims",
-                    ),
-                    ToolSpec(
-                        fn=km.get_knowledge,
-                        display_label="Reading a full knowledge claim",
-                    ),
-                    ToolSpec(
-                        fn=km.add_knowledge,
-                        display_label="Saving a new knowledge claim",
-                    ),
-                    ToolSpec(
-                        fn=km.update_knowledge,
-                        display_label="Updating a knowledge claim",
-                    ),
-                    ToolSpec(
-                        fn=km.delete_knowledge,
-                        display_label="Deleting a knowledge claim",
-                    ),
-                    ToolSpec(
-                        fn=km.invalidate_knowledge,
-                        display_label="Invalidating a knowledge claim",
-                    ),
-                    ToolSpec(
-                        fn=km.supersede_knowledge,
-                        display_label="Superseding a knowledge claim",
-                    ),
-                    ToolSpec(
-                        fn=km.reconcile_sources,
-                        display_label="Reconciling knowledge provenance",
-                    ),
-                    include_class_name=True,
-                ),
-            )
-
         # ── Proactive skill storage tool ──────────────────────────────
         if self.function_manager and self.guidance_manager:
             _actor_ref = self
@@ -3518,30 +3419,28 @@ class CodeActActor(BaseCodeActActor):
 
                 Triggers a skill-storage review of the trajectory so far. A dedicated
                 reviewer will examine the execution history and store any reusable
-                functions, compositional guidance, and durable knowledge claims
-                based on your request.
+                functions and compositional guidance based on your request.
 
                 Use this when you have just completed a complex subtask and recognize
                 a reusable pattern worth preserving — for example, a non-obvious
-                configuration of primitives.actor.act, a multi-step procedure, a
-                function that bakes in hard-won configuration, or a durable sourced
-                fact discovered during the run.
+                configuration of primitives.actor.act, a multi-step procedure, or a
+                function that bakes in hard-won configuration.
 
                 Parameters
                 ----------
                 request : str
                     Describe the skill(s) you want stored. Be specific about which
                     part of the trajectory contains the reusable pattern and what
-                    makes it valuable. For example: "Store the email lookup function
-                    that uses primitives.contacts.ask with the scoped discovery_scope"
-                    or "Store the multi-step data pipeline that combines file parsing
-                    with a durable knowledge claim."
+                    makes it valuable. For example: "Store the report-rendering
+                    function that bakes in the discovered pandoc flags" or "Store
+                    the multi-step data pipeline that combines CSV parsing with
+                    the retry loop around the export API."
 
                 Returns
                 -------
                 str
-                    A summary of what was stored (functions, guidance, and/or
-                    knowledge claims), or a note that nothing was worth storing.
+                    A summary of what was stored (functions and/or guidance), or
+                    a note that nothing was worth storing.
                 """
                 ctx = get_current_agent_context()
                 handle = ctx.handle
@@ -3667,8 +3566,8 @@ class CodeActActor(BaseCodeActActor):
 
                 **This is the preferred tool for any task that maps to a single
                 function or primitive call** — a primitive
-                (``primitives.contacts.ask``, ``primitives.transcripts.ask``, …)
-                or a stored function discovered via FunctionManager. It
+                (``primitives.actor.act``) or a stored function discovered via
+                FunctionManager. It
                 **structurally guarantees** the returned handle is exposed to
                 the outer loop for steering (ask, stop, pause, resume,
                 interject); inside ``execute_code`` a handle is only adopted
@@ -3691,7 +3590,7 @@ class CodeActActor(BaseCodeActActor):
                 function_name : str
                     Exact name of the function or primitive to execute
                     (dotted path for primitives, e.g.
-                    ``"primitives.contacts.ask"``).
+                    ``"primitives.actor.act"``).
                 call_kwargs : dict, optional
                     Keyword arguments to pass. Values keep the callee's own
                     types — a plain keyword-argument mapping, not a string
@@ -4708,11 +4607,11 @@ class CodeActActor(BaseCodeActActor):
                 _CompositeEnvironment as _CompositeEnv,
             )
             from unify.actor.environments import (
-                StateManagerEnvironment as _StateManagerEnvironment,
+                ActorEnvironment as _ActorEnvironment,
             )
         except Exception:
             _CompositeEnv = None  # type: ignore
-            _StateManagerEnvironment = None  # type: ignore
+            _ActorEnvironment = None  # type: ignore
 
         for ns, env in self.environments.items():
             # Prefer explicit reconstruction for known env types.
@@ -4724,12 +4623,12 @@ class CodeActActor(BaseCodeActActor):
                         clarification_down_q=env_clarification_down_q,
                     )
                     continue
-                if _StateManagerEnvironment is not None and isinstance(
+                if _ActorEnvironment is not None and isinstance(
                     env,
-                    _StateManagerEnvironment,
+                    _ActorEnvironment,
                 ):
-                    sandbox_envs[ns] = _StateManagerEnvironment(
-                        env.get_instance(),
+                    sandbox_envs[ns] = _ActorEnvironment(
+                        allowed_methods=env.allowed_methods,
                         clarification_up_q=env_clarification_up_q,
                         clarification_down_q=env_clarification_down_q,
                     )
@@ -4952,7 +4851,7 @@ class CodeActActor(BaseCodeActActor):
 
             tool_policy: Optional[ToolPolicyFn] = _static_only_policy
         elif self.tool_policy is _USE_DEFAULT:
-            # Default discovery-first policy (FM + GM + KM gates).
+            # Default discovery-first policy (FM + GM gates).
             _has_fm_tools = any(
                 isinstance(k, str) and k.startswith("FunctionManager_")
                 for k in base_tools.keys()
@@ -4961,15 +4860,10 @@ class CodeActActor(BaseCodeActActor):
                 isinstance(k, str) and k.startswith("GuidanceManager_")
                 for k in base_tools.keys()
             )
-            _has_km_tools = any(
-                isinstance(k, str) and k.startswith("KnowledgeManager_")
-                for k in base_tools.keys()
-            )
             tool_policy = _default_tool_policy(
                 _has_fm_tools,
                 _has_gm_tools,
                 _filter_tools,
-                has_km_tools=_has_km_tools,
             )
         else:
             # Custom caller-provided policy.  Wrap it so that _filter_tools

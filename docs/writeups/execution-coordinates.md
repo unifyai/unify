@@ -52,7 +52,7 @@ The last coordinate is the environment, and it exists because of a mundane probl
 
 So a stored function can declare its own environment. The environment is a `pyproject.toml` held as data; the first time something needs it, `uv` builds it and it's cached on disk keyed by content, so the second call is a subprocess spawn rather than a dependency resolution. For stateful work the subprocess is held open in a pool, so an expensive interpreter start is paid once.
 
-The part I like is what happens across that boundary. Code inside a dedicated venv still writes `await primitives.contacts.ask(...)` exactly as it would anywhere else — the call is marshalled back over a JSON-line channel to the parent process, run there, and the result returned. The subprocess gets isolation for its dependencies without losing access to the runtime it belongs to.
+The part I like is what happens across that boundary. Code inside a dedicated venv still writes `await primitives.actor.act(...)` exactly as it would anywhere else — the call is marshalled back over a JSON-line channel to the parent process, run there, and the result returned. The subprocess gets isolation for its dependencies without losing access to the runtime it belongs to.
 
 There's deliberately no dependency negotiation between environments. Two functions wanting incompatible versions get two environments and never meet. Isolation is cheap; solving the general version-conflict problem is not, and it isn't our problem to solve.
 

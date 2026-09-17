@@ -14,18 +14,9 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from unify.actor.settings import ActorSettings
-from unify.contact_manager.settings import ContactSettings
 from unify.conversation_manager.settings import ConversationSettings
-from unify.data_manager.settings import DataSettings
-from unify.file_manager.settings import FileSettings
 from unify.function_manager.settings import FunctionSettings
 from unify.guidance_manager.settings import GuidanceSettings
-from unify.image_manager.settings import ImageSettings
-from unify.ingestion_manager.settings import IngestionSettings
-from unify.knowledge_manager.settings import KnowledgeSettings
-from unify.memory_manager.settings import MemorySettings
-from unify.secret_manager.settings import SecretSettings
-from unify.transcript_manager.settings import TranscriptSettings
 
 
 def _parse_bool(v: Any) -> bool:
@@ -139,20 +130,11 @@ class ProductionSettings(BaseSettings):
     # Composed Manager Settings
     # ─────────────────────────────────────────────────────────────────────────
     # Each manager owns its settings in its own settings.py file.
-    # Access via SETTINGS.contact.IMPL, SETTINGS.transcript.IMPL, etc.
+    # Access via SETTINGS.function.IMPL, SETTINGS.guidance.IMPL, etc.
     actor: ActorSettings = Field(default_factory=ActorSettings)
-    contact: ContactSettings = Field(default_factory=ContactSettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
-    data: DataSettings = Field(default_factory=DataSettings)
-    file: FileSettings = Field(default_factory=FileSettings)
     function: FunctionSettings = Field(default_factory=FunctionSettings)
     guidance: GuidanceSettings = Field(default_factory=GuidanceSettings)
-    image: ImageSettings = Field(default_factory=ImageSettings)
-    ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
-    knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
-    memory: MemorySettings = Field(default_factory=MemorySettings)
-    secret: SecretSettings = Field(default_factory=SecretSettings)
-    transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Validators

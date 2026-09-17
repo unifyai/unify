@@ -10,7 +10,6 @@ invisible until it routes to the wrong manager.
 |---|---|---|
 | Written-down multi-step how-to | **procedure** | `GuidanceManager` |
 | Executable unit the assistant calls | **function** | `FunctionManager` |
-| Durable sourced statement about the world | **claim** | `KnowledgeManager` |
 | What the actor writes and runs to satisfy one request | **plan** | `Actor` |
 | One dispatched, steerable piece of work | **action** | `ConversationManager` |
 | Ordered instructions inside a docstring | **Steps** (section header) | — |
@@ -21,16 +20,16 @@ an action, or a plan. Do not title a docstring section `### Workflow`; use
 
 ## The three stores, and how to tell them apart
 
-`FunctionManager`, `GuidanceManager` and `KnowledgeManager` are the three
-places durable know-how lives, and they are distinguished by *what kind of
-thing they hold*, not by topic:
+`FunctionManager` and `GuidanceManager` are the two places durable know-how
+lives, and they are distinguished by *what kind of thing they hold*, not by
+topic:
 
-| | FunctionManager | GuidanceManager | KnowledgeManager |
-|---|---|---|---|
-| Role | the **what** | the **how** | the **is** |
-| Holds | one callable | a multi-step procedure | one typed claim |
-| Content | executable implementation | natural-language recipe | sourced statement |
-| Analogy | a tool's docstring | a prompt that references tools | a fact with provenance |
+| | FunctionManager | GuidanceManager |
+|---|---|---|
+| Role | the **what** | the **how** |
+| Holds | one callable | a multi-step procedure |
+| Content | executable implementation | natural-language recipe |
+| Analogy | a tool's docstring | a prompt that references tools |
 
 Deciding where something belongs:
 
@@ -42,22 +41,17 @@ Deciding where something belongs:
   or policy governs how work is done. A procedure links the functions it
   composes via `function_ids`, which is also how a rule change finds every
   implementation that embeds it.
-- **Is it true regardless of how you act on it?** Claim (knowledge).
-  Facts, policies, definitions, decisions, constraints, preferences —
-  carrying `source_refs` when provenance is known.
-
 The common error is storing a procedure that merely restates one
 function's docstring. If a single function's docstring already explains
 its inputs, behaviour and use, store the function and stop.
 
-Negative scope matters as much: people belong in `ContactManager`,
-credentials in `SecretManager`, file bytes in `FileManager`. None of the
-three stores is a dumping ground for "stuff we learned".
+Neither store is a dumping ground for "stuff we learned": a fact with no
+procedure attached belongs in the procedure that uses it, or nowhere.
 
 **`skill` is an umbrella, not a synonym.** "Skills" means *anything worth
 storing across the three stores* — the `store_skills` tool, the
 `"Storing reusable skills"` review label. That is a legitimate superset
-covering functions, procedures and claims together. It is wrong only when
+covering functions and procedures together. It is wrong only when
 used for one specific member.
 
 ## Before naming a new first-class type

@@ -31,19 +31,16 @@ class SimulatedConversationManagerHandle(
     def __init__(
         self,
         assistant_id: str = "",
-        contact_id: int = 0,
         *,
         description: str = "A simulated conversation between an AI assistant and a user.",
         simulation_guidance: Optional[str] = None,
         # Accept but ignore parameters that real ConversationManagerHandle uses
         event_broker: Any = None,
         conversation_id: Any = None,
-        transcript_manager: Any = None,
         conversation_manager: Any = None,
         **kwargs: Any,
     ):
         self.assistant_id = assistant_id
-        self.contact_id = contact_id
         self._description = description
         self._simulation_guidance = simulation_guidance
 
@@ -98,7 +95,6 @@ class SimulatedConversationManagerHandle(
 ### Conversation Scenario
 **Description:** {self._description}
 **Assistant ID:** {self.assistant_id}
-**Contact ID:** {self.contact_id}
 
 ### Core Responsibilities
 1.  **Maintain Internal State:** You must remember the conversation history, the user's mood, and any notifications you receive.

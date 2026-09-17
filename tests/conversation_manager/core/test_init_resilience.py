@@ -42,17 +42,23 @@ async def resilience_cm():
     reset_event_broker()
 
 
-async def _init(cm, lock_name="init_resilience"):
-    """Helper: run manager init with a SimulatedActor under file lock."""
+def _simulated_actor():
     from unify.actor.simulated import SimulatedActor
-    from unify.conversation_manager.domains import managers_utils
 
-    actor = SimulatedActor(
+    return SimulatedActor(
         steps=None,
         duration=None,
         log_mode="log",
         emit_notifications=False,
     )
+
+
+async def _init(cm, lock_name="init_resilience", actor=None):
+    """Helper: run manager init with a SimulatedActor under file lock."""
+    from unify.conversation_manager.domains import managers_utils
+
+    if actor is None:
+        actor = _simulated_actor()
     with scenario_file_lock(lock_name):
         await managers_utils.init_conv_manager(cm, actor=actor)
 
@@ -66,33 +72,16 @@ class TestDegradableStepResilience:
     """Failures in optional init steps must not prevent initialization."""
 
     @pytest.mark.asyncio
-    async def test_memory_manager_init_failure(self, resilience_cm):
+    async def test_guidance_manager_init_failure(self, resilience_cm):
         cm = resilience_cm
+        # The simulated actor resolves its own guidance manager, so it is
+        # built before the registry is made to fail.
+        actor = _simulated_actor()
         with patch(
-            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_memory_manager",
-            side_effect=ConnectionError("Orchestra unreachable"),
+            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_guidance_manager",
+            side_effect=ConnectionError("store unreachable"),
         ):
-            # Force the feature flag on so the guarded path is exercised
-            from unify.settings import SETTINGS
-
-            original = SETTINGS.memory.ENABLED
-            SETTINGS.memory.ENABLED = True
-            try:
-                await _init(cm, "resilience_memory")
-            finally:
-                SETTINGS.memory.ENABLED = original
-
-        assert cm.initialized is True
-        assert cm.memory_manager is None
-
-    @pytest.mark.asyncio
-    async def test_file_manager_init_failure(self, resilience_cm):
-        cm = resilience_cm
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_file_manager",
-            side_effect=ConnectionError("Orchestra unreachable"),
-        ):
-            await _init(cm, "resilience_file")
+            await _init(cm, "resilience_guidance", actor=actor)
 
         assert cm.initialized is True
 
@@ -114,7 +103,7 @@ class TestDegradableStepResilience:
         cm = resilience_cm
         with patch(
             "unify.conversation_manager.domains.managers_utils.ManagerRegistry.warm_all_embeddings",
-            side_effect=ConnectionError("Orchestra unreachable"),
+            side_effect=ConnectionError("store unreachable"),
         ):
             await _init(cm, "resilience_embed")
 

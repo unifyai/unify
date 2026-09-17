@@ -14,14 +14,14 @@
 # Unify
 
 The brain of a local AI assistant: a persistent conversation loop above a
-code-writing actor, a back office of state managers, and one SQLite store.
+code-writing actor, two skill libraries, and one SQLite store.
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first for the system design. This file
 covers *how to work on the code*, not *what the code does*.
 
 ## What Unify is
 
-Unify implements an AI assistant's brain as a **back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, `FileManager`, `DataManager`, `IngestionManager`, `ImageManager`, `SecretManager`) through code-first plans, and a `ConversationManager` sits above the actor as the persistent interaction loop. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
+Unify implements an AI assistant's brain as a persistent **conversation loop** above a code-writing **`Actor`**, with two **skill libraries** behind it: `FunctionManager` (stored Python functions, the *what*) and `GuidanceManager` (procedures, the *how*). The actor discovers skills before it writes code, runs plans in a persistent Python sandbox, and a storage review after each run distils what worked back into the libraries. Manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. The skill libraries expose direct CRUD methods as Actor JSON tools (`FunctionManager_*`, `GuidanceManager_*`).
 
 Everything persists in an in-process SQLite store, `unify/db/` (imported as `from unify import db`). There is no backend service, no accounts and no infrastructure: the only external dependency is an LLM provider reached through the sibling `unillm` repo (editable install via `[tool.uv.sources]` in `pyproject.toml`).
 
@@ -57,16 +57,16 @@ Tests run in tmux sessions, each test in its own session against its own SQLite 
 
 ```bash
 # Default — one session per test, max concurrency
-tests/parallel_run.sh tests/contact_manager/
+tests/parallel_run.sh tests/function_manager/
 
 # Specific test
-tests/parallel_run.sh tests/contact_manager/test_ask.py::test_name
+tests/parallel_run.sh tests/function_manager/storage/test_venvs.py::test_name
 
 # Serial mode (one session per file) for large suites
 tests/parallel_run.sh -s tests/
 
 # With timeout
-tests/parallel_run.sh --timeout 300 tests/contact_manager/
+tests/parallel_run.sh --timeout 300 tests/function_manager/
 ```
 
 Each agent (or terminal) gets an **isolated tmux server automatically**, so concurrent agents don't collide.
@@ -131,26 +131,17 @@ The public API of each state manager is defined by the abstract methods on `Base
 - **Tool-specific guidance lives in the tool's own docstring** — never in the prompt builder.
 - **Compositional guidance (when to use tool A vs B, multi-tool patterns) lives in the prompt builder** — never in individual tool docstrings.
 
-### Routing playbook (which manager owns what)
+### Routing playbook (who owns what)
 
-| Concern | Manager / primitive |
+| Concern | Owner |
 |---|---|
-| People, contact records | `primitives.contacts.*` |
-| Conversation history search | `primitives.transcripts.*` |
-| Domain facts, typed knowledge claims | `KnowledgeManager_*` (top-level JSON tools, not primitives) |
-| Files (parse, query) | `primitives.files.*` |
-| Storing new data or files, from any source | `primitives.ingestion.*` (`submit` — there is no `primitives.data.ingest`) |
-| Querying and reshaping stored tables | `primitives.data.*` |
-| Secrets (metadata only via `ask`) | `primitives.secrets.*` |
-| Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
-| Stored functions | `FunctionManager_*` (top-level JSON tools) and `execute_function` |
+| Stored functions (find, run, store) | `FunctionManager_*` JSON tools and `execute_function` |
+| Procedures, how-tos | `GuidanceManager_*` JSON tools |
+| Anything else the request needs | `execute_code` (plain Python in the sandbox) |
+| Parallel or delegated work | `primitives.actor.act` |
 | Live action from chat | `Actor.act` (via ConversationManager) |
 
 Full role descriptions are in [`.agents/rules/state-manager-roles.md`](.agents/rules/state-manager-roles.md).
-
-### Cross-manager images
-
-Images flow between managers **by filesystem path**, not by `image_id`. Receiving managers resolve to persistent storage via `ImageManager.filter_images(filter="filepath == '...'")` when needed. Managers with first-class image fields (e.g. `GuidanceManager`) accept structured `ImageRefs` types at their own API boundary.
 
 ## Additional git constraints
 
@@ -167,17 +158,9 @@ unify/
 │   ├── actor/               # CodeAct Actor, central orchestrator
 │   ├── conversation_manager/ # The persistent interaction loop (slow brain)
 │   ├── db/                  # The local SQLite store and its expression language
-│   ├── contact_manager/     # People + relationships
-│   ├── knowledge_manager/   # Typed claim ledger (facts, policies, …)
-│   ├── transcript_manager/  # Conversation history
 │   ├── guidance_manager/    # Procedures, SOPs
-│   ├── function_manager/    # Stored Python functions + primitives registry
-│   ├── file_manager/        # File parsing and registry
-│   ├── ingestion_manager/   # Checkpointed data and file ingestion
-│   ├── image_manager/       # Image storage and vision queries
-│   ├── secret_manager/      # Encrypted secrets
-│   ├── data_manager/        # Low-level data ops
-│   ├── memory_manager/      # Offline consolidation
+│   ├── function_manager/    # Stored Python functions, venvs, verification
+│   ├── workspace.py         # The assistant's working directory
 │   ├── events/              # Typed event bus
 │   └── common/              # Async tool loop, shared infra
 ├── tests/                   # Pytest suite
@@ -243,7 +226,7 @@ The script **always blocks** until all tests complete (or timeout), streaming pa
 **Examples:**
 ```bash
 # Single test file with multiple tests (default: runs all tests concurrently)
-tests/parallel_run.sh tests/contact_manager/test_ask.py
+tests/parallel_run.sh tests/function_manager/storage/test_venvs.py
 
 # Specific test functions
 tests/parallel_run.sh tests/test_foo.py::test_one tests/test_bar.py::test_two
@@ -255,7 +238,7 @@ tests/parallel_run.sh tests/actor/
 tests/parallel_run.sh -s tests/
 
 # With timeout (abort after 5 minutes)
-tests/parallel_run.sh --timeout 300 tests/contact_manager/
+tests/parallel_run.sh --timeout 300 tests/function_manager/
 ```
 
 ### Failure Handling
@@ -347,7 +330,7 @@ ls logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/
 
 **Step 2: Read with Read tool**
 ```
-Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/contact_manager-test_ask.txt
+Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/function_manager-storage-test_venvs.txt
 ```
 
 ## Worktree Symlinks
@@ -371,7 +354,7 @@ ls logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/
 
 Then use the Read tool:
 ```
-Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/contact_manager-test_ask.txt
+Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/function_manager-storage-test_venvs.txt
 ```
 
 Each session's store file sits next to its log, so a failing test's rows can be inspected with `sqlite3` after the run.
@@ -430,7 +413,6 @@ invisible until it routes to the wrong manager.
 |---|---|---|
 | Written-down multi-step how-to | **procedure** | `GuidanceManager` |
 | Executable unit the assistant calls | **function** | `FunctionManager` |
-| Durable sourced statement about the world | **claim** | `KnowledgeManager` |
 | What the actor writes and runs to satisfy one request | **plan** | `Actor` |
 | One dispatched, steerable piece of work | **action** | `ConversationManager` |
 | Ordered instructions inside a docstring | **Steps** (section header) | — |
@@ -441,16 +423,16 @@ an action, or a plan. Do not title a docstring section `### Workflow`; use
 
 ## The three stores, and how to tell them apart
 
-`FunctionManager`, `GuidanceManager` and `KnowledgeManager` are the three
-places durable know-how lives, and they are distinguished by *what kind of
-thing they hold*, not by topic:
+`FunctionManager` and `GuidanceManager` are the two places durable know-how
+lives, and they are distinguished by *what kind of thing they hold*, not by
+topic:
 
-| | FunctionManager | GuidanceManager | KnowledgeManager |
-|---|---|---|---|
-| Role | the **what** | the **how** | the **is** |
-| Holds | one callable | a multi-step procedure | one typed claim |
-| Content | executable implementation | natural-language recipe | sourced statement |
-| Analogy | a tool's docstring | a prompt that references tools | a fact with provenance |
+| | FunctionManager | GuidanceManager |
+|---|---|---|
+| Role | the **what** | the **how** |
+| Holds | one callable | a multi-step procedure |
+| Content | executable implementation | natural-language recipe |
+| Analogy | a tool's docstring | a prompt that references tools |
 
 Deciding where something belongs:
 
@@ -462,22 +444,17 @@ Deciding where something belongs:
   or policy governs how work is done. A procedure links the functions it
   composes via `function_ids`, which is also how a rule change finds every
   implementation that embeds it.
-- **Is it true regardless of how you act on it?** Claim (knowledge).
-  Facts, policies, definitions, decisions, constraints, preferences —
-  carrying `source_refs` when provenance is known.
-
 The common error is storing a procedure that merely restates one
 function's docstring. If a single function's docstring already explains
 its inputs, behaviour and use, store the function and stop.
 
-Negative scope matters as much: people belong in `ContactManager`,
-credentials in `SecretManager`, file bytes in `FileManager`. None of the
-three stores is a dumping ground for "stuff we learned".
+Neither store is a dumping ground for "stuff we learned": a fact with no
+procedure attached belongs in the procedure that uses it, or nowhere.
 
 **`skill` is an umbrella, not a synonym.** "Skills" means *anything worth
 storing across the three stores* — the `store_skills` tool, the
 `"Storing reusable skills"` review label. That is a legitimate superset
-covering functions, procedures and claims together. It is wrong only when
+covering functions and procedures together. It is wrong only when
 used for one specific member.
 
 ## Before naming a new first-class type
@@ -517,146 +494,61 @@ After editing anything under `.agents/`, regenerate the aggregate:
 
 ## Base Class Public APIs
 
-The public API for all state managers (`ContactManager`, `TranscriptManager`, `FunctionManager` etc.) is fully contained in the docstrings of the abstract methods defined on the base class `Base{SomeManager}` in `base.py`. All high level usage instructions should be fully encapsulated in these docstrings. These docstrings are then attached to the public methods of any derived class via `@functools.wraps(Base{StateManager}.{public_method}, updated=())`. These docstrings should not make **any** reference to **other managers** (we don't want to lock in any brittle cross-references, as other managers may change) and should also not make any reference to their **internal implementation**, including the private tools used for any particular instantiation of this abstract base class, with a consistent implementation agnostic public API.
+The public API for all state managers (`FunctionManager`, `GuidanceManager`) is fully contained in the docstrings of the abstract methods defined on the base class `Base{SomeManager}` in `base.py`. All high level usage instructions should be fully encapsulated in these docstrings. These docstrings are then attached to the public methods of any derived class via `@functools.wraps(Base{StateManager}.{public_method}, updated=())`. These docstrings should not make **any** reference to **other managers** (we don't want to lock in any brittle cross-references, as other managers may change) and should also not make any reference to their **internal implementation**, including the private tools used for any particular instantiation of this abstract base class, with a consistent implementation agnostic public API.
 
 ## Prompts vs Tool Docstrings
 
 The prompts in each prompt builder file should focus on the high level usage patterns, general guidance to the LLM, and specifically how to reason about the **composition** of tools, which tool to use in which scenario with contrastive explanations etc. However, in order to have a fully modular design and maximise our separation of concerns, it's very important that we do **not** bloat these prompts with any purely tool-specific information. This belongs exclusively in the tool's unique docstring (which the LLM gets access to). If the guidance is about deciding between two tools or using these tools together for complex composite behaviour, then it belongs in the prompt for the high-level public method in `prompt_builders.py`. If it's purely tool-specific, then it belongs in the tools own docstring.
 
-Use this to decide which manager to call, what each owns, and where its jurisdiction ends. Keep manager docstrings implementation‑agnostic; this guide is only for high‑level routing and composition.
+Use this to decide which component owns what and where its jurisdiction ends. Keep manager docstrings implementation‑agnostic; this guide is only for high‑level routing and composition.
 
 ### ConversationManager
-- **Role**: The persistent interaction loop. Reads inbound chat events, decides whether to speak or wait, routes work to `Actor` for code-first execution and steers it (pause/resume/interject/stop/ask) while it runs.
-- **Scope**: Conversation‑level control and message flow over the single in-app chat medium; relays steerable handles from inner tools.
+- **Role**: The persistent interaction loop. Reads the chat, decides whether to speak or wait, routes work to `Actor` for code-first execution and steers it (pause/resume/interject/stop/ask) while it runs.
+- **Scope**: One user, one chat. Owns the chat history (in memory, persisted in its own store table), the notification bar and the in-flight and completed actions. Attachments are file paths passed along with a message.
 - **Connections**:
-  - **Steered by**: The chat front end (`unify/cli.py`, or any client that publishes `UnifyMessageReceived` on the in-memory event broker).
+  - **Steered by**: the chat front end (`unify/cli.py`, or any client that publishes `UnifyMessageReceived` on the in-memory event broker).
   - **Steers**: `Actor.act`; relays in‑flight handles.
 
 ### Actor
-- **Role**: Central intelligence that orchestrates all state managers through code-first plans. Generates and executes Python plans that call primitives and top-level JSON tools.
-- **Scope**: Code-first execution via `act()`. Plans orchestrate `primitives.contacts.*`, `primitives.transcripts.*`, `primitives.files.*`, `primitives.data.*`, `primitives.ingestion.*`, `primitives.secrets.*` and `primitives.actor.*`, plus top-level JSON tools such as `GuidanceManager_*`, `KnowledgeManager_*` and `FunctionManager_*`. Wires in‑flight handles back to `ConversationManager` for real‑time steering.
+- **Role**: Central intelligence. Generates and executes Python programs in a persistent sandbox to satisfy a request, discovering stored skills first.
+- **Scope**: Code-first execution via `act()`. A plan is plain Python plus the sandbox's namespaces: `primitives.actor.*` (nested actors for parallel or delegated work), `execute_function` for stored functions, and the `FunctionManager_*` / `GuidanceManager_*` JSON tools for the skill libraries. Files anywhere on the machine are read where they are; outputs go into the workspace. Wires in‑flight handles back to `ConversationManager` for real‑time steering.
 - **Connections**:
   - **Steered by**: `ConversationManager` (primary caller of `act()`).
-  - **Steers**: State manager primitives, the typed catalogue JSON tools, and the `ConversationManager` handle (`ask`/`interject`/`get_full_transcript`). Uses `FunctionManager` for function discovery and execution.
+  - **Steers**: nested actors, the skill libraries' JSON tools, and the `ConversationManager` handle (`ask`/`interject`/`get_full_transcript`).
 
 ### Actor routing playbook
-- **Read‑only questions**
-  - Contacts → `primitives.contacts.ask`
-  - Transcripts → `primitives.transcripts.ask` (may call `primitives.contacts.ask` for participants)
-  - Knowledge → `KnowledgeManager_search` / `KnowledgeManager_filter` / `KnowledgeManager_get_knowledge`
-  - Secrets (metadata/placeholders only) → `primitives.secrets.ask`
-  - About a specific received file (filename known) → `primitives.files.ask`
-- **Mutations (create/edit/delete/merge)**
-  - Contacts → `primitives.contacts.update`
-  - Knowledge claims → `KnowledgeManager_add_knowledge` / `KnowledgeManager_update_knowledge` / `KnowledgeManager_invalidate_knowledge` / `KnowledgeManager_supersede_knowledge` / `KnowledgeManager_delete_knowledge`
-  - Guidance → `GuidanceManager_add_guidance` / `GuidanceManager_update_guidance` / `GuidanceManager_delete_guidance`
-  - Secrets → `primitives.secrets.update`
-- **Storing new data or files (any source)**
-  - Rows in hand, specific files, whole folders, or a reshape of a stored table → `primitives.ingestion.submit(source, target)`. One verb for every source/target pairing; returns a run handle immediately.
-  - Observe and recover with `primitives.ingestion.get_status` / `get_logs` / `wait` / `retry` / `cancel` / `pause` / `resume`. `status.next_step` states the one action that makes sense.
-  - Close a run with `primitives.ingestion.reconcile` before calling the data ready: it reports rows landed against rows expected **and** the columns that are blank in every row sampled.
-  - There is no `primitives.data.ingest`.
-- **File → knowledge distillation**
-  - Parse with `primitives.files.parse`, then distill durable statements into typed claims via `KnowledgeManager_add_knowledge` (attach `source_refs` pointing at the file / transcript / user statement).
-- **Images**
-  - Images are referenced **by filesystem path** across the entire stack, relative to the workspace root (`<UNIFY_HOME>/workspace`). Managers and plans reference images via their relative filepath.
-
-### ImageManager
-- **Role**: Persistent image store and metadata registry. Provides durable `image_id`‑keyed storage in the `Images` context, backing filesystem images with queryable metadata.
-- **Data model & identity**:
-  - Every stored image has a unique numeric `image_id`.
-  - Image rows store base64 bytes plus metadata (caption, timestamp, mime/type) and an optional `filepath` recording where the image sits in the workspace.
-- **ImageHandle wrapper**: internal code operates on an `ImageHandle` exposing `image_id`, `caption`/metadata, `filepath`, `raw()` and `ask(question)` (a vision‑capable model answers about the image).
-- **Cross‑manager image convention**: filesystem paths are the universal image reference at the orchestration boundary; a receiving manager resolves a path to an `image_id` via `ImageManager.filter_images(filter="filepath == '...'")` when persistent linkage is needed. Managers with a first-class `images` field (e.g. `GuidanceManager`) accept structured `ImageRefs` at their own API boundary.
-- **Connections**:
-  - **Steered by**: managers that persist or query images (`GuidanceManager`, `TranscriptManager`).
-  - **Steers**: —
-
-### KnowledgeManager
-- **Role**: Passive typed claim ledger for durable domain knowledge (facts, policies, definitions, decisions, constraints, insights, preferences) with provenance (`source_refs`) and lifecycle status (active / superseded / invalidated).
-- **Scope**: CRUD and lifecycle operations (`search`, `filter`, `get_knowledge`, `add_knowledge`, `update_knowledge`, `delete_knowledge`, `invalidate_knowledge`, `supersede_knowledge`, `reconcile_sources`, `clear`) exposed as first-class JSON tools on the Actor (`KnowledgeManager_*`). No natural-language `ask` / `update` tool loops.
-- **Negative scope**: Does **not** own people/contacts (ContactManager), procedural how-tos/SOPs (GuidanceManager), user Python functions (FunctionManager), received file bytes/parsing (FileManager), or secrets/credentials (SecretManager).
-- **Writers**: the Actor / ConversationManager (user-requested claim storage), the storage review loop (trajectory distillation into claims), and MemoryManager (offline consolidation).
-- **Connections**:
-  - **Steered by**: `Actor` (via `KnowledgeManager_*` JSON tools); `MemoryManager`.
-  - **Steers**: —
-
-### ContactManager
-- **Role**: Source of truth for people/contact records, including the assistant's own contact and the user's (boss) contact.
-- **Scope**: ask (read‑only), update (create/edit/delete/merge contacts).
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.contacts.*`); `ConversationManager` (direct `ask_about_contacts` / `update_contacts` tools); read‑only usage by `TranscriptManager.ask`.
-  - **Steers**: —
-
-### TranscriptManager
-- **Role**: Store and retrieval surface for message transcripts.
-- **Scope**: ask (read‑only retrieval, filtering, analysis); logs every inbound and outbound chat message.
-- **Edge**: Summarize conversations here; write long‑term distilled facts to `KnowledgeManager` if needed.
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.transcripts.*`); `ConversationManager` (`query_past_transcripts`).
-  - **Steers**: `ContactManager.ask` (for participant lookup in transcript answers).
-
-### FileManager
-- **Role**: Read‑only registry and parsing for files in the workspace and chat attachments.
-- **Scope**: exists/list, parse, ask about a specific file (read‑only tool loop), describe (storage discovery).
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.files.*`).
-  - **Steers**: `DataManager` (internally delegates filter/search/reduce/join operations).
-
-### DataManager
-- **Role**: Low‑level data operations on any store context.
-- **Scope**: filter, search, reduce, join, insert, update, delete, vectorize, plot. `ingest` is the low-level chunked write engine and is **not** exposed to the Actor — storing new data routes through `IngestionManager` so every write is recorded, checkpointed and recoverable.
-- **Connections**:
-  - **Steered by**: `FileManager`, `IngestionManager`, `Actor` (via `primitives.data.*`).
-  - **Steers**: — (pure primitives module, no high‑level tool loops).
-
-### IngestionManager
-- **Role**: The one verb for storing data and files from anywhere — `submit(source, target)` — with a resumable, checkpointed engine behind it.
-- **Scope**: `submit`, `get_status`, `get_logs`, `wait`, `list_runs`, `retry`, `cancel`, `pause`, `resume`, `reconcile` via `primitives.ingestion.*`. Sources: `RowsSource`, `FilesSource` / `FolderSource`, `TableSource`. Targets: `TableTarget` or `CollectionTarget`. Runs and their events are rows in `Ingestion/Runs` + `Ingestion/Events`.
-- **Negative scope**: does not query or reshape-in-place (DataManager), does not answer questions about file contents (FileManager `ask`).
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.ingestion.*`); `FileManager` (attachment ingestion).
-  - **Steers**: `DataManager.ingest` and the file parse pipeline.
-
-### SecretManager
-- **Role**: Owner of secrets.
-- **Scope**: ask (metadata/placeholder answers only), update (create/edit/delete secrets).
-- **Connections**:
-  - **Steered by**: `Actor` (via `primitives.secrets.*`).
-  - **Steers**: —
+- **Before writing code**: `FunctionManager_search_functions` / `FunctionManager_filter_functions` for a stored function that already does it; `GuidanceManager_search` / `GuidanceManager_filter` for a procedure that says how. The discovery-first policy gates the other tools until both were consulted.
+- **A single stored function or primitive call** → `execute_function` (a bare steerable handle; never `execute_code` for one call).
+- **Anything else** → `execute_code`: plain Python, loops, control flow, files, packages installed into a per-function venv.
+- **Parallel or delegated work** → `primitives.actor.act`.
+- **Asking the user** → `request_clarification` (bubbles up through every layer to the chat).
+- **After a run** the storage review decides what to keep: a callable that worked becomes a function, a non-obvious composition becomes guidance.
 
 ### FunctionManager
-- **Role**: Catalogue of stored Python functions, their venvs and their verification ledger (effect class, contract, tier‑0 checks, trust).
+- **Role**: Catalogue of stored Python functions (the **what**), their venvs and their verification ledger (effect class, contract, tier‑0 checks, trust).
 - **Scope**: add/list/filter/search/delete over functions, execution in-process or in a per-function venv, and the read-only builtins catalogue of every primitive the Actor can call.
 - **Connections**:
-  - **Steered by**: `Actor` (discovers and executes functions during plans; the storage review loop stores new ones).
+  - **Steered by**: `Actor` (discovers and executes functions during plans; the storage review stores new ones).
   - **Steers**: —
 
 ### GuidanceManager
-- **Role**: Owner of procedural how-to information: step-by-step instructions, SOPs, software walkthroughs, and strategies for composing functions together.
+- **Role**: Owner of procedural how-to information (the **how**): step-by-step instructions, walkthroughs, and strategies for composing functions together.
 - **Scope**: CRUD (search, filter, add_guidance, update_guidance, delete_guidance) exposed as `GuidanceManager_*` JSON tools on the Actor. Read tools are gated by the discovery-first policy.
 - **Builtins library**: reads also federate over a global, read-only guidance catalogue (`Guidance` context in the `Builtins` project) holding entries imported from the Agent Skills ecosystem with stable hash-based ids and `is_builtin=True`. Seeded from the committed snapshot `unify/guidance_manager/builtins_guidance.json`; `update_guidance`/`delete_guidance` refuse builtin ids.
 - **Connections**:
   - **Steered by**: `Actor` (via `GuidanceManager_*` JSON tools).
   - **Steers**: reads functions from the shared "Functions" context to surface linked functions.
 
-### MemoryManager
-- **Role**: Offline memory maintenance (periodic, non‑interactive).
-- **Scope**: One‑shot methods that return strings (no live handles): updating contacts, bios, rolling summaries, response policies and knowledge from transcript windows.
-- **Connections**:
-  - **Steered by**: `ConversationManager` (every fifty messages) and event-bus callbacks.
-  - **Steers**: `ContactManager.update`, `KnowledgeManager` typed claim APIs.
-
 ### EventBus
-- **Role**: Cross‑cutting, in‑process publish/subscribe backbone and searchable event log used by all managers for telemetry and coordination.
-- **Scope**: Managers publish structured events (notably `ManagerMethod` for incoming/outgoing method calls) via a thin logging wrapper; the bus supports `publish`, `search`, `join_published`/`join_callbacks` for deterministic flushing, per‑type window sizing, and callback registration. Persisting events to `Events/*` contexts is off by default.
+- **Role**: Cross‑cutting, in‑process publish/subscribe backbone and searchable event log used by every component for telemetry and coordination.
+- **Scope**: Components publish structured events (notably `ManagerMethod` for incoming/outgoing method calls) via a thin logging wrapper; the bus supports `publish`, `search`, `join_published`/`join_callbacks` for deterministic flushing, per‑type window sizing, and callback registration. Persisting events to `Events/*` contexts is off by default.
 - **Connections**:
-  - **Steered by**: All public manager methods (through the logging decorator).
-  - **Steers**: `MemoryManager` (registers callbacks to react to message and `ManagerMethod` events).
+  - **Steered by**: all public manager methods (through the logging decorator).
+  - **Steers**: —
 
 ### Precedence and source of truth
 - **Code is canonical**: This guide is descriptive. If the implementation contradicts it, the code takes precedence.
-- **Keep in sync**: As managers evolve, update this document alongside changes to cross‑manager wiring, public surfaces, or prompt composition.
+- **Keep in sync**: As components evolve, update this document alongside changes to cross‑component wiring, public surfaces, or prompt composition.
 - **Where to update**: Prefer updating manager base docstrings (public API contracts) and prompt builders for tool composition guidance, and reflect those changes here.
 
 # Surgical Verification Before Running Tests
@@ -813,7 +705,7 @@ tests/parallel_run.sh --symbolic-only tests
 tests/parallel_run.sh --no-cache tests
 
 # Statistical sampling for eval reliability
-tests/parallel_run.sh --no-cache --repeat 10 --eval-only tests/contact_manager
+tests/parallel_run.sh --no-cache --repeat 10 --eval-only tests/function_manager/
 ```
 
 ## When Debugging Failing Tests

@@ -21,7 +21,6 @@ import pytest
 
 from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import filter_events_by_type
-from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     run_cm_until_wait,
 )
@@ -93,14 +92,13 @@ async def test_storage_check_result_relay(initialized_cm):
     """
     cm = initialized_cm
 
-    simulated_result = "Alice Smith's phone number is +15555552222."
+    simulated_result = "The notes file lists three action items for Friday."
     mock_handle, done_gate = _make_early_resolving_handle(simulated_result)
 
     # ── Setup: process the user's message into chat history ───────────
     await cm.step(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="What is Alice Smith's phone number?",
+            content="What is in the notes file in my workspace?",
         ),
         run_llm=False,
     )
@@ -116,12 +114,12 @@ async def test_storage_check_result_relay(initialized_cm):
 
     cm.cm.completed_actions[handle_id] = {
         "handle": mock_handle,
-        "query": "What is Alice Smith's phone number?",
+        "query": "What is in the notes file in my workspace?",
         "persist": False,
         "handle_actions": [
             {
                 "action_name": "act_started",
-                "query": "What is Alice Smith's phone number?",
+                "query": "What is in the notes file in my workspace?",
                 "timestamp": prompt_now(),
             },
             {

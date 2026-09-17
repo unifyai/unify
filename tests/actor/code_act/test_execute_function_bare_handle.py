@@ -8,6 +8,10 @@ return the handle directly instead of wrapping it in an ExecutionResult dict.
 This ensures the core loop adopts the handle via the bare-handle path
 (adopt_nested, no intermediate LLM turn) rather than the composite path
 (adopt_multi_nested, wasteful LLM turn that always calls wait()).
+
+``primitives.actor`` is a ``StaticActorRunner`` stand-in installed on the
+``ActorEnvironment``'s ``Primitives`` instance, so the handle the primitive
+returns is a completed ``SteerableToolHandle`` and no inner actor runs.
 """
 
 from __future__ import annotations
@@ -19,14 +23,13 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
+from tests.actor.code_act.helpers import StaticActorRunner
 from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments.actor import ActorEnvironment
 from unify.actor.execution import ExecutionResult
-from unify.actor.environments import StateManagerEnvironment
 from unify.common.async_tool_loop import SteerableToolHandle
 from unify.common.llm_helpers import method_to_schema
 from unify.function_manager.function_manager import FunctionManager
-from unify.function_manager.primitives import Primitives, PrimitiveScope
-from unify.manager_registry import ManagerRegistry
 
 pytestmark = pytest.mark.llm_call
 
@@ -35,45 +38,17 @@ pytestmark = pytest.mark.llm_call
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
-    from unify.settings import SETTINGS
-
-    for name in ("CONTACT", "TRANSCRIPT", "KNOWLEDGE", "GUIDANCE", "WEB"):
-        monkeypatch.setenv(f"UNIFY_{name}_IMPL", "simulated")
-        attr = name.lower()
-        if hasattr(SETTINGS, attr):
-            monkeypatch.setattr(
-                getattr(SETTINGS, attr),
-                "IMPL",
-                "simulated",
-                raising=False,
-            )
-
-    for name in ("GUIDANCE", "WEB", "KNOWLEDGE"):
-        monkeypatch.setenv(f"UNIFY_{name}_ENABLED", "true")
-        attr = name.lower()
-        if hasattr(SETTINGS, attr):
-            monkeypatch.setattr(
-                getattr(SETTINGS, attr),
-                "ENABLED",
-                True,
-                raising=False,
-            )
-
-    ManagerRegistry.clear()
+def _static_actor_env() -> ActorEnvironment:
+    env = ActorEnvironment()
+    env.get_instance()._managers["actor"] = StaticActorRunner()
+    return env
 
 
 @pytest_asyncio.fixture
-async def execute_function_tool(
-    configure_simulated_managers,
-) -> AsyncIterator[Any]:
+async def execute_function_tool() -> AsyncIterator[Any]:
     """Yield the execute_function tool closure from a CodeActActor."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
     fm = FunctionManager()
-    actor = CodeActActor(environments=[env], function_manager=fm)
+    actor = CodeActActor(environments=[_static_actor_env()], function_manager=fm)
 
     tools = actor.get_tools("act")
     assert (
@@ -86,10 +61,7 @@ async def execute_function_tool(
     try:
         yield fn
     finally:
-        try:
-            await actor.close()
-        except Exception:
-            pass
+        await actor.close()
 
 
 # ---------------------------------------------------------------------------
@@ -256,33 +228,25 @@ async def test_execute_function_returns_bare_handle_for_primitive(
     """execute_function should return a bare SteerableToolHandle when
     the primitive produces no side output (stdout/stderr/error)."""
     result = await execute_function_tool(
-        thought="Asking the contacts primitive who my contacts are.",
-        function_name="primitives.contacts.ask",
-        call_kwargs={"text": "Who are my contacts?"},
+        thought="Delegating a question to a sub-actor.",
+        function_name="primitives.actor.act",
+        call_kwargs={"request": "What is 2 + 2?"},
     )
 
     assert isinstance(
         result,
         SteerableToolHandle,
     ), f"Expected bare SteerableToolHandle, got {type(result).__name__}: {result!r}"
-
-    # Clean up the running handle.
-    try:
-        await result.stop("test cleanup")
-    except Exception:
-        pass
+    assert await result.result() == "done: What is 2 + 2?"
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
-async def test_execute_function_returns_composite_when_side_output_present(
-    execute_function_tool,
-):
+async def test_execute_function_returns_composite_when_side_output_present():
     """execute_function should return the full ExecutionResult when
     the execution produces stdout alongside the handle."""
     # A composed function that prints AND returns a handle — the print
     # output is meaningful intermediate content the LLM should observe.
-    from unify.function_manager.function_manager import FunctionManager
     from unify.common.context_registry import ContextRegistry
 
     ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
@@ -293,17 +257,14 @@ async def test_execute_function_returns_composite_when_side_output_present(
     fm = FunctionManager()
     fm.add_functions(
         implementations="""
-async def ask_with_log(text: str):
-    print("About to query contacts...")
-    handle = await primitives.contacts.ask(text=text)
+async def delegate_with_log(request: str):
+    print("About to delegate...")
+    handle = await primitives.actor.act(request=request)
     return handle
 """.strip(),
     )
 
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], function_manager=fm)
+    actor = CodeActActor(environments=[_static_actor_env()], function_manager=fm)
 
     try:
         tools = actor.get_tools("act")
@@ -312,9 +273,9 @@ async def ask_with_log(text: str):
             fn = fn.fn
 
         result = await fn(
-            thought="Running the composed contacts query to capture its stdout.",
-            function_name="ask_with_log",
-            call_kwargs={"text": "Who are my contacts?"},
+            thought="Running the composed delegation to capture its stdout.",
+            function_name="delegate_with_log",
+            call_kwargs={"request": "What is 2 + 2?"},
         )
 
         # Composed function runs through the sandbox → stdout is captured
@@ -333,13 +294,6 @@ async def ask_with_log(text: str):
             f"Expected inner result to be SteerableToolHandle, "
             f"got {type(inner_result).__name__}"
         )
-
-        try:
-            await inner_result.stop("test cleanup")
-        except Exception:
-            pass
+        assert await inner_result.result() == "done: What is 2 + 2?"
     finally:
-        try:
-            await actor.close()
-        except Exception:
-            pass
+        await actor.close()

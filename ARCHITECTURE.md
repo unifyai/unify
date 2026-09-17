@@ -4,9 +4,9 @@ This document describes Unify's internal architecture for developers who want to
 
 ## Mental model
 
-Unify implements an AI assistant's brain as a **back office**. Rather than one monolithic agent loop, there are specialized **state managers** — each owning a slice of the assistant's persistent state (contacts, knowledge, transcripts, files, functions, …) — coordinated by a central **Actor** that writes Python programs to compose them, with a persistent **ConversationManager** above the Actor that talks to the user and steers the work.
+Unify implements an AI assistant's brain as a persistent **ConversationManager** that talks to the user, above a central **Actor** that writes Python programs to do the work, backed by two **skill libraries** the Actor consults before it writes code: `FunctionManager` (stored functions) and `GuidanceManager` (procedures). What the assistant learns from a job that went well flows back into those libraries through a storage review.
 
-Most public operations in the system, from searching contacts to running a multi-step plan, run inside an **async LLM tool loop** and return a **steerable handle**. These handles are the universal interface for steerable work: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running. Typed catalogues (Knowledge, Guidance, Functions) are the exception: they expose direct CRUD/lifecycle methods as Actor JSON tools, not NL tool loops.
+Most public operations in the system, from a brain turn to a multi-step plan, run inside an **async LLM tool loop** and return a **steerable handle**. These handles are the universal interface for steerable work: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running. The skill libraries are the exception: they expose direct CRUD methods as Actor JSON tools, not NL tool loops.
 
 ```
 User (terminal chat)
@@ -16,28 +16,25 @@ ConversationManager ── event-driven, one tool decision per turn
  │
  │  starts actions, steers in-flight work
  ▼
-CodeActActor ── Python plans over primitives.* + JSON tools ──►
+CodeActActor ── one Python program per turn in a persistent sandbox ──►
  │
- │  primitive calls start LLM tool loops;
- │  KnowledgeManager_* / GuidanceManager_* / FunctionManager_* are typed tools
+ │  execute_function runs a stored function; primitives.actor nests actors;
+ │  FunctionManager_* / GuidanceManager_* are typed tools
  ▼
 ┌───────────────────────────────────────────────────────┐
-│  State Managers                                       │
+│  Skill libraries                                      │
 │                                                       │
-│  ContactManager    KnowledgeManager   TranscriptManager│
-│  GuidanceManager   FunctionManager    FileManager     │
-│  IngestionManager  ImageManager                       │
-│  SecretManager     DataManager                        │
+│  FunctionManager ─── stored functions, venvs, ledger  │
+│  GuidanceManager ─── procedures, builtins catalogue   │
 │                                                       │
 │  EventBus ─── typed pub/sub backbone                  │
-│  MemoryManager ─── offline consolidation              │
 └───────────────────────────────────────────────────────┘
  │
  ▼
 unify.db ── one SQLite file: projects, contexts, rows, derived columns
 ```
 
-Steering propagates through the full tree: stopping the Actor stops its inner manager loops; interjecting into the ConversationManager can reach a deeply nested in-flight tool loop.
+Steering propagates through the full tree: stopping the Actor stops its nested loops; interjecting into the ConversationManager can reach a deeply nested in-flight tool loop.
 
 The assistant is **reactive**: every piece of work starts from a message the user sent or from work those messages started. There is no scheduler, no timer wheel and no inbound channel other than the in-app chat, so the runtime is one process with no listeners.
 
@@ -150,7 +147,7 @@ class SteerableToolHandle(ABC):
 
 ### Nested steering
 
-When the Actor calls `primitives.contacts.ask(...)`, the ContactManager starts its own tool loop and returns its own `SteerableToolHandle`. This inner handle is tracked by the Actor's loop. When the user calls `handle.pause()` on the Actor's handle, the pause propagates to all active inner handles via a **mirror queue** mechanism:
+When the Actor calls `primitives.actor.act(...)`, the nested actor starts its own tool loop and returns its own `SteerableToolHandle`. This inner handle is tracked by the Actor's loop. When the user calls `handle.pause()` on the Actor's handle, the pause propagates to all active inner handles via a **mirror queue** mechanism:
 
 1. The outer handle receives `pause()`
 2. It sets its own pause event and enqueues a `_mirror` sentinel
@@ -194,20 +191,19 @@ Different handle implementations extend the base signature with domain-specific 
 
 **File:** `unify/actor/code_act_actor.py`
 
-The Actor doesn't pick from a JSON tool menu. It generates Python programs that call typed primitives:
+The Actor doesn't pick from a JSON tool menu. It generates Python programs in a persistent sandbox:
 
 ```python
-contacts = await primitives.contacts.ask("Who was at the Henderson meeting?")
-for contact in contacts:
-    history = await primitives.transcripts.ask(f"What is {contact} working on?")
-    await primitives.contacts.update(f"Note that {contact} is working on {history}")
+rows = load_orders("~/exports/orders.csv")        # a stored function, discovered first
+summary = {s: sum(r["amount"] for r in rows if r["status"] == s) for s in ("paid", "refunded")}
+report = await primitives.actor.act(f"Write a two-paragraph note on {summary}")
 ```
 
-This runs in a `PythonExecutionSession` — a sandboxed environment where the `primitives` namespace is pre-populated with async methods that dispatch to the real managers. Typed catalogues such as Knowledge and Guidance are exposed as top-level JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than `primitives.*`.
+This runs in a `PythonExecutionSession` — a persistent sandbox where stored functions are callable by name, `primitives.actor` spawns nested actors, and state survives between turns.
 
 ### Why CodeAct over JSON tools
 
-JSON tool calling forces every composition to be a separate round-trip. To look up contacts, query transcripts for each, and record what was found, the LLM needs 3+ turns where it re-reads the entire context each time. With CodeAct, the same logic is a single program with variables, loops, and branching — one plan, one LLM turn for the plan, then execution.
+JSON tool calling forces every composition to be a separate round-trip. To load a file, reshape it and hand the result to a nested actor, the LLM would need several turns of tool selection; in Python it is one program with real variables, loops and control flow.
 
 The Actor still uses the async tool loop internally (the LLM generates code as a "tool call" that gets executed), so it inherits all the steering, compression, and observability infrastructure.
 
@@ -219,14 +215,7 @@ The Actor implements a **gating policy**: until the LLM has queried both `Functi
 
 **File:** `unify/function_manager/primitives/registry.py`
 
-`ToolSurfaceRegistry` is the single source of truth for how managers are exposed to the Actor. Each manager has a `ManagerSpec` that defines:
-
-- Which methods to expose (and which to exclude)
-- The sandbox namespace (`primitives.<alias>.<method>`)
-- Priority, domain, description, and usage hints for prompt construction
-- Dependencies between managers
-
-The registry auto-discovers methods from manager base classes, generates tool schemas, builds prompt context, and constructs the sandbox's global state — all from the spec definitions. The same registry seeds a read-only **builtins catalogue** of every primitive into the store, so the Actor can search for a capability the way it searches for a stored function.
+`ToolSurfaceRegistry` is the single source of truth for what the sandbox exposes under `primitives`: the method surface of each namespace (today `primitives.actor`, the nested-actor entry point), its tool schemas, the prompt context that describes it, and the sandbox's global state — all from one declaration.
 
 ### Storage review and the verification ledger
 
@@ -238,37 +227,19 @@ Every stored `Function` row carries a verification ledger: an **effect class** d
 
 ---
 
-## State managers
+## The skill libraries
 
-Each manager follows the same pattern:
+Each library follows the same pattern:
 
-1. A **base class** (`base.py`) defines the public API as abstract methods with rich docstrings. These docstrings are the LLM-facing contract — they're attached to concrete implementations via `@functools.wraps`.
+1. A **base class** (`base.py`) defines the public API as abstract methods with rich docstrings. These docstrings are the LLM-facing contract — they're attached to concrete implementations via `functools.wraps`, so the Actor reads one description whichever implementation is behind it.
 
-2. A **concrete implementation** that registers domain-specific tools in `__init__` and implements each public method as an async tool loop.
+2. A **concrete implementation** whose CRUD methods are exposed to the Actor as `FunctionManager_*` / `GuidanceManager_*` JSON tools.
 
-3. A **prompt builder** (`prompt_builders.py`) that constructs system prompts focusing on tool composition, contrastive guidance (when to use tool A vs. tool B), and high-level reasoning patterns. Tool-specific details stay in tool docstrings.
+3. A **simulated implementation** with the same signatures, used by tests that exercise the actor's routing without paying for the real library.
 
-### Manager isolation
+**FunctionManager** — Stored Python functions with metadata, per-function venvs, the verification ledger, and execution in-process or out-of-process. Also the read-only builtins catalogue of every primitive the Actor can call.
 
-Managers communicate through their public APIs, not shared state. When the TranscriptManager needs contact information to resolve participant names, it calls `ContactManager.ask()` — which starts its own tool loop and returns a handle. This keeps each manager independently testable and replaceable.
-
-The `_as_caller_description` class attribute on each manager tells nested loops who is calling: when one manager calls another, the callee's LLM sees the caller's description as context, not a raw user message.
-
-### Key managers
-
-**ContactManager** — People and relationships. CRUD over structured contact records with search, merge (deduplication), and relationship tracking. Provisions the assistant's own contact and the user's contact on first run.
-
-**KnowledgeManager** — Typed claim ledger for durable domain knowledge (facts, policies, definitions, decisions, constraints, insights, preferences) with provenance and lifecycle status. Exposed as `KnowledgeManager_*` JSON tools on the Actor (like Guidance), not as `primitives.knowledge.*`. Passive store; writers are the live Actor/ConversationManager, the storage review, and MemoryManager.
-
-**TranscriptManager** — Conversation history. Logs every chat message, and searches, filters, and analyzes past conversations. Can resolve participants via ContactManager.
-
-**GuidanceManager** — Procedures and SOPs. Step-by-step instructions, software walkthroughs, and strategies for composing functions. Linked to FunctionManager entries; editing or deleting an entry invalidates the trust of the functions linked to it. A read-only builtins catalogue imported from the Agent Skills ecosystem is federated into every search.
-
-**FunctionManager** — Stored Python functions with metadata, per-function venvs, the verification ledger, and execution in-process or out-of-process.
-
-**FileManager / IngestionManager / DataManager** — Files are parsed by FileManager, stored through IngestionManager's checkpointed runs, and queried through DataManager's filter/search/reduce/join operations over any store context.
-
-**MemoryManager** — Offline consolidation. Runs every ~50 messages to extract contacts, relationships, knowledge, and response policies from recent conversations into the structured managers.
+**GuidanceManager** — Procedures: step-by-step instructions, walkthroughs, and strategies for composing functions. Linked to functions by id, so a rule change finds every implementation that embeds it. Reads federate over a global builtins catalogue of imported Agent Skills.
 
 ---
 
@@ -327,7 +298,7 @@ Managers and tool loops publish structured events (tool calls, steering actions,
 Every tool loop has a **lineage** — a list of string segments tracking its position in the nesting tree, propagated via `TOOL_LOOP_LINEAGE` (a `ContextVar`). Each segment includes a random suffix for per-invocation identity:
 
 ```
-["ConversationManager.act(a1b2)", "Actor.act(c3d4)", "ContactManager.ask(e5f6)"]
+["ConversationManager.act(a1b2)", "Actor.act(c3d4)", "Actor.act(e5f6)"]
 ```
 
 This lineage is attached to every event the loop publishes, enabling full parent-child correlation in logs.
@@ -338,7 +309,7 @@ This lineage is attached to every event the loop publishes, enabling full parent
 
 **File:** `unify/common/_async_tool/propagation_mode.py`
 
-When a tool loop calls a nested tool that starts its own loop, the parent conversation may need to be visible to the child (e.g., so the ContactManager knows what the user originally asked). Unify handles this with explicit role transformation:
+When a tool loop calls a nested tool that starts its own loop, the parent conversation may need to be visible to the child (e.g., so a nested actor knows what the user originally asked). Unify handles this with explicit role transformation:
 
 - **`outer_user` / `outer_assistant`** — parent conversation roles, injected into child loops as system context
 - **`inner_user` / `inner_assistant`** — child conversation roles, visible when the parent inspects via `ask()`
@@ -410,6 +381,7 @@ The core architecture (handles, loops, CodeAct, manager composition) is independ
 unify/
 ├── unify/
 │   ├── cli.py                          # Terminal chat, `python -m unify`
+│   ├── workspace.py                    # The assistant's working directory
 │   ├── db/
 │   │   ├── engine.py                   # The store: contexts, rows, derived columns, commits
 │   │   ├── expressions.py              # The row expression language
@@ -436,21 +408,12 @@ unify/
 │   │       ├── brain.py                # Brain spec construction
 │   │       ├── brain_action_tools.py   # act, wait, and per-action steering tools
 │   │       └── event_handlers.py       # One handler per event type
-│   ├── contact_manager/
-│   ├── knowledge_manager/
-│   ├── transcript_manager/
 │   ├── guidance_manager/
-│   ├── memory_manager/
 │   ├── function_manager/
 │   │   ├── verification/               # Effect classes, contracts, ledger
 │   │   └── primitives/
 │   │       ├── registry.py             # ToolSurfaceRegistry (single source of truth)
 │   │       └── scope.py                # PrimitiveScope
-│   ├── file_manager/
-│   ├── ingestion_manager/
-│   ├── image_manager/
-│   ├── secret_manager/
-│   ├── data_manager/
 │   ├── events/
 │   │   ├── event_bus.py                # EventBus
 │   │   └── types/                      # Pydantic event payloads
@@ -467,7 +430,7 @@ unify/
 
 ## Design principles
 
-**English as an API.** Managers communicate through natural-language interfaces. The Actor orchestrates through English-language primitives. This makes the system inspectable without reading implementation code — you can read the LLM transcripts and understand what happened.
+**English as an API.** Components communicate through natural-language interfaces: the brain speaks to the actor in a request, the actor to nested actors and to the skill libraries in words. This makes the system inspectable without reading implementation code — you can read the LLM transcripts and understand what happened.
 
 **No heuristics, no regex routing.** If the system needs to respond correctly to a type of user input, the fix is always a prompt or tool docstring improvement that nudges the LLM, never a hardcoded rule that pattern-matches on the input.
 

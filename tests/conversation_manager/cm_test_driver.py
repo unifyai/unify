@@ -60,7 +60,7 @@ class CMStepDriver:
     - Capturing and applying published output events to local state
 
     Attributes are proxied to the underlying ConversationManager, so you can
-    access cm.mode, cm.contact_index, etc. directly through the driver.
+    access cm.chat_history, cm.in_flight_actions, etc. directly through the driver.
     """
 
     def __init__(self, cm: "ConversationManager"):

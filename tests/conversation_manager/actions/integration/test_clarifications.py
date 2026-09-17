@@ -11,8 +11,7 @@ import asyncio
 
 import pytest
 
-from tests.helpers import _handle_project, get_or_create_contact
-from tests.conversation_manager.conftest import BOSS
+from tests.helpers import _handle_project
 from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     extract_actor_handle,
@@ -40,35 +39,19 @@ async def test_clarification_handle_contract(initialized_cm_codeact):
     - `handle.next_clarification()` yields a question
     - `handle.answer_clarification(call_id, answer)` delivers the answer
 
-    The handle is a standard AsyncToolLoopHandle (same as ContactManager, etc.).
-    Clarification questions arrive in the handle's internal _clar_q (populated by
-    the inner loop's _handle_clarification when nested tools request clarification).
+    The action's handle wraps the loop handle for the post-completion storage
+    review and delegates ``next_clarification`` to it. Clarification questions
+    arrive in the loop handle's internal _clar_q (populated by the inner loop's
+    _handle_clarification when nested tools request clarification).
     Answers are routed back through the inner loop's mirror mechanism.
     """
     cm = initialized_cm_codeact
 
-    # Ensure there are two Johns so the actor is forced to clarify.
-    _ = get_or_create_contact(
-        cm.cm.contact_manager,
-        first_name="John",
-        surname="Smith",
-        email_address="john.smith@test.com",
-        phone_number="+15555550111",
-    )
-    _ = get_or_create_contact(
-        cm.cm.contact_manager,
-        first_name="John",
-        surname="Doe",
-        email_address="john.doe@test.com",
-        phone_number="+15555550112",
-    )
-
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
-                "Find contacts named John in our records and return their phone numbers and any "
-                "distinguishing info (company, last name, notes)."
+                "Write a short status summary for the Aurora project into a text "
+                "file in my workspace, based on whatever notes you can find there."
             ),
         ),
     )
@@ -79,10 +62,10 @@ async def test_clarification_handle_contract(initialized_cm_codeact):
 
     # Inject a clarification question into the handle's internal clarification
     # queue — the same queue that the inner loop's _handle_clarification() populates
-    # when a nested tool (e.g. ContactManager) calls request_clarification().
-    question = "Which John did you mean: John Smith or John Doe?"
+    # when a nested tool calls request_clarification().
+    question = "Which Aurora did you mean: the mobile app or the data platform?"
     call_id = "test-clar-0"
-    handle._clar_q.put_nowait(
+    handle._inner._clar_q.put_nowait(
         {
             "type": "clarification",
             "call_id": call_id,
@@ -95,18 +78,19 @@ async def test_clarification_handle_contract(initialized_cm_codeact):
     clar = await asyncio.wait_for(handle.next_clarification(), timeout=300)
     assert isinstance(clar, dict)
     q = str(clar.get("question") or "")
-    assert "which john" in q.lower(), f"Expected clarification about John, got: {q!r}"
+    assert (
+        "which aurora" in q.lower()
+    ), f"Expected clarification about Aurora, got: {q!r}"
 
     # Answer clarification via the public API.
     # The answer is routed through the inner loop's mirror mechanism.
     resp_call_id = str(clar.get("call_id") or "")
-    await handle.answer_clarification(resp_call_id, "John Smith")
+    await handle.answer_clarification(resp_call_id, "The mobile app")
 
     # User asks to stop the action so the flow completes deterministically.
     result_stop = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="That's enough, cancel that contact search.",
+            content="That's enough, cancel that summary.",
         ),
     )
     _final = await wait_for_actor_completion(cm, handle_id, timeout=300)
@@ -128,26 +112,12 @@ async def test_clarification_cm_event_broker_path(initialized_cm_codeact):
     """
     cm = initialized_cm_codeact
 
-    # Ensure two Johns so the actor prompt is naturally ambiguous.
-    _ = get_or_create_contact(
-        cm.cm.contact_manager,
-        first_name="John",
-        surname="Smith",
-        email_address="john.smith@golden.test",
-        phone_number="+15555550991",
-    )
-    _ = get_or_create_contact(
-        cm.cm.contact_manager,
-        first_name="John",
-        surname="Doe",
-        email_address="john.doe@golden.test",
-        phone_number="+15555550992",
-    )
-
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="Find John in my contacts and tell me his phone number.",
+            content=(
+                "Write a short status summary for the Aurora project into a text "
+                "file in my workspace, based on whatever notes you can find there."
+            ),
         ),
     )
     actor_event = get_actor_started_event(result)
@@ -158,9 +128,9 @@ async def test_clarification_cm_event_broker_path(initialized_cm_codeact):
     # (same queue that the inner loop populates when nested tools request clarification).
     # Then deterministically apply the corresponding CM-level event, since the background
     # broker consumer is not running in step-driven tests.
-    question = "Which John did you mean: John Smith or John Doe?"
+    question = "Which Aurora did you mean: the mobile app or the data platform?"
     call_id = "0"
-    handle._clar_q.put_nowait(
+    handle._inner._clar_q.put_nowait(
         {
             "type": "clarification",
             "call_id": call_id,
@@ -188,8 +158,7 @@ async def test_clarification_cm_event_broker_path(initialized_cm_codeact):
     # Send a user message that should cause CM brain to answer via answer_clarification_* tool.
     _ = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content="I meant John Smith.",
+            content="I meant the mobile app.",
         ),
     )
 

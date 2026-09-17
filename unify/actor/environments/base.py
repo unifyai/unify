@@ -16,10 +16,10 @@ def matches_segment(pattern: str, canonical_name: str) -> bool:
 
     Examples::
 
-        matches_segment("primitives", "primitives.contacts.ask")      # True
-        matches_segment("primitives.contacts", "primitives.contacts.ask")  # True
-        matches_segment("primitives.contacts.ask", "primitives.contacts.ask")  # True
-        matches_segment("primitives.con", "primitives.contacts.ask")   # False
+        matches_segment("primitives", "primitives.actor.act")      # True
+        matches_segment("primitives.actor", "primitives.actor.act")  # True
+        matches_segment("primitives.actor.act", "primitives.actor.act")  # True
+        matches_segment("primitives.act", "primitives.actor.act")   # False
         matches_segment("functions", "functions.alpha")                 # True
         matches_segment("functions.alpha", "functions.alpha")           # True
     """
@@ -33,7 +33,7 @@ def resolve_directly_callable(
     """Expand a list of dotted-segment patterns into matching canonical tool names.
 
     Args:
-        patterns: List of patterns (e.g., ``["primitives.contacts", "alpha"]``).
+        patterns: List of patterns (e.g., ``["primitives.actor", "alpha"]``).
         all_tool_names: Complete set of canonical tool names across all environments.
 
     Returns:
@@ -58,19 +58,11 @@ def resolve_directly_callable(
 def build_filtered_method_docs(
     allowed_methods: frozenset[str],
     namespace: str = "primitives",
-    exposed_aliases: frozenset[str] | None = None,
 ) -> str:
     """Build method-level documentation for only the specified fully-qualified methods.
 
-    Reusable across all environment types (state managers, computer, actor).
     Uses the ``ToolSurfaceRegistry`` to introspect method signatures and
     docstrings for each allowed method.
-
-    ``exposed_aliases`` names every manager reachable in the session, which can
-    exceed the aliases present in ``allowed_methods`` when per-method filtering
-    has only promoted part of the surface. A superseded manager keeps its
-    supersession framing whenever its replacement is reachable at all; when the
-    caller omits the set, the aliases in ``allowed_methods`` stand in for it.
     """
     from unify.function_manager.primitives.registry import get_registry
 
@@ -87,9 +79,6 @@ def build_filtered_method_docs(
     if not allowed_aliases:
         return ""
 
-    if exposed_aliases is None:
-        exposed_aliases = frozenset(allowed_aliases)
-
     lines = ["### Method Reference\n"]
     for alias in sorted(allowed_aliases):
         spec = registry.get_manager_spec(alias)
@@ -99,8 +88,7 @@ def build_filtered_method_docs(
 
         lines.append(f"\n#### `{namespace}.{alias}`")
         if spec:
-            text = spec.prompt_text(exposed_aliases)
-            lines.append(f"*{text.domain}* — {text.description}")
+            lines.append(f"*{spec.domain}* — {spec.description}")
 
         for method_name in sorted(allowed_aliases[alias]):
             sig_str = registry._format_method_signature(mgr_cls, method_name)
@@ -131,7 +119,7 @@ class ToolMetadata(BaseModel):
             the ID belongs to (IDs are only unique within a context).
         function_context: Which FunctionManager DB context ``function_id``
             belongs to. Required when ``function_id`` is set.
-            ``"primitive"`` for state manager methods (``Functions/Primitives``),
+            ``"primitive"`` for primitive namespace methods (``Functions/Primitives``),
             ``"compositional"`` for user-defined functions
             (``Functions/Compositional``).
     """
@@ -151,8 +139,7 @@ def _callable_accepts_clarification_kwargs(fn: Any) -> bool:
 
     We only inject queues into callables that declare `_clarification_up_q` /
     `_clarification_down_q` explicitly or accept `**kwargs`. This avoids breaking
-    other async utilities (e.g., FileManager wrappers) that do not accept these
-    keyword arguments.
+    other async utilities that do not accept these keyword arguments.
     """
     try:
         sig = inspect.signature(fn)
@@ -336,8 +323,8 @@ class _ClarificationQueueInjector:
         if callable(attr):
             return self._wrap_callable(attr)
 
-        # For nested objects (e.g. `primitives.contacts` returning a manager), return
-        # another injector so `primitives.contacts.ask(...)` also gets queue injection.
+        # For nested objects (e.g. `primitives.actor` returning a runner), return
+        # another injector so `primitives.actor.act(...)` also gets queue injection.
         return self._maybe_wrap_object(attr)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -392,8 +379,8 @@ class _ClarificationQueueInjector:
 class BaseEnvironment(ABC):
     """Abstract interface for execution environments.
 
-    An environment encapsulates a domain of tools (computer/web control, state managers,
-    custom adapters) and provides:
+    An environment encapsulates a domain of tools (nested actors, the function
+    store, custom adapters) and provides:
     - a namespace to inject into the plan execution sandbox
     - metadata for tools (purity/steerability)
     - a prompt context section describing usage patterns for those tools
@@ -471,9 +458,8 @@ class BaseEnvironment(ABC):
 class _CompositeEnvironment(BaseEnvironment):
     """Merges multiple environments sharing the same namespace.
 
-    When several environments share the ``"primitives"`` namespace (e.g.
-    ``StateManagerEnvironment``, ``ComputerEnvironment``, ``ActorEnvironment``),
-    this wrapper aggregates their tool metadata and prompt context while
+    When several environments share the ``"primitives"`` namespace, this
+    wrapper aggregates their tool metadata and prompt context while
     injecting a single ``Primitives`` instance into the sandbox.
     """
 

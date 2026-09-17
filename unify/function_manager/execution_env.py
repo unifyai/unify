@@ -7,7 +7,7 @@ compositional functions with:
 - Common standard library modules (asyncio, re, json, datetime, collections)
 - Typing module and common type hints
 - Pydantic support (if available)
-- Access to primitives (state managers, computer use)
+- Access to primitives (``primitives.actor``)
 - Steerable handle infrastructure (for functions that return steerable handles)
 """
 
@@ -212,7 +212,6 @@ def create_execution_globals() -> Dict[str, Any]:
 
     Extends create_base_globals() with:
     - The `primitives` object for lazy access to all primitive operations
-      (state managers, computer use, etc.)
     - Steerable handle infrastructure for functions that return handles
       (SteerableToolHandle)
     - The `unillm` module for advanced direct LLM usage

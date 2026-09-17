@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     get_actor_started_event,
@@ -24,7 +23,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
 )
 from unify.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
-from unify.file_manager.settings import get_local_root
+from unify.workspace import get_local_root
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval, pytest.mark.llm_call]
 
@@ -51,7 +50,6 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     # ------------------------------------------------------------------
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "Please generate a simple PNG image of a solid red square on a white "
                 "background (200x200 pixels) and save it to the Outputs folder. "
@@ -130,8 +128,11 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
 
     # A sent attachment resolves to a readable local file.
     attachment = attachment_events[0].attachments[0]
-    assert attachment.get("filepath"), f"Attachment carries no filepath: {attachment}"
-    assert attachment.get("size_bytes", 0) > 0, f"Attachment is empty: {attachment}"
+    attachment_path = Path(attachment)
+    if not attachment_path.is_absolute():
+        attachment_path = local_root / attachment_path
+    assert attachment_path.is_file(), f"Attachment is not a file: {attachment}"
+    assert attachment_path.stat().st_size > 0, f"Attachment is empty: {attachment}"
 
     # ------------------------------------------------------------------
     # Step 4: LLM judge — ask a vision model what's in the image

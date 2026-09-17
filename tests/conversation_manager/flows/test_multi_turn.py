@@ -19,7 +19,6 @@ from tests.conversation_manager.cm_helpers import (
     assert_content_contains,
     get_exactly_one,
 )
-from tests.conversation_manager.conftest import TEST_CONTACTS
 from unify.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
@@ -40,12 +39,9 @@ async def test_unify_message_two_turn_recall(initialized_cm):
     Two-turn conversation: user mentions a word, then asks assistant to recall it.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Turn 1: User mentions a unique identifier
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="My order number is ABC-9876. Please confirm you have it.",
         ),
     )
@@ -55,7 +51,6 @@ async def test_unify_message_two_turn_recall(initialized_cm):
     # Turn 2: User asks assistant to recall it
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="What was my order number?",
         ),
     )
@@ -78,12 +73,9 @@ async def test_unify_message_three_turn_recall(initialized_cm):
     Three-turn conversation: verify context persists across multiple exchanges.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
-    # Turn 1: First piece of info (use non-identity info to avoid conflict with contact metadata)
+    # Turn 1: First piece of info
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="My favorite color is blue. Please acknowledge.",
         ),
     )
@@ -92,7 +84,6 @@ async def test_unify_message_three_turn_recall(initialized_cm):
     # Turn 2: Second piece of info
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="I live in Seattle. Please acknowledge.",
         ),
     )
@@ -101,7 +92,6 @@ async def test_unify_message_three_turn_recall(initialized_cm):
     # Turn 3: Ask about both
     result3 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=contact,
             content="What is my favorite color and where do I live?",
         ),
     )

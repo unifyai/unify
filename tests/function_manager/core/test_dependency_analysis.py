@@ -131,35 +131,7 @@ class TestEnvironmentDependencies:
     """Tests for dotted environment call dependency tracking."""
 
     def test_primitive_call_detected(self):
-        """Awaited primitives.contacts.ask() is captured as a dependency."""
-        source = """
-async def main():
-    result = await primitives.contacts.ask("find John")
-    return result
-"""
-        deps = collect_dependencies_from_source(
-            source,
-            set(),
-            environment_namespaces=frozenset({"primitives"}),
-        )
-        assert "primitives.contacts.ask" in deps
-
-    def test_files_primitive_detected(self):
-        """Awaited primitives.files.describe() is captured."""
-        source = """
-async def main():
-    layout = await primitives.files.describe(file_path="report.pdf")
-    return layout
-"""
-        deps = collect_dependencies_from_source(
-            source,
-            set(),
-            environment_namespaces=frozenset({"primitives"}),
-        )
-        assert "primitives.files.describe" in deps
-
-    def test_actor_act_detected(self):
-        """Awaited primitives.actor.act() is captured."""
+        """Awaited primitives.actor.act() is captured as a dependency."""
         source = """
 async def main():
     handle = await primitives.actor.act("do the thing")
@@ -172,20 +144,34 @@ async def main():
         )
         assert "primitives.actor.act" in deps
 
+    def test_keyword_call_detected(self):
+        """A keyword-argument call is captured under its full dotted name."""
+        source = """
+async def main():
+    handle = await primitives.actor.act(request="summarise", timeout=30)
+    return handle
+"""
+        deps = collect_dependencies_from_source(
+            source,
+            set(),
+            environment_namespaces=frozenset({"primitives"}),
+        )
+        assert deps == {"primitives.actor.act"}
+
     def test_mixed_dependencies(self):
         """Both bare compositional and dotted environment deps are captured."""
         source = """
 async def main():
     data = helper()
-    result = await primitives.transcripts.ask(data)
-    return result
+    handle = await primitives.actor.act(data)
+    return await handle.result()
 """
         deps = collect_dependencies_from_source(
             source,
             {"helper"},
             environment_namespaces=frozenset({"primitives"}),
         )
-        assert deps == {"helper", "primitives.transcripts.ask"}
+        assert deps == {"helper", "primitives.actor.act"}
 
     def test_unknown_dotted_name_not_detected(self):
         """Dotted calls whose root is not in environment_namespaces are ignored."""
@@ -200,48 +186,43 @@ async def main():
         )
         assert deps == set()
 
-    def test_no_environment_namespaces_backward_compat(self):
-        """Omitting environment_namespaces preserves old behavior (no dotted deps)."""
+    def test_no_environment_namespaces_ignores_dotted_calls(self):
+        """Omitting environment_namespaces captures bare names only."""
         source = """
 async def main():
-    await primitives.contacts.ask("query")
+    await primitives.actor.act("query")
     return helper()
 """
         deps = collect_dependencies_from_source(source, {"helper"})
         assert deps == {"helper"}
 
-    def test_multiple_primitives_in_one_function(self):
-        """Multiple distinct primitive calls are all captured."""
+    def test_repeated_calls_collapse_to_one_dependency(self):
+        """Several calls to the same primitive record a single dependency."""
         source = """
 async def main():
-    contacts = await primitives.contacts.ask("list all")
-    await primitives.transcripts.ask("latest headlines")
-    handle = await primitives.actor.act("subtask")
-    return contacts
+    first = await primitives.actor.act("subtask one")
+    second = await primitives.actor.act("subtask two")
+    return first, second
 """
         deps = collect_dependencies_from_source(
             source,
             set(),
             environment_namespaces=frozenset({"primitives"}),
         )
-        assert deps == {
-            "primitives.contacts.ask",
-            "primitives.transcripts.ask",
-            "primitives.actor.act",
-        }
+        assert deps == {"primitives.actor.act"}
 
     def test_non_awaited_environment_call(self):
         """Environment calls without await are also captured (sync or handle-only)."""
         source = """
 def main():
-    primitives.contacts.ask("query")
+    primitives.actor.act("query")
 """
         deps = collect_dependencies_from_source(
             source,
             set(),
             environment_namespaces=frozenset({"primitives"}),
         )
-        assert "primitives.contacts.ask" in deps
+        assert "primitives.actor.act" in deps
 
 
 class TestDetectThirdPartyImports:
@@ -317,7 +298,7 @@ async def my_func():
         source = """
 async def my_func():
     import primitives
-    return await primitives.contacts.ask("hi")
+    return await primitives.actor.act("hi")
 """
         result = detect_third_party_imports_from_source(
             source,

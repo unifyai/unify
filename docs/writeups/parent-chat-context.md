@@ -35,7 +35,7 @@ Asking isn't a disaster — clarifications bubble up through the layers cleanly,
 
 ## Turtles all the way down
 
-The same argument exists below the conversation layer, at every boundary. When an actor calls a manager's inner loop — `contacts.ask`, `transcripts.ask`, the task scheduler — those methods accept `_parent_chat_context` too, and the actor's loop nests its own local messages on top of whatever parent context it received, so the manager sees the whole chain. The actor's Python sandbox even wraps the primitives in a forwarding proxy: generated code writes a plain `primitives.contacts.ask(...)` and the proxy injects the context argument behind the scenes, because the one thing you can't rely on is the model remembering to thread bookkeeping through every call it writes.
+The same argument exists below the conversation layer, at every boundary. When an actor calls a nested loop — a child actor, a manager method — those methods accept `_parent_chat_context` too, and the actor's loop nests its own local messages on top of whatever parent context it received, so the manager sees the whole chain. The actor's Python sandbox even wraps the primitives in a forwarding proxy: generated code writes a plain `primitives.contacts.ask(...)` and the proxy injects the context argument behind the scenes, because the one thing you can't rely on is the model remembering to thread bookkeeping through every call it writes.
 
 ## Who decides
 

@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from enum import Enum
 from unify.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
 from unify.common.llm_client import new_slow_brain_llm_client
-from unify.manager_registry import ManagerRegistry
 from .base import BaseConversationManagerHandle
 from .events import (
     NotificationInjectedEvent,
@@ -19,7 +18,6 @@ import logging
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
     from unify.conversation_manager.in_memory_event_broker import InMemoryEventBroker
-    from unify.transcript_manager.base import BaseTranscriptManager
 
 T = TypeVar("T", bound=[BaseModel, Enum])
 
@@ -30,6 +28,9 @@ logger = logging.getLogger(__name__)
 # and thinking; short enough that a user who walked away does not hold the
 # loop open indefinitely.
 USER_REPLY_TIMEOUT_S = 120
+
+# How much of the conversation the ask loop and ``get_full_transcript`` see.
+RECENT_TRANSCRIPT_MESSAGES = 20
 
 
 class ConversationManagerHandle(BaseConversationManagerHandle):
@@ -45,9 +46,7 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
         self,
         event_broker: "InMemoryEventBroker",
         conversation_id: str,
-        contact_id: int,
         *,
-        transcript_manager: "BaseTranscriptManager | None" = None,
         conversation_manager: "ConversationManager",
     ):
         """
@@ -55,8 +54,6 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
         """
         self.event_broker = event_broker
         self.conversation_id = conversation_id
-        self.contact_id = contact_id
-        self._tm = transcript_manager or ManagerRegistry.get_transcript_manager()
         self.conversation_manager = conversation_manager
 
         self._steering_channel = "app:comms:steering"
@@ -68,41 +65,23 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
     # ─────────────────────────────────────────────────────────────
     async def get_full_transcript(
         self,
-        max_messages: int = 20,
+        max_messages: int = RECENT_TRANSCRIPT_MESSAGES,
     ) -> dict:
-        """
-        Polls the durable transcript store for recent messages in this conversation.
-        """
-
-        # _filter_messages is synchronous, so we run it in a thread to avoid blocking.
-        def _fetch_from_transcript():
-            return self._tm._filter_messages(limit=max_messages)["messages"]
-
-        try:
-            # Await the thread-based call
-            results = await asyncio.to_thread(_fetch_from_transcript)
-        except Exception as e:
-            return {"status": "error", "message": f"Transcript read failed: {e}"}
-
-        # Format the results into a clean JSON shape for the LLM
+        """Return the most recent messages of the conversation."""
         messages = [
             {
-                "message_id": m.message_id,
-                "timestamp": getattr(
-                    m.timestamp,
-                    "isoformat",
-                    lambda: str(m.timestamp),
-                )(),
-                "content": m.content,
-                "medium": m.medium.value,
+                "role": message.role,
+                "timestamp": message.timestamp.isoformat(),
+                "content": message.content,
+                "attachments": list(message.attachments),
             }
-            for m in (results or [])
+            for message in self.conversation_manager.chat_history.recent(max_messages)
         ]
 
         if messages:
-            logger.info(f"TOOL: Found {len(messages)} user message(s).")
+            logger.info(f"TOOL: Found {len(messages)} message(s).")
         else:
-            logger.info("TOOL: No new user messages found yet.")
+            logger.info("TOOL: No messages found yet.")
 
         return {
             "status": "ok",
@@ -132,31 +111,21 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
 
         cm_handle = self
 
-        # Build recent transcript from contact_index for LLM context
-        recent_transcript_for_prompt: str = ""
-        try:
-            contact = self.conversation_manager.contact_index.get_contact(
-                contact_id=self.contact_id,
+        # The recent conversation gives the loop a chance to answer without
+        # asking (PATH 1).
+        conversation_turns, _ = self.conversation_manager.get_recent_transcript(
+            max_messages=RECENT_TRANSCRIPT_MESSAGES,
+        )
+        if conversation_turns:
+            prompt_lines = [
+                f"- {turn['role']}: {turn['content']}" for turn in conversation_turns
+            ]
+            recent_transcript_for_prompt = (
+                f"Recent Transcript (last {RECENT_TRANSCRIPT_MESSAGES} messages):\n"
+                + "\n".join(prompt_lines)
             )
-
-            conversation_turns, _ = self.conversation_manager.get_recent_transcript(
-                contact=contact,
-                max_messages=20,
-            )
-
-            if conversation_turns:
-                prompt_lines = [
-                    f"- {turn['role']}: {turn['content']}"
-                    for turn in conversation_turns
-                ]
-                recent_transcript_for_prompt = (
-                    "Recent Transcript (last 20 messages):\n" + "\n".join(prompt_lines)
-                )
-            else:
-                recent_transcript_for_prompt = "Recent Transcript: (none)"
-        except Exception as e:
-            logger.error(f"Could not fetch transcript context: {e}")
-            recent_transcript_for_prompt = "Recent Transcript: (error)"
+        else:
+            recent_transcript_for_prompt = "Recent Transcript: (none)"
 
         # Build prompts using prompt_builders
         prompt_parts = build_ask_handle_prompt(
@@ -202,10 +171,7 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
             user_reply_future = asyncio.Future()
             return f"User replied: {user_msg}"
 
-        tools = {
-            "ask_question": ask_question,
-            "ask_historic_transcript": self._tm.ask,
-        }
+        tools = {"ask_question": ask_question}
 
         # ──────────────────────────────────────────────────────────────────
         # 3. START THE LOOP

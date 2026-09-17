@@ -16,7 +16,6 @@ from tests.helpers import _handle_project
 from unify.guidance_manager.builtins_catalog import (
     BUILTINS_GUIDANCE_CONTEXT,
     CONTENT_EMBED_HEAD_CHARS,
-    PLATFORM_GUIDANCE_ENTRIES,
     default_guidance_entries,
     load_snapshot,
     seed_builtin_guidance,
@@ -114,7 +113,7 @@ def test_default_catalogue_is_converged():
 
 
 # --------------------------------------------------------------------------- #
-# Default library (imported-skills snapshot + platform-authored entries)       #
+# Default library (imported-skills snapshot)                                   #
 # --------------------------------------------------------------------------- #
 
 
@@ -125,10 +124,7 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
     snapshot = load_snapshot()
     assert len(snapshot) == 58
     entries = default_guidance_entries()
-    assert len(entries) == len(snapshot) + len(PLATFORM_GUIDANCE_ENTRIES)
-    # Platform entries are code-versioned, never part of the snapshot, and
-    # can never be shadowed by an imported-skill key.
-    assert not set(PLATFORM_GUIDANCE_ENTRIES) & set(snapshot)
+    assert entries == snapshot
 
     # Several skills exceed the backend's per-input embedding limit; seeding
     # must still succeed because ranking embeds a truncated content head.
@@ -163,71 +159,6 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
         full = gm.get_guidance(guidance_id=row.guidance_id)
         assert full.content == by_title[full.title]["content"]
         assert len(full.content) > GUIDANCE_PREVIEW_CHARS
-
-
-# Core platform entries and the operative phrases their first
-# GUIDANCE_PREVIEW_CHARS chars must carry: GM search and list reads return
-# ~2,000-char previews, and the follow-up get_guidance call is not mandated,
-# so the preview window has to carry the operative contract.
-_PLATFORM_PREVIEW_CONTRACTS = {
-    "platform/manager-routing": [
-        "DATA INSIDE tables",
-        "FILES themselves",
-        "`primitives.ingestion.submit`",
-    ],
-}
-
-
-@_handle_project
-def test_platform_guidance_entries_exist_and_previews_carry_contract(
-    builtins_test_project,
-    monkeypatch,
-):
-    """Deterministic existence layer (no embeddings): each core platform
-    entry seeds idempotently, is retrievable via a non-semantic filter read,
-    and its preview window carries the operative contract."""
-    from unify.guidance_manager import builtins_catalog
-    from unify.guidance_manager.guidance_manager import GUIDANCE_PREVIEW_CHARS
-
-    # Embedding backfill needs the (currently key-gated) embeddings backend;
-    # the existence layer must run without it.
-    monkeypatch.setattr(
-        builtins_catalog,
-        "ensure_vector_column",
-        lambda *args, **kwargs: None,
-    )
-
-    entries = {
-        key: PLATFORM_GUIDANCE_ENTRIES[key] for key in _PLATFORM_PREVIEW_CONTRACTS
-    }
-    assert set(entries) == set(_PLATFORM_PREVIEW_CONTRACTS)
-
-    assert seed_builtin_guidance(entries=entries) is True
-    # Idempotent: converged reseed is a read-only no-op.
-    assert seed_builtin_guidance(entries=entries) is False
-
-    gm = GuidanceManager()
-    rows = gm.filter(filter="is_builtin == True", limit=100)
-    by_id = {row.guidance_id: row for row in rows}
-
-    for key, phrases in _PLATFORM_PREVIEW_CONTRACTS.items():
-        entry = PLATFORM_GUIDANCE_ENTRIES[key]
-        gid = stable_guidance_id(entry["title"])
-        assert gid in by_id, f"{key} missing from non-semantic filter read"
-        row = by_id[gid]
-        assert row.title == entry["title"]
-        # The stored preview (what list reads/search hits actually show) must
-        # carry every operative phrase inside the preview cap. Whitespace is
-        # normalized so line-wrapping tweaks do not break the pin.
-        preview = " ".join(row.content[:GUIDANCE_PREVIEW_CHARS].split())
-        for phrase in phrases:
-            assert phrase in preview, (
-                f"{key}: operative phrase {phrase!r} not in the first "
-                f"{GUIDANCE_PREVIEW_CHARS} chars"
-            )
-        # The full body round-trips verbatim through get_guidance.
-        full = gm.get_guidance(guidance_id=gid)
-        assert full.content == entry["content"]
 
 
 @_handle_project

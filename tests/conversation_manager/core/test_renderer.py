@@ -12,10 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unify.conversation_manager.domains.contact_index import (
-    ContactIndex,
-    UnifyMessage,
-)
+from unify.conversation_manager.domains.chat_history import ChatHistory, ChatMessage
 from unify.conversation_manager.domains.notifications import (
     NotificationBar,
     Notification,
@@ -27,17 +24,11 @@ from unify.conversation_manager.domains.renderer import (
     NotificationElement,
     ActionElement,
     compute_snapshot_diff,
-    _get_current_time_in_timezone,
+    user_display_name,
 )
+from unify.session_details import SESSION_DETAILS
 
 pytestmark = pytest.mark.no_unify_context
-
-
-# =============================================================================
-# Test Fixtures
-
-
-# =============================================================================
 
 
 @pytest.fixture
@@ -46,83 +37,91 @@ def renderer():
     return Renderer()
 
 
-# =============================================================================
-# Tests for UnifyMessage Rendering
+@pytest.fixture
+def user_name(monkeypatch):
+    """Pin the user's name so message lines render deterministically."""
+    monkeypatch.setattr(SESSION_DETAILS.user, "first_name", "Dana")
+    monkeypatch.setattr(SESSION_DETAILS.user, "surname", "Owner")
+    return "Dana Owner"
+
+
+def _message(role: str, content: str, ts: datetime, attachments=None) -> ChatMessage:
+    return ChatMessage(
+        role=role,
+        content=content,
+        timestamp=ts,
+        attachments=list(attachments or []),
+    )
 
 
 # =============================================================================
+# Tests for message rendering
+# =============================================================================
 
 
-class TestRendererUnifyMessage:
-    """Tests for UnifyMessage rendering (in-app chat)."""
+class TestRendererMessage:
+    """Tests for one conversation line."""
 
-    def test_render_incoming_unify_message_shows_contact_name(self, renderer):
-        """Incoming UnifyMessage shows contact's name."""
-        message = UnifyMessage(
-            name="Boss",
-            content="Please send the report to Alice.",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            attachments=[],
+    def test_render_incoming_message_shows_user_name(self, renderer, user_name):
+        """An inbound message is attributed to the user by name."""
+        message = _message(
+            "user",
+            "Please summarise the report.",
+            datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
         )
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
         result = renderer.render_message(message, last_snapshot)
 
-        assert "[Boss @" in result
-        assert "Please send the report to Alice." in result
+        assert "[Dana Owner @" in result
+        assert "Please summarise the report." in result
         assert "**NEW**" in result
 
-    def test_render_outgoing_unify_message_shows_you(self, renderer):
-        """Outgoing UnifyMessage shows 'You' as the sender."""
-        message = UnifyMessage(
-            name="You",
-            content="Done, I've sent the report.",
-            timestamp=datetime(2025, 6, 13, 12, 5, 0, tzinfo=timezone.utc),
-            role="assistant",
-            attachments=[],
+    def test_render_outgoing_message_shows_you(self, renderer, user_name):
+        """An assistant message shows 'You' as the sender."""
+        message = _message(
+            "assistant",
+            "Done, I've summarised the report.",
+            datetime(2025, 6, 13, 12, 5, 0, tzinfo=timezone.utc),
         )
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
         result = renderer.render_message(message, last_snapshot)
 
         assert "[You @" in result
-        assert "Done, I've sent the report." in result
+        assert "Done, I've summarised the report." in result
 
-    def test_render_unify_message_with_attachments(self, renderer):
-        """Attachments render as ``filename (filepath)`` so the Actor can open them."""
-        message = UnifyMessage(
-            name="Boss",
-            content="Here's the document.",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            attachments=[
-                {
-                    "filename": "report.pdf",
-                    "filepath": "Attachments/report.pdf",
-                    "content_type": "application/pdf",
-                    "size_bytes": 1024,
-                },
-                {
-                    "filename": "data.xlsx",
-                    "filepath": "Attachments/data.xlsx",
-                    "content_type": "application/vnd.ms-excel",
-                    "size_bytes": 2048,
-                },
-            ],
+    def test_old_message_has_no_new_marker(self, renderer, user_name):
+        """A message older than the last snapshot renders without **NEW**."""
+        message = _message(
+            "user",
+            "Old news.",
+            datetime(2025, 6, 13, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
+        assert "**NEW**" not in renderer.render_message(message, last_snapshot)
+
+    def test_render_message_with_attachments(self, renderer, user_name):
+        """Attachments render as workspace paths so the Actor can open them."""
+        message = _message(
+            "user",
+            "Here's the document.",
+            datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
+            attachments=["Attachments/report.pdf", "Attachments/data.xlsx"],
         )
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
         result = renderer.render_message(message, last_snapshot)
 
         assert "Here's the document." in result
-        assert (
-            "[Attachments: report.pdf (Attachments/report.pdf), "
-            "data.xlsx (Attachments/data.xlsx)]" in result
-        )
+        assert "[Attachments: Attachments/report.pdf, Attachments/data.xlsx]" in result
+
+    def test_user_display_name_falls_back_to_placeholder(self, monkeypatch):
+        """With no user name configured the placeholder first name is used."""
+        monkeypatch.setattr(SESSION_DETAILS.user, "first_name", "")
+        monkeypatch.setattr(SESSION_DETAILS.user, "surname", "")
+        assert user_display_name() == "Default"
 
 
 # =============================================================================
 # Tests for Incremental Diff
-
-
 # =============================================================================
 
 
@@ -136,9 +135,7 @@ class TestComputeSnapshotDiff:
             full_render="<full_state>content</full_state>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts1,
                     rendered="[User @ ...]: Hello",
                 ),
@@ -156,9 +153,7 @@ class TestComputeSnapshotDiff:
             full_render="<state>same</state>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts1,
                     rendered="[User @ ...]: Hello",
                 ),
@@ -168,9 +163,7 @@ class TestComputeSnapshotDiff:
             full_render="<state>same</state>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts1,
                     rendered="[User @ ...]: Hello",
                 ),
@@ -189,9 +182,7 @@ class TestComputeSnapshotDiff:
             full_render="<state>old</state>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts1,
                     rendered="[User @ ...]: Hello",
                 ),
@@ -201,16 +192,12 @@ class TestComputeSnapshotDiff:
             full_render="<state>new</state>",
             messages=[
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=0,
+                    index_in_conversation=0,
                     timestamp=ts1,
                     rendered="[User @ ...]: Hello",
                 ),
                 MessageElement(
-                    contact_id=1,
-                    thread_name="global",
-                    index_in_thread=1,
+                    index_in_conversation=1,
                     timestamp=ts2,
                     rendered="[User @ ...]: Please help me",
                 ),
@@ -268,7 +255,7 @@ class TestComputeSnapshotDiff:
             actions=[
                 ActionElement(
                     handle_id=0,
-                    query="search contacts",
+                    query="search the workspace",
                     status="executing",
                     history_count=0,
                     rendered="<action id='0' status='executing'>...",
@@ -280,7 +267,7 @@ class TestComputeSnapshotDiff:
             actions=[
                 ActionElement(
                     handle_id=0,
-                    query="search contacts",
+                    query="search the workspace",
                     status="executing",
                     history_count=1,  # History count changed (new event)
                     rendered="<action id='0' status='executing'>new history event...",
@@ -303,17 +290,17 @@ class TestComputeSnapshotDiff:
             actions=[
                 ActionElement(
                     handle_id=0,
-                    query="search contacts",
+                    query="search the workspace",
                     status="executing",
                     history_count=0,
-                    rendered="<action id='0'>search contacts...",
+                    rendered="<action id='0'>search the workspace...",
                 ),
             ],
         )
 
         diff = compute_snapshot_diff(old_snapshot, new_snapshot)
         assert "<action_updates>" in diff
-        assert "search contacts" in diff
+        assert "search the workspace" in diff
 
     def test_diff_tracks_notification_pinned_state_change(self):
         """Notification pinned state change is detected as a new notification."""
@@ -352,15 +339,9 @@ class TestRenderStateWithTracking:
     """Tests for render_state with element tracking."""
 
     @pytest.fixture
-    def contact_index(self):
-        """Create a ContactIndex with a conversation."""
-        ci = ContactIndex()
-        ci._fallback_contacts[1] = {
-            "contact_id": 1,
-            "first_name": "Alice",
-            "surname": "Smith",
-        }
-        return ci
+    def chat_history(self):
+        """An unbound (in-memory only) chat history."""
+        return ChatHistory()
 
     @pytest.fixture
     def notification_bar(self):
@@ -370,14 +351,14 @@ class TestRenderStateWithTracking:
     def test_returns_snapshot_state_with_full_render(
         self,
         renderer,
-        contact_index,
+        chat_history,
         notification_bar,
     ):
         """render_state returns SnapshotState with full_render."""
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             last_snapshot=last_snapshot,
@@ -387,12 +368,12 @@ class TestRenderStateWithTracking:
         assert result.full_render is not None
         assert "<notifications>" in result.full_render
         assert "<in_flight_actions>" in result.full_render
-        assert "<active_conversations>" in result.full_render
+        assert "<conversation>" in result.full_render
 
     def test_snapshot_ends_with_the_current_time_pane(
         self,
         renderer,
-        contact_index,
+        chat_history,
         notification_bar,
     ):
         """The wall clock closes the snapshot, not the system prompt.
@@ -407,7 +388,7 @@ class TestRenderStateWithTracking:
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             last_snapshot=last_snapshot,
@@ -418,102 +399,89 @@ class TestRenderStateWithTracking:
     def test_tracks_messages_in_conversation(
         self,
         renderer,
-        contact_index,
+        chat_history,
         notification_bar,
+        user_name,
     ):
-        """Messages in conversations are tracked with identity."""
+        """Messages in the conversation are tracked with identity."""
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
-        contact_index.push_message(
-            contact_id=1,
-            sender_name="Alice",
-            message_content="Hello there!",
-            timestamp=ts1,
-            role="user",
-        )
+        chat_history.append(role="user", content="Hello there!", timestamp=ts1)
 
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             last_snapshot=last_snapshot,
         )
 
-        # Should have tracked the message
-        assert len(result.messages) >= 1
-        msg = next(m for m in result.messages if "Hello there!" in m.rendered)
-        assert msg.contact_id == 1
+        assert len(result.messages) == 1
+        msg = result.messages[0]
+        assert "Hello there!" in msg.rendered
+        assert "[Dana Owner @" in msg.rendered
+        assert msg.index_in_conversation == 0
         assert msg.timestamp == ts1
 
-    def test_render_state_uses_shared_assistant_timezone_helper(
+    def test_conversation_is_capped_to_the_most_recent_messages(
         self,
         renderer,
-        contact_index,
+        chat_history,
         notification_bar,
-        monkeypatch,
+        user_name,
     ):
-        """Active conversation rendering gets assistant timezone from common helper."""
-        calls = []
-
-        def fake_get_assistant_timezone():
-            calls.append(True)
-            return "America/New_York"
-
-        monkeypatch.setattr(
-            "unify.conversation_manager.domains.renderer.get_assistant_timezone",
-            fake_get_assistant_timezone,
-        )
-        contact_index._fallback_contacts[1]["timezone"] = "America/Los_Angeles"
-        ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
-        contact_index.push_message(
-            contact_id=1,
-            sender_name="Alice",
-            message_content="Hello there!",
-            timestamp=ts1,
-            role="user",
-        )
+        """Only the last ``max_messages`` messages render, oldest dropped first."""
+        base = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
+        for i in range(10):
+            chat_history.append(
+                role="user",
+                content=f"message_{i}",
+                timestamp=base.replace(minute=i),
+            )
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             last_snapshot=datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
+            max_messages=3,
         )
 
-        assert calls == [True]
-        assert "America/New_York" in result.full_render
-        assert "America/Los_Angeles" in result.full_render
+        for i in range(7):
+            assert f"message_{i}" not in result.full_render
+        for i in range(7, 10):
+            assert f"message_{i}" in result.full_render
+        assert [m.index_in_conversation for m in result.messages] == [7, 8, 9]
 
     def test_render_state_includes_recent_tool_executions(
         self,
         renderer,
-        contact_index,
+        chat_history,
         notification_bar,
     ):
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             recent_tool_executions=[
                 {
                     "generation": 2,
                     "origin_event_name": "UnifyMessageReceived",
-                    "tool_name": "ask_about_contacts",
-                    "args_preview": '{"query":"Who is Alice?"}',
-                    "result_preview": '{"answer":"Alice Smith"}',
+                    "tool_name": "act",
+                    "args_preview": '{"query":"Summarise the report"}',
+                    "result_preview": '{"status":"acting"}',
                 },
             ],
             last_snapshot=last_snapshot,
         )
 
         assert "<recent_tool_executions>" in result.full_render
-        assert "tool=ask_about_contacts" in result.full_render
+        assert "tool=act" in result.full_render
         assert "origin=UnifyMessageReceived" in result.full_render
 
-    def test_tracks_notifications(self, renderer, contact_index, notification_bar):
+    def test_tracks_notifications(self, renderer, chat_history, notification_bar):
         """Notifications are tracked with identity."""
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
         notification_bar.notifications.append(
@@ -528,7 +496,7 @@ class TestRenderStateWithTracking:
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             last_snapshot=last_snapshot,
@@ -540,7 +508,7 @@ class TestRenderStateWithTracking:
         assert notif.pinned is False
         assert "Action completed" in notif.rendered
 
-    def test_tracks_in_flight_actions(self, renderer, contact_index, notification_bar):
+    def test_tracks_in_flight_actions(self, renderer, chat_history, notification_bar):
         """In-flight actions are tracked with identity."""
         mock_handle = MagicMock()
         mock_handle._pause_event = MagicMock()
@@ -549,9 +517,9 @@ class TestRenderStateWithTracking:
         in_flight_actions = {
             0: {
                 "handle": mock_handle,
-                "query": "Search for Alice's email",
+                "query": "Summarise the quarterly report",
                 "handle_actions": [
-                    {"action_name": "interject_0", "query": "also check phone"},
+                    {"action_name": "interject_0", "query": "also chart it"},
                 ],
             },
         }
@@ -559,7 +527,7 @@ class TestRenderStateWithTracking:
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions=in_flight_actions,
             last_snapshot=last_snapshot,
@@ -568,15 +536,13 @@ class TestRenderStateWithTracking:
         assert len(result.actions) == 1
         action = result.actions[0]
         assert action.handle_id == 0
-        assert action.query == "Search for Alice's email"
+        assert action.query == "Summarise the quarterly report"
         assert action.status == "executing"
         assert action.history_count == 1
 
 
 # =============================================================================
 # Tests for Render Caps
-
-
 # =============================================================================
 
 
@@ -700,8 +666,6 @@ class TestRenderCaps:
 
 # =============================================================================
 # Tests for Completed Actions Rendering
-
-
 # =============================================================================
 
 
@@ -727,7 +691,7 @@ class TestRenderCompletedActions:
         completed_actions = {
             0: {
                 "handle": MagicMock(),
-                "query": "Find all contacts in Berlin",
+                "query": "Find every CSV in the workspace",
                 "handle_actions": [],
             },
         }
@@ -738,7 +702,7 @@ class TestRenderCompletedActions:
         assert "</completed_actions>" in result
         assert "id='0'" in result
         assert "status='completed'" in result
-        assert "Find all contacts in Berlin" in result
+        assert "Find every CSV in the workspace" in result
         # Should have ask steering tool (not close, stop, pause, resume, interject)
         assert "ask_" in result
         assert "close_" not in result
@@ -752,12 +716,12 @@ class TestRenderCompletedActions:
         completed_actions = {
             0: {
                 "handle": MagicMock(),
-                "query": "Search for engineering contacts",
+                "query": "Search the web for AI news",
                 "handle_actions": [],
             },
             1: {
                 "handle": MagicMock(),
-                "query": "Summarise the last conversation with Alice",
+                "query": "Summarise the attached report",
                 "handle_actions": [],
             },
         }
@@ -768,22 +732,22 @@ class TestRenderCompletedActions:
         assert "</completed_actions>" in result
         assert "id='0'" in result
         assert "id='1'" in result
-        assert "Search for engineering contacts" in result
-        assert "Summarise the last conversation with Alice" in result
+        assert "Search the web for AI news" in result
+        assert "Summarise the attached report" in result
 
     def test_failed_completed_action_renders_error_state(self, renderer):
         """Failed actions render explicit failed status and error text."""
         completed_actions = {
             0: {
                 "handle": MagicMock(),
-                "query": "Merge the duplicate Alice contacts",
+                "query": "Merge the two spreadsheets",
                 "action_type": "act",
                 "handle_actions": [
                     {
                         "action_name": "act_failed",
-                        "query": "Contact 7 not found",
+                        "query": "File 7 not found",
                         "success": False,
-                        "error": "Contact 7 not found",
+                        "error": "File 7 not found",
                     },
                 ],
             },
@@ -792,11 +756,11 @@ class TestRenderCompletedActions:
         result = renderer.render_completed_actions(completed_actions)
 
         assert "status='failed'" in result
-        assert "<error>Contact 7 not found</error>" in result
+        assert "<error>File 7 not found</error>" in result
 
     def test_render_state_includes_completed_actions(self, renderer):
         """render_state includes completed_actions section."""
-        contact_index = ContactIndex()
+        chat_history = ChatHistory()
         notification_bar = NotificationBar()
         completed_actions = {
             0: {
@@ -808,7 +772,7 @@ class TestRenderCompletedActions:
         last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
 
         result = renderer.render_state(
-            contact_index,
+            chat_history,
             notification_bar,
             in_flight_actions={},
             completed_actions=completed_actions,
@@ -817,61 +781,3 @@ class TestRenderCompletedActions:
 
         assert "<completed_actions>" in result.full_render
         assert "Test completed action" in result.full_render
-
-
-# =============================================================================
-# Tests for Timezone Rendering
-
-
-# =============================================================================
-
-
-class TestMessageTimezones:
-    """Tests for the timezone block rendered beneath chat messages."""
-
-    def test_unify_message_shows_timezone_block_when_different(self, renderer):
-        """Contact and assistant in different timezones render both, separated by |."""
-        msg = UnifyMessage(
-            name="Boss",
-            content="Please send the report",
-            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
-            role="user",
-            attachments=[],
-        )
-        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
-        result = renderer.render_message(
-            msg,
-            last_snapshot,
-            contact_name="The Boss",
-            contact_timezone="Europe/London",
-            assistant_timezone="America/New_York",
-        )
-
-        assert "[Now:" in result
-        assert "You" in result
-        assert "The Boss" in result
-        assert "Europe/London" in result
-        assert "America/New_York" in result
-        assert "|" in result
-
-    def test_current_time_reads_the_freezable_clock(self):
-        """The timezone block must go through ``prompt_helpers.now``.
-
-        That helper is the seam the suite freezes, and this block renders into
-        the transcript once per participant group. Reading the clock directly
-        here puts the wall-clock minute into every prompt, which changes the
-        LLM cache key on each run and makes cached flows miss.
-        """
-        # The autouse stub freezes now() at 2025-06-13 12:00 UTC.
-        assert _get_current_time_in_timezone("UTC") == "12:00 PM"
-        assert _get_current_time_in_timezone("America/New_York") == "8:00 AM"
-
-    def test_current_time_is_stable_across_repeated_renders(self):
-        """Repeated reads within a run must not drift.
-
-        ``UNIFY_INCREMENTING_TIMESTAMPS`` advances the stub by microseconds so
-        **NEW** markers order correctly; at minute precision that must still
-        render one identical string, or a single prompt disagrees with itself.
-        """
-        rendered = {_get_current_time_in_timezone("Europe/London") for _ in range(5)}
-        assert rendered == {"1:00 PM"}

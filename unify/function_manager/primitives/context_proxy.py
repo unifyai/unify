@@ -45,7 +45,7 @@ class ContextForwardingProxy:
 
     This enables parent chat context propagation through ``execute_code`` without
     any source-code manipulation: the LLM's generated code calls
-    ``primitives.contacts.ask(text="...")`` as usual, and the proxy transparently
+    ``primitives.actor.act("...")`` as usual, and the proxy transparently
     adds the context kwarg before the real method executes.
     """
 

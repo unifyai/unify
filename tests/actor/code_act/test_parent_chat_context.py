@@ -4,11 +4,11 @@ import pytest
 from pydantic import BaseModel, Field
 from unittest.mock import MagicMock
 
+from tests.actor.code_act.helpers import patch_actor_act
 from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments.actor import ActorEnvironment
 from unify.actor.execution.session import PythonExecutionSession, _PARENT_CHAT_CONTEXT
-from unify.actor.environments.state_managers import StateManagerEnvironment
-from unify.function_manager.primitives import Primitives
-from unify.function_manager.primitives.scope import PrimitiveScope
+from unify.actor.simulated import _StaticAnswerHandle
 
 
 class SecretModel(BaseModel):
@@ -47,67 +47,112 @@ async def test_code_act_initial_parent_chat_context_is_used():
             pass
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────────────────────────
+
+
+_LUCY_ANSWER = "Lucy Baker: 555-0199"
+
+_LUCY_PARENT_CTX = [
+    {
+        "role": "user",
+        "content": ("Can you find Lucy's number? I think her surname is Baker."),
+    },
+    {"role": "assistant", "content": "Sure, let me look that up for you."},
+]
+
+_LUCY_REQUEST = (
+    "Delegate exactly one sub-task with primitives.actor.act: "
+    "request='Find Lucy's phone number'. Set "
+    "include_parent_chat_context=true on the tool call so the "
+    "conversation context is available inside the sandbox, then report "
+    "the sub-actor's answer."
+)
+
+
+def _spy_actor_act(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Route ``primitives.actor.act`` to a spy that records the parent chat
+    context visible at call time.
+
+    The real ``_ActorRunner.act`` reads ``_PARENT_CHAT_CONTEXT`` rather than
+    taking a kwarg, so the spy records what that ContextVar holds when the
+    sandbox reaches the primitive.
+    """
+    calls: list[dict] = []
+
+    async def _impl(request: str, **kwargs):
+        calls.append(
+            {
+                "request": request,
+                "parent_chat_context": _PARENT_CHAT_CONTEXT.get(None),
+            },
+        )
+        return _StaticAnswerHandle(_LUCY_ANSWER)
+
+    patch_actor_act(monkeypatch, _impl)
+    return calls
+
+
+class _SpyRunner:
+    """Records calls to act() so the test can inspect received kwargs."""
+
+    def __init__(self) -> None:
+        self.act_calls: list[dict] = []
+
+    async def act(
+        self,
+        request: str,
+        _parent_chat_context: list[dict] | None = None,
+        **kwargs,
+    ):
+        self.act_calls.append(
+            {"request": request, "_parent_chat_context": _parent_chat_context},
+        )
+        return _StaticAnswerHandle(_LUCY_ANSWER)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# execute_function / execute_code context forwarding
+# ────────────────────────────────────────────────────────────────────────────
+
+
 @pytest.mark.eval
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @pytest.mark.timeout(300)
-async def test_execute_function_forwards_parent_chat_context():
+async def test_execute_function_forwards_parent_chat_context(monkeypatch):
     """Parent chat context should flow from the outer act() loop through the
     execute_function tool into the sandbox via the _PARENT_CHAT_CONTEXT
     ContextVar, just like execute_code.
 
-    Scenario: two contacts named Lucy exist. The parent conversation
-    mentions "Baker" as the surname, but the act() description just says
-    "Find Lucy's phone number."  We inject a spy ContactManager into a
-    real Primitives instance and verify that _parent_chat_context arrives.
+    Scenario: the parent conversation mentions "Baker" as the surname, but
+    the act() description just says "Find Lucy's phone number."  A spy
+    stands in for ``primitives.actor.act`` and records the context visible
+    when it is reached.
 
     Context injection is opt-in, so the request explicitly instructs the
     model to set include_parent_chat_context=true on the tool call; the
     subject here is the forwarding plumbing, not the model's opt-in
     judgment.
-
-    execute_function now synthesises code and routes through the same
-    SessionExecutor path as execute_code, so context forwarding is handled
-    by PythonExecutionSession's ContextForwardingProxy wrapping.
     """
-    spy = _SpyContactManager()
-
-    prims = Primitives(
-        primitive_scope=PrimitiveScope(scoped_managers=frozenset({"contacts"})),
-    )
-    prims._managers["contacts"] = spy
-
-    env = StateManagerEnvironment(prims)
-
-    actor = CodeActActor(
-        environments=[env],
-        timeout=60,
-    )
-
-    parent_ctx = [
-        {
-            "role": "user",
-            "content": ("Can you find Lucy's number? I think her surname is Baker."),
-        },
-        {"role": "assistant", "content": "Sure, let me look that up for you."},
-    ]
+    calls = _spy_actor_act(monkeypatch)
+    actor = CodeActActor(environments=[ActorEnvironment()], timeout=60)
 
     try:
         handle = await actor.act(
-            "Find Lucy's phone number from contacts. Set "
-            "include_parent_chat_context=true on the tool call so the "
-            "conversation context is available inside the sandbox.",
+            _LUCY_REQUEST,
             can_compose=False,
             persist=False,
             clarification_enabled=False,
-            _parent_chat_context=parent_ctx,
+            _parent_chat_context=_LUCY_PARENT_CTX,
         )
         await asyncio.wait_for(handle.result(), timeout=90)
 
-        assert len(spy.ask_calls) > 0, "primitives.contacts.ask was never called"
-        assert spy.ask_calls[0]["_parent_chat_context"] is not None, (
-            "primitives.contacts.ask was called without _parent_chat_context — "
-            "execute_function needs to set _PARENT_CHAT_CONTEXT for the sandbox"
+        assert len(calls) > 0, "primitives.actor.act was never called"
+        assert calls[0]["parent_chat_context"] is not None, (
+            "primitives.actor.act ran without _PARENT_CHAT_CONTEXT set — "
+            "execute_function needs to set it for the sandbox"
         )
     finally:
         try:
@@ -116,109 +161,36 @@ async def test_execute_function_forwards_parent_chat_context():
             pass
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Helpers for execute_code test
-# ────────────────────────────────────────────────────────────────────────────
-
-
-class _FakeHandle:
-    """Minimal SteerableToolHandle stand-in so LLM code like
-    ``handle = await primitives.contacts.ask(...); await handle.result()``
-    doesn't crash."""
-
-    def __init__(self, value: str) -> None:
-        self._value = value
-
-    def __repr__(self) -> str:
-        return f"_FakeHandle({self._value!r})"
-
-    async def result(self) -> str:
-        return self._value
-
-    def done(self) -> bool:
-        return True
-
-
-class _SpyContactManager:
-    """Records calls to ask() so the test can inspect received kwargs."""
-
-    def __init__(self) -> None:
-        self.ask_calls: list[dict] = []
-
-    async def ask(
-        self,
-        text: str,
-        _parent_chat_context: list[dict] | None = None,
-        **kwargs,
-    ):
-        self.ask_calls.append(
-            {"text": text, "_parent_chat_context": _parent_chat_context},
-        )
-        return _FakeHandle("Lucy Baker: 555-0199")
-
-    async def update(self, *args, **kwargs):
-        return _FakeHandle("updated")
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# execute_code context forwarding
-# ────────────────────────────────────────────────────────────────────────────
-
-
 @pytest.mark.eval
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @pytest.mark.timeout(300)
-async def test_execute_code_forwards_parent_chat_context():
-    """Parent chat context should be forwarded to primitives called from
-    within execute_code via ContextForwardingProxy wrapping.
+async def test_execute_code_forwards_parent_chat_context(monkeypatch):
+    """Parent chat context should reach primitives called from within
+    execute_code.
 
     Same Lucy Baker scenario as the execute_function test, but here the LLM
-    generates code that calls ``primitives.contacts.ask(...)`` directly in
-    the sandbox.  We inject a spy ContactManager and assert that its ask()
-    method received _parent_chat_context. As there, the request instructs
-    the explicit include_parent_chat_context=true opt-in because injection
-    is opt-in and the subject is the forwarding plumbing.
+    generates code that calls ``primitives.actor.act(...)`` directly in the
+    sandbox.  As there, the request instructs the explicit
+    include_parent_chat_context=true opt-in because injection is opt-in and
+    the subject is the forwarding plumbing.
     """
-    spy = _SpyContactManager()
-
-    # Build a real Primitives instance scoped to contacts, but pre-populate
-    # the manager cache with our spy so ManagerRegistry is never hit.
-    prims = Primitives(
-        primitive_scope=PrimitiveScope(scoped_managers=frozenset({"contacts"})),
-    )
-    prims._managers["contacts"] = spy
-
-    env = StateManagerEnvironment(prims)
-
-    actor = CodeActActor(
-        environments=[env],
-        timeout=60,
-    )
-
-    parent_ctx = [
-        {
-            "role": "user",
-            "content": ("Can you find Lucy's number? I think her surname is Baker."),
-        },
-        {"role": "assistant", "content": "Sure, let me look that up for you."},
-    ]
+    calls = _spy_actor_act(monkeypatch)
+    actor = CodeActActor(environments=[ActorEnvironment()], timeout=60)
 
     try:
         handle = await actor.act(
-            "Find Lucy's phone number from contacts. Set "
-            "include_parent_chat_context=true on the tool call so the "
-            "conversation context is available inside the sandbox.",
+            _LUCY_REQUEST,
             persist=False,
             clarification_enabled=False,
-            _parent_chat_context=parent_ctx,
+            _parent_chat_context=_LUCY_PARENT_CTX,
         )
         await asyncio.wait_for(handle.result(), timeout=90)
 
-        assert len(spy.ask_calls) > 0, "primitives.contacts.ask was never called"
-        assert spy.ask_calls[0]["_parent_chat_context"] is not None, (
-            "primitives.contacts.ask was called without _parent_chat_context — "
-            "execute_code needs to wrap primitives with ContextForwardingProxy"
+        assert len(calls) > 0, "primitives.actor.act was never called"
+        assert calls[0]["parent_chat_context"] is not None, (
+            "primitives.actor.act ran without _PARENT_CHAT_CONTEXT set — "
+            "execute_code needs to set it for the sandbox"
         )
     finally:
         try:
@@ -238,49 +210,49 @@ async def test_sandbox_execute_wraps_primitives_via_contextvar():
     with ContextForwardingProxy when the _PARENT_CHAT_CONTEXT ContextVar is
     set.  This is the single wrapping site that covers ALL execution paths
     (stateless, stateful session 0, persistent sessions, read-only)."""
-    spy = _SpyContactManager()
+    spy = _SpyRunner()
 
     sb = PythonExecutionSession()
-    sb.global_state["primitives"] = MagicMock(contacts=spy)
+    sb.global_state["primitives"] = MagicMock(actor=spy)
 
     ctx = [{"role": "user", "content": "Her surname is Baker"}]
     token = _PARENT_CHAT_CONTEXT.set(ctx)
     try:
         res = await sb.execute(
-            'await primitives.contacts.ask(text="Lucy number?")',
+            'await primitives.actor.act(request="Lucy number?")',
         )
     finally:
         _PARENT_CHAT_CONTEXT.reset(token)
 
     assert res["error"] is None, f"sandbox execution failed: {res['error']}"
-    assert len(spy.ask_calls) == 1
-    assert spy.ask_calls[0]["_parent_chat_context"] is ctx
+    assert len(spy.act_calls) == 1
+    assert spy.act_calls[0]["_parent_chat_context"] is ctx
 
 
 @pytest.mark.asyncio
 async def test_sandbox_execute_no_wrap_when_contextvar_unset():
     """When _PARENT_CHAT_CONTEXT is not set (default None), the sandbox
-    should NOT wrap primitives — ask() receives None."""
-    spy = _SpyContactManager()
+    should NOT wrap primitives — act() receives None."""
+    spy = _SpyRunner()
 
     sb = PythonExecutionSession()
-    sb.global_state["primitives"] = MagicMock(contacts=spy)
+    sb.global_state["primitives"] = MagicMock(actor=spy)
 
     res = await sb.execute(
-        'await primitives.contacts.ask(text="Lucy number?")',
+        'await primitives.actor.act(request="Lucy number?")',
     )
 
     assert res["error"] is None, f"sandbox execution failed: {res['error']}"
-    assert len(spy.ask_calls) == 1
-    assert spy.ask_calls[0]["_parent_chat_context"] is None
+    assert len(spy.act_calls) == 1
+    assert spy.act_calls[0]["_parent_chat_context"] is None
 
 
 @pytest.mark.asyncio
 async def test_sandbox_execute_restores_original_primitives():
     """After execution the original primitives object must be restored in
     global_state to avoid stacking proxies across calls."""
-    spy = _SpyContactManager()
-    original_prims = MagicMock(contacts=spy)
+    spy = _SpyRunner()
+    original_prims = MagicMock(actor=spy)
 
     sb = PythonExecutionSession()
     sb.global_state["primitives"] = original_prims
@@ -288,7 +260,7 @@ async def test_sandbox_execute_restores_original_primitives():
     ctx = [{"role": "user", "content": "context"}]
     token = _PARENT_CHAT_CONTEXT.set(ctx)
     try:
-        await sb.execute('await primitives.contacts.ask(text="test")')
+        await sb.execute('await primitives.actor.act(request="test")')
     finally:
         _PARENT_CHAT_CONTEXT.reset(token)
 

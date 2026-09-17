@@ -6,11 +6,8 @@ Tests for multilingual conversation handling.
 
 Verifies that the ConversationManager:
 
-1. Responds to contacts in their language (detected from inbound messages)
-2. Keeps all internal operations in English:
-   - Queries delegated to ``act``
-   - Messages sent to other (English-speaking) contacts
-   - Confirmations / summaries sent to the boss
+1. Responds to the user in their language (detected from inbound messages)
+2. Keeps the queries delegated to ``act`` in English
 """
 
 import re
@@ -22,7 +19,6 @@ from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
     get_exactly_one,
 )
-from tests.conversation_manager.conftest import TEST_CONTACTS, BOSS
 from unify.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
@@ -30,11 +26,6 @@ from unify.conversation_manager.events import (
 )
 
 pytestmark = pytest.mark.eval
-
-# Convenience contact references
-ALICE = TEST_CONTACTS[0]  # contact_id 2
-BOB = TEST_CONTACTS[1]  # contact_id 3
-
 
 # ---------------------------------------------------------------------------
 #  Language detection helpers
@@ -274,12 +265,11 @@ def _is_english(text: str) -> bool:
 @pytest.mark.asyncio
 @_handle_project
 async def test_spanish_message_reply_in_spanish(initialized_cm):
-    """Alice writes in Spanish -> assistant replies in Spanish."""
+    """The user writes in Spanish -> assistant replies in Spanish."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=ALICE,
             content=(
                 "¡Hola! Muchas gracias por tu ayuda ayer, fue muy útil. "
                 "Espero que tengas un excelente día."
@@ -290,18 +280,17 @@ async def test_spanish_message_reply_in_spanish(initialized_cm):
     msg = get_exactly_one(result.output_events, UnifyMessageSent)
     assert _has_spanish(
         msg.content,
-    ), f"Expected Spanish reply to Spanish-speaking Alice, got: {msg.content}"
+    ), f"Expected Spanish reply to a Spanish-speaking user, got: {msg.content}"
 
 
 @pytest.mark.asyncio
 @_handle_project
 async def test_japanese_unify_message_reply_in_japanese(initialized_cm):
-    """Alice sends a Unify message in Japanese -> reply contains Japanese."""
+    """The user writes in Japanese -> reply contains Japanese."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=ALICE,
             content=(
                 "こんにちは！先日はお手伝いいただきありがとうございました。"
                 "おかげさまでとても助かりました。良い一日をお過ごしください。"
@@ -312,18 +301,17 @@ async def test_japanese_unify_message_reply_in_japanese(initialized_cm):
     msg = get_exactly_one(result.output_events, UnifyMessageSent)
     assert _has_japanese(
         msg.content,
-    ), f"Expected Japanese reply to Japanese-speaking Alice, got: {msg.content}"
+    ), f"Expected Japanese reply to a Japanese-speaking user, got: {msg.content}"
 
 
 @pytest.mark.asyncio
 @_handle_project
 async def test_arabic_message_reply_in_arabic(initialized_cm):
-    """Alice writes in Arabic -> reply contains Arabic script."""
+    """The user writes in Arabic -> reply contains Arabic script."""
     cm = initialized_cm
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=ALICE,
             content=(
                 "مرحبا! شكراً جزيلاً على مساعدتك بالأمس. "
                 "كان ذلك مفيداً جداً. أتمنى لك يوماً سعيداً."
@@ -334,15 +322,14 @@ async def test_arabic_message_reply_in_arabic(initialized_cm):
     msg = get_exactly_one(result.output_events, UnifyMessageSent)
     assert _has_arabic(
         msg.content,
-    ), f"Expected Arabic reply to Arabic-speaking Alice, got: {msg.content}"
+    ), f"Expected Arabic reply to an Arabic-speaking user, got: {msg.content}"
 
 
 # =====================================================================
 #  Group 2 — Act queries stay in English
 #
-#  Alice's messages are simple informational statements (no action
-#  needed). The boss then explicitly asks to contact an unknown person
-#  (David), which is what forces the ``act`` delegation.
+#  The boss asks for a file to be written into the workspace, which is
+#  what forces the ``act`` delegation.
 # =====================================================================
 
 
@@ -358,21 +345,9 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
     """
     cm = initialized_cm
 
-    # Alice sends a Spanish informational message (no action required)
-    result_alice = await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=ALICE,
-            content=(
-                "Hola, solo quería avisarte que David me pidió que te "
-                "dijera que necesita hablar contigo. Dice que es urgente."
-            ),
-        ),
-    )
-
     # Boss gives instruction in Spanish -> needs the actor (writes a file)
     result_boss = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 "Crea un archivo de texto con una lista de verificación para "
                 "preparar una reunión y guárdalo en mi espacio de trabajo"
@@ -381,13 +356,13 @@ async def test_act_query_english_when_boss_speaks_spanish(initialized_cm):
     )
 
     actor_events = filter_events_by_type(
-        result_alice.output_events + result_boss.output_events,
+        result_boss.output_events,
         ActorHandleStarted,
     )
     assert actor_events, (
         "Expected act to be called (ActorHandleStarted), "
         f"got tools={cm.all_tool_calls}, "
-        f"events={[type(e).__name__ for e in result_alice.output_events + result_boss.output_events]}"
+        f"events={[type(e).__name__ for e in result_boss.output_events]}"
     )
 
     for event in actor_events:
@@ -412,21 +387,9 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
     """
     cm = initialized_cm
 
-    # Alice sends a Japanese informational message (no action required)
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=ALICE,
-            content=(
-                "こんにちは。デビッドさんから伝言です。"
-                "あなたに連絡を取りたいそうです。急ぎだそうです。"
-            ),
-        ),
-    )
-
     # Boss gives instruction in Japanese -> needs the actor (writes a file)
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="会議の準備チェックリストをテキストファイルにまとめて、ワークスペースに保存してください",
         ),
     )
@@ -447,175 +410,7 @@ async def test_act_query_english_when_boss_speaks_japanese(initialized_cm):
 
 
 # =====================================================================
-#  Group 3 — Cross-contact language isolation
-#
-#  Alice shares simple factual information (statements, not questions).
-#  No lookups needed — the assistant already has everything it needs
-#  to acknowledge Alice and later relay the info to Bob or the boss.
-# =====================================================================
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_relay_to_bob_in_english_despite_spanish_source(initialized_cm):
-    """
-    Alice speaks Spanish, boss relays to Bob -> Bob receives English.
-
-    The assistant must translate / paraphrase Alice's Spanish content into
-    English when forwarding it to Bob, an English-speaking contact.
-    """
-    cm = initialized_cm
-
-    # Alice sends Spanish informational message (no action needed)
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=ALICE,
-            content=(
-                "¡Hola! Solo quería contarte que la cena del viernes será "
-                "a las 7 de la noche en el restaurante italiano. ¡Nos vemos allí!"
-            ),
-        ),
-    )
-
-    # Bob sends a simple English greeting (establishes active conversation
-    # without mentioning the dinner — we don't want the model to pre-relay
-    # Alice's info before the boss asks)
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=BOB,
-            content="Hey, just checking in. Hope you're having a good day!",
-        ),
-    )
-
-    # Boss asks to relay Alice's dinner info to Bob (explicit send instruction)
-    result = await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=BOSS,
-            content="Send Bob a message with what Alice said about the Friday dinner",
-        ),
-    )
-
-    sent_events = filter_events_by_type(result.output_events, UnifyMessageSent)
-    bob_messages = [
-        s for s in sent_events if s.contact["contact_id"] == BOB["contact_id"]
-    ]
-    assert len(bob_messages) >= 1, (
-        f"Expected a message to Bob, got messages to: "
-        f"{[s.contact['contact_id'] for s in sent_events]}"
-    )
-
-    bob_msg = bob_messages[0].content
-    assert _is_english(
-        bob_msg,
-    ), f"Message to English-speaking Bob should be in English, got: {bob_msg}"
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_boss_gets_english_summary_of_spanish_message(initialized_cm):
-    """
-    Alice messages in Spanish, boss asks what she said -> English summary.
-
-    The boss always communicates in English. The response should be an
-    English paraphrase / summary, not a copy of Alice's Spanish text.
-    """
-    cm = initialized_cm
-
-    # Alice sends Spanish informational message (no action needed)
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=ALICE,
-            content=(
-                "Buenos días. Solo quería informarle que el informe trimestral "
-                "ya está terminado y lo envié esta mañana. ¡Gracias por todo!"
-            ),
-        ),
-    )
-
-    # Boss asks about Alice's message
-    result = await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=BOSS,
-            content="What did Alice just say?",
-        ),
-    )
-
-    sent_events = filter_events_by_type(result.output_events, UnifyMessageSent)
-    boss_messages = [
-        s for s in sent_events if s.contact["contact_id"] == BOSS["contact_id"]
-    ]
-    assert len(boss_messages) >= 1, (
-        f"Expected a reply to the boss, got messages to: "
-        f"{[s.contact['contact_id'] for s in sent_events]}"
-    )
-
-    boss_msg = boss_messages[0].content
-    assert _is_english(
-        boss_msg,
-    ), f"Summary for the boss should be in English, got: {boss_msg}"
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_relay_japanese_content_to_bob_in_english(initialized_cm):
-    """
-    Alice messages in Japanese, boss relays to Bob -> Bob receives English.
-
-    Non-Latin script makes language leakage especially visible. Bob's message
-    must not contain any Japanese characters.
-    """
-    cm = initialized_cm
-
-    # Alice sends Japanese informational message (no action needed)
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=ALICE,
-            content=(
-                "金曜日のディナーの件ですが、午後7時にイタリアンレストランで"
-                "予約を入れました。楽しみにしています！"
-            ),
-        ),
-    )
-
-    # Bob sends a simple English greeting (establishes active conversation
-    # without mentioning the dinner — we don't want the model to pre-relay
-    # Alice's info before the boss asks)
-    await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=BOB,
-            content="Hey, just wanted to say hi. Hope your week is going well!",
-        ),
-    )
-
-    # Boss relays (explicit send instruction)
-    result = await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=BOSS,
-            content="Send Bob a message with what Alice said about Friday dinner",
-        ),
-    )
-
-    sent_events = filter_events_by_type(result.output_events, UnifyMessageSent)
-    bob_messages = [
-        s for s in sent_events if s.contact["contact_id"] == BOB["contact_id"]
-    ]
-    assert len(bob_messages) >= 1, (
-        f"Expected a message to Bob, got messages to: "
-        f"{[s.contact['contact_id'] for s in sent_events]}"
-    )
-
-    bob_msg = bob_messages[0].content
-    assert not _has_japanese(
-        bob_msg,
-    ), f"Message to Bob must not contain Japanese, got: {bob_msg}"
-    assert _is_english(bob_msg), f"Message to Bob should be in English, got: {bob_msg}"
-
-
-# =====================================================================
-#  Group 4 — Multi-turn language consistency
-#
-#  Both turns are simple conversational exchanges — greetings and
-#  thank-yous — requiring only a polite reply each time.
+#  Group 3 — Language sticks across turns
 # =====================================================================
 
 
@@ -628,7 +423,6 @@ async def test_spanish_multi_turn_stays_spanish(initialized_cm):
     # Turn 1: simple greeting and thanks
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=ALICE,
             content=(
                 "¡Hola! Muchas gracias por todo tu trabajo. "
                 "Me ha sido de gran ayuda."
@@ -643,7 +437,6 @@ async def test_spanish_multi_turn_stays_spanish(initialized_cm):
     # Turn 2: follow-up thanks and well-wishing
     result2 = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=ALICE,
             content=(
                 "¡Qué amable! También quería decirte que todo salió "
                 "muy bien con el proyecto. ¡Buen trabajo!"
@@ -654,52 +447,3 @@ async def test_spanish_multi_turn_stays_spanish(initialized_cm):
     assert _has_spanish(
         msg2.content,
     ), f"Turn-2 reply should be in Spanish, got: {msg2.content}"
-
-
-# =====================================================================
-#  Group 5 — Different languages per contact
-#
-#  Simple thank-you messages from each contact.  The assistant must
-#  track language preference per contact and reply appropriately.
-# =====================================================================
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_two_contacts_different_languages(initialized_cm):
-    """
-    Alice speaks Spanish, Bob speaks French -> each gets their language.
-
-    Both contacts message in the same session. The assistant must track
-    language preference per contact and reply appropriately.
-    """
-    cm = initialized_cm
-
-    # Alice messages in Spanish (simple thanks — no action needed)
-    result_a = await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=ALICE,
-            content=(
-                "¡Hola! Solo quería darte las gracias por tu ayuda. " "¡Fue genial!"
-            ),
-        ),
-    )
-    alice_msg = get_exactly_one(result_a.output_events, UnifyMessageSent)
-    assert _has_spanish(
-        alice_msg.content,
-    ), f"Reply to Alice should be in Spanish, got: {alice_msg.content}"
-
-    # Bob messages in French (simple thanks — no action needed)
-    result_b = await cm.step_until_wait(
-        UnifyMessageReceived(
-            contact=BOB,
-            content=(
-                "Bonjour ! Je voulais vous remercier pour votre aide. "
-                "C'était vraiment parfait !"
-            ),
-        ),
-    )
-    bob_msg = get_exactly_one(result_b.output_events, UnifyMessageSent)
-    assert _has_french(
-        bob_msg.content,
-    ), f"Reply to Bob should be in French, got: {bob_msg.content}"

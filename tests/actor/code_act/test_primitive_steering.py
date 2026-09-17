@@ -1,12 +1,14 @@
 """
 E2E tests for primitive handle steering through the CodeActActor.
 
-Verifies that when the CodeActActor invokes state manager primitives
-via ``execute_function`` or ``execute_code``, the returned
-SteerableToolHandle(s) are adopted by the outer tool loop and can be
-steered (interjected, paused, resumed) from the outside.
+Verifies that when the CodeActActor invokes ``primitives.actor.act`` via
+``execute_function`` or ``execute_code``, the returned SteerableToolHandle(s)
+are adopted by the outer tool loop and can be steered (interjected, paused,
+resumed) from the outside.
 
-Uses simulated managers backed by a real LLM for realistic behavior.
+``primitives.actor.act`` is routed to a ``SimulatedActor`` so each handle is
+a real steerable handle (pause/resume/interject/stop all work) without
+spawning a nested code-writing actor.
 """
 
 from __future__ import annotations
@@ -15,12 +17,14 @@ import asyncio
 
 import pytest
 
-from tests.actor.state_managers.utils import extract_code_act_execute_code_snippets
+from tests.actor.code_act.helpers import (
+    extract_code_act_execute_code_snippets,
+    patch_actor_act,
+)
 from tests.async_helpers import _wait_for_condition
 from unify.actor.code_act_actor import CodeActActor
-from unify.actor.environments import StateManagerEnvironment
-from unify.function_manager.primitives import Primitives, PrimitiveScope
-from unify.manager_registry import ManagerRegistry
+from unify.actor.environments.actor import ActorEnvironment
+from unify.actor.simulated import SimulatedActor
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -49,38 +53,29 @@ TOOL_RESULT_WAIT = ACTOR_TIMEOUT
 # in-test assertions are what fail rather than pytest killing the test first.
 TEST_TIMEOUT = RESULT_WAIT + 90.0
 
+# Wall-clock life of each simulated sub-actor: long enough to be steered
+# mid-flight, short enough that the outer loop finishes promptly.
+SUB_ACTOR_DURATION = 3.0
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _force_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Switch all managers to simulated impl for this test."""
-    from unify.settings import SETTINGS
+def _simulate_sub_actors(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Back ``primitives.actor.act`` with a SimulatedActor per call."""
+    requests: list[str] = []
 
-    for name in (
-        "CONTACT",
-        "TASK",
-        "TRANSCRIPT",
-        "KNOWLEDGE",
-        "GUIDANCE",
-        "SECRET",
-        "WEB",
-        "FILE",
-        "DATA",
-    ):
-        monkeypatch.setenv(f"UNITY_{name}_IMPL", "simulated")
-        attr = name.lower()
-        if hasattr(SETTINGS, attr):
-            monkeypatch.setattr(
-                getattr(SETTINGS, attr),
-                "IMPL",
-                "simulated",
-                raising=False,
-            )
+    async def _impl(request: str, **kwargs):
+        requests.append(request)
+        return await SimulatedActor(duration=SUB_ACTOR_DURATION).act(
+            request,
+            clarification_enabled=False,
+        )
 
-    ManagerRegistry.clear()
+    patch_actor_act(monkeypatch, _impl)
+    return requests
 
 
 def _restrict_to_execute_code(actor: CodeActActor) -> None:
@@ -119,25 +114,18 @@ async def _wait_for_tool_result_in_transcript(
 @pytest.mark.asyncio
 @pytest.mark.timeout(TEST_TIMEOUT)
 async def test_execute_function_primitive_steering(monkeypatch):
-    """CodeActActor (can_compose=False) → execute_function → primitives.contacts.ask
+    """CodeActActor (can_compose=False) → execute_function → primitives.actor.act
     → handle adopted → interjection forwarded → result incorporates both turns.
     """
-    _force_simulated(monkeypatch)
-
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=ACTOR_TIMEOUT)
+    requests = _simulate_sub_actors(monkeypatch)
+    actor = CodeActActor(environments=[ActorEnvironment()], timeout=ACTOR_TIMEOUT)
 
     try:
         # can_compose=False forces the LLM to use execute_function (no code sandbox).
-        # Primitives may not appear in search results immediately after sync
-        # (backend embedding computation is async), so we give the LLM the
-        # exact function name to use after the discovery step.
         handle = await actor.act(
             "Step 1: Call FunctionManager_list_functions (required first step).\n"
-            "Step 2: Call execute_function with function_name='primitives.contacts.ask' "
-            "and call_kwargs={'text': 'Find all contacts located in Berlin'}. "
+            "Step 2: Call execute_function with function_name='primitives.actor.act' "
+            "and call_kwargs={'request': 'Draft a short summary of the Berlin office'}. "
             "The function WILL be found even if the list appeared empty.",
             can_compose=False,
             clarification_enabled=False,
@@ -152,7 +140,7 @@ async def test_execute_function_primitive_steering(monkeypatch):
 
         # Steer: interject additional context mid-flight.
         await handle.interject(
-            "Also include any contacts in Munich.",
+            "Also cover the Munich office.",
         )
 
         # Steer: pause then resume to verify lifecycle methods propagate.
@@ -163,6 +151,7 @@ async def test_execute_function_primitive_steering(monkeypatch):
         # Let the loop finish.
         result = await asyncio.wait_for(handle.result(), timeout=RESULT_WAIT)
         assert result is not None, "Expected a non-None result from the actor"
+        assert requests, "primitives.actor.act was never reached"
     finally:
         try:
             if not handle.done():
@@ -179,19 +168,19 @@ async def test_execute_function_primitive_steering(monkeypatch):
 @pytest.mark.timeout(TEST_TIMEOUT)
 async def test_execute_code_mode_selection_realistic_steerable_intent(monkeypatch):
     """Natural request that implies mid-flight control should return a handle."""
-    _force_simulated(monkeypatch)
-
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=ACTOR_TIMEOUT, tool_policy=None)
+    _simulate_sub_actors(monkeypatch)
+    actor = CodeActActor(
+        environments=[ActorEnvironment()],
+        timeout=ACTOR_TIMEOUT,
+        tool_policy=None,
+    )
     _restrict_to_execute_code(actor)
     handle = None
 
     try:
         handle = await actor.act(
-            "Start checking contacts in Berlin now, but keep the lookup running because "
-            "I may refine the criteria while it is underway.",
+            "Delegate drafting a summary of the Berlin office to a sub-actor now, "
+            "but keep it running because I may refine the brief while it is underway.",
             clarification_enabled=False,
         )
 
@@ -204,7 +193,7 @@ async def test_execute_code_mode_selection_realistic_steerable_intent(monkeypatc
         snippets = extract_code_act_execute_code_snippets(handle)
         assert snippets, "Expected CodeAct to use execute_code."
         assert any(
-            "primitives.contacts.ask" in snippet and ".result(" not in snippet
+            "primitives.actor.act" in snippet and ".result(" not in snippet
             for snippet in snippets
         ), (
             "Expected at least one execute_code snippet to return a primitive handle "
@@ -212,7 +201,7 @@ async def test_execute_code_mode_selection_realistic_steerable_intent(monkeypatc
             f"Snippets:\n{chr(10).join(snippets)}"
         )
 
-        await handle.interject("Also include contacts in Munich.")
+        await handle.interject("Also cover the Munich office.")
         result = await asyncio.wait_for(handle.result(), timeout=RESULT_WAIT)
         assert result is not None, "Expected a non-None result from the actor"
     finally:
@@ -231,19 +220,16 @@ async def test_execute_code_mode_selection_realistic_steerable_intent(monkeypatc
 @pytest.mark.timeout(TEST_TIMEOUT)
 async def test_execute_code_mode_selection_realistic_inline_composition(monkeypatch):
     """Natural request that requires same-block processing should await result."""
-    _force_simulated(monkeypatch)
-
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=ACTOR_TIMEOUT)
+    _simulate_sub_actors(monkeypatch)
+    actor = CodeActActor(environments=[ActorEnvironment()], timeout=ACTOR_TIMEOUT)
     _restrict_to_execute_code(actor)
     handle = None
 
     try:
         handle = await actor.act(
-            "In one code step, look up contacts in Berlin and immediately compute a "
-            "short summary string with the number of matches before replying.",
+            "In one code step, delegate drafting a summary of the Berlin office to "
+            "a sub-actor and immediately compute the word count of its answer "
+            "before replying.",
             clarification_enabled=False,
         )
 
@@ -253,7 +239,7 @@ async def test_execute_code_mode_selection_realistic_inline_composition(monkeypa
         snippets = extract_code_act_execute_code_snippets(handle)
         assert snippets, "Expected CodeAct to use execute_code."
         assert any(
-            "primitives.contacts.ask" in snippet and ".result(" in snippet
+            "primitives.actor.act" in snippet and ".result(" in snippet
             for snippet in snippets
         ), (
             "Expected at least one execute_code snippet to await .result() for inline "
@@ -280,23 +266,20 @@ async def test_execute_code_mode_selection_realistic_inline_composition(monkeypa
 @pytest.mark.asyncio
 @pytest.mark.timeout(TEST_TIMEOUT)
 async def test_execute_code_primitive_steering(monkeypatch):
-    """CodeActActor → execute_code calling primitives.contacts.ask(...)
+    """CodeActActor → execute_code calling primitives.actor.act(...)
     → handle returned as last expression → adopted → interjection forwarded.
     """
-    _force_simulated(monkeypatch)
-
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=ACTOR_TIMEOUT)
+    requests = _simulate_sub_actors(monkeypatch)
+    actor = CodeActActor(environments=[ActorEnvironment()], timeout=ACTOR_TIMEOUT)
 
     try:
         # The system prompt already documents steerable handles. Give an
         # explicit instruction so the LLM returns the handle for steering
         # rather than awaiting it inline.
         handle = await actor.act(
-            "Use execute_code to call `await primitives.contacts.ask(text='Find contacts in Berlin')` "
-            "as the **last expression** so the handle is returned for steering. "
+            "Use execute_code to call `await primitives.actor.act(request='Draft a "
+            "short summary of the Berlin office')` as the **last expression** so "
+            "the handle is returned for steering. "
             "Do NOT await handle.result() inside the code.",
             clarification_enabled=False,
         )
@@ -310,7 +293,7 @@ async def test_execute_code_primitive_steering(monkeypatch):
 
         # Steer: interject additional context mid-flight.
         await handle.interject(
-            "Also include any contacts in Munich.",
+            "Also cover the Munich office.",
         )
 
         # Steer: pause then resume.
@@ -321,6 +304,7 @@ async def test_execute_code_primitive_steering(monkeypatch):
         # Let the loop finish.
         result = await asyncio.wait_for(handle.result(), timeout=RESULT_WAIT)
         assert result is not None, "Expected a non-None result from the actor"
+        assert requests, "primitives.actor.act was never reached"
     finally:
         try:
             if not handle.done():
@@ -342,27 +326,23 @@ async def test_execute_code_primitive_steering(monkeypatch):
 @pytest.mark.timeout(TEST_TIMEOUT)
 async def test_execute_code_dual_primitive_steering(monkeypatch):
     """CodeActActor → execute_code returning two steerable handles
-    (ContactManager.ask + TranscriptManager.ask) from a single code block.
+    (two sub-actors) from a single code block.
 
     Both handles should be adopted via the multi-handle adoption path and
     each should be individually steerable from the outer loop.
     """
-    _force_simulated(monkeypatch)
-
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts", "transcripts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=ACTOR_TIMEOUT)
+    requests = _simulate_sub_actors(monkeypatch)
+    actor = CodeActActor(environments=[ActorEnvironment()], timeout=ACTOR_TIMEOUT)
 
     try:
         handle = await actor.act(
-            "Use a SINGLE execute_code call to launch two primitives and "
+            "Use a SINGLE execute_code call to launch two sub-actors and "
             "return both handles as the last expression (a dict). "
             "The code should be exactly:\n\n"
             "```python\n"
-            "h1 = await primitives.contacts.ask(text='Find contacts in Berlin')\n"
-            "h2 = await primitives.transcripts.ask(text='Recent messages about Berlin')\n"
-            "{'contacts_handle': h1, 'transcripts_handle': h2}\n"
+            "h1 = await primitives.actor.act(request='Draft a summary of the Berlin office')\n"
+            "h2 = await primitives.actor.act(request='Draft a summary of the Munich office')\n"
+            "{'berlin_handle': h1, 'munich_handle': h2}\n"
             "```\n\n"
             "Do NOT await .result() on either handle inside the code.",
             clarification_enabled=False,
@@ -375,10 +355,10 @@ async def test_execute_code_dual_primitive_steering(monkeypatch):
             timeout=TOOL_RESULT_WAIT,
         )
 
-        # Steer the first handle (contacts) via an interjection.
-        await handle.interject("Also include contacts in Munich.")
+        # Steer the first handle via an interjection.
+        await handle.interject("Also mention headcount in each summary.")
 
-        # Steer the second handle (transcripts) via a pause/resume cycle.
+        # Steer the second handle via a pause/resume cycle.
         await handle.pause()
         await asyncio.sleep(0.5)
         await handle.resume()
@@ -386,6 +366,7 @@ async def test_execute_code_dual_primitive_steering(monkeypatch):
         # Let the loop finish.
         result = await asyncio.wait_for(handle.result(), timeout=RESULT_WAIT)
         assert result is not None, "Expected a non-None result from the actor"
+        assert len(requests) == 2, f"Expected two sub-actors, got: {requests}"
     finally:
         try:
             if not handle.done():

@@ -28,10 +28,10 @@ Tests use real LLM calls with cached responses. After the first run, cached resp
 tests/parallel_run.sh tests/
 
 # Run a specific module
-tests/parallel_run.sh tests/contact_manager/
+tests/parallel_run.sh tests/function_manager/
 
 # Run a specific test
-tests/parallel_run.sh tests/contact_manager/test_ask.py::test_name
+tests/parallel_run.sh tests/function_manager/storage/test_venvs.py::test_name
 ```
 
 See [tests/README.md](tests/README.md) for the full testing philosophy.
@@ -90,10 +90,8 @@ For PRs that touch a specific subsystem, the table below is a rough guide to who
 | `unify/actor/` (CodeAct Actor) | @YushaArif99, @djl11 |
 | `unify/conversation_manager/` (the interaction loop) | @djl11, @vedpatwardhan, @juliagsy |
 | `unify/db/` (the local store) | @djl11 |
-| `unify/contact_manager/`, `unify/knowledge_manager/`, `unify/transcript_manager/` | @djl11 |
-| `unify/file_manager/` (parsing) | @hmahmood24, @djl11 |
 | `unify/function_manager/` | @djl11, @YushaArif99, @juliagsy |
-| `unify/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
+| `unify/guidance_manager/` | @djl11 |
 | `tests/conftest.py`, `tests/parallel_run.sh` | @djl11, @CatB1t |
 
 ## Questions?

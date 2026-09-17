@@ -11,19 +11,20 @@ while user-defined functions live in per-assistant Functions/Compositional
 contexts with auto-incrementing IDs.
 """
 
-import asyncio
-
 import pytest
 
 from unify.function_manager.function_manager import FunctionManager
 from unify.function_manager.primitives import (
     Primitives,
-    _AsyncPrimitiveWrapper,
-    _create_async_wrapper,
+    PrimitiveScope,
+    get_primitive_callable,
     get_registry,
 )
 from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
+
+_ACTOR_ACT = "primitives.actor.act"
+_ACTOR_CLASS_PATH = "unify.actor.environments.actor._ActorRunner"
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -69,26 +70,18 @@ def function_manager_factory():
 
 def test_collect_primitives_returns_expected_methods():
     """Registry should return metadata for all auto-discovered methods."""
-    from unify.function_manager.primitives import PrimitiveScope
     from unify.function_manager.primitives.registry import get_primitive_sources
 
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
     primitives = registry.collect_primitives(scope)
 
-    # Should have collected at least some primitives
-    assert len(primitives) > 0
-
-    # Verify primitives include expected manager classes (using primitive_class)
-    classes_found = set(p["primitive_class"] for p in primitives.values())
-    assert any("ContactManager" in c for c in classes_found)
-    assert any("FileManager" in c for c in classes_found)
-    assert any("DataManager" in c for c in classes_found)
+    assert set(primitives) == {_ACTOR_ACT}
+    assert primitives[_ACTOR_ACT]["primitive_class"] == _ACTOR_CLASS_PATH
 
     # Verify primitives match what get_primitive_sources returns
-    # (i.e., the auto-discovery is working correctly).
-    # Build a lookup by (class_name_suffix, method) since names are now
-    # in ``primitives.{alias}.{method}`` format.
+    # (i.e., the auto-discovery is working correctly), keyed by
+    # (class name, method) since names are ``primitives.{alias}.{method}``.
     method_to_name = {
         (row["primitive_class"].rsplit(".", 1)[-1], row["primitive_method"]): name
         for name, row in primitives.items()
@@ -104,8 +97,6 @@ def test_collect_primitives_returns_expected_methods():
 
 def test_collect_primitives_has_required_fields():
     """Each primitive should have the required metadata fields including function_id."""
-    from unify.function_manager.primitives import PrimitiveScope
-
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
     primitives = registry.collect_primitives(scope)
@@ -125,15 +116,9 @@ def test_collect_primitives_has_required_fields():
 
 def test_collect_primitives_has_stable_ids():
     """Primitive function_ids should be stable hash-based IDs."""
-    from unify.function_manager.primitives import PrimitiveScope
-
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
     primitives = registry.collect_primitives(scope)
-
-    # Verify no duplicate IDs
-    ids = [p["function_id"] for p in primitives.values()]
-    assert len(ids) == len(set(ids)), "Primitive IDs should be unique"
 
     # Verify IDs are deterministic (calling twice gives same IDs)
     primitives2 = registry.collect_primitives(scope)
@@ -142,33 +127,25 @@ def test_collect_primitives_has_stable_ids():
             primitives2[name]["function_id"] == data["function_id"]
         ), f"ID for '{name}' should be stable across calls"
 
-    # Verify IDs are non-negative integers (hash-based)
+    # Verify IDs are non-negative integers within the signed 32-bit range
     for data in primitives.values():
         assert isinstance(data["function_id"], int)
-        assert data["function_id"] >= 0
+        assert 0 <= data["function_id"] <= 0x7FFFFFFF
 
 
 def test_collect_primitives_has_docstrings():
-    """Primitives should have non-empty docstrings (from base class)."""
-    from unify.function_manager.primitives import PrimitiveScope
-
+    """Every primitive carries a non-empty docstring."""
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
     primitives = registry.collect_primitives(scope)
 
-    # At least some primitives should have docstrings
-    with_docstrings = [
-        name for name, p in primitives.items() if p.get("docstring", "").strip()
-    ]
-    assert (
-        len(with_docstrings) > 0
-    ), "Expected at least some primitives to have docstrings"
+    assert primitives
+    for name, p in primitives.items():
+        assert p["docstring"].strip(), f"{name} should have a docstring"
 
 
 def test_compute_primitives_hash_is_stable():
     """Hash should be deterministic for the same primitives."""
-    from unify.function_manager.primitives import PrimitiveScope
-
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
 
@@ -179,26 +156,10 @@ def test_compute_primitives_hash_is_stable():
     assert len(hash1) == 16  # 16 hex chars
 
 
-def test_compute_primitives_hash_changes_for_different_scopes():
-    """Hash should be different for different scopes."""
-    from unify.function_manager.primitives import PrimitiveScope
-
-    registry = get_registry()
-    scope_all = PrimitiveScope.all_managers()
-    scope_files = PrimitiveScope.single("files")
-
-    hash_all = registry.compute_primitives_hash(primitive_scope=scope_all)
-    hash_files = registry.compute_primitives_hash(primitive_scope=scope_files)
-
-    assert hash_all != hash_files
-
-
 def test_compute_primitives_hash_changes_on_modification():
     """Hash should change when primitives are modified."""
-    from unify.function_manager.primitives import PrimitiveScope
-
     registry = get_registry()
-    scope = PrimitiveScope.single("files")
+    scope = PrimitiveScope.single("actor")
     primitives = registry.collect_primitives(scope)
 
     # Compute original hash
@@ -215,22 +176,6 @@ def test_compute_primitives_hash_changes_on_modification():
     assert (
         original_hash != modified_hash
     ), "Hash should change when primitives are modified"
-
-
-def test_collect_primitives_includes_file_manager():
-    """FileManager primitives should be collected from auto-discovery."""
-    from unify.function_manager.primitives import PrimitiveScope
-
-    registry = get_registry()
-    scope = PrimitiveScope.single("files")
-    primitives = registry.collect_primitives(scope)
-
-    assert len(primitives) >= 5, "Expected at least 5 FileManager primitives"
-
-    # Verify all are from files manager (using primitive_class)
-    for name, p in primitives.items():
-        assert "FileManager" in p["primitive_class"]
-        assert p["name"].startswith("primitives.files.")
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -279,8 +224,6 @@ def test_list_primitives_returns_primitive_metadata(function_manager_factory):
 @_handle_project
 def test_primitives_have_stable_ids_in_catalog(function_manager_factory):
     """Catalogue rows should expose the same stable IDs as the registry."""
-    from unify.function_manager.primitives import PrimitiveScope
-
     function_manager = function_manager_factory()
 
     registry = get_registry()
@@ -294,13 +237,25 @@ def test_primitives_have_stable_ids_in_catalog(function_manager_factory):
     assert stored
 
     for name, data in stored.items():
-        if data.get("integration_source") == "provider_backed":
-            continue
         assert name in expected, f"Unexpected catalogue primitive {name}"
         assert data["function_id"] == expected[name], (
             f"Primitive {name} ID {data['function_id']} does not match "
             f"registry ID {expected[name]}"
         )
+
+
+@_handle_project
+def test_catalog_rows_resolve_to_runtime_callables(function_manager_factory):
+    """Stored primitive metadata resolves back to the live runtime method."""
+    function_manager = function_manager_factory()
+    row = function_manager.list_primitives()[_ACTOR_ACT]
+
+    primitives = Primitives()
+    resolved = get_primitive_callable(row, primitives=primitives)
+
+    assert resolved is not None
+    assert resolved.__func__ is type(primitives.actor).act
+    assert resolved.__self__ is primitives.actor
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -315,7 +270,7 @@ def test_search_includes_primitives_by_default(function_manager_factory):
 
     # Search for something that should match a primitive
     results = function_manager.search_functions(
-        query="ask a question to the contact manager",
+        query="spawn a sub-actor for a focused sub-task",
         n=5,
     )
 
@@ -328,47 +283,20 @@ def test_search_includes_primitives_by_default(function_manager_factory):
 
 
 @_handle_project
-def test_search_returns_primitives_by_default(function_manager_factory):
-    """search_functions returns both primitives and user functions by default."""
-    function_manager = function_manager_factory()
-
-    # Add a user function
-    implementation = '''
-def ask_contact_question(question: str) -> str:
-    """Ask a question about contacts."""
-    return f"Asked: {question}"
-'''
-    function_manager.add_functions(implementations=[implementation])
-
-    # Search returns both types (callers can post-filter with is_primitive if needed)
-    results = function_manager.search_functions(
-        query="ask question about contacts",
-        n=10,
-    )
-
-    user_funcs = [r for r in results if not r.get("is_primitive")]
-    primitives = [r for r in results if r.get("is_primitive")]
-    assert len(user_funcs) >= 1, "Expected at least one user function"
-    # Primitives may or may not appear depending on relevance, but are not excluded
-    assert isinstance(results, list)
-
-
-@_handle_project
 def test_search_ranks_functions_and_primitives_together(function_manager_factory):
-    """Search should return both functions and primitives ranked by relevance."""
+    """Search should return both user functions and primitives, ranked together."""
     function_manager = function_manager_factory()
 
-    # Add a user function related to contacts
+    # Add a user function related to delegation
     implementation = '''
-def update_contact_email(contact_id: int, email: str) -> str:
-    """Update a contact's email address."""
-    return f"Updated contact {contact_id} email to {email}"
+def delegate_subtask(request: str) -> str:
+    """Hand a focused sub-task to a helper and return its summary."""
+    return f"Delegated: {request}"
 '''
     function_manager.add_functions(implementations=[implementation])
 
-    # Search for contact-related functionality
     results = function_manager.search_functions(
-        query="update contact information",
+        query="delegate a focused sub-task to a helper",
         n=10,
     )
 
@@ -376,8 +304,8 @@ def update_contact_email(contact_id: int, email: str) -> str:
     user_funcs = [r for r in results if not r.get("is_primitive")]
     primitives = [r for r in results if r.get("is_primitive")]
 
-    assert len(user_funcs) > 0, "Expected at least one user function"
-    assert len(primitives) > 0, "Expected at least one primitive"
+    assert {r["name"] for r in user_funcs} == {"delegate_subtask"}
+    assert {r["name"] for r in primitives} == {_ACTOR_ACT}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -400,7 +328,7 @@ def test_clear_preserves_builtins_catalog(function_manager_factory):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 5. Async patching tests
+# 5. Registry configuration
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -425,120 +353,12 @@ def test_common_excluded_methods():
     assert "get_tools" in _COMMON_EXCLUDED_METHODS
 
 
-def test_primitive_methods_respects_exclusions():
-    """primitive_methods should exclude methods in config."""
-    registry = get_registry()
-    methods = registry.primitive_methods(manager_alias="contacts")
-
-    # Should not include excluded methods
-    assert "filter_contacts" not in methods
-    assert "update_contact" not in methods
-    assert "clear" not in methods  # Common exclusion
-
-    # Should include public methods
-    assert "ask" in methods
-    assert "update" in methods
-
-
-def test_async_wrapper_auto_detects_sync_methods():
-    """Wrapper should auto-detect sync methods without config."""
-    from unify.manager_registry import ManagerRegistry
-
-    dm = ManagerRegistry.get_data_manager()
-
-    # Before wrapping, filter is sync
-    original_filter = dm.filter
-    is_originally_sync = not asyncio.iscoroutinefunction(original_filter)
-
-    # Create wrapper (using manager alias)
-    wrapper = _create_async_wrapper(dm, "data")
-
-    # After wrapping, filter should be async
-    assert asyncio.iscoroutinefunction(
-        wrapper.filter,
-    ), "filter should be async after wrapping"
-
-    # Original should remain sync
-    assert not asyncio.iscoroutinefunction(
-        dm.filter,
-    ), "Original filter should remain sync"
-
-    # Verify it was originally sync (this confirms auto-detection worked)
-    assert is_originally_sync, "filter should have been sync before wrapping"
-
-
-def test_async_patching_preserves_docstrings():
-    """Patched methods should preserve their original docstrings."""
-    primitives = Primitives()
-    dm = primitives.data
-
-    # Patched method should have a docstring
-    assert dm.filter.__doc__ is not None, "Patched method should have docstring"
-    assert len(dm.filter.__doc__) > 0, "Docstring should not be empty"
-
-
-def test_async_patching_preserves_signatures():
-    """Patched methods should preserve their original signatures."""
-    import inspect
-
-    primitives = Primitives()
-    dm = primitives.data
-
-    # Patched method should have a signature
-    sig = inspect.signature(dm.filter)
-    assert sig is not None, "Patched method should have signature"
-
-    # Should have expected parameters
-    params = list(sig.parameters.keys())
-    assert "context" in params, "filter should have 'context' parameter"
-
-
-def test_primitives_data_is_async_wrapper():
-    """primitives.data should return an async wrapper around DataManager."""
-    primitives = Primitives()
-    dm = primitives.data
-
-    assert isinstance(dm, _AsyncPrimitiveWrapper)
-
-
-def test_primitives_files_is_async_wrapper():
-    """primitives.files should return an async wrapper around FileManager."""
-    primitives = Primitives()
-    fm = primitives.files
-
-    assert isinstance(fm, _AsyncPrimitiveWrapper)
-
-
-def test_primitives_returns_async_wrapper():
-    """primitives.data should return an async wrapper."""
-    primitives = Primitives()
-
-    # Access data
-    dm = primitives.data
-
-    # Should be a wrapper
-    assert isinstance(dm, _AsyncPrimitiveWrapper), "Should return async wrapper"
-
-
-def test_async_wrapper_preserves_async_methods():
-    """Wrapper should preserve methods that are already async."""
-    from unify.manager_registry import ManagerRegistry
-
-    fm = ManagerRegistry.get_file_manager()
-
-    # ask_about_file is already async
-    original_ask = fm.ask_about_file
-    assert asyncio.iscoroutinefunction(original_ask), "ask_about_file should be async"
-
-    # Create wrapper (using manager alias)
-    wrapper = _create_async_wrapper(fm, "files")
-
-    # Wrapped method should also be async
-    assert asyncio.iscoroutinefunction(
-        wrapper.ask_about_file,
-    ), "Wrapped method should be async"
-
-    # Original should be unchanged
-    assert asyncio.iscoroutinefunction(
-        fm.ask_about_file,
-    ), "Original should remain async"
+def test_primitive_callable_unknown_class_is_none():
+    """get_primitive_callable() returns None for metadata outside the registry."""
+    assert (
+        get_primitive_callable(
+            {"primitive_class": "unify.nowhere.Nothing", "primitive_method": "act"},
+        )
+        is None
+    )
+    assert get_primitive_callable({"primitive_class": _ACTOR_CLASS_PATH}) is None

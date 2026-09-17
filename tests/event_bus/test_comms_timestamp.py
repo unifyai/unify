@@ -60,7 +60,6 @@ def test_unify_message_roundtrip():
     original_ts = dt.datetime(2025, 6, 15, 14, 30, 0, tzinfo=dt.UTC)
     original = UnifyMessageReceived(
         timestamp=original_ts,
-        contact={"contact_id": 3, "name": "Console User"},
         content="Message from console",
     )
 
@@ -91,7 +90,6 @@ async def test_publish_comms_with_timestamp():
         timestamp=now,
         payload=CommsPayload(
             timestamp=now,
-            contact={"contact_id": 1},
             content="Test message",
         ),
     )
@@ -117,7 +115,6 @@ async def test_publish_and_search_comms_timestamp():
         timestamp=original_ts,
         payload=CommsPayload(
             timestamp=original_ts,
-            contact={"contact_id": 1},
             content="Searchable message",
         ),
     )

@@ -13,7 +13,6 @@ class ConversationSettings(BaseSettings):
 
     Attributes:
         IMPL: Implementation type - "real" or "simulated".
-        CONTACT_ID: Default contact ID for simulated ConversationManager.
         SLOW_BRAIN_MODEL: Shared ConversationManager slow-brain model. Empty
             falls back to the global shared model (UNIFY_MODEL / assistant
             default resolution). Override via
@@ -27,7 +26,6 @@ class ConversationSettings(BaseSettings):
     SLOW_BRAIN_MODEL: str = "openai/gpt-5.6-terra@openrouter"
     SLOW_BRAIN_REASONING_EFFORT: str = "high"
     IMPL: str = "real"
-    CONTACT_ID: str = "1"
 
     model_config = SettingsConfigDict(
         env_prefix="UNIFY_CONVERSATION_",

@@ -7,7 +7,7 @@ from PIL import Image
 
 from unify.common.image_content import sniff_image_mime, to_image_content_block
 
-ASSET_JPEG = Path(__file__).parent.parent / "image_manager" / "assets" / "google.jpeg"
+ASSET_JPEG = Path(__file__).parent.parent / "images" / "gcp_homepage.jpg"
 
 
 def test_sniff_image_mime_detects_jpeg_and_png():

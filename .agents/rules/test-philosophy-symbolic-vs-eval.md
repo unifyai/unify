@@ -100,7 +100,7 @@ tests/parallel_run.sh --symbolic-only tests
 tests/parallel_run.sh --no-cache tests
 
 # Statistical sampling for eval reliability
-tests/parallel_run.sh --no-cache --repeat 10 --eval-only tests/contact_manager
+tests/parallel_run.sh --no-cache --repeat 10 --eval-only tests/function_manager/
 ```
 
 ## When Debugging Failing Tests

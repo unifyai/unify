@@ -5,9 +5,8 @@ tests/conversation_manager/core/test_event_logging.py
 Tests that verify ConversationManager publishes events to the EventBus
 for observability.
 
-Unlike ContactManager and TranscriptManager which publish ManagerMethod events
-for their ask()/update() methods, ConversationManager publishes Comms events
-(UnifyMessageReceived, UnifyMessageSent) as it processes the chat.
+ConversationManager publishes Comms events (UnifyMessageReceived,
+UnifyMessageSent) as it processes the chat.
 
 These tests verify that:
 1. Inbound events (UnifyMessageReceived) are logged to EventBus
@@ -66,25 +65,6 @@ async def wait_for_operations_queue(timeout: float = 5.0) -> None:
 # =============================================================================
 
 
-# Test contacts
-TEST_CONTACTS = [
-    {
-        "contact_id": 0,
-        "first_name": "Test",
-        "surname": "Assistant",
-        "email_address": "assistant@test.com",
-        "phone_number": "+15555551234",
-    },
-    {
-        "contact_id": 1,
-        "first_name": "Test",
-        "surname": "Contact",
-        "email_address": "test@contact.com",
-        "phone_number": "+15555551111",
-    },
-]
-
-
 @pytest_asyncio.fixture
 async def cm_with_eventbus():
     """
@@ -97,18 +77,8 @@ async def cm_with_eventbus():
     from unify.conversation_manager import start_async, stop_async
     from unify.conversation_manager.domains import managers_utils
 
-    # Actor is simulated; Contact/Transcript are real so the transcript
-    # writes behind log_message run against the store.
     os.environ["UNIFY_ACTOR_IMPL"] = "simulated"
     os.environ["UNIFY_ACTOR_SIMULATED_STEPS"] = "3"
-    os.environ["UNIFY_CONTACT_IMPL"] = "real"
-    os.environ["UNIFY_TRANSCRIPT_IMPL"] = "real"
-    os.environ["UNIFY_MEMORY_ENABLED"] = "false"
-    os.environ["UNIFY_KNOWLEDGE_ENABLED"] = "false"
-    os.environ["UNIFY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNIFY_SECRET_ENABLED"] = "false"
-    os.environ["UNIFY_SKILL_ENABLED"] = "false"
-    os.environ["UNIFY_FILE_ENABLED"] = "false"
     os.environ["UNIFY_INCREMENTING_TIMESTAMPS"] = "true"
     os.environ["TEST"] = "true"
 
@@ -124,19 +94,6 @@ async def cm_with_eventbus():
 
     # Start the operations listener that processes EventBus publishing
     asyncio.create_task(managers_utils.listen_to_operations(cm))
-
-    # Update test contacts in ContactManager (source of truth)
-    # ContactIndex.get_contact() queries ContactManager directly
-    if cm.contact_manager is not None:
-        for contact_data in TEST_CONTACTS:
-            cm.contact_manager.update_contact(
-                contact_id=contact_data["contact_id"],
-                first_name=contact_data.get("first_name"),
-                surname=contact_data.get("surname"),
-                email_address=contact_data.get("email_address"),
-                phone_number=contact_data.get("phone_number"),
-                should_respond=True,
-            )
 
     yield cm
 
@@ -157,17 +114,15 @@ async def test_unify_message_received_logged_to_eventbus(cm_with_eventbus):
     Verify that inbound chat events are published to the EventBus.
 
     When a chat message is received and processed, a UnifyMessageReceived
-    event should be logged with contact and content.
+    event should be logged with its content.
     """
     from unify.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
-    contact = TEST_CONTACTS[1]
 
     unique_content = "💬 Test event logging inbound message"
 
     unify_msg_event = UnifyMessageReceived(
-        contact=contact,
         content=unique_content,
     )
 
@@ -192,8 +147,8 @@ async def test_unify_message_received_logged_to_eventbus(cm_with_eventbus):
     # Verify payload content
     received_evt = unify_received_events[0]
     assert (
-        received_evt.payload.get("contact") == contact
-    ), "UnifyMessageReceived event should contain the contact"
+        received_evt.payload.get("attachments") == []
+    ), "UnifyMessageReceived event should carry its attachment list"
 
 
 @pytest.mark.asyncio
@@ -203,17 +158,15 @@ async def test_unify_message_sent_logged_to_eventbus(cm_with_eventbus):
     Verify that outbound chat events are published to the EventBus.
 
     When the assistant's reply is processed, a UnifyMessageSent event should
-    be logged with contact and content.
+    be logged with its content.
     """
     from unify.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
-    contact = TEST_CONTACTS[1]
 
     unique_content = "💬 Test event logging outbound message"
 
     sent_event = UnifyMessageSent(
-        contact=contact,
         content=unique_content,
     )
 
@@ -233,8 +186,8 @@ async def test_unify_message_sent_logged_to_eventbus(cm_with_eventbus):
         f"Found events: {[e.payload_cls for e in events]}"
     )
     assert (
-        unify_sent_events[0].payload.get("contact") == contact
-    ), "UnifyMessageSent event should contain the contact"
+        unify_sent_events[0].payload.get("attachments") == []
+    ), "UnifyMessageSent event should carry its attachment list"
 
 
 @pytest.mark.asyncio
@@ -249,10 +202,8 @@ async def test_event_bus_event_has_correct_type(cm_with_eventbus):
     from unify.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
-    contact = TEST_CONTACTS[1]
 
     unify_msg_event = UnifyMessageReceived(
-        contact=contact,
         content="Test event type verification",
     )
 

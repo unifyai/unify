@@ -4,12 +4,13 @@ tests/conversation_manager/core/test_boot_hydration_gate.py
 
 Symbolic tests for the boot hydration render gate: a slow-brain turn
 requested while boot hydration is still in flight must hold until the
-global thread is hydrated, so the first reply after a wake never renders
-an empty view of a conversation whose history is seconds from landing.
+conversation is loaded from the chat table, so the first reply after a
+restart never renders an empty view of a conversation whose history is
+seconds from landing.
 
-The production shape being reproduced: converse (the session persists its
-Comms events), the pod retires, a new pod boots over the same durable
-world, and an inbound lands immediately — before ``hydrate_global_thread``
+The production shape being reproduced: converse (every message is written
+to the chat table), the process exits, a new process boots over the same
+store, and an inbound lands immediately — before ``hydrate_chat_history``
 has restored the prior conversation. These tests rebuild that window at
 the component level: the gate closed exactly as ``init_conv_manager``
 closes it, the inbound stepped in, and hydration run through the real
@@ -19,18 +20,15 @@ spinning full manager init a second time.
 
 import asyncio
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.conftest import BOSS
-from unify.conversation_manager.domains.contact_index import ContactIndex
+from unify import db
+from unify.conversation_manager.domains.chat_history import ChatHistory
 from unify.conversation_manager.domains.managers_utils import run_boot_hydration
-from unify.conversation_manager.events import (
-    UnifyMessageReceived,
-    UnifyMessageSent,
-)
+from unify.conversation_manager.events import UnifyMessageReceived
 
 PRIOR_USER_ASK = "Please file the Week 2 expense report from the spreadsheet I shared."
 PRIOR_ASSISTANT_REPLY = (
@@ -39,30 +37,26 @@ PRIOR_ASSISTANT_REPLY = (
 INBOUND_AFTER_WAKE = "Did you file the Week 2 expenses yet?"
 
 
-def _prior_session_bus_events():
+def _store_prior_session(chat_history: ChatHistory) -> None:
     """The durable world a rebooted CM hydrates: last week's exchange.
 
-    Returned newest-first, matching the real ``EventBus.search`` ordering
-    ``hydrate_global_thread`` expects.
+    Written straight into the chat table the running history is bound to,
+    as a previous process would have left it.
     """
     from unify.common.prompt_helpers import now as prompt_now
 
     base = prompt_now(as_string=False) - timedelta(days=7)
-    events = [
-        UnifyMessageReceived(
-            contact=BOSS,
-            content=PRIOR_USER_ASK,
-            timestamp=base,
-        ),
-        UnifyMessageSent(
-            contact=BOSS,
-            content=PRIOR_ASSISTANT_REPLY,
-            timestamp=base + timedelta(minutes=1),
-        ),
-    ]
-    bus_events = [ev.to_bus_event() for ev in events]
-    bus_events.reverse()
-    return bus_events
+    for role, content, ts in (
+        ("user", PRIOR_USER_ASK, base),
+        ("assistant", PRIOR_ASSISTANT_REPLY, base + timedelta(minutes=1)),
+    ):
+        db.log(
+            context=chat_history._ctx,
+            role=role,
+            content=content,
+            timestamp=ts.isoformat(),
+            attachments=[],
+        )
 
 
 # =============================================================================
@@ -73,20 +67,17 @@ def _prior_session_bus_events():
 class TestRunBootHydration:
 
     def _mock_cm(self):
-        """Minimal CM mid-boot: real ContactIndex, gate closed."""
+        """Minimal CM mid-boot: gate closed."""
         cm = MagicMock()
-        cm.contact_index = ContactIndex()
         cm._hydration_gate = asyncio.Event()
         return cm
 
     @pytest.mark.asyncio
     async def test_gate_reopens_after_restore(self):
         cm = self._mock_cm()
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_prior_session_bus_events())
-            restored = await run_boot_hydration(cm)
+        cm.chat_history.load = MagicMock(return_value=2)
+
+        restored = await run_boot_hydration(cm)
 
         assert restored == 2
         assert cm._hydration_gate.is_set()
@@ -94,11 +85,9 @@ class TestRunBootHydration:
     @pytest.mark.asyncio
     async def test_gate_reopens_when_store_is_empty(self):
         cm = self._mock_cm()
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=[])
-            restored = await run_boot_hydration(cm)
+        cm.chat_history.load = MagicMock(return_value=0)
+
+        restored = await run_boot_hydration(cm)
 
         assert restored == 0
         assert cm._hydration_gate.is_set()
@@ -106,12 +95,10 @@ class TestRunBootHydration:
     @pytest.mark.asyncio
     async def test_gate_reopens_when_hydration_fails(self):
         cm = self._mock_cm()
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(side_effect=RuntimeError("search down"))
-            with pytest.raises(RuntimeError):
-                await run_boot_hydration(cm)
+        cm.chat_history.load = MagicMock(side_effect=RuntimeError("store down"))
+
+        with pytest.raises(RuntimeError):
+            await run_boot_hydration(cm)
 
         assert cm._hydration_gate.is_set()
 
@@ -149,6 +136,7 @@ async def test_first_turn_after_wake_renders_hydrated_history(initialized_cm):
     # The booted fixture leaves the gate open — the steady-state contract
     # that every ordinary turn passes through without waiting.
     assert cm.cm._hydration_gate.is_set()
+    assert cm.cm.chat_history.is_bound
 
     renders = []
     real_render = cm.cm.prompt_renderer.render_state
@@ -164,9 +152,7 @@ async def test_first_turn_after_wake_renders_hydrated_history(initialized_cm):
     cm.cm.prompt_renderer.render_state = recording_render
     try:
         step_task = asyncio.create_task(
-            cm.step(
-                UnifyMessageReceived(contact=BOSS, content=INBOUND_AFTER_WAKE),
-            ),
+            cm.step(UnifyMessageReceived(content=INBOUND_AFTER_WAKE)),
         )
 
         # The turn must reach the hold without having rendered anything.
@@ -174,13 +160,10 @@ async def test_first_turn_after_wake_renders_hydrated_history(initialized_cm):
         assert not step_task.done()
         assert renders == []
 
-        # Hydration lands: the prior session prepends into the global
-        # thread and the boot wrapper reopens the gate.
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
-        ) as mock_bus:
-            mock_bus.search = AsyncMock(return_value=_prior_session_bus_events())
-            restored = await run_boot_hydration(cm.cm)
+        # Hydration lands: the prior session prepends into the conversation
+        # and the boot wrapper reopens the gate.
+        _store_prior_session(cm.cm.chat_history)
+        restored = await run_boot_hydration(cm.cm)
         assert restored == 2
 
         result = await asyncio.wait_for(step_task, timeout=300)
@@ -190,6 +173,9 @@ async def test_first_turn_after_wake_renders_hydrated_history(initialized_cm):
         assert PRIOR_USER_ASK in first_render
         assert PRIOR_ASSISTANT_REPLY in first_render
         assert INBOUND_AFTER_WAKE in first_render
+        assert first_render.index(PRIOR_USER_ASK) < first_render.index(
+            INBOUND_AFTER_WAKE,
+        )
     finally:
         cm.cm.prompt_renderer.render_state = real_render
         cm.cm._hydration_gate = gate
@@ -228,9 +214,7 @@ async def test_held_turn_renders_eagerly_when_hydration_is_stuck(
     cm.cm.prompt_renderer.render_state = recording_render
     try:
         result = await asyncio.wait_for(
-            cm.step(
-                UnifyMessageReceived(contact=BOSS, content=INBOUND_AFTER_WAKE),
-            ),
+            cm.step(UnifyMessageReceived(content=INBOUND_AFTER_WAKE)),
             timeout=300,
         )
 

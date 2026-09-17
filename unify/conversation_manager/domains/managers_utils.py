@@ -10,24 +10,16 @@ from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unify.settings import SETTINGS
 from unify.session_details import SESSION_DETAILS
 from unify.common.async_tool_loop import SteerableToolHandle
-from unify.contact_manager.types.contact import UNASSIGNED
 from unify.conversation_manager.event_broker import get_event_broker
 from unify.conversation_manager.events import (
     ActorClarificationRequest,
     ActorNotification,
     ActorResult,
     ActorSessionResponse,
-    Event,
-    GetChatHistory,
     InitializationComplete,
-    LogMessageResponse,
-    StoreChatHistory,
-    UnifyMessageSent,
 )
 from unify.events.event_bus import EVENT_BUS
 from unify.manager_registry import ManagerRegistry
-from unify.function_manager.primitives import Primitives, default_runtime_scope
-from unify.conversation_manager.cm_types import Medium
 
 if TYPE_CHECKING:
     from unify.actor.base import BaseActor
@@ -43,146 +35,42 @@ def ensure_runtime_context(*, strict: bool = False) -> str:
     return bind_runtime_context_root(strict=strict)
 
 
-# EVENT BUS
-async def get_last_store_chat_history() -> StoreChatHistory:
-    _t0 = perf_counter()
-    bus_events = await EVENT_BUS.search(
-        filter='type == "Comms" and payload_cls == "StoreChatHistory"',
-        limit=1,
-    )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] managers.get_last_store_chat_history duration=%.2fs events=%d",
-        perf_counter() - _t0,
-        len(bus_events),
-    )
-    if len(bus_events):
-        return Event.from_bus_event(bus_events[0])
-    return None
-
-
-def _get_sender_name(contact: dict | None) -> str:
-    """Extract display name from a contact dict."""
-    if not contact:
-        return "Unknown"
-    first_name = contact.get("first_name", "")
-    surname = contact.get("surname", "")
-    name = f"{first_name} {surname}".strip()
-    return name or contact.get("email_address", "") or "Unknown"
-
-
-# Event types that produce global-thread entries during hydration.
-_MESSAGE_PRODUCING_EVENTS = {
-    "UnifyMessageReceived",
-    "UnifyMessageSent",
-}
+# CHAT HISTORY
 
 
 async def run_boot_hydration(cm: "ConversationManager") -> int:
-    """Hydrate the global thread, then reopen the slow-brain render gate.
+    """Load the stored chat history, then reopen the slow-brain render gate.
 
     The gate must reopen on every outcome — restored history, an empty
-    store, or a failed search — because a turn held at the gate degrades to
+    table, or a failed read — because a turn held at the gate degrades to
     the pre-hydration view after its bounded wait anyway; keeping the gate
     closed past hydration buys nothing but latency.
     """
     try:
-        return await hydrate_global_thread(cm)
+        return await hydrate_chat_history(cm)
     finally:
         cm._hydration_gate.set()
 
 
-async def hydrate_global_thread(cm: "ConversationManager") -> int:
-    """Populate the shared global deque from persisted EventBus Comms events.
+async def hydrate_chat_history(cm: "ConversationManager") -> int:
+    """Prepend the messages earlier sessions stored in the chat table.
 
-    Called after initialization to restore conversation state from the previous
-    session.  Hydrated (historical) messages are prepended to the global thread
-    so that any messages that arrived during initialization keep their correct
-    chronological position at the end.
-
-    Returns the number of messages restored — zero both when there is
-    genuinely no prior conversation and when the deployment does not persist
-    the Comms stream. The caller records it so the initialization-complete
-    notification can tell the brain the truth about what was loaded.
+    Messages that arrived during initialization keep their chronological
+    position at the end. Returns the number of messages restored — zero when
+    there is no prior conversation. The caller records it so the
+    initialization-complete notification can tell the brain the truth about
+    what was loaded.
     """
-    from unify.conversation_manager.domains.contact_index import ContactIndex
-
-    deque_size = (
-        cm.contact_index.global_thread.maxlen or ContactIndex.DEFAULT_GLOBAL_THREAD_SIZE
-    )
-
     _t0 = perf_counter()
-    bus_events = await EVENT_BUS.search(
-        filter='type == "Comms"',
-        limit=deque_size,
-    )
+    restored = await asyncio.to_thread(cm.chat_history.load)
     log_startup_timing(
         LOGGER,
-        "⏱️ [StartupTiming] managers.hydrate_global_thread.search duration=%.2fs events=%d limit=%d",
-        perf_counter() - _t0,
-        len(bus_events),
-        deque_size,
-    )
-
-    if not bus_events:
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [Hydration] No Comms events found, skipping hydration",
-        )
-        return 0
-
-    # Bus events come in descending order (most recent first), reverse for chronological
-    bus_events.reverse()
-
-    # Build entries into a buffer via build_message (no append to the live
-    # deque), so we can prepend them all at once and preserve chronological
-    # ordering relative to any messages that arrived during initialization.
-    hydrated_entries: list = []
-
-    _t0 = perf_counter()
-    for bus_event in bus_events:
-        payload_cls = bus_event.payload_cls
-        # Strip module prefix if present (e.g., "unify.conversation_manager.events.UnifyMessageSent")
-        if "." in payload_cls:
-            payload_cls = payload_cls.rsplit(".", 1)[-1]
-
-        if payload_cls not in _MESSAGE_PRODUCING_EVENTS:
-            continue
-
-        try:
-            cm_event = Event.from_bus_event(bus_event)
-        except Exception:
-            continue
-
-        contact = getattr(cm_event, "contact", None) or {}
-        contact_id = contact.get("contact_id")
-        if contact_id is None:
-            continue
-
-        hydrated_entries.append(
-            cm.contact_index.build_message(
-                contact_id=contact_id,
-                sender_name=_get_sender_name(contact),
-                message_content=cm_event.content,
-                role="user" if payload_cls == "UnifyMessageReceived" else "assistant",
-                timestamp=cm_event.timestamp,
-                attachments=getattr(cm_event, "attachments", None),
-            ),
-        )
-
-    restored = len(hydrated_entries)
-    # Prepend hydrated entries so historical messages appear before any
-    # messages that arrived during initialization.
-    cm.contact_index.prepend_entries(hydrated_entries)
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] managers.hydrate_global_thread.render duration=%.2fs restored=%d events=%d",
+        "⏱️ [StartupTiming] managers.hydrate_chat_history duration=%.2fs restored=%d",
         perf_counter() - _t0,
         restored,
-        len(bus_events),
     )
-
     LOGGER.info(
-        f"{ICONS['managers_worker']} [Hydration] Restored {restored} messages from {len(bus_events)} Comms events",
+        f"{ICONS['managers_worker']} [Hydration] Restored {restored} chat messages",
     )
     return restored
 
@@ -384,208 +272,6 @@ async def actor_watch_clarifications(
         )
 
 
-# TRANSCRIPTS
-
-# Exchange-metadata key the conversation key is stored under.
-_CONVERSATION_KEY_FIELD = "conversation_key"
-
-
-def _conversation_key(contact_id: int) -> str:
-    """The key that groups every chat message with one contact into one exchange.
-
-    Inbound and outbound resolve to the same key, so an assistant reply lands
-    in the exchange it answers, with no inactivity window.
-    """
-    return f"{Medium.UNIFY_MESSAGE.value}:dm:{contact_id}"
-
-
-def _recover_exchange_id(
-    cm: "ConversationManager",
-    conversation_key: str,
-) -> int:
-    """Find the existing exchange for ``conversation_key`` in Exchanges metadata.
-
-    Runs only on an in-memory cache miss (the first message with a contact
-    after a CM restart), so a conversation survives restarts without opening
-    a duplicate exchange. Returns ``UNASSIGNED`` when no exchange exists yet.
-    """
-    escaped_key = conversation_key.replace('"', '\\"')
-    try:
-        result = cm.transcript_manager.filter_exchanges(
-            filter=(
-                f'medium == "{Medium.UNIFY_MESSAGE.value}" '
-                f'and metadata["{_CONVERSATION_KEY_FIELD}"] == "{escaped_key}"'
-            ),
-            limit=1,
-        )
-    except Exception:
-        return UNASSIGNED
-    exchanges = result.get("exchanges") or []
-    if not exchanges:
-        return UNASSIGNED
-    return exchanges[0].exchange_id
-
-
-async def log_message(cm: "ConversationManager", event: Event) -> None:
-    """Log a chat message via TranscriptManager."""
-    ensure_runtime_context()
-    event_name = event.__class__.__name__
-    LOGGER.debug(f"{DEFAULT_ICON} publishing transcript {event_name}")
-    medium = Medium.UNIFY_MESSAGE
-    role = "Assistant" if isinstance(event, UnifyMessageSent) else "User"
-    contact_id = event.contact["contact_id"]
-    if role == "Assistant":
-        sender_id, receiver_ids = SESSION_DETAILS.self_contact_id, [contact_id]
-    else:
-        sender_id, receiver_ids = contact_id, [SESSION_DETAILS.self_contact_id]
-
-    # Derived on every message, not only when the exchange is unknown: it is
-    # also stamped onto the exchange as the join key that makes the
-    # conversation recoverable after a restart.
-    conversation_key = _conversation_key(contact_id)
-    exchange_id = cm._conversation_exchange_ids.get(conversation_key, UNASSIGNED)
-    if exchange_id == UNASSIGNED:
-        exchange_id = _recover_exchange_id(cm, conversation_key)
-
-    def _publish_transcript() -> int:
-        nonlocal exchange_id
-        try:
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] Logging message: {event.to_dict()}",
-            )
-            msg_data = {
-                "medium": medium,
-                "sender_id": sender_id,
-                "receiver_ids": receiver_ids,
-                "timestamp": event.timestamp,
-                "content": event.content,
-            }
-            attachments = getattr(event, "attachments", [])
-            if attachments:
-                msg_data["attachments"] = attachments
-
-            if exchange_id == UNASSIGNED:
-                exchange_id, _ = (
-                    cm.transcript_manager.log_first_message_in_new_exchange(
-                        msg_data,
-                        exchange_initial_metadata={
-                            "medium": medium.value,
-                            _CONVERSATION_KEY_FIELD: conversation_key,
-                        },
-                    )
-                )
-            else:
-                cm.transcript_manager.log_messages(
-                    {**msg_data, "exchange_id": exchange_id},
-                    synchronous=True,
-                )
-
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] Logged message: {medium}"
-                f" from {sender_id} to {receiver_ids}",
-            )
-            return exchange_id
-        except Exception as e:
-            LOGGER.error(
-                f"{ICONS['managers_worker']} [ManagersWorker] Error logging message: {e}",
-            )
-            return UNASSIGNED
-
-    exchange_id = await asyncio.to_thread(_publish_transcript)
-
-    # Cache the exchange immediately so the next message in this conversation
-    # reuses it. The LogMessageResponse handler runs asynchronously on the
-    # event loop, by which time the worker may already have started the next
-    # log_message call and would otherwise create a duplicate exchange.
-    if exchange_id != UNASSIGNED:
-        cm._conversation_exchange_ids[conversation_key] = exchange_id
-
-    # publish reply as event envelope
-    await event_broker.publish(
-        "app:logging:message_logged",
-        LogMessageResponse(
-            medium=medium,
-            exchange_id=exchange_id,
-        ).to_json(),
-    )
-    LOGGER.debug(
-        f"{ICONS['managers_worker']} [ManagersWorker] Published exchange_id {exchange_id}",
-    )
-
-
-# Contact updates
-
-
-async def update_session_contacts(
-    cm: "ConversationManager",
-    assistant_first_name: str,
-    assistant_surname: str,
-    assistant_number: str,
-    assistant_email: str,
-    user_first_name: str,
-    user_surname: str,
-    user_number: str,
-    user_email: str,
-    assistant_job_title: str | None = None,
-) -> None:
-    """
-    Update the resolved assistant and boss contacts in the ContactManager when
-    session details change.
-    """
-    if cm.contact_manager is None:
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Cannot update contacts: contact_manager is None",
-        )
-        return
-
-    async def _update_contact(
-        contact_id: int,
-        first_name: str,
-        surname: str,
-        phone_number: str,
-        email_address: str,
-        job_title: str | None = None,
-    ):
-        try:
-            kwargs: dict = dict(
-                contact_id=contact_id,
-                phone_number=phone_number,
-                email_address=email_address,
-                first_name=first_name,
-                surname=surname,
-            )
-            if job_title is not None and contact_id == SESSION_DETAILS.self_contact_id:
-                kwargs["job_title"] = job_title
-            await asyncio.to_thread(
-                cm.contact_manager.update_contact,
-                **kwargs,
-            )
-            LOGGER.info(
-                f"{ICONS['managers_worker']} [ManagersWorker] Updated contact {contact_id}: {first_name} {surname}",
-            )
-        except Exception as e:
-            LOGGER.error(
-                f"{ICONS['managers_worker']} [ManagersWorker] Failed to update contact {contact_id}: {e}",
-            )
-
-    await _update_contact(
-        SESSION_DETAILS.self_contact_id,
-        assistant_first_name,
-        assistant_surname,
-        assistant_number,
-        assistant_email,
-        assistant_job_title,
-    )
-
-    await _update_contact(
-        SESSION_DETAILS.boss_contact_id,
-        user_first_name,
-        user_surname,
-        user_number,
-        user_email,
-    )
-
-
 # Queueing operations that need managers
 
 _operations_queue = asyncio.Queue()
@@ -718,8 +404,9 @@ def _init_managers(
     actor: "BaseActor | None" = None,
 ) -> None:
     """
-    Initialize all managers in a separate thread.
-    The main event loop is passed for managers that need to schedule async tasks.
+    Initialize the runtime, the chat table, the handle and the actor in a
+    separate thread. The main event loop is passed for work that must be
+    scheduled back onto it.
 
     Args:
         cm: The ConversationManager instance to initialize.
@@ -740,98 +427,31 @@ def _init_managers(
         f"{perf_counter() - local_start_time:.2f} seconds",
     )
 
-    # 1. Configure EventBus
-    EVENT_BUS.set_window("Comms", 100)
-
-    # 1b. Kick off hydration concurrently — it only needs unify.init() and
-    # EventBus config (both done). Runs on the main event loop while the
-    # remaining managers initialize in this thread. Completion reopens the
-    # slow-brain render gate ``init_conv_manager`` closed, releasing any
-    # turn held for a hydrated view without waiting for the rest of init.
+    # 1. Bind the chat table so every message from here on is written
+    #    through, then hydrate the stored history concurrently on the main
+    #    loop while the rest of init continues in this thread. Completion
+    #    reopens the slow-brain render gate ``init_conv_manager`` closed.
+    local_start_time = perf_counter()
+    cm.chat_history.bind()
     LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] Starting concurrent hydration...",
+        f"{ICONS['managers_worker']} [ManagersWorker] Chat table bound in "
+        f"{perf_counter() - local_start_time:.2f} seconds",
     )
     cm._hydration_future = asyncio.run_coroutine_threadsafe(
         run_boot_hydration(cm),
         loop,
     )
 
-    # 2. Initialize ContactManager (respects SETTINGS.contact.IMPL)
-    LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] Initializing ContactManager...",
-    )
-    local_start_time = perf_counter()
-    cm.contact_manager = ManagerRegistry.get_contact_manager(
-        description="production deployment",
-    )
-    # Wire up ContactManager to ContactIndex for always-fresh contact data
-    cm.contact_index.set_contact_manager(cm.contact_manager)
-    LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] ContactManager ({type(cm.contact_manager).__name__}) initialized in "
-        f"{perf_counter() - local_start_time:.2f} seconds",
-    )
-
-    # 3. Initialize TranscriptManager (respects SETTINGS.transcript.IMPL)
-    LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] Initializing TranscriptManager...",
-    )
-    local_start_time = perf_counter()
-    cm.transcript_manager = ManagerRegistry.get_transcript_manager(
-        description="production deployment",
-        contact_manager=cm.contact_manager,
-    )
-    LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] TranscriptManager ({type(cm.transcript_manager).__name__}) initialized in "
-        f"{perf_counter() - local_start_time:.2f} seconds",
-    )
-
-    # 4. Initialize MemoryManager (optional - respects SETTINGS.memory.ENABLED and IMPL)
-    if SETTINGS.memory.ENABLED:
-        try:
-            from unify.memory_manager.memory_manager import MemoryManager
-
-            LOGGER.info(
-                f"{ICONS['managers_worker']} [ManagersWorker] Initializing MemoryManager...",
-            )
-            local_start_time = perf_counter()
-            mem_cfg = MemoryManager.MemoryConfig(
-                contacts=SETTINGS.memory.CONTACTS,
-                bios=SETTINGS.memory.BIOS,
-                rolling_summaries=SETTINGS.memory.ROLLING_SUMMARIES,
-                response_policies=SETTINGS.memory.RESPONSE_POLICIES,
-                knowledge=SETTINGS.memory.KNOWLEDGE,
-            )
-            cm.memory_manager = ManagerRegistry.get_memory_manager(
-                transcript_manager=cm.transcript_manager,
-                contact_manager=cm.contact_manager,
-                config=mem_cfg,
-                loop=loop,
-            )
-            LOGGER.info(
-                f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager initialized in "
-                f"{perf_counter() - local_start_time:.2f} seconds",
-            )
-        except Exception as e:
-            LOGGER.warning(
-                f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager init failed (degraded): {e}",
-            )
-    else:
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager disabled (SETTINGS.memory.ENABLED=False)",
-        )
-
-    # 5. Initialize ConversationManagerHandle (respects SETTINGS.conversation.IMPL)
+    # 2. Initialize ConversationManagerHandle (respects SETTINGS.conversation.IMPL)
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] Initializing ConversationManagerHandle...",
     )
     local_start_time = perf_counter()
-    # ConversationManagerHandle has different constructor args for real vs simulated
     if SETTINGS.conversation.IMPL == "simulated":
         cm._conversation_manager_handle = (
             ManagerRegistry.get_conversation_manager_handle(
                 description="production deployment",
                 assistant_id=SESSION_DETAILS.assistant.agent_id,
-                contact_id=str(SESSION_DETAILS.boss_contact_id),
             )
         )
     else:
@@ -839,8 +459,6 @@ def _init_managers(
             ManagerRegistry.get_conversation_manager_handle(
                 event_broker=cm.event_broker,
                 conversation_id=SESSION_DETAILS.assistant.agent_id,
-                contact_id=str(SESSION_DETAILS.boss_contact_id),
-                transcript_manager=cm.transcript_manager,
                 conversation_manager=cm,
             )
         )
@@ -849,7 +467,7 @@ def _init_managers(
         f"{perf_counter() - local_start_time:.2f} seconds",
     )
 
-    # 6. Initialize Actor (use provided actor or create via ManagerRegistry)
+    # 3. Initialize Actor (use provided actor or create via ManagerRegistry)
     LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Initializing Actor...")
     try:
         local_start_time = perf_counter()
@@ -858,19 +476,11 @@ def _init_managers(
             cm.actor = actor
         else:
             # Create via ManagerRegistry (respects SETTINGS.actor.IMPL)
-            from unify.actor.environments import (
-                StateManagerEnvironment,
-                ActorEnvironment,
-            )
+            from unify.actor.environments import ActorEnvironment
 
             cm.actor = ManagerRegistry.get_actor(
                 description="production deployment",
-                environments=[
-                    StateManagerEnvironment(
-                        Primitives(primitive_scope=default_runtime_scope()),
-                    ),
-                    ActorEnvironment(),
-                ],
+                environments=[ActorEnvironment()],
             )
         actor_cls = type(cm.actor).__name__
         LOGGER.info(
@@ -882,48 +492,18 @@ def _init_managers(
             f"{ICONS['managers_worker']} [ManagersWorker] Error initializing Actor: {e}",
         )
 
-    # 7. Initialize FileManager (eagerly, so the FileRecords context exists
-    #    before any file operations or background tasks attempt to use it)
-    try:
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Initializing FileManager...",
-        )
-        local_start_time = perf_counter()
-        fm = ManagerRegistry.get_file_manager()
-        # Force the lazy DataManager property to resolve now while ContextVars
-        # are correct.  The ingestion pipeline later accesses _data_manager from
-        # ThreadPoolExecutor workers where ContextVars may not propagate — eager
-        # init avoids the resulting empty-context / double-slash paths.
-        _ = fm._data_manager  # noqa: F841
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] FileManager initialized in "
-            f"{perf_counter() - local_start_time:.2f} seconds",
-        )
-    except Exception as e:
-        LOGGER.warning(
-            f"{ICONS['managers_worker']} [ManagersWorker] FileManager init failed (degraded): {e}",
-        )
-
-    LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] All managers initialized in "
-        f"{perf_counter() - start_time:.2f} seconds",
-    )
-
-    # 8. Static primitives live in the global builtins catalogue (seeded at
-    #    start-up), so no per-assistant primitive sync is needed here.
-    _init_fm = ManagerRegistry.get_function_manager()
-
-    # 9. Pre-warm embedding columns for all managers (best-effort, avoids
-    #    cold-start latency on the first vector search after a fresh hire).
-    #    Also explicitly warm the FunctionManager (not in the singleton cache
-    #    due to _force_new=True) so Primitives embeddings are ready.
+    # 4. Warm the function and guidance catalogues' embedding columns so the
+    #    first vector search of the session does not pay the cold-start cost.
+    #    FunctionManager is not a singleton (one per primitive scope), so it is
+    #    warmed explicitly alongside the cached singletons.
     try:
         LOGGER.debug(
             f"{ICONS['managers_worker']} [ManagersWorker] Warming embedding columns...",
         )
         local_start_time = perf_counter()
+        ManagerRegistry.get_guidance_manager()
         ManagerRegistry.warm_all_embeddings()
-        _init_fm.warm_embeddings()
+        ManagerRegistry.get_function_manager().warm_embeddings()
         LOGGER.info(
             f"{ICONS['managers_worker']} [ManagersWorker] Embedding columns warmed in "
             f"{perf_counter() - local_start_time:.2f} seconds",
@@ -932,6 +512,11 @@ def _init_managers(
         LOGGER.warning(
             f"{ICONS['managers_worker']} [ManagersWorker] Embedding warm-up failed (degraded): {e}",
         )
+
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] All managers initialized in "
+        f"{perf_counter() - start_time:.2f} seconds",
+    )
 
 
 async def init_conv_manager(
@@ -1004,27 +589,12 @@ async def init_conv_manager(
                 perf_counter() - _t0,
             )
 
-            store_chat_history = await get_last_store_chat_history()
-            if store_chat_history:
-                _t0 = perf_counter()
-                await cm.event_broker.publish(
-                    "app:comms:chat_history",
-                    GetChatHistory(
-                        chat_history=store_chat_history.chat_history,
-                    ).to_json(),
-                )
-                log_startup_timing(
-                    LOGGER,
-                    "⏱️ [StartupTiming] managers.init_conv_manager.publish_chat_history duration=%.2fs",
-                    perf_counter() - _t0,
-                )
-
             cm.initialized = True
 
             # Await the concurrent hydration that was kicked off inside
-            # _init_managers right after EventBus config.  In practice it
-            # finishes long before this point (hidden behind ContactManager
-            # init), so this is effectively a no-op await.
+            # _init_managers right after the chat table was bound. In
+            # practice it finishes long before this point, so this is
+            # effectively a no-op await.
             hydration_future = getattr(cm, "_hydration_future", None)
             if hydration_future is not None:
                 try:
@@ -1046,7 +616,7 @@ async def init_conv_manager(
                 except Exception as e:
                     LOGGER.error(
                         f"{ICONS['managers_worker']} [ManagersWorker] "
-                        f"Global thread hydration failed: {e}",
+                        f"Chat history hydration failed: {e}",
                     )
                     import traceback
 

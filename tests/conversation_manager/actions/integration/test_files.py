@@ -11,14 +11,12 @@ These validate the production path where a user provides a file path and the act
 import pytest
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     get_actor_started_event,
     wait_for_actor_completion,
 )
 from unify.conversation_manager.events import UnifyMessageReceived
-from unify.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -33,7 +31,6 @@ async def test_file_summarize_pdf_by_path(initialized_cm_codeact, test_files):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=f"Please summarize the PDF at {pdf_path} in 2 bullet points.",
         ),
     )
@@ -56,7 +53,6 @@ async def test_file_read_csv_extracts_names(initialized_cm_codeact, test_files):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content=(
                 f"Read the CSV at {csv_path} and tell me how many rows it has and the names listed."
             ),
@@ -81,7 +77,6 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
             content="Summarize the file at /definitely/does/not/exist.pdf in one sentence.",
         ),
     )
@@ -146,43 +141,35 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
 @_handle_project
-async def test_downloaded_attachment_readable_by_actor(initialized_cm_codeact):
-    """Actor can read a file that was auto-downloaded to Attachments/.
+async def test_chat_attachment_readable_by_actor(initialized_cm_codeact):
+    """Actor can read a file the user attached to a chat message.
 
-    Simulates the production attachment flow: a file lands in Attachments/ via
-    save_attachment (which ingests it), then the user asks the actor
-    about its contents.  The test is agnostic to *how* the actor reads the
-    file (open(), primitives.files.*, etc.) — it only checks the answer.
+    Mirrors the production attachment flow: the chat front end copies the
+    file into Attachments/ and puts its workspace path on the message, the
+    brain hands that path to the actor, and the actor reads the file. The
+    test is agnostic to *how* the actor reads the file — it only checks the
+    answer.
     """
     cm = initialized_cm_codeact
 
-    # Simulate an attachment download: save a .txt file with known content.
     from pathlib import Path
 
-    from unify.file_manager.settings import get_local_root
+    from unify.workspace import get_local_root
 
-    fm = ManagerRegistry.get_file_manager()
-    saved_path = fm.save_attachment(
-        "att-notes-1",
-        "meeting_notes.txt",
+    attachments_dir = Path(get_local_root()) / "Attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = "Attachments/att-notes-1_meeting_notes.txt"
+    (Path(get_local_root()) / saved_path).write_bytes(
         b"Project Aurora kickoff meeting\n"
         b"Attendees: Sarah Chen, Marcus Webb, Priya Patel\n"
         b"Decision: launch date set for March 15th\n"
         b"Action item: Marcus to prepare the budget forecast by Friday\n",
     )
-    abs_saved = Path(get_local_root()) / saved_path
-    assert abs_saved.is_file(), (
-        f"save_attachment did not create {abs_saved} under get_local_root(); "
-        f"saved_path={saved_path!r}"
-    )
 
     result = await cm.step_until_wait(
         UnifyMessageReceived(
-            contact=BOSS,
-            content=(
-                f"I just received a file at {saved_path}. "
-                "Who attended the meeting and what was the launch date?"
-            ),
+            content="Who attended this meeting and what was the launch date?",
+            attachments=[saved_path],
         ),
     )
 

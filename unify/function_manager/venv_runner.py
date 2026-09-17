@@ -259,7 +259,7 @@ def dispatch_rpc_response(msg: dict) -> None:
 
 
 class ManagerProxy:
-    """Proxy for a state manager (e.g., contacts, tasks)."""
+    """Proxy for one primitive namespace (e.g., ``actor``)."""
 
     def __init__(self, manager_name: str, is_async: bool = True):
         self._manager_name = manager_name
@@ -291,8 +291,8 @@ class PrimitivesProxy:
     """
     Proxy for the primitives object.
 
-    Provides access to all state manager methods via RPC.
-    Usage: await primitives.contacts.ask(question="...")
+    Provides access to every primitive method via RPC.
+    Usage: await primitives.actor.act(request="...")
     """
 
     def __init__(self, is_async: bool = True):

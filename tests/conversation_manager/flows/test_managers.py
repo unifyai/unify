@@ -18,7 +18,6 @@ import pytest
 
 from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import filter_events_by_type
-from tests.conversation_manager.conftest import TEST_CONTACTS
 from unify.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
@@ -45,12 +44,9 @@ async def test_task_request_processed(initialized_cm):
     Test that task creation requests are processed by the LLM.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me all my contacts with their names and phone numbers.",
+            content="Go through every CSV in my workspace and list their column names.",
         ),
     )
 
@@ -65,20 +61,16 @@ async def test_stop_request_processed(initialized_cm):
     Test that stop requests are processed by the LLM.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Start a task first
     await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me all my contacts with their names and phone numbers.",
+            content="Go through every CSV in my workspace and list their column names.",
         ),
     )
 
     # Then send stop request
     stop_result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
             content="Stop that task, I don't need it anymore",
         ),
     )
@@ -93,20 +85,16 @@ async def test_status_query_processed(initialized_cm):
     Test that status queries are processed by the LLM.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Start a task
     await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me all my contacts with their names and phone numbers.",
+            content="Go through every CSV in my workspace and list their column names.",
         ),
     )
 
     # Ask about status
     status_result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
             content="What's the status of that task you're working on?",
         ),
     )
@@ -121,21 +109,17 @@ async def test_modification_request_processed(initialized_cm):
     Test that task modification requests are processed.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Start a task
     await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me all my contacts with their names and phone numbers.",
+            content="Go through every CSV in my workspace and list their column names.",
         ),
     )
 
     # Modify the task
     modify_result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Actually, for that task, please exclude my own contact from the list",
+            content="Actually, for that task, please skip any file over 1 MB",
         ),
     )
 
@@ -149,20 +133,16 @@ async def test_pause_request_processed(initialized_cm):
     Test that pause requests are processed by the LLM.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Start a task
     await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me all my contacts with their names and phone numbers.",
+            content="Go through every CSV in my workspace and list their column names.",
         ),
     )
 
     # Pause request
     pause_result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
             content="Pause that task for now",
         ),
     )
@@ -177,20 +157,16 @@ async def test_resume_request_processed(initialized_cm):
     Test that resume requests are processed by the LLM.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Start a task
     await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me all my contacts with their names and phone numbers.",
+            content="Go through every CSV in my workspace and list their column names.",
         ),
     )
 
     # Resume request
     resume_result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
             content="Resume that task please",
         ),
     )
@@ -213,13 +189,10 @@ async def test_llm_asks_clarification_for_ambiguous_request(initialized_cm):
     rather than making assumptions. This produces an immediate chat response.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Send an ambiguous request
     result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="I need help with a contact",  # Ambiguous: which? what help?
+            content="I need help with a file",  # Ambiguous: which? what help?
         ),
     )
 
@@ -249,21 +222,17 @@ async def test_llm_processes_clarification_response(initialized_cm):
     the LLM should process those details.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Send an ambiguous request
     await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="I need help with a contact",
+            content="I need help with a file",
         ),
     )
 
     # Provide clarification
     result = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="Show me only contacts that have email addresses.",
+            content="Only the CSV files, and list their row counts.",
         ),
     )
 
@@ -285,13 +254,10 @@ async def test_multi_turn_task_conversation(initialized_cm):
     Verifies that the LLM processes each turn appropriately.
     """
     cm = initialized_cm
-    contact = TEST_CONTACTS[0]
-
     # Turn 1: Request a task
     result1 = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
-            content="List all my contacts",
+            content="List the files in my workspace",
         ),
     )
     assert result1.llm_ran, "Expected LLM to run for task request"
@@ -299,7 +265,6 @@ async def test_multi_turn_task_conversation(initialized_cm):
     # Turn 2: Ask about status
     result2 = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
             content="How's that task going?",
         ),
     )
@@ -308,7 +273,6 @@ async def test_multi_turn_task_conversation(initialized_cm):
     # Turn 3: Stop the task
     result3 = await cm.step(
         UnifyMessageReceived(
-            contact=contact,
             content="Stop that task please",
         ),
     )

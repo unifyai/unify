@@ -1,4 +1,4 @@
-"""Symbolic: discovery-first policy gates on FM + GM + KM when present."""
+"""Symbolic: discovery-first policy gates on FM + GM when present."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def _unpack(result):
     return mode, tools, opts
 
 
-def test_default_tool_policy_requires_km_when_present():
+def test_default_tool_policy_requires_both_families_when_present():
     tools = {
         "FunctionManager_search_functions": object(),
         "FunctionManager_list_functions": object(),
@@ -30,17 +30,12 @@ def test_default_tool_policy_requires_km_when_present():
         "GuidanceManager_filter": object(),
         "GuidanceManager_get_guidance": object(),
         "GuidanceManager_add_guidance": object(),
-        "KnowledgeManager_search": object(),
-        "KnowledgeManager_filter": object(),
-        "KnowledgeManager_get_knowledge": object(),
-        "KnowledgeManager_add_knowledge": object(),
         "execute_code": object(),
     }
     policy = _default_tool_policy(
         has_fm_tools=True,
         has_gm_tools=True,
         filter_tools=_identity_filter,
-        has_km_tools=True,
     )
     mode, gated, opts = _unpack(policy(0, tools, called_tools=[]))
     assert mode == "required"
@@ -49,25 +44,20 @@ def test_default_tool_policy_requires_km_when_present():
     assert set(gated) == {
         "FunctionManager_search_functions",
         "GuidanceManager_search",
-        "KnowledgeManager_search",
     }
     assert "FunctionManager_add_functions" not in gated
     assert "GuidanceManager_add_guidance" not in gated
-    assert "KnowledgeManager_add_knowledge" not in gated
 
     mode, gated, opts = _unpack(
         policy(
             1,
             tools,
-            called_tools=[
-                "FunctionManager_search_functions",
-                "GuidanceManager_search",
-            ],
+            called_tools=["FunctionManager_search_functions"],
         ),
     )
     assert mode == "required"
     assert opts == {"eager": True}
-    assert set(gated) == {"KnowledgeManager_search"}
+    assert set(gated) == {"GuidanceManager_search"}
 
     mode, full, opts = _unpack(
         policy(
@@ -76,7 +66,6 @@ def test_default_tool_policy_requires_km_when_present():
             called_tools=[
                 "FunctionManager_search_functions",
                 "GuidanceManager_search",
-                "KnowledgeManager_search",
             ],
         ),
     )
@@ -84,21 +73,19 @@ def test_default_tool_policy_requires_km_when_present():
     assert opts is None
     assert "execute_code" in full
     assert "GuidanceManager_add_guidance" in full
-    assert "KnowledgeManager_add_knowledge" in full
+    assert "FunctionManager_add_functions" in full
 
 
 def test_default_tool_policy_falls_back_when_preferred_missing():
     tools = {
         "FunctionManager_list_functions": object(),
         "GuidanceManager_filter": object(),
-        "KnowledgeManager_get_knowledge": object(),
         "execute_code": object(),
     }
     policy = _default_tool_policy(
         has_fm_tools=True,
         has_gm_tools=True,
         filter_tools=_identity_filter,
-        has_km_tools=True,
     )
     mode, gated, opts = _unpack(policy(0, tools, called_tools=[]))
     assert mode == "required"
@@ -106,47 +93,51 @@ def test_default_tool_policy_falls_back_when_preferred_missing():
     assert set(gated) == {
         "FunctionManager_list_functions",
         "GuidanceManager_filter",
-        "KnowledgeManager_get_knowledge",
     }
 
 
-def test_default_tool_policy_skips_km_gate_when_absent():
+def test_default_tool_policy_skips_gm_gate_when_absent():
     tools = {
         "FunctionManager_search_functions": object(),
         "FunctionManager_list_functions": object(),
-        "GuidanceManager_search": object(),
-        "GuidanceManager_add_guidance": object(),
+        "FunctionManager_add_functions": object(),
         "execute_code": object(),
     }
     policy = _default_tool_policy(
         has_fm_tools=True,
-        has_gm_tools=True,
+        has_gm_tools=False,
         filter_tools=_identity_filter,
-        has_km_tools=False,
     )
     mode, gated, opts = _unpack(policy(0, tools, called_tools=[]))
     assert mode == "required"
     assert opts == {"eager": True}
-    assert "GuidanceManager_add_guidance" not in gated
-    assert set(gated) == {
-        "FunctionManager_search_functions",
-        "GuidanceManager_search",
-    }
+    assert "FunctionManager_add_functions" not in gated
+    assert set(gated) == {"FunctionManager_search_functions"}
 
     mode, full, opts = _unpack(
         policy(
             1,
             tools,
-            called_tools=[
-                "FunctionManager_search_functions",
-                "GuidanceManager_search",
-            ],
+            called_tools=["FunctionManager_search_functions"],
         ),
     )
     assert mode == "auto"
     assert opts is None
     assert "execute_code" in full
-    assert "GuidanceManager_add_guidance" in full
+    assert "FunctionManager_add_functions" in full
+
+
+def test_default_tool_policy_passes_through_without_families():
+    tools = {"execute_code": object()}
+    policy = _default_tool_policy(
+        has_fm_tools=False,
+        has_gm_tools=False,
+        filter_tools=_identity_filter,
+    )
+    mode, full, opts = _unpack(policy(0, tools, called_tools=[]))
+    assert mode == "auto"
+    assert opts is None
+    assert full == tools
 
 
 def test_discovery_gate_schema_detection():
@@ -159,9 +150,8 @@ def test_discovery_gate_schema_detection():
     )
     assert _is_discovery_gate_schema(
         [
-            "FunctionManager_search_functions",
-            "GuidanceManager_search",
-            "KnowledgeManager_search",
+            "FunctionManager_list_functions",
+            "GuidanceManager_get_guidance",
         ],
     )
     assert not _is_discovery_gate_schema(
@@ -177,14 +167,14 @@ def test_discovery_gate_schema_detection():
 def test_discovery_preferred_for_schema_orders_families():
     preferred = _discovery_preferred_for_schema(
         [
-            "KnowledgeManager_search",
-            "FunctionManager_search_functions",
             "GuidanceManager_search",
+            "FunctionManager_search_functions",
             "compress_context",
         ],
     )
     assert [name for name, _args in preferred] == [
         "FunctionManager_search_functions",
         "GuidanceManager_search",
-        "KnowledgeManager_search",
     ]
+    assert dict(preferred)["FunctionManager_search_functions"]["query"]
+    assert dict(preferred)["GuidanceManager_search"]["query"]

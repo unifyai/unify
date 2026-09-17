@@ -3,19 +3,20 @@
 Verifies:
 1. ToolMetadata supports function_id + function_context
 2. ToolSurfaceRegistry.get_function_id() matches collect_primitives() IDs
-3. StateManagerEnvironment populates function_id/function_context for each primitive
+3. ActorEnvironment populates function_id/function_context for each primitive
 4. FunctionManager exclusion filter generation (context-aware: primitive vs compositional)
 """
 
 import pytest
 from types import SimpleNamespace
 
+from unify.actor.environments import ActorEnvironment
 from unify.actor.environments.base import ToolMetadata
-from unify.actor.environments.state_managers import StateManagerEnvironment
 from unify.function_manager.function_manager import FunctionManager
-from unify.function_manager.primitives import Primitives
 from unify.function_manager.primitives.scope import PrimitiveScope
 from unify.function_manager.primitives.registry import get_registry, _get_stable_id
+
+_ACTOR_ACT = "primitives.actor.act"
 
 # ────────────────────────────────────────────────────────────────────────────
 # ToolMetadata function_id + function_context fields
@@ -55,20 +56,13 @@ def test_tool_metadata_function_id_with_context():
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_registry_get_function_id_contacts_ask():
-    """get_function_id matches the ID from _get_stable_id for contacts.ask."""
+def test_registry_get_function_id_actor_act():
+    """get_function_id hashes the short class name and method, like _get_stable_id."""
     registry = get_registry()
-    fid = registry.get_function_id("contacts", "ask")
-    expected = _get_stable_id("ContactManager", "ask")
-    assert fid == expected
-
-
-def test_registry_get_function_id_web_ask():
-    """get_function_id matches the ID from _get_stable_id for web.ask."""
-    registry = get_registry()
-    fid = registry.get_function_id("transcripts", "ask")
-    expected = _get_stable_id("TranscriptManager", "ask")
-    assert fid == expected
+    fid = registry.get_function_id("actor", "act")
+    assert fid == _get_stable_id("_ActorRunner", "act")
+    assert fid != _get_stable_id("_ActorRunner", "other")
+    assert 0 <= fid <= 0x7FFFFFFF
 
 
 def test_registry_get_function_id_invalid_alias():
@@ -83,6 +77,7 @@ def test_registry_get_function_id_matches_collect_primitives():
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
     collected = registry.collect_primitives(scope)
+    assert collected
 
     for name, row in collected.items():
         parts = name.split(".")
@@ -96,13 +91,13 @@ def test_registry_get_function_id_matches_collect_primitives():
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# StateManagerEnvironment function_id + function_context population
+# ActorEnvironment function_id + function_context population
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_state_manager_env_get_tools_has_function_ids():
-    """Every tool from StateManagerEnvironment has function_id and function_context."""
-    env = StateManagerEnvironment()
+def test_actor_env_get_tools_has_function_ids():
+    """Every tool from ActorEnvironment has function_id and function_context."""
+    env = ActorEnvironment()
     tools = env.get_tools()
     assert len(tools) > 0, "Expected at least some tools"
     for fq_name, meta in tools.items():
@@ -111,12 +106,14 @@ def test_state_manager_env_get_tools_has_function_ids():
         assert (
             meta.function_context == "primitive"
         ), f"Tool {fq_name} should have function_context='primitive'"
+        assert meta.is_impure is True
+        assert meta.is_steerable is True
 
 
-def test_state_manager_env_function_ids_match_registry():
+def test_actor_env_function_ids_match_registry():
     """function_ids from get_tools() match registry.get_function_id()."""
     registry = get_registry()
-    env = StateManagerEnvironment()
+    env = ActorEnvironment()
     tools = env.get_tools()
 
     for fq_name, meta in tools.items():
@@ -129,26 +126,15 @@ def test_state_manager_env_function_ids_match_registry():
         ), f"Tool {fq_name}: function_id={meta.function_id}, expected {expected_id}"
 
 
-def test_state_manager_env_scoped_has_function_ids():
-    """Scoped StateManagerEnvironment still populates function_ids."""
-    scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
+def test_actor_env_allowed_methods_still_populates_function_ids():
+    """An ActorEnvironment narrowed by allowed_methods keeps tagging its tools."""
+    env = ActorEnvironment(allowed_methods={_ACTOR_ACT})
     tools = env.get_tools()
 
-    assert len(tools) > 0
-    for fq_name, meta in tools.items():
-        assert fq_name.startswith("primitives.contacts.")
-        assert meta.function_id is not None
-        assert meta.function_context == "primitive"
-
-
-def test_state_manager_env_function_ids_are_unique():
-    """All function_ids from get_tools() are unique."""
-    env = StateManagerEnvironment()
-    tools = env.get_tools()
-    ids = [meta.function_id for meta in tools.values()]
-    assert len(ids) == len(set(ids)), "function_ids should be unique"
+    assert set(tools) == {_ACTOR_ACT}
+    meta = tools[_ACTOR_ACT]
+    assert meta.function_id == get_registry().get_function_id("actor", "act")
+    assert meta.function_context == "primitive"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -259,7 +245,7 @@ def test_scoped_filter_all_none_returns_none():
 def test_scoped_primitive_filter_with_exclusion():
     """_scoped_primitive_filter combines primitive_row_filter with primitive exclusion."""
     registry = get_registry()
-    scope = PrimitiveScope.single("contacts")
+    scope = PrimitiveScope.single("actor")
     fm = _make_fm_stub(exclude_primitive_ids={42}, primitive_scope=scope)
     result = fm._scoped_primitive_filter()
     base_filter = registry.primitive_row_filter(scope)
@@ -271,7 +257,7 @@ def test_scoped_primitive_filter_with_exclusion():
 def test_scoped_primitive_filter_ignores_compositional_exclusion():
     """_scoped_primitive_filter must NOT apply compositional exclusions."""
     registry = get_registry()
-    scope = PrimitiveScope.single("contacts")
+    scope = PrimitiveScope.single("actor")
     fm = _make_fm_stub(exclude_compositional_ids={42}, primitive_scope=scope)
     result = fm._scoped_primitive_filter()
     expected = registry.primitive_row_filter(scope)
@@ -282,7 +268,7 @@ def test_scoped_primitive_filter_ignores_compositional_exclusion():
 def test_scoped_primitive_filter_no_exclusion():
     """_scoped_primitive_filter returns base filter when no exclusions set."""
     registry = get_registry()
-    scope = PrimitiveScope.single("contacts")
+    scope = PrimitiveScope.single("actor")
     fm = _make_fm_stub(primitive_scope=scope)
     result = fm._scoped_primitive_filter()
     expected = registry.primitive_row_filter(scope)

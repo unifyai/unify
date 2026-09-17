@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
-    from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 __all__ = [
     "BaseActor",
@@ -85,7 +84,6 @@ class BaseActor(ABC):
         environments: Optional[list["BaseEnvironment"]] = None,
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
-        knowledge_manager: Optional["KnowledgeManager"] = None,
     ) -> None:
         """
         Shared initialization for concrete actor implementations.
@@ -94,9 +92,6 @@ class BaseActor(ABC):
         - Environment setup (grouping by namespace, composite merging)
         - FunctionManager resolution (registry fallback)
         - GuidanceManager resolution (registry fallback)
-        - KnowledgeManager resolution (registry fallback)
-        - WorkflowManager resolution (registry fallback, catalogue-gated)
-        - Extraction of computer primitives for backward compatibility
         """
         self.environments: Dict[str, "BaseEnvironment"] = self._setup_environments(
             environments=environments if environments is not None else [],
@@ -109,9 +104,6 @@ class BaseActor(ABC):
         )
         self.guidance_manager = (
             guidance_manager or ManagerRegistry.get_guidance_manager()
-        )
-        self.knowledge_manager = (
-            knowledge_manager or ManagerRegistry.get_knowledge_manager()
         )
 
     def _setup_environments(
@@ -161,18 +153,18 @@ class BaseActor(ABC):
         """
         Perform work from a natural language request and return a steerable handle.
 
-        This is the all-purpose method for engaging with knowledge, resources, and
-        the world beyond immediate conversational context. Use ``act`` for any work
-        that requires searching, retrieving, manipulating, or acting on information.
+        This is the all-purpose method for engaging with resources and the world
+        beyond immediate conversational context. Use ``act`` for any work that
+        requires computing, retrieving, manipulating, or acting on information.
 
         **Capabilities include (but are not limited to):**
 
-        - **Retrieval**: Search contact records, query knowledge bases, look up past
-          conversations, find calendar events, retrieve files
-        - **Action**: Update records, modify spreadsheets, store knowledge, write and
-          run functions
-        - **Combined**: Find information and then act on it (e.g., "find David's email
-          and add it to the attendees table")
+        - **Retrieval**: Read and analyse files in the workspace, fetch data from
+          APIs and the web, run stored functions that look things up
+        - **Action**: Write and run code, install packages, produce files, call
+          external services, store reusable functions and procedures
+        - **Combined**: Find information and then act on it (e.g., "read the CSV
+          in the workspace and produce a summary chart")
 
         **When to use ``act``:**
 
@@ -186,13 +178,14 @@ class BaseActor(ABC):
 
         - The returned handle supports pause/resume/interject/stop for mid-flight control
         - Results are returned as strings (or structured output if ``response_format`` specified)
-        - The actor has access to persistent storage, external APIs, and system capabilities
+        - The actor has access to a persistent workspace, a library of stored functions and procedures, external APIs, and system capabilities
         - Multiple ``act`` calls can run concurrently
 
         Args:
             request: Natural language request specifying what to do. Can be a question
-                ("What is David's email?"), a command ("Update David's phone number"), or
-                a combination ("Find David's email and add him to the attendees table").
+                ("How many rows does report.csv have?"), a command ("Convert the
+                attached spreadsheet to JSON"), or a combination ("Fetch today's
+                exchange rates and write them to rates.csv").
             guidelines: Optional meta-guidance on *how* to approach the task, as
                 opposed to *what* to do. Examples: "don't install new python packages",
                 "use sub-agents for solving this task", "prefer simple solutions over
@@ -219,8 +212,9 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
     Notes
     -----
     - Still shares the global actor base class: `BaseActor`.
-    - Adds CodeAct-specific `act()` parameters (notifications, images) while
-      preserving manager tool-registration patterns via `BaseStateManager`.
+    - Adds CodeAct-specific `act()` parameters (persistence, composition and
+      storage permissions, model profile) while preserving manager
+      tool-registration patterns via `BaseStateManager`.
     """
 
     _as_caller_description: str = (
@@ -233,14 +227,12 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         environments: Optional[list["BaseEnvironment"]] = None,
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
-        knowledge_manager: Optional["KnowledgeManager"] = None,
     ) -> None:
         BaseActor.__init__(
             self,
             environments=environments,
             function_manager=function_manager,
             guidance_manager=guidance_manager,
-            knowledge_manager=knowledge_manager,
         )
         BaseStateManager.__init__(self)
 

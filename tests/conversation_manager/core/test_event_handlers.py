@@ -14,11 +14,13 @@ Tests cover:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from unify.conversation_manager.domains.chat_history import ChatHistory
 from unify.conversation_manager.domains.event_handlers import (
     EventHandler,
     INITIALIZATION_COMPLETE_NO_HISTORY_NOTIFICATION,
@@ -26,6 +28,7 @@ from unify.conversation_manager.domains.event_handlers import (
     OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
     _event_type_to_log_key,
 )
+from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.events import (
     ActionStopRequested,
     ActorClarificationRequest,
@@ -34,26 +37,17 @@ from unify.conversation_manager.events import (
     ActorNotification,
     ActorResult,
     ActorSessionResponse,
-    BackupContactsEvent,
     DirectMessageEvent,
     Error,
     Event,
-    GetChatHistory,
     InitializationComplete,
-    LLMInput,
     NotificationInjectedEvent,
     NotificationUnpinnedEvent,
     OpenSlowBrainTurn,
     Ping,
-    SyncContacts,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
-from unify.contact_manager.simulated import SimulatedContactManager
-from unify.conversation_manager.domains.contact_index import ContactIndex
-from unify.conversation_manager.domains.notifications import NotificationBar
-from unify.conversation_manager.cm_types import Medium, Mode
-from unify.session_details import SESSION_DETAILS
 
 # =============================================================================
 # Test Fixtures
@@ -79,63 +73,20 @@ def mock_event_broker():
 
 
 @pytest.fixture
-def sample_contacts():
-    """Standard test contacts."""
-    return [
-        {
-            "contact_id": 0,
-            "first_name": "Test",
-            "surname": "Assistant",
-            "email_address": "assistant@test.com",
-            "phone_number": "+15555551234",
-        },
-        {
-            "contact_id": 1,
-            "first_name": "Boss",
-            "surname": "User",
-            "email_address": "boss@test.com",
-            "phone_number": "+15555551111",
-        },
-        {
-            "contact_id": 2,
-            "first_name": "Alice",
-            "surname": "Smith",
-            "email_address": "alice@example.com",
-            "phone_number": "+15555552222",
-        },
-    ]
-
-
-@pytest.fixture
-def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
+def mock_cm(mock_session_logger, mock_event_broker):
     """Create a mock ConversationManager with minimal state for handler tests."""
     cm = MagicMock()
     cm._session_logger = mock_session_logger
     cm.event_broker = mock_event_broker
-    cm.mode = Mode.TEXT
-    cm.chat_history = []
+    cm.brain_messages = []
     cm.in_flight_actions = {}
     cm.completed_actions = {}
-    cm.memory_manager = None
 
-    # Create a SimulatedContactManager and populate with sample contacts
-    contact_manager = SimulatedContactManager()
+    # The conversation, in memory only
+    cm.chat_history = ChatHistory()
 
-    # Update system contacts (0 and 1) with sample data
-    for contact_data in sample_contacts:
-        contact_id = contact_data["contact_id"]
-        contact_manager.update_contact(
-            contact_id=contact_id,
-            first_name=contact_data.get("first_name"),
-            surname=contact_data.get("surname"),
-            email_address=contact_data.get("email_address"),
-            phone_number=contact_data.get("phone_number"),
-        )
-
-    # Set up contact index with SimulatedContactManager
-    cm.contact_index = ContactIndex()
-    cm.contact_index.set_contact_manager(contact_manager)
-    cm.contact_manager = contact_manager
+    # No ask handle is waiting on the next user message
+    cm.active_ask_handle = None
 
     # Set up notifications bar
     cm.notifications_bar = NotificationBar()
@@ -146,8 +97,6 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     # Mock async methods
     cm.request_llm_run = AsyncMock()
     cm.stop_in_flight_action_by_calling_id = AsyncMock(return_value=True)
-    cm.record_last_inbound_reply = MagicMock()
-    cm.get_active_contact = MagicMock(return_value=sample_contacts[1])
 
     return cm
 
@@ -172,8 +121,6 @@ class TestEventHandlerRegistry:
             UnifyMessageReceived,
             UnifyMessageSent,
             Error,
-            BackupContactsEvent,
-            GetChatHistory,
             ActorHandleStarted,
             ActorHandleResponse,
             ActorResult,
@@ -182,7 +129,6 @@ class TestEventHandlerRegistry:
             ActorNotification,
             NotificationInjectedEvent,
             NotificationUnpinnedEvent,
-            SyncContacts,
             OpenSlowBrainTurn,
             InitializationComplete,
             DirectMessageEvent,
@@ -254,11 +200,16 @@ class TestEventTypeToLogKey:
     def test_simple_camel_case(self):
         """Simple CamelCase converts to snake_case."""
         assert _event_type_to_log_key(ActorResult) == "actor_result"
-        assert _event_type_to_log_key(SyncContacts) == "sync_contacts"
+        assert _event_type_to_log_key(ActionStopRequested) == "action_stop_requested"
 
     def test_consecutive_uppercase(self):
         """Handles consecutive uppercase letters (LLM)."""
-        assert _event_type_to_log_key(LLMInput) == "llm_input"
+
+        @dataclass
+        class LLMStubEvent(Event):
+            loggable: ClassVar[bool] = False
+
+        assert _event_type_to_log_key(LLMStubEvent) == "llm_stub_event"
 
     def test_unify_message_events(self):
         """UnifyMessage event names convert correctly."""
@@ -290,7 +241,6 @@ class TestHandleEventCore:
     @pytest.mark.asyncio
     async def test_handle_event_logs_event(self, mock_cm):
         """Verify handle_event logs loggable+prominent events via session logger."""
-        from dataclasses import dataclass
 
         @dataclass
         class StubLoggableEvent(Event):
@@ -308,10 +258,7 @@ class TestHandleEventCore:
     @pytest.mark.asyncio
     async def test_handle_event_publishes_loggable_events(self, mock_cm):
         """Verify loggable events are published to bus."""
-        event = UnifyMessageReceived(
-            contact={"contact_id": 2},
-            content="Hello",
-        )
+        event = UnifyMessageReceived(content="Hello")
 
         with patch(
             "unify.conversation_manager.domains.event_handlers.managers_utils",
@@ -364,181 +311,97 @@ class TestUnifyMessageHandlers:
     """Tests for the UnifyMessageReceived / UnifyMessageSent handlers."""
 
     @pytest.mark.asyncio
-    async def test_received_updates_contact_index(self, mock_cm):
-        """UnifyMessageReceived adds the message to the contact's thread."""
-        event = UnifyMessageReceived(
-            contact={"contact_id": 2},
-            content="Hello there!",
-        )
+    async def test_received_appends_to_the_conversation(self, mock_cm):
+        """UnifyMessageReceived adds the message to the conversation as the user."""
+        event = UnifyMessageReceived(content="Hello there!")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        msgs = mock_cm.contact_index.get_messages_for_contact(2)
+        msgs = mock_cm.chat_history.recent()
         assert len(msgs) == 1
         assert msgs[0].content == "Hello there!"
         assert msgs[0].role == "user"
+        assert msgs[0].timestamp == event.timestamp
 
     @pytest.mark.asyncio
     async def test_received_pushes_notification(self, mock_cm):
-        """UnifyMessageReceived pushes a notification naming the sender."""
-        event = UnifyMessageReceived(
-            contact={"contact_id": 2},
-            content="Test message",
-        )
+        """UnifyMessageReceived pushes a notification."""
+        event = UnifyMessageReceived(content="Test message")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
         assert len(mock_cm.notifications_bar.notifications) == 1
         notif = mock_cm.notifications_bar.notifications[0]
         assert notif.type == "comms"
-        assert notif.content == "Unify message from Alice Smith"
+        assert notif.content == "Message received"
 
     @pytest.mark.asyncio
     async def test_received_requests_llm_run(self, mock_cm):
-        """UnifyMessageReceived wakes the slow brain for the sender."""
-        event = UnifyMessageReceived(
-            contact={"contact_id": 2},
-            content="Need response",
-        )
+        """UnifyMessageReceived wakes the slow brain as a user-origin request."""
+        event = UnifyMessageReceived(content="Need response")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=2)
+        mock_cm.request_llm_run.assert_called_once_with(is_user_origin=True)
 
     @pytest.mark.asyncio
-    async def test_received_records_last_inbound_reply_context(self, mock_cm):
-        """UnifyMessageReceived records where a reply should be routed."""
+    async def test_received_carries_attachments_into_conversation(self, mock_cm):
+        """Attachment paths on the event are kept on the conversation message."""
         event = UnifyMessageReceived(
-            contact={"contact_id": 2},
-            content="Where are you?",
-        )
-
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
-
-        mock_cm.record_last_inbound_reply.assert_called_once_with(
-            {"medium": Medium.UNIFY_MESSAGE.value, "contact_id": 2},
-        )
-
-    @pytest.mark.asyncio
-    async def test_received_logs_message_via_transcript_queue(self, mock_cm):
-        """UnifyMessageReceived queues the transcript write for the message."""
-        event = UnifyMessageReceived(
-            contact={"contact_id": 2},
-            content="Log me",
-        )
-
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
-
-        mock_utils.queue_operation.assert_any_call(
-            mock_utils.log_message,
-            mock_cm,
-            event,
-        )
-
-    @pytest.mark.asyncio
-    async def test_received_carries_attachments_into_thread(self, mock_cm):
-        """Attachments on the event are attached to the thread entry."""
-        attachment = {
-            "filename": "report.pdf",
-            "filepath": "Files/report.pdf",
-            "content_type": "application/pdf",
-            "size_bytes": 1234,
-        }
-        event = UnifyMessageReceived(
-            contact={"contact_id": 2},
             content="See attached",
-            attachments=[attachment],
+            attachments=["Attachments/report.pdf"],
         )
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        msgs = mock_cm.contact_index.get_messages_for_contact(2)
+        msgs = mock_cm.chat_history.recent()
         assert len(msgs) == 1
-        assert msgs[0].attachments == [attachment]
+        assert msgs[0].attachments == ["Attachments/report.pdf"]
 
     @pytest.mark.asyncio
-    async def test_received_from_unknown_contact_uses_event_contact(self, mock_cm):
-        """A sender missing from the contact catalogue is named from the event."""
-        event = UnifyMessageReceived(
-            contact={"contact_id": 42, "first_name": "Zed", "surname": "Nobody"},
-            content="Hi",
-        )
+    async def test_received_answers_an_open_ask_instead_of_waking_brain(
+        self,
+        mock_cm,
+    ):
+        """While a handle question is open, the reply goes to that handle."""
+        ask_handle = MagicMock()
+        ask_handle.done.return_value = False
+        ask_handle.interject = AsyncMock()
+        mock_cm.active_ask_handle = ask_handle
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        event = UnifyMessageReceived(content="Let's do 2 PM")
 
-        msgs = mock_cm.contact_index.get_messages_for_contact(42)
-        assert len(msgs) == 1
-        assert (
-            mock_cm.notifications_bar.notifications[0].content
-            == "Unify message from Zed Nobody"
-        )
-        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=42)
+        await EventHandler.handle_event(event, mock_cm)
+
+        ask_handle.interject.assert_awaited_once_with("Let's do 2 PM")
+        mock_cm.request_llm_run.assert_not_called()
+        # The reply is still part of the conversation
+        assert mock_cm.chat_history.recent()[0].content == "Let's do 2 PM"
 
     @pytest.mark.asyncio
-    async def test_sent_updates_contact_index_with_assistant_role(self, mock_cm):
+    async def test_received_wakes_brain_when_open_ask_is_done(self, mock_cm):
+        """A finished ask handle no longer claims inbound messages."""
+        ask_handle = MagicMock()
+        ask_handle.done.return_value = True
+        ask_handle.interject = AsyncMock()
+        mock_cm.active_ask_handle = ask_handle
+
+        await EventHandler.handle_event(UnifyMessageReceived(content="Hi"), mock_cm)
+
+        ask_handle.interject.assert_not_called()
+        mock_cm.request_llm_run.assert_called_once_with(is_user_origin=True)
+
+    @pytest.mark.asyncio
+    async def test_sent_appends_with_assistant_role(self, mock_cm):
         """UnifyMessageSent adds the message with the assistant role."""
-        event = UnifyMessageSent(
-            contact={"contact_id": 2},
-            content="Reply to you",
-        )
+        event = UnifyMessageSent(content="Reply to you")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        msgs = mock_cm.contact_index.get_messages_for_contact(2)
+        msgs = mock_cm.chat_history.recent()
         assert len(msgs) == 1
         assert msgs[0].role == "assistant"
-        assert (
-            mock_cm.notifications_bar.notifications[0].content
-            == "Unify message sent to Alice Smith"
-        )
-
-    @pytest.mark.asyncio
-    async def test_sent_does_not_record_inbound_reply_context(self, mock_cm):
-        """Outbound messages never update the inbound reply routing."""
-        event = UnifyMessageSent(
-            contact={"contact_id": 2},
-            content="Outgoing message",
-        )
-
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
-
-        mock_cm.record_last_inbound_reply.assert_not_called()
+        assert mock_cm.notifications_bar.notifications[0].content == "Message sent"
 
 
 class TestOutboundSentWakePolicy:
@@ -547,16 +410,11 @@ class TestOutboundSentWakePolicy:
     @pytest.mark.asyncio
     async def test_unify_message_sent_with_suppress_flag_skips_llm_run(self, mock_cm):
         event = UnifyMessageSent(
-            contact={"contact_id": 2},
             content="Quiet reply",
             suppress_slow_brain_wake=True,
         )
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.request_llm_run.assert_not_called()
         assert len(mock_cm.notifications_bar.notifications) == 1
@@ -566,35 +424,23 @@ class TestOutboundSentWakePolicy:
         self,
         mock_cm,
     ):
-        event = UnifyMessageSent(
-            contact={"contact_id": 2},
-            content="Actor follow-up",
-        )
+        event = UnifyMessageSent(content="Actor follow-up")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=2)
+        mock_cm.request_llm_run.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_received_ignores_suppress_flag(self, mock_cm):
         """An inbound user message always wakes the slow brain."""
         event = UnifyMessageReceived(
-            contact={"contact_id": 2},
             content="Still needs a reply",
             suppress_slow_brain_wake=True,
         )
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=2)
+        mock_cm.request_llm_run.assert_called_once_with(is_user_origin=True)
 
 
 # =============================================================================
@@ -610,11 +456,7 @@ class TestErrorHandler:
         """Error surfaces on the notification bar and triggers an immediate turn."""
         event = Error(message="send_unify_message failed: connection reset")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
         assert len(mock_cm.notifications_bar.notifications) == 1
         notif = mock_cm.notifications_bar.notifications[0]
@@ -640,11 +482,7 @@ class TestActionStopRequestedHandler:
             source="chat",
         )
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.stop_in_flight_action_by_calling_id.assert_awaited_once_with(
             "act-123",
@@ -656,11 +494,7 @@ class TestActionStopRequestedHandler:
         """An empty reason falls back to the default stop message."""
         event = ActionStopRequested(calling_id="act-123")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.stop_in_flight_action_by_calling_id.assert_awaited_once_with(
             "act-123",
@@ -673,78 +507,13 @@ class TestActionStopRequestedHandler:
         mock_cm.stop_in_flight_action_by_calling_id = AsyncMock(return_value=False)
         event = ActionStopRequested(calling_id="missing")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.stop_in_flight_action_by_calling_id.assert_awaited_once()
 
 
 # =============================================================================
-# 7. BackupContactsEvent Handler Tests
-# =============================================================================
-
-
-class TestBackupContactsHandler:
-    """Tests for the BackupContactsEvent handler."""
-
-    @pytest.mark.asyncio
-    async def test_caches_contacts_before_contact_manager_is_set(self, mock_cm):
-        """Without a ContactManager the contacts are cached as fallbacks."""
-        mock_cm.contact_index = ContactIndex()
-        event = BackupContactsEvent(
-            contacts=[{"contact_id": 9, "first_name": "Fallback", "surname": "One"}],
-        )
-
-        await EventHandler.handle_event(event, mock_cm)
-
-        cached = mock_cm.contact_index.get_contact(9)
-        assert cached is not None
-        assert cached["first_name"] == "Fallback"
-
-    @pytest.mark.asyncio
-    async def test_ignored_once_contact_manager_is_set(self, mock_cm):
-        """With a ContactManager attached the fallback cache is left alone."""
-        event = BackupContactsEvent(
-            contacts=[{"contact_id": 9, "first_name": "Fallback", "surname": "One"}],
-        )
-
-        await EventHandler.handle_event(event, mock_cm)
-
-        assert 9 not in mock_cm.contact_index._fallback_contacts
-
-
-# =============================================================================
-# 8. State Update Handler Tests
-# =============================================================================
-
-
-class TestStateUpdateHandlers:
-    """Tests for state update event handlers."""
-
-    @pytest.mark.asyncio
-    async def test_get_chat_history_prepends_to_history(self, mock_cm):
-        """GetChatHistory prepends messages to existing history."""
-        mock_cm.chat_history = [{"role": "user", "content": "existing"}]
-        event = GetChatHistory(
-            chat_history=[
-                {"role": "user", "content": "older message"},
-                {"role": "assistant", "content": "older response"},
-            ],
-        )
-
-        await EventHandler.handle_event(event, mock_cm)
-
-        # New history should be prepended
-        assert len(mock_cm.chat_history) == 3
-        assert mock_cm.chat_history[0]["content"] == "older message"
-        assert mock_cm.chat_history[2]["content"] == "existing"
-
-
-# =============================================================================
-# 9. Actor Event Handler Tests
+# 7. Actor Event Handler Tests
 # =============================================================================
 
 
@@ -812,7 +581,7 @@ class TestActorEventHandlers:
         """ActorResult failure stores error context before completion handoff."""
         mock_cm.in_flight_actions = {
             7: {
-                "query": "Fix contact memberships",
+                "query": "Fix the spreadsheet formulas",
                 "action_type": "act",
                 "handle_actions": [],
             },
@@ -929,7 +698,7 @@ class TestActorEventHandlers:
 
         mock_cm.in_flight_actions = {
             1: {
-                "query": "Search transcripts for budget review",
+                "query": "Search the workspace for the budget review",
                 "handle_actions": [
                     {
                         "action_name": "interject_1",
@@ -1030,7 +799,7 @@ class TestActorEventHandlers:
 
 
 # =============================================================================
-# 10. Notification Event Handler Tests
+# 8. Notification Event Handler Tests
 # =============================================================================
 
 
@@ -1107,7 +876,7 @@ class TestNotificationEventHandlers:
 
 
 # =============================================================================
-# 11. InitializationComplete Handler Tests
+# 9. InitializationComplete Handler Tests
 # =============================================================================
 
 
@@ -1121,7 +890,7 @@ class TestInitializationCompleteHandler:
     ``event_handlers.INITIALIZATION_COMPLETE_NOTIFICATION``. These tests
     lock in both the "always run the brain" contract and the key wording
     of that directive (regression coverage for the cold-start
-    duplicate-reply bug observed for assistant 1820).
+    duplicate-reply bug).
     """
 
     @pytest.fixture(autouse=True)
@@ -1148,13 +917,13 @@ class TestInitializationCompleteHandler:
         """The pinned notif must explicitly tell the brain to call wait
         and NOT send a duplicate/rephrased reply.
 
-        Regression test for the Unify duplicate-reply bug: a looser
-        wording ("Review any earlier responses … and follow up if needed
-        — correct, elaborate, or confirm") was being read as permission
-        to re-send a rephrased version of the pre-init reply. The
-        wording must keep the legitimate follow-up paths (deferred work,
-        wrong/incomplete due to missing context) but explicitly forbid
-        rephrase/restate/confirm-style duplicates.
+        Regression test for the duplicate-reply bug: a looser wording
+        ("Review any earlier responses … and follow up if needed — correct,
+        elaborate, or confirm") was being read as permission to re-send a
+        rephrased version of the pre-init reply. The wording must keep the
+        legitimate follow-up paths (deferred work, wrong/incomplete due to
+        missing context) but explicitly forbid rephrase/restate/confirm-style
+        duplicates.
         """
         # Hydration restored history, so the notification may claim it.
         mock_cm._hydrated_history_count = 3
@@ -1184,10 +953,9 @@ class TestInitializationCompleteHandler:
         """A boot whose hydration restored nothing must not claim that
         history was loaded.
 
-        Regression test for the cold-boot amnesia incident (2026-08-22):
-        on a deployment without a persisted Comms stream, the rebooted CM
-        announced "full conversation history has been loaded" over an
-        empty thread render, and the brain went hunting elsewhere for
+        Regression test for the cold-boot amnesia incident: a rebooted CM
+        announced "full conversation history has been loaded" over an empty
+        conversation render, and the brain went hunting elsewhere for
         context the notification told it already had.
         """
         await EventHandler.handle_event(InitializationComplete(), mock_cm)
@@ -1221,17 +989,13 @@ class TestInitializationCompleteHandler:
         notification wording above.
         """
 
-        mock_cm.contact_index.push_message(
-            contact_id=1,
-            sender_name="Boss",
-            message_content="What meetings do I have today?",
+        mock_cm.chat_history.append(
             role="user",
+            content="What meetings do I have today?",
         )
-        mock_cm.contact_index.push_message(
-            contact_id=1,
-            sender_name="You",
-            message_content="I'm still booting up — give me a moment.",
+        mock_cm.chat_history.append(
             role="assistant",
+            content="I'm still booting up — give me a moment.",
         )
 
         await EventHandler.handle_event(InitializationComplete(), mock_cm)
@@ -1239,7 +1003,7 @@ class TestInitializationCompleteHandler:
         mock_cm.request_llm_run.assert_called_once_with(delay=0)
 
     @pytest.mark.asyncio
-    async def test_requests_brain_run_when_thread_is_empty(self, mock_cm):
+    async def test_requests_brain_run_when_conversation_is_empty(self, mock_cm):
         """No pre-init traffic — handler still schedules a brain turn so
         the brain can react to hydrated history."""
 
@@ -1249,51 +1013,7 @@ class TestInitializationCompleteHandler:
 
 
 # =============================================================================
-# 12. SyncContacts Handler Tests
-# =============================================================================
-
-
-class TestSyncContactsHandler:
-    """Tests for SyncContacts event handler."""
-
-    @pytest.mark.asyncio
-    async def test_sync_contacts_logs_event(self, mock_cm):
-        """SyncContacts logs the sync reason."""
-        event = SyncContacts(reason="Manual refresh")
-
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
-
-        # Verify the handler logged the event
-        mock_cm._session_logger.info.assert_any_call(
-            "state_update",
-            "SyncContacts: Manual refresh",
-        )
-
-    @pytest.mark.asyncio
-    async def test_sync_contacts_queues_sync_operation(self, mock_cm):
-        """SyncContacts queues the contact sync as a serialized operation."""
-        event = SyncContacts(reason="Manual refresh")
-
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
-
-        queued = [
-            call.args[0]
-            for call in mock_utils.queue_operation.await_args_list
-            if getattr(call.args[0], "__name__", "") == "_sync_contacts"
-        ]
-        assert len(queued) == 1
-
-
-# =============================================================================
-# 13. DirectMessageEvent Handler Tests
+# 10. DirectMessageEvent Handler Tests
 # =============================================================================
 
 
@@ -1301,11 +1021,8 @@ class TestDirectMessageEventHandler:
     """Tests for DirectMessageEvent handler."""
 
     @pytest.mark.asyncio
-    async def test_direct_message_records_assistant_message_for_active_contact(
-        self,
-        mock_cm,
-    ):
-        """DirectMessageEvent records the message on the active contact's thread."""
+    async def test_direct_message_records_assistant_message(self, mock_cm):
+        """DirectMessageEvent records the message on the conversation as the assistant."""
         event = DirectMessageEvent(
             content="Direct message content",
             source="system",
@@ -1313,29 +1030,16 @@ class TestDirectMessageEventHandler:
 
         await EventHandler.handle_event(event, mock_cm)
 
-        msgs = mock_cm.contact_index.get_messages_for_contact(1)
+        msgs = mock_cm.chat_history.recent()
         assert len(msgs) == 1
         assert msgs[0].content == "Direct message content"
         assert msgs[0].role == "assistant"
+        assert msgs[0].timestamp == event.timestamp
         mock_cm.request_llm_run.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_direct_message_falls_back_to_boss_contact(self, mock_cm):
-        """Without an active contact the message goes to the boss thread."""
-        mock_cm.get_active_contact = MagicMock(return_value=None)
-        event = DirectMessageEvent(content="Hello boss", source="handle")
-
-        await EventHandler.handle_event(event, mock_cm)
-
-        msgs = mock_cm.contact_index.get_messages_for_contact(
-            SESSION_DETAILS.boss_contact_id,
-        )
-        assert len(msgs) == 1
-        assert msgs[0].content == "Hello boss"
 
 
 # =============================================================================
-# 14. Edge Cases and Error Handling Tests
+# 11. Edge Cases and Error Handling Tests
 # =============================================================================
 
 
@@ -1375,29 +1079,19 @@ class TestEventHandlerEdgeCases:
         mock_cm.request_llm_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_unify_message_without_contact_id_still_notifies(self, mock_cm):
-        """A message whose contact carries no id is surfaced without a thread entry."""
-        event = UnifyMessageReceived(
-            contact={"first_name": "Anon"},
-            content="Hello?",
-        )
+    async def test_empty_message_still_recorded_and_notified(self, mock_cm):
+        """An inbound message with empty content is still a message."""
+        event = UnifyMessageReceived(content="")
 
-        with patch(
-            "unify.conversation_manager.domains.event_handlers.managers_utils",
-        ) as mock_utils:
-            mock_utils.queue_operation = AsyncMock()
-            await EventHandler.handle_event(event, mock_cm)
+        await EventHandler.handle_event(event, mock_cm)
 
-        assert len(mock_cm.contact_index.global_thread) == 0
-        assert (
-            mock_cm.notifications_bar.notifications[0].content
-            == "Unify message from Anon"
-        )
-        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=None)
+        assert len(mock_cm.chat_history.recent()) == 1
+        assert mock_cm.notifications_bar.notifications[0].content == "Message received"
+        mock_cm.request_llm_run.assert_called_once_with(is_user_origin=True)
 
 
 # =============================================================================
-# 15. OpenSlowBrainTurn Event Tests
+# 12. OpenSlowBrainTurn Event Tests
 # =============================================================================
 
 

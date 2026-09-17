@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import mimetypes
 import os
 import shutil
 import sys
@@ -75,40 +74,15 @@ def _configure_environment(args: argparse.Namespace) -> Path:
     return home
 
 
-def _boss_contact() -> dict:
-    from unify.session_details import (
-        PLACEHOLDER_USER_FIRST_NAME,
-        PLACEHOLDER_USER_SURNAME,
-        SESSION_DETAILS,
-    )
-
-    user = SESSION_DETAILS.user
-    return {
-        "contact_id": SESSION_DETAILS.boss_contact_id,
-        "first_name": user.first_name or PLACEHOLDER_USER_FIRST_NAME,
-        "surname": user.surname or PLACEHOLDER_USER_SURNAME,
-        "phone_number": user.number,
-        "email_address": user.email,
-        "is_system": True,
-    }
-
-
-def _stage_attachment(source: Path) -> dict:
-    """Copy a local file into the workspace and describe it as an attachment."""
-    from unify.file_manager.settings import get_local_root
+def _stage_attachment(source: Path) -> str:
+    """Copy a local file into the workspace and return its workspace path."""
+    from unify.workspace import get_local_root
 
     attachments_dir = Path(get_local_root()) / "Attachments"
     attachments_dir.mkdir(parents=True, exist_ok=True)
     target_name = f"{uuid.uuid4().hex[:8]}_{source.name}"
-    target = attachments_dir / target_name
-    shutil.copy2(source, target)
-    content_type, _ = mimetypes.guess_type(source.name)
-    return {
-        "filename": source.name,
-        "filepath": f"Attachments/{target_name}",
-        "content_type": content_type or "application/octet-stream",
-        "size_bytes": target.stat().st_size,
-    }
+    shutil.copy2(source, attachments_dir / target_name)
+    return f"Attachments/{target_name}"
 
 
 def _assistant_name() -> str:
@@ -138,7 +112,6 @@ class Chat:
         self._seed_builtins()
 
         self._cm = await run_conversation_manager(project_name=db.DEFAULT_PROJECT)
-        self._cm.contact_index.set_fallback_contacts([_boss_contact()])
         self._listener = asyncio.create_task(self._listen())
 
     @staticmethod
@@ -171,6 +144,7 @@ class Chat:
             ActorClarificationRequest,
             ActorNotification,
             ActorResult,
+            DirectMessageEvent,
             Error,
             Event,
             InitializationComplete,
@@ -189,10 +163,10 @@ class Chat:
                 event = Event.from_json(msg["data"])
                 if isinstance(event, InitializationComplete):
                     self._ready.set()
-                elif isinstance(event, UnifyMessageSent):
+                elif isinstance(event, (UnifyMessageSent, DirectMessageEvent)):
                     self._say(_assistant_name(), event.content)
-                    for attachment in event.attachments:
-                        self._status(f"attached {attachment.get('filepath')}")
+                    for attachment in getattr(event, "attachments", []):
+                        self._status(f"attached {attachment}")
                 elif isinstance(event, ActorNotification):
                     prefix = "done" if event.completed else "working"
                     self._status(f"{prefix}: {event.response}")
@@ -217,11 +191,7 @@ class Chat:
 
         attachments = [_stage_attachment(p) for p in self._pending_attachments]
         self._pending_attachments.clear()
-        event = UnifyMessageReceived(
-            contact=_boss_contact(),
-            content=text,
-            attachments=attachments,
-        )
+        event = UnifyMessageReceived(content=text, attachments=attachments)
         await self._cm.event_broker.publish(UnifyMessageReceived.topic, event.to_json())
 
     def attach(self, raw_path: str) -> str:

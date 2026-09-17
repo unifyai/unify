@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     get_actor_started_event,
@@ -43,9 +42,8 @@ async def test_actor_progress_notification_e2e_wiring(initialized_cm_codeact):
     try:
         start = await cm.step_until_wait(
             UnifyMessageReceived(
-                contact=BOSS,
                 content=(
-                    "Search my transcripts for discussion about quarterly planning and "
+                    "Search my notes files for discussion about quarterly planning and "
                     "keep me updated as you make progress."
                 ),
             ),
@@ -54,9 +52,7 @@ async def test_actor_progress_notification_e2e_wiring(initialized_cm_codeact):
 
         handle_id = get_actor_started_event(start).handle_id
 
-        injected_message = (
-            "Searching transcript records and preparing interim findings."
-        )
+        injected_message = "Searching the notes files and preparing interim findings."
         # Deterministically apply notification handling to CM state.
         await inject_actor_notification(
             cm,
@@ -82,8 +78,7 @@ async def test_actor_progress_notification_e2e_wiring(initialized_cm_codeact):
 
         update = await cm.step_until_wait(
             UnifyMessageReceived(
-                contact=BOSS,
-                content="Any update on that transcript search?",
+                content="Any update on that notes search?",
             ),
         )
         assert_no_errors(update)

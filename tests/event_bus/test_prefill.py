@@ -3,8 +3,7 @@ import datetime as dt
 
 from unify.events.event_bus import EventBus, Event
 from unify.events.types.comms import CommsPayload
-from unify.transcript_manager.types.message import Message
-from unify.conversation_manager.cm_types import Medium
+from unify.events.types.llm import LLMPayload
 from tests.helpers import _handle_project
 
 
@@ -57,23 +56,16 @@ async def test_non_prefilled_types_still_searchable():
     bus1 = EventBus()
 
     evt = Event(
-        type="Message",
-        payload=Message(
-            medium=Medium.UNIFY_MESSAGE,
-            sender_id=1,
-            receiver_ids=[2],
-            timestamp=dt.datetime.now(dt.UTC),
-            content="hello",
-            exchange_id=0,
-        ),
+        type="LLM",
+        payload=LLMPayload(request={"content": "hello"}),
     )
     await bus1.publish(evt)
     bus1.join_published()
 
     bus2 = EventBus()
-    results = await bus2.search(filter="type == 'Message'", limit=10)
+    results = await bus2.search(filter="type == 'LLM'", limit=10)
 
-    assert evt.timestamp in {r.timestamp for r in results}, "Message event not found"
+    assert evt.timestamp in {r.timestamp for r in results}, "LLM event not found"
 
 
 @pytest.mark.asyncio
@@ -85,15 +77,8 @@ async def test_row_id_seeded_for_non_prefilled_types():
     bus1 = EventBus()
 
     evt = Event(
-        type="Message",
-        payload=Message(
-            medium=Medium.UNIFY_MESSAGE,
-            sender_id=1,
-            receiver_ids=[2],
-            timestamp=dt.datetime.now(dt.UTC),
-            content="seed-test",
-            exchange_id=0,
-        ),
+        type="LLM",
+        payload=LLMPayload(request={"content": "seed-test"}),
     )
     await bus1.publish(evt)
     bus1.join_published()
@@ -102,7 +87,7 @@ async def test_row_id_seeded_for_non_prefilled_types():
     bus2 = EventBus()
     await bus2.join_initialization()
 
-    next_id = bus2._next_row_ids.get("Message", 0)
+    next_id = bus2._next_row_ids.get("LLM", 0)
     assert next_id > first_row_id, (
         f"row_id counter ({next_id}) should be seeded above the "
         f"persisted row_id ({first_row_id})"
