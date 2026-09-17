@@ -508,18 +508,25 @@ async def test_concurrent_function_boundaries_do_not_cross_talk_lineage_or_calli
         ]
         assert len(ask_events) == 2
 
+        # Match the boundary segment itself: a call id is four hex digits and
+        # can spell "f1" or "f2" by chance.
+        def _has_boundary(hierarchy: list[str], name: str) -> bool:
+            return any(seg.startswith(f"{name}(") for seg in hierarchy)
+
         hierarchies = [e.payload.get("hierarchy", []) for e in ask_events]
-        f1_hierarchy = [h for h in hierarchies if any("f1" in seg for seg in h)]
-        f2_hierarchy = [h for h in hierarchies if any("f2" in seg for seg in h)]
+        f1_hierarchy = [h for h in hierarchies if _has_boundary(h, "f1")]
+        f2_hierarchy = [h for h in hierarchies if _has_boundary(h, "f2")]
         assert len(f1_hierarchy) == 1, f"Expected one f1 hierarchy, got {f1_hierarchy}"
         assert len(f2_hierarchy) == 1, f"Expected one f2 hierarchy, got {f2_hierarchy}"
 
         # f1's hierarchy must NOT contain f2, and vice versa.
-        assert not any(
-            "f2" in seg for seg in f1_hierarchy[0]
+        assert not _has_boundary(
+            f1_hierarchy[0],
+            "f2",
         ), f"f1 hierarchy leaked f2: {f1_hierarchy[0]}"
-        assert not any(
-            "f1" in seg for seg in f2_hierarchy[0]
+        assert not _has_boundary(
+            f2_hierarchy[0],
+            "f1",
         ), f"f2 hierarchy leaked f1: {f2_hierarchy[0]}"
     finally:
         TOOL_LOOP_LINEAGE.reset(lineage_token)
