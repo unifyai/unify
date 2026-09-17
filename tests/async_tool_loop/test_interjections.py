@@ -15,6 +15,8 @@ import asyncio
 from typing import List
 
 import pytest
+
+from unify.common._async_tool.messages import is_loop_authored_message
 from unify.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
 from unify.common.llm_client import new_llm_client
@@ -93,6 +95,10 @@ def _is_internal_bookkeeping(msg: dict) -> bool:
     if _is_synthetic_check_status_stub(msg) or _is_synthetic_check_status_tool_msg(
         msg,
     ):
+        return True
+    # Lifecycle, progress and quota notices the loop appends in the user role
+    # are bookkeeping too: only a genuine interjection is a turn boundary.
+    if is_loop_authored_message(msg):
         return True
     if msg.get("role") != "system":
         return False

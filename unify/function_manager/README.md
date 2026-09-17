@@ -172,7 +172,6 @@ When functions are executed via an Actor (`CodeActActor`), additional objects ar
 
 | Name | Description |
 |------|-------------|
-| `computer_primitives` | Web/desktop control (navigate, act, observe, query, reason) |
 | `request_clarification` | Ask the user for clarification during execution |
 
 ---

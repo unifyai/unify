@@ -225,6 +225,12 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
         cm.record_last_inbound_reply(
             {"medium": Medium.UNIFY_MESSAGE.value, "contact_id": contact_id},
         )
+        # A question posed through the handle's ``ask`` owns the next user
+        # turn: the reply answers it directly instead of waking the brain.
+        ask_handle = cm.active_ask_handle
+        if ask_handle is not None and not ask_handle.done():
+            await ask_handle.interject(event.content)
+            return
         await cm.request_llm_run(triggering_contact_id=contact_id)
     elif not event.suppress_slow_brain_wake:
         await cm.request_llm_run(triggering_contact_id=contact_id)

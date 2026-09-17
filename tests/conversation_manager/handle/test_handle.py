@@ -113,9 +113,13 @@ class UserPreference(BaseModel):
 class MeetingTime(BaseModel):
     """Structured response for meeting time questions."""
 
-    hour: int = Field(description="Hour of the meeting (24-hour format)", ge=0, le=23)
+    hour: int = Field(
+        description="Hour on the 24-hour clock, 0-23; 2 PM is 14, 9 AM is 9.",
+        ge=0,
+        le=23,
+    )
     minute: int = Field(description="Minute of the meeting", ge=0, le=59)
-    period: str = Field(description="AM or PM")
+    period: str = Field(description="'AM' or 'PM', consistent with the 24-hour hour.")
 
 
 class IssueCategory(str, Enum):

@@ -143,7 +143,7 @@ async def consume_and_log(handles: Iterable[ImageHandle]) -> List[int]:
   - Each non‑None `ImageHandle` has: `image_id: int` (pending id initially), `is_pending: bool`.
 
 - `ImageHandle.raw() -> bytes`
-  - Returns decoded bytes from locally cached base64; if the data is a GCS URL, it downloads the bytes once and caches the base64 locally for future reads.
+  - Returns the decoded bytes of the stored base64 payload.
 
 - `ImageHandle.ask(question: str) -> Awaitable[str]`
   - Single vision call; returns a plain text answer.

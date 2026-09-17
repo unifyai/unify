@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, List, Union, Optional
 
 from unify import db
 from .filter_utils import normalize_filter_expr
@@ -18,24 +18,12 @@ SUPPORTED_REDUCTION_METRICS: set[str] = {
 }
 
 
-def _normalize_filter(
-    flt: Optional[Union[str, Dict[str, str]]],
-) -> Optional[Union[str, Dict[str, str]]]:
-    """
-    Normalise a string or per-key filter mapping using the shared helper.
-
-    This keeps reduction tools consistent with other filter-capable tools that
-    rely on :func:`normalize_filter_expr`.
-    """
+def _normalize_filter(flt: Optional[str]) -> Optional[str]:
+    """Normalise a filter expression with the shared helper so reduction
+    tools accept the same syntax as every other filter-capable tool."""
     if flt is None:
         return None
-    if isinstance(flt, str):
-        return normalize_filter_expr(flt)
-    # Dict form: {key_name: filter_expr_for_that_key}
-    out: Dict[str, str] = {}
-    for k, expr in flt.items():
-        out[str(k)] = normalize_filter_expr(expr)
-    return out
+    return normalize_filter_expr(flt)
 
 
 def reduce_logs(
@@ -43,7 +31,7 @@ def reduce_logs(
     context: str,
     metric: str,
     keys: Union[str, List[str]],
-    filter: Optional[Union[str, Dict[str, str]]] = None,
+    filter: Optional[str] = None,
     group_by: Optional[Union[str, List[str]]] = None,
     project: Optional[str] = None,
 ) -> Any:
@@ -66,15 +54,9 @@ def reduce_logs(
         produces a scalar result (when ``group_by`` is not used); a list of
         column names computes the same metric independently for each key and
         returns a ``{key -> value}`` mapping.
-    filter : str | dict[str, str] | None, default None
-        Optional filter expression(s) to restrict which rows contribute to the
-        metric. Mirrors the behaviour of :func:`db.get_logs_metric`:
-
-        * When a string, the same expression is applied for all keys.
-        * When a dict, each key maps to its own filter expression.
-
-        In both cases, expressions are normalised via
-        :func:`normalize_filter_expr` for consistency with other tools.
+    filter : str | None, default None
+        Optional filter expression restricting the rows aggregated, normalised
+        via :func:`normalize_filter_expr` for consistency with other tools.
     group_by : str | list[str] | None, default None
         Optional field(s) to group by. Use a single column name for a single
         grouping level, or a list like ``[\"status\", \"priority\"]`` to group
