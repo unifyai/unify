@@ -79,7 +79,6 @@ class TaskSettings(BaseSettings):
     SIM_ACTOR_DURATION: float = 20.0
     LOCAL_SCHEDULER_ENABLED: bool = _derive_local_scheduler_default()
     LOCAL_SCHEDULER_POLL_INTERVAL_SECONDS: float = 60.0
-    PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS: int = 300
 
     model_config = SettingsConfigDict(
         env_prefix="UNIFY_TASK_",

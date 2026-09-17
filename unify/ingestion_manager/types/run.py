@@ -1,9 +1,7 @@
 """What an ingestion reports back: one run, its progress, and what to do next.
 
-Every ingestion is a **run** with an id, whichever tier executed it. That is the
-point of the design: an inline run and a dispatched cloud run are asked about the
-same way, so a plan that submits work does not have to know where it went in order
-to find out how it ended.
+Every ingestion is a **run** with an id. A plan that submits work does not have
+to watch it in order to find out how it ended.
 
 Runs and their events are ordinary rows in contexts this manager owns, read through
 the same logging path as every other catalogue. There is deliberately no separate
@@ -167,35 +165,24 @@ class FileProgress(BaseModel):
     a batch into one run per file was the only way to recover that, which traded
     away the single handle that made the batch observable at all.
 
-    Built from the checkpoints the dispatched path already writes, so this
-    surfaces what was measured rather than measuring anything new.
+    Built from the checkpoints the run already writes, so this surfaces what
+    was measured rather than measuring anything new.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(description="Source file this describes.")
-    observed: bool = Field(
-        default=True,
-        description=(
-            "Whether anything actually measured this file. False means only the "
-            "path is known and every other field is unset -- the case for a run "
-            "executing on the worker fleet, which does not report per file. "
-            "False is not 'queued': absence of a measurement is not evidence "
-            "that no work happened."
-        ),
-    )
     state: Optional[RunState] = Field(
         default=None,
-        description="Where this file has got to, or null when not observed.",
+        description="Where this file has got to.",
     )
-    claimed: Optional[bool] = Field(
-        default=None,
+    claimed: bool = Field(
+        default=False,
         description=(
-            "Whether a worker has taken this file up, or null when not "
-            "observed. A file that is queued and unclaimed is waiting for "
-            "capacity; one that is queued and claimed is working and has "
-            "simply not committed yet. Only the first is a reason to look for "
-            "a cause -- and only when it was actually observed."
+            "Whether a worker has taken this file up. A file that is queued "
+            "and unclaimed is waiting for capacity; one that is queued and "
+            "claimed is working and has simply not committed yet. Only the "
+            "first is a reason to look for a cause."
         ),
     )
     rows_written: int = Field(default=0, description="Rows committed so far.")
@@ -313,9 +300,6 @@ class IngestionRunRecord(AuthoredRow):
     run_key: str
 
     state: RunState = "queued"
-    # Which tier ran it. Recorded because "why did this take an hour" is usually
-    # answered by it, and because a resume has to know where to look.
-    executed_as: Optional[Literal["inline", "dispatched"]] = None
 
     source_kind: str = ""
     target_kind: str = ""
@@ -325,8 +309,8 @@ class IngestionRunRecord(AuthoredRow):
     # itself: a rows source can be arbitrarily large, and embedding it here would
     # put bulk data in a log row.
     request_key: str = ""
-    # Exact size once measured -- the count the tier decision was made on, and
-    # what the completion check holds the durable checkpoint against.
+    # Exact size once measured -- what the completion check holds the durable
+    # checkpoint against.
     declared_rows: Optional[int] = None
 
     # Concrete context paths this run wrote. The reason a canvas can be built over
@@ -339,9 +323,6 @@ class IngestionRunRecord(AuthoredRow):
     error: Optional[str] = None
     # Items parked after exhausting retries -- the depth `retry(only="dlq")` clears.
     parked: int = 0
-
-    # Set when the dispatched tier ran it, for correlating with cloud-side records.
-    dispatch_id: Optional[str] = None
 
     created_at: Optional[str] = None
     started_at: Optional[str] = None
@@ -360,7 +341,6 @@ class IngestionRun(BaseModel):
 
     run_id: str
     state: RunState
-    executed_as: Optional[Literal["inline", "dispatched"]] = None
     # Populated once known; empty while a run is still queued.
     contexts: List[str] = Field(default_factory=list)
 
@@ -378,7 +358,6 @@ class RunStatus(BaseModel):
 
     run_id: str
     state: RunState
-    executed_as: Optional[Literal["inline", "dispatched"]] = None
 
     stages: List[StageProgress] = Field(default_factory=list)
     files: List[FileProgress] = Field(

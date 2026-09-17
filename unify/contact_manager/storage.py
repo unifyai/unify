@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 from unify import db
 from ..common.context_store import TableStore
 from ..common.model_to_fields import model_to_fields
-from .types.contact import Contact, VOICE_ENROLLMENT_FIELDS
+from .types.contact import Contact
 
 
 def provision_storage(self) -> None:
@@ -16,7 +16,7 @@ def provision_storage(self) -> None:
         unique_keys={"contact_id": "int"},
         auto_counting={"contact_id": None},
         description="List of contacts, with all contact details stored.",
-        fields={**model_to_fields(Contact), **VOICE_ENROLLMENT_FIELDS},
+        fields=model_to_fields(Contact),
     )
 
 

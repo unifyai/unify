@@ -115,24 +115,6 @@ class TaskBase(AuthoredRow):
         ),
         json_schema_extra={"ui_editable": True},
     )
-    requires_filesystem: bool = Field(
-        default=False,
-        description=(
-            "When true, the run must not start until assistant Local "
-            "(~/Unity/Local synced from the desktop workspace) is ready. "
-            "Independent of offline delivery and of requires_computer."
-        ),
-        json_schema_extra={"ui_editable": True},
-    )
-    requires_computer: bool = Field(
-        default=False,
-        description=(
-            "When true, the run must not start until a computer-use desktop "
-            "(managed assistant VM or equivalent) is connected and ready. "
-            "Independent of offline delivery and of requires_filesystem."
-        ),
-        json_schema_extra={"ui_editable": True},
-    )
     enabled: bool = Field(
         default=True,
         description=(

@@ -6,7 +6,6 @@ from .medium import (
     MediumInfo,
     VALID_MEDIA,
 )
-from .screenshot import ScreenshotEntry
 
 __all__ = [
     "MEDIUM_REGISTRY",
@@ -14,7 +13,6 @@ __all__ = [
     "Medium",
     "MediumInfo",
     "Mode",
-    "ScreenshotEntry",
     "VALID_MEDIA",
     "VALID_MODES",
 ]

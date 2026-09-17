@@ -22,23 +22,8 @@ that is a table. If the intent is to read, search or cite it, that is a collecti
 ## Nothing blocks
 
 ``submit`` records the request and returns a handle immediately. Work happens in the
-background whichever tier runs it, so a plan is never held open by a large
-ingestion. Poll ``get_status`` when there is other work to do, or call ``wait`` when
+background, so a plan is never held open by a large ingestion. Poll ``get_status`` when there is other work to do, or call ``wait`` when
 there genuinely is not.
-
-## Where work runs is not a parameter
-
-There is no mode or tier argument, and adding one would be a mistake rather than a
-convenience. Files are parsed away from the assistant's own process whenever a
-worker fleet is reachable, because parsing loads the file and its model into
-whatever process does it and no number predicts that cost in advance; a deployment
-without a fleet parses in process rather than refusing the file. Rows and stored
-tables run in process only under a *measured* row ceiling, where queue round-trip
-would cost more than the work.
-
-Both paths write the same artifacts and the same checkpoints, so the choice affects
-latency and nothing else. A run has the same id, the same states and the same
-recovery verbs either way, and asking about one reads identically.
 
 ## Runs survive the process that started them
 

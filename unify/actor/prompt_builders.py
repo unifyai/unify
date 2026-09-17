@@ -36,8 +36,8 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     **Discovery index scope:** Function search covers user-stored functions
     **and** the built-in `primitives.*` catalogue — primitive rows come back
     with `is_primitive`, `argspec`, and `docstring`. The exception:
-    callables already documented in this prompt (computer-control
-    methods, prompt-injected functions and guidance) —
+    callables already documented in this prompt (prompt-injected
+    functions and guidance) —
     they never appear in search results, so empty discovery does **not**
     mean a prompt-documented callable is unavailable; call it by exact
     name via `execute_function`.
@@ -95,60 +95,6 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     | **read_only** | `await func.read_only(...)` | Sees current state, changes discarded |
 """).strip()
 
-_WORKFLOW_SHELF = textwrap.dedent("""
-    ### Installable workflows
-
-    The `WorkflowManager_*` tools manage a shelf of curated, versioned
-    packages — each one sets an assistant up for a recurring job (its
-    procedures, functions, recurring tasks, typed claims) in one install.
-
-    **Install vs. build.** When the user asks for a capability shaped like
-    a packaged job ("set me up to draft email replies each morning"),
-    check the shelf first with `WorkflowManager_list_workflows`. Install
-    when a workflow matches; build with tasks/guidance/functions only for
-    genuinely bespoke requests. Do not hand-assemble what a workflow
-    already packages, and do not install a workflow to get just one of
-    its pieces.
-
-    **Installing is consequential.** It plants content and creates
-    recurring jobs that will act on their own later. Confirm with the
-    user before installing anything they did not explicitly ask for, and
-    afterwards report exactly what was set up — every recurring job and
-    its schedule in plain language, and any settings recorded.
-
-    **A missing connection is not an error.** When the result carries
-    `connect_required`, the workflow is installed but held: tell the user
-    which app to connect and that nothing fires in the meantime.
-    Reinstalling after they connect arms the jobs.
-
-    **After install, everything is ordinary.** Planted procedures are
-    found by the same guidance search as any other; planted tasks are
-    ordinary tasks, run and steered through the usual task tools.
-    Uninstalling removes what the workflow planted and stops its jobs —
-    name them before confirming.
-
-    **Running one is always explicit.** Installing plants and arms; it
-    never runs. When the user asks for a workflow's work now — "run my
-    briefing", "do the review sweep" — take the `task_id` from that
-    installation's `jobs` (in `WorkflowManager_get_workflow`, or the
-    installed entries of `WorkflowManager_list_workflows`) and start it
-    with `primitives.tasks.execute`. There is no workflow-level run,
-    because a workflow has no runtime: the task it planted does. A job
-    reporting `enabled: false` is held on a missing connection, and
-    starting it is refused — say which app to connect instead.
-
-    **Settings travel with the run.** A planted task's run request carries
-    the workflow's recorded installation settings, already resolved. The
-    settings tool exists for reading and discussing configuration with the
-    user, not for runs to fetch their own.
-
-    **"Is it working?" is a question about runs.** `jobs` reports arming,
-    never whether the work happened — an armed job whose every occurrence
-    fails looks identical to a healthy one here. Take its `task_id` and ask
-    `primitives.tasks` about that task's runs.
-""")
-
-
 _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
     ### Discovery-First Policy (Active) — HARD REQUIREMENT
 
@@ -171,7 +117,7 @@ _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
        composition, branching, iteration, or combining intermediate results.
 """).strip()
 
-_TOOL_SELECTION_AND_SURFACES = textwrap.dedent("""
+_TOOL_SELECTION = textwrap.dedent("""
     ### Tool Selection: `execute_function` vs `execute_code`
 
     - One exact function or primitive call is
@@ -206,30 +152,6 @@ _TOOL_SELECTION_AND_SURFACES = textwrap.dedent("""
     plan — `steer` is for handles the outer async tool loop is tracking for
     you, not for handles you are holding directly in code.
 
-    ### Execution Surface: where code runs
-
-    `execute_code` runs on the **local** host by default; pass `surface`
-    to run elsewhere:
-
-    - `surface="local"` (default) — the only surface with stateful sessions
-      and venvs.
-    - `surface="assistant_desktop"` — your managed VM.
-    - `surface="user_desktop"` — the user's own **personal machine**. Only
-      use it when that user has linked it and has clearly asked you to act
-      on it (pass `user_id` when more than one is linked);
-      confirm with the user before running anything that changes their
-      system. **To read, fetch, or "sync" their files, always use
-      `primitives.computer.user_desktop.files` (list/pull/push)** — it
-      mirrors their home into `~/Unity/Remote/<user_id>/` and returns local
-      paths. Never retrieve their file content via shell commands on this
-      surface (no `cat`/`find`/`tar`/`base64`/`cp`/`scp`/`rclone`) — shell
-      there is only for commands the user explicitly wants run on their
-      machine. Access is separately gated by the user's Console consent and
-      can be revoked mid-run, so prompt-level permission alone is never
-      sufficient.
-
-    Remote surfaces are **stateless one-shots**: do not pass a non-stateless
-    `state_mode`, `session_id`, `session_name`, or `venv_id`.
 """).strip()
 
 _MANAGER_PRIMITIVE_SCOPE = textwrap.dedent("""
@@ -292,8 +214,7 @@ _EXECUTION_RULES = textwrap.dedent("""
 
     5. **Verify outcomes against evidence**: after a mutation or
        extraction, confirm the outcome from real evidence (return values,
-       screenshots, a re-read) — a step that ran is not a step that
-       worked. If the result rests on an unverified choice between
+       a re-read) — a step that ran is not a step that worked. If the result rests on an unverified choice between
        plausible alternatives, request clarification; if the evidence
        contradicts the result, fix and re-run.
 
@@ -354,10 +275,9 @@ def _build_sandbox_environment_section() -> str:
 
         | Global | What it is |
         |--------|------------|
-        | `primitives` | Manager/computer domains (`primitives.tasks`, …); `help(primitives.<manager>.<method>)` reads live method docs |
-        | `display` | `display(obj)` emits rich output — use it over `print(...)` for images; whatever you `display()` (screenshots included) comes back as visual input next turn — inspect it directly, no separate vision/observe call |
+        | `primitives` | Manager domains (`primitives.tasks`, …); `help(primitives.<manager>.<method>)` reads live method docs |
+        | `display` | `display(obj)` emits rich output — use it over `print(...)` for images; whatever you `display()` comes back as visual input next turn — inspect it directly, no separate vision/observe call |
         | `query_llm` / `list_llms` | Semantic LLM calls from code (doctrine below); full contract `help(query_llm)`, endpoints `list_llms()` |
-        | `get_oauth_access_token` | Connected-account OAuth handle for proxy REST; always injected, documented in full when workspace OAuth is connected — `help(get_oauth_access_token)` |
         | `run_coro_sync` | Drives a coroutine factory from a sync façade under the already-running loop |
         | `unillm` | Advanced direct LLM usage beyond `query_llm` |
         | `SteerableToolHandle` | Handle type manager calls return; make it the last expression to hand steering to the outer loop |
@@ -517,105 +437,32 @@ _TASK_SCHEDULING = textwrap.dedent("""
     resolved. If the primitive confirmed the fields, report them — do
     not claim failure or uncertainty.
 
-    Full procedure — task types, schedules, trigger and provider-event
-    binding resolution, entrypoints, `execute(task_id)` runs:
-    `GuidanceManager_search` "creating verifying arming and running
-    durable scheduled triggered and provider-event tasks".
-""").strip()
-
-
-_EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
-    ### External App Integration
-
-    Integrating an external service (cloud storage, CRM, comms,
-    accounting, …): check stored credentials with
-    `primitives.secrets.ask(...)` — if absent, tell the caller to
-    connect the service from the **Integrations** tab in the console —
-    then install the official Python SDK via `install_python_packages`
-    and integrate. Static keys sync to `.env` (`os.environ`);
-    connected-account OAuth REST goes through the local workspace proxy
-    via `get_oauth_access_token` — see `help(get_oauth_access_token)`.
-
-    Provider calls return one final result envelope (`ok`,
-    `connect_required`, `confirmation_required`, `missing_scope`,
-    `provider_error`, …) — handle it, and add **no custom retry/sleep
-    loops** (transient failures already retry inside
-    `primitives.integrations.*` / `execute_tool`; long domain waits are
-    the only exception).
-
-    **OAuth scope check**: when a granted-scopes secret exists
-    (`GOOGLE_GRANTED_SCOPES` / `MICROSOFT_GRANTED_SCOPES`), check that
-    the scope the API call requires is granted before calling
-    (Microsoft scopes are stored URL-prefixed). Secret missing entirely
-    → proceed normally; scope absent → do not attempt the call — tell
-    the user to reconnect the service from the **Integrations** tab in
-    the console with the missing access.
-
-    **Sharing links resolve through the API, never through their web page.**
-    For a OneDrive/SharePoint sharing URL, encode it into a share token
-    and walk the Graph shares surface through the proxy — do not fetch
-    the link or scrape its HTML. Full walkthrough (share tokens,
-    redemption, fallbacks, Google links): `GuidanceManager_search`
-    "reading OneDrive SharePoint sharing links workspace".
-
-    Full walkthrough (proxy base URLs, allowlist masking, mailbox
-    routing, storing reusable integrations): `GuidanceManager_search`
-    "integrating external apps credentials OAuth envelopes".
-""").strip()
-
-
-_FAST_PATH_AWARENESS = textwrap.dedent("""
-    ### Fast-Path Awareness
-
-    During interactive screen-share sessions, the outer process may handle
-    simple computer actions (browser navigation, clicks, scrolls) via fast
-    paths instead of routing them through you — visible as interjections
-    tagged `[Fast-path request]` / `[Fast-path result]`.
-
-    Monitor them and escalate when the fast path is out of its depth: its
-    result indicates failure or confusion, the task falls within guidance
-    you have loaded, or it needs capabilities the fast path lacks (stored
-    credentials via `${SECRET_NAME}` injection, multi-step procedures,
-    structured extraction). Escalate with a `send_notification` message
-    starting `"Escalation:"`, then **proceed with execution** — do not wait
-    for permission; the outer process coordinates from your notification.
-    Do not intervene when simple atomic actions complete successfully.
+    Full procedure — task types, schedules, trigger binding resolution,
+    entrypoints, `execute(task_id)` runs: `GuidanceManager_search`
+    "creating verifying arming and running durable scheduled and
+    triggered tasks".
 """).strip()
 
 
 def _build_filesystem_context() -> str:
-    from pathlib import Path
+    pass
 
     from unify.file_manager.settings import get_local_root
 
     resolved = get_local_root()
-    remote_mirror = Path(resolved).parent / "Remote"  # sibling of the workspace
     return textwrap.dedent(f"""
         ### Filesystem Context
 
-        This is the **local (pod) workspace** used by `execute_code` and by
-        attachment send/receive — not the managed VM desktop filesystem.
+        This is the **local workspace** used by `execute_code` and by
+        attachment send/receive.
         Your working directory is `{resolved}`.  It **persists across
         every interaction** with the user.  **Always use full absolute
         paths** (starting with `{resolved}/`); never relative paths.
-
-        GUI files on the managed desktop live under `/Unity/...` (home
-        `HOME=/Unity`, Downloads `/Unity/Downloads`, synced tree
-        `/Unity/Local`) — Computer Control paths only.  Downloads is a
-        symlink into the synced tree, so anything the browser saves there
-        arrives in this workspace under `Downloads/` once synced, and is
-        ingestible from that path;
-        do not treat them as this pod workspace's cwd or open them with
-        ordinary local file IO (see Computer Control →
-        Managed desktop filesystem).  Do not treat the desktop panel name
-        `unityuser` as `/home/unityuser` — that is not the desktop home.
 
         | Location | Purpose |
         |----------|---------|
         | `{resolved}/Attachments/` | **Inbound & Outbound** — exchanged attachments as `{{attachment_id}}_{{filename}}`. Persists across sessions. |
         | `{resolved}/Outputs/` | **Outbound staging** — save generated files here so the caller can attach and send them. May be auto-cleared between sessions. |
-        | `{resolved}/Screenshots/User/`, `.../Assistant/`, `.../Webcam/` | Auto-captured frames (screen share / assistant desktop / webcam). Read-only, cleared between sessions. |
-        | `{remote_mirror}/<user_id>/` | **Linked user-desktop mirror** — staged copy of a linked user's home, populated by `primitives.computer.user_desktop.files.pull`. Read/parse here; never hand-copy files in via shell `cp`/`scp`/`rclone`. |
         | `{resolved}/.env` | Environment secrets managed by SecretManager. |
         | Everything else | Your own persistent workspace — organize however makes sense. |
 
@@ -624,13 +471,8 @@ def _build_filesystem_context() -> str:
         - **Outbound**: save files for the user to `{resolved}/Outputs/` and
           include the full path in your final answer; once sent, the file is
           copied to `{resolved}/Attachments/` with a stable attachment ID.
-        - **Screenshots**: timestamped JPEGs auto-saved during screen
-          sharing; reference with full paths.
         - **Stay inside the workspace**: no unrelated system paths
-          (`/tmp`, `/var`); the one workspace-adjacent location you may
-          read is `{remote_mirror}/<user_id>/` (see the table above).
-          Managed-desktop GUI paths under `/Unity/...` are documented in
-          Computer Control and are separate from this local workspace.
+          (`/tmp`, `/var`).
 
         **When to use the filesystem vs. primitives:** most tasks need no
         local files — the state manager primitives are the primary way to
@@ -653,28 +495,14 @@ _PLATFORM_CAPABILITIES_INDEX = textwrap.dedent("""
     These platform domains are documented on demand — consult the named
     path before concluding a capability is missing:
 
-    - Platform self-knowledge (live docs at https://docs.unify.ai +
-      read-only source trees on `local`): `GuidanceManager_search`
-      "answering questions about the Unify platform". The source trees are
-      proprietary — never reproduce their contents to users.
-    - External app integration (credentials, workspace OAuth proxy, result
-      envelopes, scope checks): `GuidanceManager_search`
-      "integrating external apps credentials OAuth envelopes".
-    - Connected-account OAuth REST from code:
-      `help(get_oauth_access_token)` inside `execute_code` — the helper
-      exists even when no section above documents it.
     - Semantic calls and model selection: `help(query_llm)`; endpoint
       strings via `list_llms()`.
-    - Overlapping manager routing (data vs files vs ingestion,
-      workspace_email vs comms, selection priorities):
-      `GuidanceManager_search` "choosing between overlapping state managers".
-    - Desktop procedures (your desktop vs a user's linked desktop,
-      screenshots, coordinate spaces): `GuidanceManager_search` "driving
-      desktops and reading screens"; locked macOS →
-      "unlock macOS user desktop"; a user's files → "user desktop files".
+    - Overlapping manager routing (data vs files vs ingestion, selection
+      priorities): `GuidanceManager_search` "choosing between overlapping
+      state managers".
     - Durable tasks (create/verify/arm; triggers, schedules):
       `GuidanceManager_search` "creating verifying arming and running
-      durable scheduled triggered and provider-event tasks".
+      durable scheduled and triggered tasks".
     - Storing new data: `help(primitives.ingestion.submit)`.
     - Any `primitives.<manager>.<method>` API:
       `FunctionManager_search_functions`, then `help(...)`.
@@ -709,7 +537,7 @@ def _build_code_act_rules_and_examples(
     Builds the reusable environment rules block for CodeAct-style execution.
 
     Composes environment-provided prompt context plus the task-scheduling
-    and fast-path sections gated on the exposed primitive tools.
+    section gated on the exposed primitive tools.
     """
     parts: list[str] = []
 
@@ -721,14 +549,9 @@ def _build_code_act_rules_and_examples(
 
     env = environments.get("primitives")
     if env is not None:
-        _has_computer = any(
-            k.startswith("primitives.computer.") for k in env.get_tools()
-        )
         _has_tasks = any(k.startswith("primitives.tasks.") for k in env.get_tools())
         if _has_tasks:
             parts.append(_TASK_SCHEDULING)
-        if _has_computer:
-            parts.append(_FAST_PATH_AWARENESS)
 
     return "\n\n---\n\n".join(p for p in parts if p and p.strip()).strip()
 
@@ -740,8 +563,6 @@ def build_code_act_prompt(
     can_store: bool = False,
     guidelines: Optional[str] = None,
     discovery_first_policy: bool = False,
-    include_external_app_integration: bool = True,
-    include_oauth_helper: bool = True,
     persist: bool = False,
 ) -> str:
     """Build the system prompt for the CodeActActor.
@@ -757,21 +578,6 @@ def build_code_act_prompt(
     discovery_first_policy:
         When ``True``, appends guidance explaining the discovery-first tool
         policy (FM, GM, and KM must be called before other tools unlock).
-    include_external_app_integration:
-        When ``True`` (default, today's behavior), renders the
-        ``External App Integration`` section. Callers gate this on the
-        presence of integration packages
-        (``unify.integration_status.discovery.discover_available_packages``).
-        When gated off, the Platform Capabilities Index line still names
-        the consult path.
-    include_oauth_helper:
-        When ``True`` (default, today's behavior), renders the
-        ``OAuth Access Token Helper`` section. Callers gate this on
-        workspace-OAuth connection presence
-        (``unify.common.runtime_oauth.has_workspace_oauth_connection``).
-        Independent of ``include_external_app_integration`` — a
-        workspace-email assistant with zero integration packages keeps
-        the OAuth section. When gated off, the index line remains.
     persist:
         When ``True``, the skill-storage notice describes the persistent
         session's schedule — automatic consolidation after each completed
@@ -790,10 +596,6 @@ def build_code_act_prompt(
     has_km_tools = bool(
         tools and any(str(k).startswith("KnowledgeManager_") for k in tools.keys()),
     )
-    has_wm_tools = bool(
-        tools and any(str(k).startswith("WorkflowManager_") for k in tools.keys()),
-    )
-
     rules_and_examples = _build_code_act_rules_and_examples(
         environments=environments,
     )
@@ -805,7 +607,7 @@ def build_code_act_prompt(
         # cache-friendly prefix: role, contracts, execution semantics, and
         # selection rules first (identical across assistants of a
         # deployment), then per-assistant/per-session content (environment
-        # scope, filesystem paths, workflows, guidelines) at the tail.
+        # scope, filesystem paths, guidelines) at the tail.
         parts.append(
             "### Role\n\n"
             "You are an expert agent that solves tasks by writing and executing code. "
@@ -816,16 +618,10 @@ def build_code_act_prompt(
         parts.append(_TOOLS_SECTION)
 
         parts.append(_build_sandbox_environment_section())
-        parts.append(_TOOL_SELECTION_AND_SURFACES)
+        parts.append(_TOOL_SELECTION)
         parts.append(_MANAGER_PRIMITIVE_SCOPE)
         parts.append(_EXECUTION_RULES)
-        if include_oauth_helper:
-            from unify.common.runtime_oauth import get_oauth_prompt_context
-
-            parts.append(get_oauth_prompt_context())
         parts.append(_INCREMENTAL_EXECUTION)
-        if include_external_app_integration:
-            parts.append(_EXTERNAL_APP_INTEGRATION)
 
         if has_fm_tools or has_gm_tools or has_km_tools:
             parts.append(_PLATFORM_CAPABILITIES_INDEX)
@@ -846,9 +642,6 @@ def build_code_act_prompt(
 
         if rules_and_examples:
             parts.append(rules_and_examples)
-
-        if has_wm_tools:
-            parts.append(_WORKFLOW_SHELF)
 
         if guidelines:
             parts.append(
@@ -878,9 +671,6 @@ def build_code_act_prompt(
             parts.append(_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY)
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
-
-        if has_wm_tools:
-            parts.append(_WORKFLOW_SHELF)
 
         parts.append(
             "### Procedure\n\n"

@@ -44,8 +44,6 @@ def _task_due_payload_from_snapshot(
         "task_summary": snap.task_summary or snap.task_name or "",
         "visibility_policy": "silent_by_default",
         "recurrence_hint": "recurring" if snap.recurring else "one_off",
-        "requires_filesystem": bool(snap.requires_filesystem),
-        "requires_computer": bool(snap.requires_computer),
     }
 
 

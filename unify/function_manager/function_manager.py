@@ -20,8 +20,6 @@ import threading
 from pathlib import Path
 from weakref import WeakSet
 
-from unify.logger import LOGGER
-from unify.common.hierarchical_logger import ICONS
 from secrets import token_hex
 from typing import (
     Any,
@@ -35,7 +33,6 @@ from typing import (
     Set,
     Tuple,
     Union,
-    TYPE_CHECKING,
 )
 from unify import db
 from .shell_pool import ShellPool
@@ -80,7 +77,6 @@ from .steering import (
     dispatch_with_steering,
     instrument,
     interrupt_directive,
-    is_stopped_outcome,
     restore_session,
     run_with_steering,
 )
@@ -200,11 +196,6 @@ FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
     for envs only your private functions need. Pass ``"team:<id>"`` to share
     the env with team-level functions in that team. See the Accessible shared teams
     block in your system prompt; pick personal when in doubt."""
-
-if TYPE_CHECKING:  # pragma: no cover
-    from unify.actor.execution.targets.assistant_desktop import (
-        AssistantDesktopTarget,
-    )
 
 
 def _compositional_contexts() -> list[str]:
@@ -428,7 +419,7 @@ class _DependencyVisitor(ast.NodeVisitor):
                 called_name = self._assignment_map[func_name]
 
         # Case 2: Method call -> obj.method() - generally ignore for dependency injection
-        # (We assume obj like computer_primitives is globally available)
+        # (objects like ``primitives`` are globally available)
 
         if called_name:
             self.dependencies.add(called_name)
@@ -673,7 +664,6 @@ class _VenvConnection:
         call_kwargs: dict,
         is_async: bool,
         primitives: Optional[Any] = None,
-        computer_primitives: Optional[Any] = None,
         timeout: Optional[float] = None,
         env_overlay: Optional[Dict[str, str]] = None,
     ) -> dict:
@@ -691,7 +681,6 @@ class _VenvConnection:
             call_kwargs: Keyword arguments to pass to the function.
             is_async: Whether the function is async.
             primitives: The Primitives instance for RPC access.
-            computer_primitives: The ComputerPrimitives instance for RPC access.
             timeout: Execution timeout in seconds (None for no timeout).
 
         Returns:
@@ -777,7 +766,6 @@ class _VenvConnection:
                                 reply = await self._handle_rpc_call(
                                     msg,
                                     primitives=primitives,
-                                    computer_primitives=computer_primitives,
                                 )
                             except ControlledInterruption as interruption:
                                 # The child is blocked on this reply, so
@@ -848,7 +836,6 @@ class _VenvConnection:
         self,
         msg: dict,
         primitives: Optional[Any],
-        computer_primitives: Optional[Any],
     ) -> dict:
         """Answer one RPC message from the subprocess.
 
@@ -864,7 +851,6 @@ class _VenvConnection:
                 path=msg.get("path", ""),
                 kwargs=msg.get("kwargs", {}),
                 primitives=primitives,
-                computer_primitives=computer_primitives,
             )
         except ControlledInterruption:
             raise
@@ -1101,7 +1087,6 @@ class VenvPool:
         is_async: bool,
         session_id: int = 0,
         primitives: Optional[Any] = None,
-        computer_primitives: Optional[Any] = None,
         function_manager: "FunctionManager",
         timeout: Optional[float] = None,
         env_overlay: Optional[Dict[str, str]] = None,
@@ -1116,7 +1101,6 @@ class VenvPool:
             is_async: Whether the function is async.
             session_id: The session ID within the venv (default 0).
             primitives: The Primitives instance for RPC access.
-            computer_primitives: The ComputerPrimitives instance for RPC access.
             function_manager: The FunctionManager for venv preparation.
             timeout: Execution timeout in seconds.
 
@@ -1145,7 +1129,6 @@ class VenvPool:
                 call_kwargs=call_kwargs,
                 is_async=is_async,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
                 timeout=timeout,
                 env_overlay=env_overlay,
             )
@@ -1174,7 +1157,6 @@ class VenvPool:
                     call_kwargs=call_kwargs,
                     is_async=is_async,
                     primitives=primitives,
-                    computer_primitives=computer_primitives,
                     timeout=timeout,
                     env_overlay=env_overlay,
                 )
@@ -1722,9 +1704,6 @@ class _VenvFunctionProxy:
 
         # Resolve RPC targets from the injected namespace (caller-controlled).
         primitives = self._namespace.get("primitives")
-        computer_primitives = (
-            getattr(primitives, "computer", None) if primitives else None
-        )
 
         call_kwargs = self._map_positional_args(
             args=args,
@@ -1746,7 +1725,6 @@ class _VenvFunctionProxy:
                     call_kwargs=call_kwargs,
                     is_async=is_async,
                     primitives=primitives,
-                    computer_primitives=computer_primitives,
                     function_manager=self._function_manager,
                 )
             else:
@@ -1758,7 +1736,6 @@ class _VenvFunctionProxy:
                     call_kwargs=call_kwargs,
                     is_async=is_async,
                     primitives=primitives,
-                    computer_primitives=computer_primitives,
                 )
 
         elif state_mode == "read_only":
@@ -1782,7 +1759,6 @@ class _VenvFunctionProxy:
                 is_async=is_async,
                 initial_state=initial_state,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
             )
 
         else:  # state_mode == "stateless"
@@ -1793,7 +1769,6 @@ class _VenvFunctionProxy:
                 call_kwargs=call_kwargs,
                 is_async=is_async,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
             )
 
         if result.get("error"):
@@ -2064,23 +2039,6 @@ class FunctionManager(BaseFunctionManager):
         # ------------------------------------------------------------------ #
         # Dict[session_id, Dict[str, Any]] - persistent globals per session
         self._in_process_sessions: Dict[int, Dict[str, Any]] = {}
-
-    def _get_runtime_oauth_env_overlay(self) -> Dict[str, str]:
-        """Build the rotating OAuth env overlay for venv/shell execution.
-
-        This is intentionally routed through ``unify.common.runtime_oauth``
-        rather than SecretManager so provider metadata, expiry semantics, and
-        runtime helper behavior stay in one place.  Failures should not block
-        unrelated function execution; explicit token calls can still surface a
-        provider-specific error when the actor really needs a token.
-        """
-        try:
-            from unify.common.runtime_oauth import get_refresh_token_oauth_env_overlay
-
-            return get_refresh_token_oauth_env_overlay()
-        except Exception:
-            logger.warning("Failed to build OAuth env overlay", exc_info=True)
-            return {}
 
     @property
     def primitive_scope(self) -> PrimitiveScope:
@@ -2432,7 +2390,7 @@ class FunctionManager(BaseFunctionManager):
 
         Allows:
         - Built-in functions (except dangerous ones)
-        - Any method calls on objects (e.g., computer_primitives.*, call_handle.*, call.*)
+        - Any method calls on objects (e.g., primitives.*, call_handle.*, call.*)
         - User-defined functions (tracked as dependencies)
 
         Disallows:
@@ -2442,7 +2400,7 @@ class FunctionManager(BaseFunctionManager):
 
         for called in calls:
             # Allow all method calls (anything with a dot)
-            # This includes computer_primitives.*, call_handle.*, obj.method(), etc.
+            # This includes primitives.*, call_handle.*, obj.method(), etc.
             if "." in called:
                 continue
 
@@ -6792,7 +6750,6 @@ class FunctionManager(BaseFunctionManager):
         path: str,
         kwargs: Dict[str, Any],
         primitives: Optional[Any] = None,
-        computer_primitives: Optional[Any] = None,
     ) -> Any:
         """
         Handle an RPC call from a subprocess.
@@ -6808,7 +6765,6 @@ class FunctionManager(BaseFunctionManager):
             path: The RPC path (e.g., "contacts.ask", "computer.click")
             kwargs: The keyword arguments for the call
             primitives: The Primitives instance for state manager access
-            computer_primitives: The ComputerPrimitives instance
 
         Returns:
             The result of the RPC call
@@ -6819,7 +6775,6 @@ class FunctionManager(BaseFunctionManager):
                 path=path,
                 kwargs=kwargs,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
             )
 
         return await dispatch_with_steering(
@@ -6835,7 +6790,6 @@ class FunctionManager(BaseFunctionManager):
         path: str,
         kwargs: Dict[str, Any],
         primitives: Optional[Any],
-        computer_primitives: Optional[Any],
     ) -> Any:
         """Resolve one RPC path against the runtime and primitives and call it."""
         parts = path.split(".", 1)
@@ -6853,30 +6807,6 @@ class FunctionManager(BaseFunctionManager):
             from unify.common.reasoning import list_llms
 
             return list_llms(provider=kwargs.get("provider"))
-
-        if manager_name == "runtime" and method_name == "get_oauth_access_token":
-            from unify.common.runtime_oauth import get_oauth_access_token
-
-            provider = kwargs.get("provider")
-            min_ttl_seconds = int(kwargs.get("min_ttl_seconds", 300))
-            return get_oauth_access_token(
-                provider,
-                min_ttl_seconds=min_ttl_seconds,
-            )
-
-        # Handle computer primitives
-        if manager_name == "computer":
-            if computer_primitives is None:
-                raise RuntimeError("computer_primitives not available")
-            method = getattr(computer_primitives, method_name, None)
-            if method is None:
-                raise AttributeError(
-                    f"computer_primitives has no method '{method_name}'",
-                )
-            # ComputerPrimitives methods are sync, but we run in async context
-            if asyncio.iscoroutinefunction(method):
-                return await method(**kwargs)
-            return method(**kwargs)
 
         # Handle state manager primitives
         if primitives is None:
@@ -6905,7 +6835,6 @@ class FunctionManager(BaseFunctionManager):
         is_async: bool = True,
         initial_state: Optional[Dict[str, Any]] = None,
         primitives: Optional[Any] = None,
-        computer_primitives: Optional[Any] = None,
         env_overlay: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
@@ -6914,7 +6843,7 @@ class FunctionManager(BaseFunctionManager):
         This method:
         1. Ensures the venv is prepared (lazy creation on first use)
         2. Spawns a subprocess with the venv's Python interpreter
-        3. Handles bidirectional RPC for primitives and computer_primitives
+        3. Handles bidirectional RPC for primitives
         4. Returns the result from the subprocess
 
         While a steering session is in flight, each RPC reply doubles as a
@@ -6930,7 +6859,6 @@ class FunctionManager(BaseFunctionManager):
             initial_state: Optional serialized state to inject before execution.
                 Used for read_only mode to inherit state from a persistent session.
             primitives: The Primitives instance for RPC access to state managers.
-            computer_primitives: The ComputerPrimitives instance for RPC access.
 
         Returns:
             Dict with keys: result, error, stdout, stderr
@@ -6945,7 +6873,7 @@ class FunctionManager(BaseFunctionManager):
         python_path = await self.prepare_venv(venv_id=venv_id)
         runner_path = self._get_venv_runner_path(venv_id)
 
-        env_overlay = env_overlay or self._get_runtime_oauth_env_overlay()
+        env_overlay = env_overlay or {}
 
         # Execute in subprocess with bidirectional communication
         # Use start_new_session=True to create a new process group, allowing
@@ -7134,7 +7062,6 @@ class FunctionManager(BaseFunctionManager):
                                 path=msg.get("path", ""),
                                 kwargs=msg.get("kwargs", {}),
                                 primitives=primitives,
-                                computer_primitives=computer_primitives,
                             )
                             response = {
                                 "type": "rpc_result",
@@ -7401,7 +7328,7 @@ class FunctionManager(BaseFunctionManager):
         if func_data is None:
             raise ValueError(f"Function '{function_name}' not found")
 
-        # Direct executions (canvas actions, sub-agents, proxy re-entry)
+        # Direct executions (sub-agents, proxy re-entry)
         # feed the usage trace here; primitives are filtered inside.
         self._note_function_use(func_data)
 
@@ -7534,355 +7461,6 @@ class FunctionManager(BaseFunctionManager):
     # Both default to ~/Unity/Local; on Windows VMs this is C:\Unity\Local
     REMOTE_WINDOWS_LOCAL_ROOT = "C:\\Unity\\Local"
 
-    # Shell mode for remote Windows command execution ('powershell' or 'cmd')
-    REMOTE_WINDOWS_SHELL_MODE = "powershell"
-
-    def _get_sync_manager(self) -> Optional[Any]:
-        """Get SyncManager from LocalFileManager if available and started."""
-        if self._fm is None:
-            return None
-        adapter = getattr(self._fm, "_adapter", None)
-        if adapter is None:
-            return None
-        sync_mgr = getattr(adapter, "_sync_manager", None)
-        if sync_mgr is None or not getattr(sync_mgr, "_started", False):
-            return None
-        return sync_mgr
-
-    async def _sync_to_remote(self) -> bool:
-        """Trigger bisync before execution to push local changes and pull remote state.
-
-        Returns True if sync succeeded or was not needed.
-        """
-        sync_manager = self._get_sync_manager()
-        if sync_manager is None:
-            return True  # No sync configured, continue anyway
-
-        LOGGER.info(
-            f"{ICONS['windows_exec']} [windows exec] Syncing files to remote...",
-        )
-        result = await sync_manager.sync_remote_changes()
-        if not result.success:
-            LOGGER.warning(
-                f"{ICONS['windows_exec']} [windows exec] Warning: sync failed: {result.errors}",
-            )
-            return False
-        return True
-
-    async def _sync_from_remote(self) -> bool:
-        """Trigger sync from remote after execution.
-
-        Returns True if sync succeeded.
-        """
-        sync_manager = self._get_sync_manager()
-        if sync_manager is None:
-            return True
-
-        LOGGER.info(
-            f"{ICONS['windows_exec']} [windows exec] Syncing files from remote...",
-        )
-        result = await sync_manager.sync_remote_changes()
-        if not result.success:
-            LOGGER.warning(
-                f"{ICONS['windows_exec']} [windows exec] Warning: sync failed: {result.errors}",
-            )
-            return False
-        return True
-
-    def _should_execute_python_function_on_remote_windows(
-        self,
-        func_data: Dict[str, Any],
-    ) -> bool:
-        """
-        Determine if a Python function should execute on a remote Windows VM.
-
-        Returns True when ALL of the following conditions are met:
-        - Function has windows_os_required=True
-        - Assistant has desktop_mode='windows'
-
-        Args:
-            func_data: Function metadata dict from the function store.
-
-        Returns:
-            True if remote Windows execution is required, False otherwise.
-        """
-        windows_os_required = func_data.get("windows_os_required", False)
-        if not windows_os_required:
-            return False
-
-        from unify.session_details import SESSION_DETAILS
-
-        return SESSION_DETAILS.assistant.desktop_mode == "windows"
-
-    def _windows_exec_local_root(self) -> Path:
-        """Local sync root that FileSync bisyncs to the VM's ``C:\\Unity\\Local``."""
-        from unify.file_manager.settings import get_local_root
-
-        return Path(get_local_root()).expanduser()
-
-    def _write_venv_pyproject_local(self, venv_id: int) -> None:
-        """Stage a venv's ``pyproject.toml`` in the local sync root.
-
-        The file rides the pre-exec bisync to
-        ``C:\\Unity\\Local\\Local\\venvs\\venv_<id>\\pyproject.toml`` where
-        ``uv sync`` consumes it. Mirrors the relative path the remote VM
-        expects (the extra ``Local`` segment matches ``venv_full_path``).
-
-        Raises:
-            ValueError: If venv_id does not exist.
-        """
-        venv_data = self.get_venv(venv_id=venv_id)
-        if venv_data is None:
-            raise ValueError(f"VirtualEnv with ID {venv_id} not found")
-
-        dest = (
-            self._windows_exec_local_root()
-            / "Local"
-            / "venvs"
-            / f"venv_{venv_id}"
-            / "pyproject.toml"
-        )
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(venv_data["venv"], encoding="utf-8")
-
-    async def _prepare_venv_on_remote_windows(
-        self,
-        target: "AssistantDesktopTarget",
-        venv_id: int,
-    ) -> str:
-        """
-        Install a virtual environment on the remote Windows VM via ``uv sync``.
-
-        Assumes the venv's ``pyproject.toml`` has already been staged locally
-        (see :meth:`_write_venv_pyproject_local`) and pushed to the VM by the
-        pre-exec bisync. Runs the install over the assistant-desktop target,
-        which owns the agent-service transport.
-
-        Args:
-            target: Execution target for the managed Windows VM.
-            venv_id: The venv ID to install.
-
-        Returns:
-            Path to the Python executable in the prepared venv.
-
-        Raises:
-            RuntimeError: If venv installation fails.
-        """
-        venv_dir = f"Local\\venvs\\venv_{venv_id}"
-        venv_full_path = f"{self.REMOTE_WINDOWS_LOCAL_ROOT}\\{venv_dir}"
-
-        LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Preparing venv {venv_id}")
-
-        # Step 1: Install uv (ignore failure if already installed).
-        LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Installing uv")
-        await target.run_shell(
-            "pip install uv",
-            cwd=self.REMOTE_WINDOWS_LOCAL_ROOT,
-            timeout=300,
-        )
-
-        # Step 2: Run 'uv sync'.
-        LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Running uv sync")
-        sync_res = await target.run_shell("uv sync", cwd=venv_full_path, timeout=600)
-        if sync_res.returncode != 0:
-            raise RuntimeError(
-                "Failed to sync venv on remote: "
-                f"{sync_res.stderr or sync_res.stdout or 'Unknown error'}",
-            )
-
-        python_path = f"{venv_full_path}\\.venv\\Scripts\\python.exe"
-        logger.info(f"Prepared venv {venv_id} on remote Windows VM")
-        return python_path
-
-    async def _execute_python_function_on_remote_windows(
-        self,
-        *,
-        func_data: Dict[str, Any],
-        implementation: str,
-        call_kwargs: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """
-        Execute a Python function on a remote Windows VM.
-
-        Prerequisites:
-        - All file paths in call_kwargs must be under ~/
-        - FileSync makes these paths available on the remote VM
-
-        File movement runs entirely over FileSync bisync (no /api/files):
-        1. Wait for VM to be ready
-        2. Stage the wrapper script (and venv pyproject) in the local sync root
-        3. Bisync to push the staged inputs to the VM
-        4. Install the venv on the VM if needed (uv sync over /exec)
-        5. Execute the script (/exec)
-        6. Bisync from the VM to pull the result file, then read it locally
-
-        Args:
-            func_data: Function metadata dict.
-            implementation: Function source code.
-            call_kwargs: Keyword arguments to pass to the function.
-
-        Returns:
-            Dict with keys: result, error, stdout, stderr
-        """
-        import uuid
-
-        from unify.actor.execution.targets.assistant_desktop import (
-            AssistantDesktopTarget,
-        )
-        from unify.session_details import SESSION_DETAILS
-
-        # Strip @custom_function decorators (not available on remote Windows)
-        implementation = _strip_custom_function_decorators(implementation)
-
-        func_name_meta = func_data.get("name", "unknown")
-        LOGGER.info(
-            f"{ICONS['windows_exec']} [windows exec] Executing '{func_name_meta}' on remote Windows",
-        )
-
-        # The assistant-desktop target owns the agent-service transport and the
-        # managed-VM readiness wait; ensure_ready() blocks on both.
-        target = AssistantDesktopTarget(
-            self,
-            api_url=SESSION_DETAILS.assistant.desktop_url,
-            os="windows",
-        )
-        await target.ensure_ready()
-
-        # FileSync (bisync) is the sole file-movement mechanism for Windows
-        # exec: the wrapper script, venv pyproject, and result file all ride
-        # bisync between ~/Unity/Local and the VM's C:\Unity\Local. Without an
-        # active SyncManager there is no way to move files to/from the VM.
-        if self._get_sync_manager() is None:
-            raise RuntimeError(
-                "Windows function execution requires FileSync, but no active "
-                "SyncManager is available. Cannot move files to the managed VM.",
-            )
-
-        # Step 2: Build the wrapper script and stage every input in the local
-        # sync root. Relative paths mirror what the VM expects after bisync.
-        exec_id = uuid.uuid4().hex[:8]
-        is_async = "async def" in implementation
-
-        try:
-            tree = ast.parse(implementation)
-            func_name = tree.body[0].name if tree.body else "main"
-        except Exception:
-            func_name = "main"
-
-        call_kwargs_json = json.dumps(call_kwargs or {})
-
-        if is_async:
-            invoke_code = f"result = asyncio.run({func_name}(**call_kwargs))"
-        else:
-            invoke_code = f"result = {func_name}(**call_kwargs)"
-
-        wrapper_script = f"""
-import json
-import asyncio
-import sys
-
-# Function implementation
-{implementation}
-
-# Execution wrapper
-def _main():
-    call_kwargs = json.loads({repr(call_kwargs_json)})
-    try:
-        {invoke_code}
-        output = {{"result": result, "error": None}}
-    except Exception as e:
-        import traceback
-        output = {{"result": None, "error": traceback.format_exc()}}
-
-    # Write result to file
-    with open("_result_{exec_id}.json", "w", encoding="utf-8") as f:
-        json.dump(output, f, default=str)
-
-    print("__EXECUTION_COMPLETE__")
-
-if __name__ == "__main__":
-    _main()
-"""
-
-        local_root = self._windows_exec_local_root()
-        script_local = local_root / "scripts" / f"_exec_{exec_id}.py"
-        result_local = local_root / f"_result_{exec_id}.json"
-        script_local.parent.mkdir(parents=True, exist_ok=True)
-        script_local.write_text(wrapper_script, encoding="utf-8")
-
-        venv_id = func_data.get("venv_id")
-        if venv_id is not None:
-            self._write_venv_pyproject_local(venv_id)
-
-        # Step 3: Push staged inputs to the VM via bisync.
-        await self._sync_to_remote()
-
-        # Step 4: Install the venv on the VM (its pyproject was just pushed).
-        if venv_id is not None:
-            python_path = await self._prepare_venv_on_remote_windows(
-                target,
-                venv_id,
-            )
-        else:
-            python_path = "python"
-
-        # Step 5: Execute the script over /exec.
-        script_filename = f"scripts\\_exec_{exec_id}.py"
-        cwd = self.REMOTE_WINDOWS_LOCAL_ROOT
-        exec_command = f'& "{python_path}" "{script_filename}"'
-        LOGGER.debug(
-            f"{ICONS['windows_exec']} [windows exec] Starting script: {exec_command} - CWD: {cwd} - "
-            f"Kwargs: {call_kwargs}",
-        )
-
-        exec_res = await target.run_shell(exec_command, cwd=cwd, timeout=3600)
-
-        stdout = exec_res.stdout
-        stderr = exec_res.stderr
-        exit_code = exec_res.returncode
-        LOGGER.info(
-            f"{ICONS['windows_exec']} [windows exec] Execution complete (exitCode={exit_code})",
-        )
-
-        # Step 6: Pull the result file back via bisync, then read it locally.
-        await self._sync_from_remote()
-
-        if is_stopped_outcome(exec_res.result):
-            # A steering stop ended the script mid-run. Whatever it wrote
-            # before dying has been pulled back; the stop is the run's
-            # outcome, not a failure to produce a result file — and it wins
-            # even over a result the script managed to write while the kill
-            # was landing, matching the venv boundaries.
-            result_data = {"result": exec_res.result, "error": None}
-        elif result_local.exists():
-            try:
-                result_data = json.loads(result_local.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                result_data = {
-                    "result": None,
-                    "error": "Failed to parse result JSON",
-                }
-        else:
-            result_data = {
-                "result": None,
-                "error": (f"Execution failed: {stderr}" if stderr else "Unknown error"),
-            }
-
-        # Step 7: Drop the staged temp files locally; the deletions propagate
-        # to the VM on the next bisync, keeping both roots from accumulating.
-        for tmp in (script_local, result_local):
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-
-        return {
-            "result": result_data.get("result"),
-            "error": result_data.get("error"),
-            "stdout": stdout,
-            "stderr": stderr,
-        }
-
     async def _execute_python_function(
         self,
         *,
@@ -7897,14 +7475,6 @@ if __name__ == "__main__":
         _parent_chat_context: Optional[list] = None,
     ) -> Dict[str, Any]:
         """Execute a Python function with venv and state mode support."""
-        # Check if remote Windows execution is required
-        if self._should_execute_python_function_on_remote_windows(func_data):
-            return await self._execute_python_function_on_remote_windows(
-                func_data=func_data,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-            )
-
         # Strip @custom_function decorators (not available in subprocess runner)
         implementation = _strip_custom_function_decorators(implementation)
 
@@ -7923,9 +7493,6 @@ if __name__ == "__main__":
 
         # Extract RPC-bridgeable namespaces for subprocess execution paths.
         primitives = extra_namespaces.get("primitives")
-        computer_primitives = (
-            getattr(primitives, "computer", None) if primitives else None
-        )
 
         # Handle execution based on venv and state_mode
         if exec_venv_id is None:
@@ -7957,7 +7524,6 @@ if __name__ == "__main__":
                 is_async=is_async,
                 session_id=session_id,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
                 function_manager=self,
             )
 
@@ -7982,7 +7548,6 @@ if __name__ == "__main__":
                 is_async=is_async,
                 initial_state=initial_state,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
             )
 
         else:  # state_mode == "stateless"
@@ -7993,7 +7558,6 @@ if __name__ == "__main__":
                 call_kwargs=call_kwargs,
                 is_async=is_async,
                 primitives=primitives,
-                computer_primitives=computer_primitives,
             )
 
     async def _execute_shell_function(
@@ -8353,7 +7917,6 @@ if __name__ == "__main__":
         env: Optional[Dict[str, str]] = None,
         cwd: Optional[str] = None,
         primitives: Optional[Any] = None,
-        computer_primitives: Optional[Any] = None,
         timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """
@@ -8374,7 +7937,6 @@ if __name__ == "__main__":
             env: Optional environment variables to add to the script's environment.
             cwd: Optional working directory for the script.
             primitives: The Primitives instance for RPC access to state managers.
-            computer_primitives: The ComputerPrimitives instance for RPC access.
             timeout: Maximum execution time in seconds (default 5 minutes).
 
         Returns:
@@ -8526,7 +8088,6 @@ if __name__ == "__main__":
                                 path=path,
                                 kwargs=kwargs,
                                 primitives=primitives,
-                                computer_primitives=computer_primitives,
                             )
                             result = self._make_json_serializable(result)
                             response = {

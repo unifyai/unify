@@ -17,16 +17,6 @@ Keeping them separate is what lets the actor pick each on its own terms: it know
 what it is holding (the source) and what it wants to do with it (the target),
 and never has to reason about a single config whose fields half apply.
 
-**Where the work runs is not expressible here, on purpose.** There is no mode,
-tier or worker field, because the choice is not a judgement about intent -- it
-follows from measured size and from what the deployment has running, both of
-which the manager knows and a caller does not. Offering the knob would invite a
-guess in place of a measurement, and the guess would be wrong in the direction
-that hurts: parsing a large file in the assistant's own process.
-
-Nothing is lost by withholding it. Both tiers write the same artifacts and the
-same checkpoints, so a run is resumable and recoverable either way, and asking
-about one reads identically.
 """
 
 from __future__ import annotations

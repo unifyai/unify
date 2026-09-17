@@ -1,10 +1,9 @@
 """
 ContactIndex: Conversation state management for ConversationManager.
 
-All messages are stored in a single shared global deque. Per-contact and
-per-medium views are derived on demand. Contact information (name, email,
-phone, response_policy, etc.) is fetched from ContactManager, which is the
-single source of truth.
+All messages are stored in a single shared global deque. Per-contact views
+are derived on demand. Contact information (name, email, response_policy,
+etc.) is fetched from ContactManager, which is the single source of truth.
 """
 
 from collections import deque
@@ -22,65 +21,18 @@ if TYPE_CHECKING:
 class CommsMessage:
     """Base class for actual communications with contacts.
 
-    All message types representing real user<->assistant communications inherit
+    Message types representing real user<->assistant communications inherit
     from this class. Use isinstance(msg, CommsMessage) to distinguish actual
     communications from internal orchestration messages (like GuidanceMessage).
     """
 
 
 @dataclass
-class Message(CommsMessage):
-    """Simple text message (SMS, voice utterances)."""
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    local_message_id: int = field(default=0, compare=False)
-    screenshots: list[str] = field(default_factory=list, compare=False)
-    image_ids: list[int] = field(default_factory=list, compare=False)
-
-
-@dataclass
-class EmailMessage(CommsMessage):
-    """Email message with subject, body, and optional attachments.
-
-    Each attachment is a dict with keys: id, filename (and optionally filepath).
-    """
-
-    name: str
-    subject: str
-    body: str
-    email_id: str | None
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    thread_id: str | None = None
-    attachments: list[dict] = field(default_factory=list)
-    # Recipients (for reply-all functionality)
-    to: list[str] = field(default_factory=list)
-    cc: list[str] = field(default_factory=list)
-    bcc: list[str] = field(default_factory=list)
-    # Contact's role in this email: "sender", "to", "cc", or "bcc"
-    # Used to clarify the contact's relationship to the email when rendered
-    # in their contact-specific thread (emails appear in threads for ALL
-    # contacts involved, not just the primary contact)
-    contact_role: str | None = None
-
-
-@dataclass
 class UnifyMessage(CommsMessage):
-    """A message from the Unify console chat interface, optionally with attachments.
+    """A message from the in-app chat, optionally with attachments.
 
-    Each attachment is a dict with keys: id, filename, gs_url, content_type, size_bytes.
-
-    ``thread_id`` is the unified chat-store thread the message belongs to.
-    ``team_id`` / ``group_id`` mark room-scoped messages (team group chat /
-    org chat group) as opposed to a private 1:1 Console thread — replies to a
-    room must pass the same scope back to ``send_unify_message``.
-
-    ``mentions`` names who the sender addressed, which only matters in a room:
-    every member assistant receives the message, so this is what distinguishes
-    being asked from being copied in.
+    Each attachment is a dict with keys: filename, filepath, content_type,
+    size_bytes.
     """
 
     name: str
@@ -88,215 +40,20 @@ class UnifyMessage(CommsMessage):
     timestamp: datetime
     role: str  # "user" or "assistant"
     attachments: list[dict] = field(default_factory=list)
-    thread_id: int | None = None
-    team_id: int | None = None
-    group_id: int | None = None
-    mentions: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class WhatsAppMessage(CommsMessage):
-    """A WhatsApp message, optionally with attachments.
-
-    Each attachment is a dict with keys: id, filename, gs_url, content_type, size_bytes.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    attachments: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class TeamsMessage(CommsMessage):
-    """A Microsoft Teams chat message (1:1, group, or meeting chat).
-
-    ``chat_id`` is the Teams thread identifier required to reply into the
-    same chat. ``message_id`` is the server-side Teams message id (used to
-    thread replies when relevant).
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    chat_id: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class SlackMessage(CommsMessage):
-    """A Slack direct message.
-
-    ``team_id`` / ``channel_id`` identify the Slack workspace and DM
-    channel. ``thread_ts`` is set when the message is in a thread (Slack
-    represents both the parent and replies with the parent's ``ts``).
-    ``routing_metadata`` is a free-form dict surfaced to the assistant via
-    the renderer; carries Orchestra-side hints such as ``via_token``,
-    ``coordinator_fallback``, ``ambiguous_token``, ``known_assistants``
-    so the assistant can address misroutes correctly.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    team_id: str = ""
-    channel_id: str = ""
-    thread_ts: str = ""
-    event_ts: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-    routing_metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class SlackChannelMessage(CommsMessage):
-    """A Slack channel message (or threaded reply).
-
-    Channel identity is carried by ``team_id`` + ``channel_id``;
-    ``thread_ts`` is set when the message lives in a thread.
-    ``routing_metadata`` (see :class:`SlackMessage`) carries Orchestra-side
-    routing context surfaced to the assistant.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    team_id: str = ""
-    channel_id: str = ""
-    thread_ts: str = ""
-    event_ts: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-    routing_metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class DiscordChannelMessage(CommsMessage):
-    """A Discord guild channel message (bot @mention or in-channel reply).
-
-    ``channel_id`` is the Discord channel the message belongs to and the
-    target for replies via ``send_discord_channel_message``; ``guild_id``
-    identifies the server. ``bot_id`` is the pool bot that received/sent it.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    channel_id: str = ""
-    guild_id: str = ""
-    bot_id: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class TeamsChannelMessage(CommsMessage):
-    """A Microsoft Teams channel message.
-
-    Channel identity is carried by ``team_id`` + ``channel_id``. ``thread_id``
-    (also called root message id) is required to reply in-thread, while
-    ``message_id`` is the specific post's id.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    team_id: str = ""
-    channel_id: str = ""
-    thread_id: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class MsTeamsBotMessage(CommsMessage):
-    """A 1:1 DM via the org-installed Unify Teams app (Bot Framework).
-
-    Distinct from :class:`TeamsMessage` (delegated per-user Graph). Replies route
-    back into the same Teams conversation via ``send_ms_teams_bot_message`` using
-    the Microsoft ``tenant_id`` and the Bot Framework ``conversation_id`` — both
-    are surfaced to the assistant by the renderer.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    tenant_id: str = ""
-    conversation_id: str = ""
-    channel_id: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-    routing_metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class MsTeamsBotChannelMessage(CommsMessage):
-    """A group chat / Teams channel message via the org-installed Unify Teams app.
-
-    The shared-conversation counterpart of :class:`MsTeamsBotMessage`. Replies
-    route back via ``send_ms_teams_bot_channel_message`` using the Microsoft
-    ``tenant_id`` and the Bot Framework ``conversation_id``; ``team_id`` /
-    ``channel_id`` / ``thread_id`` identify the channel thread.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    tenant_id: str = ""
-    conversation_id: str = ""
-    team_id: str = ""
-    channel_id: str = ""
-    thread_id: str = ""
-    message_id: str = ""
-    attachments: list[dict] = field(default_factory=list)
-    routing_metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class ApiMessage(CommsMessage):
-    """A programmatic API message, optionally with attachments and developer-supplied tags.
-
-    Each attachment is a dict with keys: id, filename, gs_url, content_type, size_bytes.
-    Tags are opaque strings chosen by the developer for routing and context.
-    """
-
-    name: str
-    content: str
-    timestamp: datetime
-    role: str  # "user" or "assistant"
-    attachments: list[dict] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
 class GuidanceMessage:
     """Internal orchestration message (not an actual communication).
 
-    Used for internal notifications between components (e.g., FastBrainNotification
-    from the ConversationManager to the voice agent). These should NOT appear in
-    transcripts shown to external systems or used for communication context.
+    Carries guidance injected into a thread by the assistant's own components.
+    These should NOT appear in transcripts shown to external systems or used
+    for communication context.
     """
 
     name: str
     content: str
     timestamp: datetime
-
-
-# Message type -> Medium mapping for deriving per-medium views from the global deque.
-_MESSAGE_TYPE_TO_MEDIUM: dict[type, Medium] = {
-    EmailMessage: Medium.EMAIL,
-    UnifyMessage: Medium.UNIFY_MESSAGE,
-    ApiMessage: Medium.API_MESSAGE,
-}
 
 
 @dataclass
@@ -304,13 +61,13 @@ class GlobalThreadEntry:
     """An entry in the shared global thread.
 
     Wraps a message with its contact associations and medium, enabling
-    per-contact and per-medium views to be derived from the single deque.
+    per-contact views to be derived from the single deque.
     """
 
-    message: Message | EmailMessage | UnifyMessage | GuidanceMessage
+    message: UnifyMessage | GuidanceMessage
     medium: Medium
-    # For most messages, a single contact. For emails, all involved contacts
-    # with their roles (sender, to, cc, bcc). role is None for non-email.
+    # The contacts this entry belongs to. Values are reserved for a
+    # per-contact role annotation and are None for chat messages.
     contact_roles: dict[int, str | None]
 
 
@@ -318,22 +75,20 @@ class GlobalThreadEntry:
 class ConversationState:
     """Per-contact conversation metadata (not message storage).
 
-    Messages live in the shared global deque on ContactIndex. This class
-    stores only non-message state like call status.
+    Messages live in the shared global deque on ContactIndex.
     """
 
     contact_id: int
-    on_call: bool = False
 
 
 class ContactIndex:
     """
     Manages conversation state for active contacts.
 
-    All messages are stored in a single shared global deque. Per-contact and
-    per-medium views are derived on demand via helper methods.
+    All messages are stored in a single shared global deque. Per-contact
+    views are derived on demand via helper methods.
 
-    Contact information (name, email, phone, response_policy, etc.) is ALWAYS
+    Contact information (name, email, response_policy, etc.) is ALWAYS
     fetched from ContactManager - the single source of truth with DataStore-backed
     caching.
 
@@ -355,7 +110,6 @@ class ContactIndex:
         self._contact_manager: "BaseContactManager | None" = None
         # Fallback cache for contacts before ContactManager is initialized
         self._fallback_contacts: dict[int, dict] = {}
-        self._next_local_message_id: int = 0
 
     def set_contact_manager(self, contact_manager: "BaseContactManager") -> None:
         """Set the ContactManager to use as the source of truth for contact data.
@@ -412,15 +166,7 @@ class ContactIndex:
             )
         return self.active_conversations[contact_id]
 
-    def get_contact(
-        self,
-        contact_id: int | None = None,
-        phone_number: str | None = None,
-        email: str | None = None,
-        whatsapp_number: str | None = None,
-        discord_id: str | None = None,
-        slack_user_id: str | None = None,
-    ) -> dict | None:
+    def get_contact(self, contact_id: int | None = None) -> dict | None:
         """
         Get contact information from fallback cache or ContactManager.
 
@@ -428,121 +174,39 @@ class ContactIndex:
         events). If not found, falls back to ContactManager.
 
         Args:
-            contact_id: Contact ID (preferred).
-            phone_number: Phone number to search by.
-            email: Email address to search by.
-            whatsapp_number: WhatsApp number to search by.
-            discord_id: Discord user snowflake ID to search by.
-            slack_user_id: Slack user ID to search by.
+            contact_id: Contact ID.
 
         Returns:
             Contact dict or None if not found.
         """
+        if contact_id is None:
+            return None
         if self._contact_manager is None:
-            # Check fallback cache first (contacts from inbound messages)
-            if contact_id is not None:
-                if contact_id in self._fallback_contacts:
-                    return self._fallback_contacts[contact_id]
-            elif phone_number is not None:
-                for c in self._fallback_contacts.values():
-                    if c.get("phone_number") == phone_number:
-                        return c
-            elif email is not None:
-                for c in self._fallback_contacts.values():
-                    if c.get("email_address") == email:
-                        return c
-            elif whatsapp_number is not None:
-                for c in self._fallback_contacts.values():
-                    if c.get("whatsapp_number") == whatsapp_number:
-                        return c
-            elif discord_id is not None:
-                for c in self._fallback_contacts.values():
-                    if c.get("discord_id") == discord_id:
-                        return c
-            elif slack_user_id is not None:
-                for c in self._fallback_contacts.values():
-                    if c.get("slack_user_id") == slack_user_id:
-                        return c
-        else:
-            try:
-                if contact_id is not None:
-                    result = self._contact_manager.get_contact_info(contact_id)
-                    return result.get(contact_id)
-                elif phone_number is not None:
-                    result = self._contact_manager.filter_contacts(
-                        filter=f"phone_number == '{phone_number}'",
-                        limit=1,
-                    )
-                    contacts = result.get("contacts", [])
-                    if contacts:
-                        c = contacts[0]
-                        return c.model_dump() if hasattr(c, "model_dump") else c
-                elif email is not None:
-                    result = self._contact_manager.filter_contacts(
-                        filter=f"email_address == '{email}'",
-                        limit=1,
-                    )
-                    contacts = result.get("contacts", [])
-                    if contacts:
-                        c = contacts[0]
-                        return c.model_dump() if hasattr(c, "model_dump") else c
-                elif whatsapp_number is not None:
-                    result = self._contact_manager.filter_contacts(
-                        filter=f"whatsapp_number == '{whatsapp_number}'",
-                        limit=1,
-                    )
-                    contacts = result.get("contacts", [])
-                    if contacts:
-                        c = contacts[0]
-                        return c.model_dump() if hasattr(c, "model_dump") else c
-                elif discord_id is not None:
-                    result = self._contact_manager.filter_contacts(
-                        filter=f"discord_id == '{discord_id}'",
-                        limit=1,
-                    )
-                    contacts = result.get("contacts", [])
-                    if contacts:
-                        c = contacts[0]
-                        return c.model_dump() if hasattr(c, "model_dump") else c
-                elif slack_user_id is not None:
-                    result = self._contact_manager.filter_contacts(
-                        filter=f"slack_user_id == '{slack_user_id}'",
-                        limit=1,
-                    )
-                    contacts = result.get("contacts", [])
-                    if contacts:
-                        c = contacts[0]
-                        return c.model_dump() if hasattr(c, "model_dump") else c
-            except Exception:
-                return None
-        return None
+            return self._fallback_contacts.get(contact_id)
+        try:
+            result = self._contact_manager.get_contact_info(contact_id)
+            return result.get(contact_id)
+        except Exception:
+            return None
 
     # =========================================================================
     # Message query helpers — derive views from the shared global deque
     # =========================================================================
 
-    def get_messages_for_contact(
-        self,
-        contact_id: int,
-        medium: Medium | None = None,
-    ) -> list:
-        """Get messages for a contact, optionally filtered by medium.
+    def get_messages_for_contact(self, contact_id: int) -> list:
+        """Get messages for a contact.
 
         Args:
             contact_id: The contact to filter for.
-            medium: If provided, only return messages of this medium.
 
         Returns:
             List of messages (in chronological order) for this contact.
         """
-        results = []
-        for entry in self.global_thread:
-            if contact_id not in entry.contact_roles:
-                continue
-            if medium is not None and entry.medium != medium:
-                continue
-            results.append(entry.message)
-        return results
+        return [
+            entry.message
+            for entry in self.global_thread
+            if contact_id in entry.contact_roles
+        ]
 
     def get_active_contact_ids(self) -> set[int]:
         """Return the set of contact_ids present in the global thread."""
@@ -576,33 +240,10 @@ class ContactIndex:
         self,
         contact_id: int,
         sender_name: str,
-        thread_name: Medium,
         message_content: str | None = None,
-        subject: str | None = None,
-        body: str | None = None,
-        email_id: str | None = None,
-        attachments: list[str] | None = None,
+        attachments: list[dict] | None = None,
         timestamp: datetime | None = None,
         role: str = "user",
-        to: list[str] | None = None,
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        contact_role: str | None = None,
-        tags: list[str] | None = None,
-        chat_id: str | None = None,
-        channel_id: str | None = None,
-        team_id: str | None = None,
-        thread_id: str | None = None,
-        group_id: str | None = None,
-        thread_ts: str | None = None,
-        event_ts: str | None = None,
-        message_id: str | None = None,
-        routing_metadata: dict | None = None,
-        guild_id: str | None = None,
-        bot_id: str | None = None,
-        tenant_id: str | None = None,
-        conversation_id: str | None = None,
-        mentions: list[dict] | None = None,
     ) -> "GlobalThreadEntry":
         """
         Build a GlobalThreadEntry without appending it to the global thread.
@@ -626,228 +267,41 @@ class ContactIndex:
                 content=message_content or "",
                 timestamp=timestamp,
             )
-        # Create appropriate comms message type based on medium
-        elif thread_name == Medium.EMAIL:
-            message = EmailMessage(
-                name=name,
-                subject=subject or "",
-                body=body or "",
-                email_id=email_id,
-                thread_id=thread_id,
-                timestamp=timestamp,
-                role=role,
-                attachments=attachments or [],
-                to=to or [],
-                cc=cc or [],
-                bcc=bcc or [],
-                contact_role=contact_role,
-            )
-        elif thread_name == Medium.UNIFY_MESSAGE:
+        else:
             message = UnifyMessage(
                 name=name,
                 content=message_content or "",
                 timestamp=timestamp,
                 role=role,
                 attachments=attachments or [],
-                thread_id=int(thread_id) if thread_id else None,
-                team_id=int(team_id) if team_id else None,
-                group_id=int(group_id) if group_id else None,
-                mentions=mentions or [],
-            )
-        elif thread_name == Medium.WHATSAPP_MESSAGE:
-            message = WhatsAppMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                attachments=attachments,
-            )
-        elif thread_name == Medium.TEAMS_MESSAGE:
-            message = TeamsMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                chat_id=chat_id or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-            )
-        elif thread_name == Medium.TEAMS_CHANNEL_MESSAGE:
-            message = TeamsChannelMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                team_id=team_id or "",
-                channel_id=channel_id or "",
-                thread_id=thread_id or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-            )
-        elif thread_name == Medium.SLACK_MESSAGE:
-            message = SlackMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                team_id=team_id or "",
-                channel_id=channel_id or "",
-                thread_ts=thread_ts or "",
-                event_ts=event_ts or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-                routing_metadata=routing_metadata or {},
-            )
-        elif thread_name == Medium.SLACK_CHANNEL_MESSAGE:
-            message = SlackChannelMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                team_id=team_id or "",
-                channel_id=channel_id or "",
-                thread_ts=thread_ts or "",
-                event_ts=event_ts or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-                routing_metadata=routing_metadata or {},
-            )
-        elif thread_name == Medium.DISCORD_CHANNEL_MESSAGE:
-            message = DiscordChannelMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                channel_id=channel_id or "",
-                guild_id=guild_id or "",
-                bot_id=bot_id or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-            )
-        elif thread_name == Medium.MS_TEAMS_BOT_MESSAGE:
-            message = MsTeamsBotMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                tenant_id=tenant_id or "",
-                conversation_id=conversation_id or chat_id or "",
-                channel_id=channel_id or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-                routing_metadata=routing_metadata or {},
-            )
-        elif thread_name == Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE:
-            message = MsTeamsBotChannelMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                tenant_id=tenant_id or "",
-                conversation_id=conversation_id or chat_id or "",
-                team_id=team_id or "",
-                channel_id=channel_id or "",
-                thread_id=thread_id or "",
-                message_id=message_id or "",
-                attachments=attachments or [],
-                routing_metadata=routing_metadata or {},
-            )
-        elif thread_name == Medium.API_MESSAGE:
-            message = ApiMessage(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                attachments=attachments or [],
-                tags=tags or [],
-            )
-        else:
-            self._next_local_message_id += 1
-            message = Message(
-                name=name,
-                content=message_content or "",
-                timestamp=timestamp,
-                role=role,
-                local_message_id=self._next_local_message_id,
             )
 
         return GlobalThreadEntry(
             message=message,
-            medium=thread_name,
-            contact_roles={contact_id: contact_role},
+            medium=Medium.UNIFY_MESSAGE,
+            contact_roles={contact_id: None},
         )
 
     def push_message(
         self,
         contact_id: int,
         sender_name: str,
-        thread_name: Medium,
         message_content: str | None = None,
-        subject: str | None = None,
-        body: str | None = None,
-        email_id: str | None = None,
-        attachments: list[str] | None = None,
+        attachments: list[dict] | None = None,
         timestamp: datetime | None = None,
         role: str = "user",
-        to: list[str] | None = None,
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        contact_role: str | None = None,
-        tags: list[str] | None = None,
-        chat_id: str | None = None,
-        channel_id: str | None = None,
-        team_id: str | None = None,
-        thread_id: str | None = None,
-        group_id: str | None = None,
-        thread_ts: str | None = None,
-        event_ts: str | None = None,
-        message_id: str | None = None,
-        routing_metadata: dict | None = None,
-        guild_id: str | None = None,
-        bot_id: str | None = None,
-        tenant_id: str | None = None,
-        conversation_id: str | None = None,
-        mentions: list[dict] | None = None,
-    ) -> int:
-        """
-        Build a message and append it to the shared global thread.
-
-        Returns the message_id assigned to the new message (0 for non-Message types).
-        """
+    ) -> GlobalThreadEntry:
+        """Build a message, append it to the shared global thread and return it."""
         entry = self.build_message(
             contact_id=contact_id,
             sender_name=sender_name,
-            thread_name=thread_name,
             message_content=message_content,
-            subject=subject,
-            body=body,
-            email_id=email_id,
             attachments=attachments,
             timestamp=timestamp,
             role=role,
-            to=to,
-            cc=cc,
-            bcc=bcc,
-            contact_role=contact_role,
-            tags=tags,
-            chat_id=chat_id,
-            channel_id=channel_id,
-            team_id=team_id,
-            thread_id=thread_id,
-            group_id=group_id,
-            thread_ts=thread_ts,
-            event_ts=event_ts,
-            message_id=message_id,
-            routing_metadata=routing_metadata,
-            guild_id=guild_id,
-            bot_id=bot_id,
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            mentions=mentions,
         )
         self.global_thread.append(entry)
-        msg = entry.message
-        return msg.local_message_id if isinstance(msg, Message) else 0
+        return entry
 
     def prepend_entries(self, entries: list) -> None:
         """Prepend entries to the front of the global thread.

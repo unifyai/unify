@@ -241,10 +241,9 @@ def _submit_attachment(
         CollectionTarget(extract_tables=extract_tables),
     )
     logger.info(
-        "Submitted attachment %s for ingestion as run %s (%s)",
+        "Submitted attachment %s for ingestion as run %s",
         file_path,
         run.run_id,
-        run.executed_as,
     )
     return run.run_id
 

@@ -16,16 +16,6 @@ __all__ = [
 ]
 
 
-_PROVIDER_EVENT_OFFLINE_ENV_KEYS = (
-    "UNIFY_OFFLINE_PROVIDER_EVENT_OPERATION_ID",
-    "UNIFY_OFFLINE_PROVIDER_EVENT_RUN_ID",
-    "UNIFY_OFFLINE_PROVIDER_EVENT_BINDING_ID",
-    "UNIFY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID",
-    "UNIFY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF",
-    "UNIFY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
-)
-
-
 def build_offline_runner_env(
     *,
     assistant_id: str,
@@ -43,8 +33,6 @@ def build_offline_runner_env(
     entrypoint: int | None = None,
     destination: str | None = None,
     job_name: str = "",
-    requires_filesystem: bool = False,
-    requires_computer: bool = False,
 ) -> dict[str, str]:
     """Build the task-specific env-var dict for one offline_runner subprocess."""
 
@@ -67,8 +55,6 @@ def build_offline_runner_env(
         "UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
             str(source_contact_id) if source_contact_id is not None else ""
         ),
-        "UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM": ("1" if requires_filesystem else "0"),
-        "UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER": "1" if requires_computer else "0",
         "ASSISTANT_ID": str(assistant_id),
     }
     if source_contact_display_name:

@@ -1,35 +1,33 @@
 import asyncio
-import os
 from time import perf_counter
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import unify
 
 from unify.logger import LOGGER
 from unify.common.startup_timing import log_startup_timing
-from unify.common.context_registry import ContextRegistry
 from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unify.settings import SETTINGS
 from unify.session_details import SESSION_DETAILS
-from unify.conversation_manager.metrics import (
-    manager_init_total,
-    per_manager_init,
-)
 from unify.common.async_tool_loop import SteerableToolHandle
-from unify.comms import conversation_keys
 from unify.contact_manager.types.contact import UNASSIGNED
-from unify.conversation_manager.domains.comms_utils import (
-    publish_system_error,
-)
 from unify.conversation_manager.event_broker import get_event_broker
-from unify.conversation_manager.events import *
+from unify.conversation_manager.events import (
+    ActorClarificationRequest,
+    ActorNotification,
+    ActorResult,
+    ActorSessionResponse,
+    Event,
+    GetChatHistory,
+    InitializationComplete,
+    LogMessageResponse,
+    StoreChatHistory,
+    UnifyMessageSent,
+)
 from unify.events.event_bus import EVENT_BUS
 from unify.manager_registry import ManagerRegistry
-from unify.function_manager.primitives import default_runtime_scope
-from unify.conversation_manager.cm_types import Medium, Mode
-from unify.conversation_manager.domains.whatsapp_history import (
-    whatsapp_sent_history_content,
-)
+from unify.function_manager.primitives import Primitives, default_runtime_scope
+from unify.conversation_manager.cm_types import Medium
 
 if TYPE_CHECKING:
     from unify.actor.base import BaseActor
@@ -37,18 +35,12 @@ if TYPE_CHECKING:
 
 event_broker = get_event_broker()
 
-# Cache for pre-hire exchange ID - used to group all pre-hire messages into one exchange
-_pre_hire_exchange_id: int | None = None
-
 
 def ensure_runtime_context(*, strict: bool = False) -> str:
     """Rebind runtime context in this task and refresh ContextRegistry base."""
     from unify.common.runtime_context import bind_runtime_context_root
 
-    return bind_runtime_context_root(skip_create=True, strict=strict)
-
-
-# Thought: This entire file could actually be turned into a mixin class
+    return bind_runtime_context_root(strict=strict)
 
 
 # EVENT BUS
@@ -76,76 +68,13 @@ def _get_sender_name(contact: dict | None) -> str:
     first_name = contact.get("first_name", "")
     surname = contact.get("surname", "")
     name = f"{first_name} {surname}".strip()
-    return (
-        name
-        or contact.get("phone_number", "")
-        or contact.get("email_address", "")
-        or contact.get("discord_id", "")
-        or contact.get("slack_user_id", "")
-        or "Unknown"
-    )
+    return name or contact.get("email_address", "") or "Unknown"
 
 
-# Event types that produce push_message calls during hydration.
+# Event types that produce global-thread entries during hydration.
 _MESSAGE_PRODUCING_EVENTS = {
-    "SMSReceived",
-    "SMSSent",
-    "EmailReceived",
-    "EmailSent",
     "UnifyMessageReceived",
     "UnifyMessageSent",
-    "InboundPhoneUtterance",
-    "OutboundPhoneUtterance",
-    "InboundUnifyMeetUtterance",
-    "OutboundUnifyMeetUtterance",
-    "InboundWhatsAppCallUtterance",
-    "OutboundWhatsAppCallUtterance",
-    "InboundGoogleMeetUtterance",
-    "OutboundGoogleMeetUtterance",
-    "InboundTeamsMeetUtterance",
-    "OutboundTeamsMeetUtterance",
-    "GoogleMeetChatMessage",
-    "TeamsMeetChatMessage",
-    "GoogleMeetChatSent",
-    "TeamsMeetChatSent",
-    "AssistantTurnInjected",
-    "FastBrainNotification",
-    "PhoneCallReceived",
-    "PhoneCallSent",
-    "UnifyMeetReceived",
-    "GoogleMeetReceived",
-    "TeamsMeetReceived",
-    "PhoneCallStarted",
-    "UnifyMeetStarted",
-    "GoogleMeetStarted",
-    "TeamsMeetStarted",
-    "PhoneCallNotAnswered",
-    "WhatsAppReceived",
-    "WhatsAppSent",
-    "WhatsAppCallReceived",
-    "WhatsAppCallSent",
-    "WhatsAppCallStarted",
-    "WhatsAppCallNotAnswered",
-    "WhatsAppCallInviteSent",
-    "WhatsAppCallPermissionResponse",
-    "ApiMessageReceived",
-    "ApiMessageSent",
-    "DiscordMessageReceived",
-    "DiscordMessageSent",
-    "DiscordChannelMessageReceived",
-    "DiscordChannelMessageSent",
-    "SlackMessageReceived",
-    "SlackMessageSent",
-    "SlackChannelMessageReceived",
-    "SlackChannelMessageSent",
-    "TeamsMessageReceived",
-    "TeamsMessageSent",
-    "TeamsChannelMessageReceived",
-    "TeamsChannelMessageSent",
-    "MsTeamsBotMessageSent",
-    "MsTeamsBotMessageReceived",
-    "MsTeamsBotChannelMessageSent",
-    "MsTeamsBotChannelMessageReceived",
 }
 
 
@@ -209,11 +138,10 @@ async def hydrate_global_thread(cm: "ConversationManager") -> int:
     # ordering relative to any messages that arrived during initialization.
     hydrated_entries: list = []
 
-    restored = 0
     _t0 = perf_counter()
     for bus_event in bus_events:
         payload_cls = bus_event.payload_cls
-        # Strip module prefix if present (e.g., "unify.conversation_manager.events.SMSReceived")
+        # Strip module prefix if present (e.g., "unify.conversation_manager.events.UnifyMessageSent")
         if "." in payload_cls:
             payload_cls = payload_cls.rsplit(".", 1)[-1]
 
@@ -229,673 +157,19 @@ async def hydrate_global_thread(cm: "ConversationManager") -> int:
         contact_id = contact.get("contact_id")
         if contact_id is None:
             continue
-        sender_name = _get_sender_name(contact)
-        ts = cm_event.timestamp
 
-        entry = None
-        match payload_cls:
-            # --- SMS ---
-            case "SMSReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.SMS_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                )
-            case "SMSSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.SMS_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
+        hydrated_entries.append(
+            cm.contact_index.build_message(
+                contact_id=contact_id,
+                sender_name=_get_sender_name(contact),
+                message_content=cm_event.content,
+                role="user" if payload_cls == "UnifyMessageReceived" else "assistant",
+                timestamp=cm_event.timestamp,
+                attachments=getattr(cm_event, "attachments", None),
+            ),
+        )
 
-            # --- WhatsApp Messages ---
-            case "WhatsAppReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                )
-            case "WhatsAppSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_MESSAGE,
-                    message_content=whatsapp_sent_history_content(cm_event),
-                    role="assistant",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                )
-
-            # --- Unify Messages ---
-            case "UnifyMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.UNIFY_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    thread_id=getattr(cm_event, "thread_id", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    group_id=getattr(cm_event, "group_id", None),
-                )
-            case "UnifyMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.UNIFY_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    thread_id=getattr(cm_event, "thread_id", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    group_id=getattr(cm_event, "group_id", None),
-                )
-
-            # --- API Messages ---
-            case "ApiMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.API_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    tags=getattr(cm_event, "tags", None),
-                )
-            case "ApiMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.API_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    tags=getattr(cm_event, "tags", None),
-                )
-
-            # --- Discord Messages ---
-            case "DiscordMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.DISCORD_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                )
-            case "DiscordMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.DISCORD_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "DiscordChannelMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.DISCORD_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                )
-            case "DiscordChannelMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.DISCORD_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-
-            # --- Slack Messages ---
-            case "SlackMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.SLACK_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    thread_ts=getattr(cm_event, "thread_ts", None),
-                    message_id=getattr(cm_event, "message_id", None),
-                    routing_metadata=getattr(cm_event, "routing_metadata", None),
-                )
-            case "SlackMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.SLACK_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    team_id=getattr(cm_event, "team_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    thread_ts=getattr(cm_event, "thread_ts", None),
-                )
-            case "SlackChannelMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    thread_ts=getattr(cm_event, "thread_ts", None),
-                    message_id=getattr(cm_event, "message_id", None),
-                    routing_metadata=getattr(cm_event, "routing_metadata", None),
-                )
-            case "SlackChannelMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    team_id=getattr(cm_event, "team_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    thread_ts=getattr(cm_event, "thread_ts", None),
-                )
-
-            # --- Teams Messages ---
-            case "TeamsMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    chat_id=getattr(cm_event, "chat_id", None),
-                    message_id=getattr(cm_event, "message_id", None),
-                )
-            case "TeamsMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    chat_id=getattr(cm_event, "chat_id", None),
-                )
-            case "MsTeamsBotMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.MS_TEAMS_BOT_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    tenant_id=getattr(cm_event, "tenant_id", None),
-                    conversation_id=getattr(cm_event, "conversation_id", None),
-                )
-            case "MsTeamsBotMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.MS_TEAMS_BOT_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    tenant_id=getattr(cm_event, "tenant_id", None),
-                    conversation_id=getattr(cm_event, "conversation_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    message_id=getattr(cm_event, "message_id", None),
-                    routing_metadata=getattr(cm_event, "routing_metadata", None),
-                )
-            case "MsTeamsBotChannelMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    tenant_id=getattr(cm_event, "tenant_id", None),
-                    conversation_id=getattr(cm_event, "conversation_id", None),
-                )
-            case "MsTeamsBotChannelMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    tenant_id=getattr(cm_event, "tenant_id", None),
-                    conversation_id=getattr(cm_event, "conversation_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    thread_id=getattr(cm_event, "thread_id", None),
-                    message_id=getattr(cm_event, "message_id", None),
-                    routing_metadata=getattr(cm_event, "routing_metadata", None),
-                )
-            case "TeamsChannelMessageReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                    thread_id=getattr(cm_event, "thread_id", None),
-                    message_id=getattr(cm_event, "message_id", None),
-                )
-            case "TeamsChannelMessageSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_CHANNEL_MESSAGE,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                    attachments=getattr(cm_event, "attachments", None),
-                    team_id=getattr(cm_event, "team_id", None),
-                    channel_id=getattr(cm_event, "channel_id", None),
-                )
-
-            # --- Email ---
-            case "EmailReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.EMAIL,
-                    subject=cm_event.subject,
-                    body=cm_event.body,
-                    email_id=getattr(cm_event, "email_id", None),
-                    attachments=getattr(cm_event, "attachments", None),
-                    role="user",
-                    timestamp=ts,
-                    to=getattr(cm_event, "to", None),
-                    cc=getattr(cm_event, "cc", None),
-                    bcc=getattr(cm_event, "bcc", None),
-                    contact_role="sender",
-                )
-            case "EmailSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.EMAIL,
-                    subject=cm_event.subject,
-                    body=cm_event.body,
-                    attachments=getattr(cm_event, "attachments", None),
-                    role="assistant",
-                    timestamp=ts,
-                    to=getattr(cm_event, "to", None),
-                    cc=getattr(cm_event, "cc", None),
-                    bcc=getattr(cm_event, "bcc", None),
-                )
-
-            # --- Phone/Meet utterances ---
-            case "InboundPhoneUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.PHONE_CALL,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                )
-            case "OutboundPhoneUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.PHONE_CALL,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "InboundUnifyMeetUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.UNIFY_MEET,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                )
-            case "OutboundUnifyMeetUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.UNIFY_MEET,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "InboundWhatsAppCallUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                )
-            case "OutboundWhatsAppCallUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "InboundGoogleMeetUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.GOOGLE_MEET,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                )
-            case "OutboundGoogleMeetUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.GOOGLE_MEET,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "InboundTeamsMeetUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_MEET,
-                    message_content=cm_event.content,
-                    role="user",
-                    timestamp=ts,
-                )
-            case "OutboundTeamsMeetUtterance":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_MEET,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-
-            # --- Browser-meet chat ---
-            # The `<meeting chat>` prefix is reproduced rather than inferred: the
-            # thread is flat text to the brain, so a rehydrated line without it
-            # reads as something the participant said out loud.
-            case "GoogleMeetChatMessage" | "TeamsMeetChatMessage":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    # The typist, not the call's contact. Anyone in the meeting
-                    # can type, and unlike every case above, the event carries
-                    # the real name -- resolving it from the contact would
-                    # attribute a third participant's message to whoever the
-                    # call is with.
-                    sender_name=cm_event.sender_name,
-                    thread_name=(
-                        Medium.GOOGLE_MEET
-                        if payload_cls == "GoogleMeetChatMessage"
-                        else Medium.TEAMS_MEET
-                    ),
-                    message_content=f"<meeting chat> {cm_event.content}",
-                    role="user",
-                    timestamp=ts,
-                )
-            case "GoogleMeetChatSent" | "TeamsMeetChatSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    # Ignored for an assistant role, which renders as "You" --
-                    # passed for symmetry with every other case here.
-                    sender_name=sender_name,
-                    thread_name=(
-                        Medium.GOOGLE_MEET
-                        if payload_cls == "GoogleMeetChatSent"
-                        else Medium.TEAMS_MEET
-                    ),
-                    message_content=f"<meeting chat> {cm_event.content}",
-                    role="assistant",
-                    timestamp=ts,
-                )
-
-            # --- Fast brain notification ---
-            case "FastBrainNotification":
-                if cm.call_manager.has_active_google_meet:
-                    notif_medium = Medium.GOOGLE_MEET
-                elif cm.call_manager.has_active_teams_meet:
-                    notif_medium = Medium.TEAMS_MEET
-                elif cm.mode == Mode.MEET:
-                    notif_medium = Medium.UNIFY_MEET
-                elif cm.call_manager._call_channel == "whatsapp_call":
-                    notif_medium = Medium.WHATSAPP_CALL
-                else:
-                    notif_medium = Medium.PHONE_CALL
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=notif_medium,
-                    message_content=cm_event.message,
-                    role="guidance",
-                    timestamp=ts,
-                )
-
-            case "AssistantTurnInjected":
-                if cm.call_manager.has_active_google_meet:
-                    injected_medium = Medium.GOOGLE_MEET
-                elif cm.call_manager.has_active_teams_meet:
-                    injected_medium = Medium.TEAMS_MEET
-                elif cm.mode == Mode.MEET:
-                    injected_medium = Medium.UNIFY_MEET
-                elif cm.call_manager._call_channel == "whatsapp_call":
-                    injected_medium = Medium.WHATSAPP_CALL
-                else:
-                    injected_medium = Medium.PHONE_CALL
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=injected_medium,
-                    message_content=cm_event.content,
-                    role="assistant",
-                    timestamp=ts,
-                )
-
-            # --- Call lifecycle ---
-            case "PhoneCallReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.PHONE_CALL,
-                    message_content="<Receiving Call...>",
-                    role="user",
-                    timestamp=ts,
-                )
-            case "PhoneCallSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.PHONE_CALL,
-                    message_content="<Sending Call...>",
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "UnifyMeetReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.UNIFY_MEET,
-                    message_content="<Receiving Call...>",
-                    role="user",
-                    timestamp=ts,
-                )
-            case "GoogleMeetReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.GOOGLE_MEET,
-                    message_content="<Joining Google Meet...>",
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "TeamsMeetReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.TEAMS_MEET,
-                    message_content="<Joining Teams meeting...>",
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case (
-                "PhoneCallStarted"
-                | "UnifyMeetStarted"
-                | "GoogleMeetStarted"
-                | "TeamsMeetStarted"
-            ):
-                medium = (
-                    Medium.GOOGLE_MEET
-                    if payload_cls == "GoogleMeetStarted"
-                    else (
-                        Medium.TEAMS_MEET
-                        if payload_cls == "TeamsMeetStarted"
-                        else (
-                            Medium.UNIFY_MEET
-                            if payload_cls == "UnifyMeetStarted"
-                            else Medium.PHONE_CALL
-                        )
-                    )
-                )
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=medium,
-                    message_content="<Call Started>",
-                    role="user",
-                    timestamp=ts,
-                )
-            case "WhatsAppCallReceived":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content="<Receiving WhatsApp Call...>",
-                    role="user",
-                    timestamp=ts,
-                )
-            case "WhatsAppCallStarted":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content="<Call Started>",
-                    role="user",
-                    timestamp=ts,
-                )
-            case "WhatsAppCallSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content="<Sending WhatsApp Call...>",
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "WhatsAppCallNotAnswered":
-                reason = getattr(cm_event, "reason", "no-answer") or "no-answer"
-                reason_display = {
-                    "no-answer": "did not answer",
-                    "busy": "was busy",
-                    "canceled": "call was canceled",
-                    "failed": "call failed",
-                }.get(reason, f"not answered ({reason})")
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content=f"<WhatsApp Call Not Answered: {reason_display}>",
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "WhatsAppCallInviteSent":
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content=getattr(
-                        cm_event,
-                        "content",
-                        "<WhatsApp Call Permission Request Sent: waiting for the user to allow calls>",
-                    ),
-                    role="assistant",
-                    timestamp=ts,
-                )
-            case "WhatsAppCallPermissionResponse":
-                accepted = getattr(cm_event, "accepted", False)
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.WHATSAPP_CALL,
-                    message_content=(
-                        "<WhatsApp Call Permission Granted: calling now>"
-                        if accepted
-                        else "<WhatsApp Call Permission Rejected>"
-                    ),
-                    role="user",
-                    timestamp=ts,
-                )
-            case "PhoneCallNotAnswered":
-                reason = getattr(cm_event, "reason", "no-answer") or "no-answer"
-                reason_display = {
-                    "no-answer": "did not answer",
-                    "busy": "was busy",
-                    "canceled": "call was canceled",
-                    "failed": "call failed",
-                }.get(reason, f"not answered ({reason})")
-                entry = cm.contact_index.build_message(
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                    thread_name=Medium.PHONE_CALL,
-                    message_content=f"<Call Not Answered: {reason_display}>",
-                    role="assistant",
-                    timestamp=ts,
-                )
-
-        if entry is not None:
-            hydrated_entries.append(entry)
-            restored += 1
-
+    restored = len(hydrated_entries)
     # Prepend hydrated entries so historical messages appear before any
     # messages that arrived during initialization.
     cm.contact_index.prepend_entries(hydrated_entries)
@@ -917,8 +191,6 @@ async def publish_bus_events(event):
     try:
         event_name = event.__class__.__name__
         bus_event = event.to_bus_event()
-        bus_event.payload.pop("api_key", None)
-        bus_event.payload.pop("email_id", None)
         LOGGER.debug(f"{DEFAULT_ICON} Publishing bus event {event_name}")
         await EVENT_BUS.publish(bus_event)
     except Exception as e:
@@ -1112,731 +384,101 @@ async def actor_watch_clarifications(
         )
 
 
-def _resolve_meet_name_to_contact(
-    cm: "ConversationManager",
-    display_name: str,
-) -> dict | None:
-    """Best-effort resolution of a browser-meet display name to a contact.
+# TRANSCRIPTS
 
-    Iterates the contact_index's fallback cache and checks for exact
-    full-name or first-name matches.  Returns the contact dict on match,
-    None otherwise.
+# Exchange-metadata key the conversation key is stored under.
+_CONVERSATION_KEY_FIELD = "conversation_key"
+
+
+def _conversation_key(contact_id: int) -> str:
+    """The key that groups every chat message with one contact into one exchange.
+
+    Inbound and outbound resolve to the same key, so an assistant reply lands
+    in the exchange it answers, with no inactivity window.
     """
-    if not display_name:
-        return None
-    dn_lower = display_name.strip().lower()
-    for c in cm.contact_index._fallback_contacts.values():
-        full = f"{c.get('first_name', '')} {c.get('surname', '')}".strip()
-        if full.lower() == dn_lower:
-            return c
-        if c.get("first_name", "").lower() == dn_lower:
-            return c
-    return None
-
-
-# Conversation grouping lives in ``unify.comms.conversation_keys`` so the
-# headless comms path derives byte-identical keys when it reads an exchange
-# back; a divergence here would silently miss rather than fail.
-_DM_MEDIA = conversation_keys.DM_MEDIA
-_PROVIDER_THREAD_MEDIA = conversation_keys.PROVIDER_THREAD_MEDIA
-_DURABLE_MEDIA = conversation_keys.DURABLE_MEDIA
-_derive_conversation_key = conversation_keys.conversation_key_for_event
-
-
-def call_start_for_medium(call_manager, medium: "Medium"):
-    """The session-start instant this medium measures utterance offsets from."""
-    if medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL):
-        return call_manager.call_start_timestamp
-    if medium == Medium.UNIFY_MEET:
-        return call_manager.unify_meet_start_timestamp
-    if medium == Medium.GOOGLE_MEET:
-        return call_manager.google_meet_start_timestamp
-    if medium == Medium.TEAMS_MEET:
-        return call_manager.teams_meet_start_timestamp
-    return None
-
-
-def _parse_iso(value):
-    """An ISO instant from the wire, or None when absent or malformed.
-
-    Utterance events carry the speech start as a string because only
-    ``Event.timestamp`` is decoded back to a datetime on the far side of the
-    voice-agent IPC hop.
-    """
-    if not value:
-        return None
-    from datetime import datetime
-
-    try:
-        return datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def call_utterance_stamp(call_start, spoken_at) -> str:
-    """``MM.SS`` from session start to this utterance, or "" outside a call.
-
-    Measured from the utterance's own timestamp rather than the clock at logging
-    time. This runs on the transcript worker, so reading the clock here charges
-    every utterance for however long its write queued behind exchange creation
-    and context provisioning -- worst on a call's first utterance (18s observed
-    in staging), decaying as the pipeline warms. That pushed early offsets well
-    past their position in the audio.
-
-    Still only an approximation of a position in the recording: the session-start
-    event precedes the egress compositor by a few seconds. Consumers that need
-    an exact position use the ``recording_started_at`` anchor on the exchange.
-    """
-    if not call_start or spoken_at is None:
-        return ""
-    elapsed = int((spoken_at - call_start).total_seconds())
-    minutes, seconds = divmod(max(0, elapsed), 60)
-    return f"{minutes:02d}.{seconds:02d}"
-
-
-def _conversation_exchange_metadata(
-    event: "Event",
-    medium: "Medium",
-    conversation_key: str,
-) -> dict:
-    """Routing identity persisted on a conversation-thread exchange so it can be
-    queried back to its Discord channel / Teams thread / Slack thread / email
-    thread."""
-    metadata: dict = {"medium": medium.value, "conversation_key": conversation_key}
-    for attr in (
-        "channel_id",
-        "guild_id",
-        "tenant_id",
-        "conversation_id",
-        "team_id",
-        "group_id",
-        "thread_ts",
-        "event_ts",
-        "thread_id",
-    ):
-        value = getattr(event, attr, "") or ""
-        if value:
-            metadata[attr] = value
-    return metadata
-
-
-# Exchanges already checked for missing routing this process. The backfill is
-# a no-op after the first repair, so re-reading the row on every subsequent
-# message in the conversation would be pure overhead.
-_routing_backfilled_exchanges: set[int] = set()
-
-
-def _backfill_exchange_routing(
-    cm: "ConversationManager",
-    *,
-    exchange_id: int,
-    event: "Event",
-    medium: "Medium",
-    conversation_key: str,
-) -> None:
-    """Add missing routing identity to an exchange that predates its capture.
-
-    Exchange metadata is written once, when the exchange is created, and
-    conversations are long-lived: a thread started before routing was
-    recorded would never acquire it, leaving outbound replies unable to
-    find the conversation for as long as the thread lives. Repair it from
-    the first message that arrives carrying the identifiers, in either
-    direction, so the gap closes on its own rather than needing a backfill.
-    """
-    if exchange_id in _routing_backfilled_exchanges:
-        return
-    _routing_backfilled_exchanges.add(exchange_id)
-
-    desired = _conversation_exchange_metadata(event, medium, conversation_key)
-    routing = {k: v for k, v in desired.items() if k != "medium"}
-    try:
-        stored = cm.transcript_manager.get_exchange_metadata(exchange_id).metadata or {}
-    except Exception:  # noqa: BLE001 — a missing/unreadable row is not fatal
-        LOGGER.debug(
-            f"{ICONS['managers_worker']} [ManagersWorker] Could not read exchange "
-            f"{exchange_id} metadata for routing backfill.",
-        )
-        return
-
-    missing = {k: v for k, v in routing.items() if not stored.get(k)}
-    if not missing:
-        return
-    # Merges rather than replaces, so only the gap needs sending.
-    cm.transcript_manager.update_exchange_metadata(exchange_id, missing)
-    LOGGER.debug(
-        f"{ICONS['managers_worker']} [ManagersWorker] Backfilled routing "
-        f"{sorted(missing)} onto exchange {exchange_id}.",
-    )
+    return f"{Medium.UNIFY_MESSAGE.value}:dm:{contact_id}"
 
 
 def _recover_exchange_id(
     cm: "ConversationManager",
-    medium: "Medium",
     conversation_key: str,
-) -> int | None:
-    """Find an existing exchange for ``conversation_key`` in Exchanges metadata.
+) -> int:
+    """Find the existing exchange for ``conversation_key`` in Exchanges metadata.
 
-    Runs only on an in-memory cache miss (e.g. the first message of a durable
-    conversation after a CM restart), so 1:1 DMs (keyed on the contact) and email
-    threads (keyed on the provider thread) survive restarts without opening a
-    duplicate exchange. Returns ``None`` when no matching exchange exists.
+    Runs only on an in-memory cache miss (the first message with a contact
+    after a CM restart), so a conversation survives restarts without opening
+    a duplicate exchange. Returns ``UNASSIGNED`` when no exchange exists yet.
     """
     escaped_key = conversation_key.replace('"', '\\"')
     try:
         result = cm.transcript_manager.filter_exchanges(
             filter=(
-                f'medium == "{medium.value}" '
-                f'and metadata["conversation_key"] == "{escaped_key}"'
+                f'medium == "{Medium.UNIFY_MESSAGE.value}" '
+                f'and metadata["{_CONVERSATION_KEY_FIELD}"] == "{escaped_key}"'
             ),
             limit=1,
         )
     except Exception:
-        return None
+        return UNASSIGNED
     exchanges = result.get("exchanges") or []
     if not exchanges:
-        return None
+        return UNASSIGNED
     return exchanges[0].exchange_id
 
 
-async def log_message(
-    cm: "ConversationManager",
-    event: Event,
-    *,
-    local_message_id: int | None = None,
-) -> None:
-    """Log a message via TranscriptManager."""
+async def log_message(cm: "ConversationManager", event: Event) -> None:
+    """Log a chat message via TranscriptManager."""
     ensure_runtime_context()
     event_name = event.__class__.__name__
     LOGGER.debug(f"{DEFAULT_ICON} publishing transcript {event_name}")
-    event_name = event_name.lower()
-    if "apimessage" in event_name:
-        medium = Medium.API_MESSAGE
-    elif "unify" in event_name or "prehire" in event_name:
-        medium = Medium.UNIFY_MEET if "meet" in event_name else Medium.UNIFY_MESSAGE
-    elif "phone" in event_name:
-        medium = Medium.PHONE_CALL
-    elif "whatsapp" in event_name:
-        medium = (
-            Medium.WHATSAPP_CALL if "call" in event_name else Medium.WHATSAPP_MESSAGE
-        )
-    elif "sms" in event_name:
-        medium = Medium.SMS_MESSAGE
-    elif "googlemeet" in event_name:
-        medium = Medium.GOOGLE_MEET
-    elif "teamsmeet" in event_name:
-        medium = Medium.TEAMS_MEET
-    elif "discord" in event_name:
-        medium = (
-            Medium.DISCORD_CHANNEL_MESSAGE
-            if "channel" in event_name
-            else Medium.DISCORD_MESSAGE
-        )
-    elif "slack" in event_name:
-        medium = (
-            Medium.SLACK_CHANNEL_MESSAGE
-            if "channel" in event_name
-            else Medium.SLACK_MESSAGE
-        )
-    elif "msteamsbot" in event_name:
-        medium = (
-            Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE
-            if "channel" in event_name
-            else Medium.MS_TEAMS_BOT_MESSAGE
-        )
-    elif "teams" in event_name:
-        medium = (
-            Medium.TEAMS_CHANNEL_MESSAGE
-            if "channel" in event_name
-            else Medium.TEAMS_MESSAGE
-        )
-    else:
-        medium = Medium.EMAIL
-    role = (
-        "Assistant"
-        if "sent" in event_name or "assistant" in event_name or "outbound" in event_name
-        else "User"
-    )
-    if "prehire" in event_name:
-        role = event.role.capitalize()
-    if isinstance(event, WhatsAppSent):
-        content = whatsapp_sent_history_content(event)
-    elif isinstance(event, (EmailSent, EmailReceived)):
-        content = event.subject + "\n\n" + event.body
-    else:
-        content = event.content
-
-    contact_id = None
-    if isinstance(event, (PreHireMessage,)):
-        # PreHireMessage is always boss context
-        contact_id = SESSION_DETAILS.boss_contact_id
-    elif isinstance(
-        event,
-        (
-            UnifyMessageSent,
-            UnifyMessageReceived,
-            InboundUnifyMeetUtterance,
-            OutboundUnifyMeetUtterance,
-            InboundGoogleMeetUtterance,
-            OutboundGoogleMeetUtterance,
-            InboundTeamsMeetUtterance,
-            OutboundTeamsMeetUtterance,
-            GoogleMeetChatMessage,
-            TeamsMeetChatMessage,
-            GoogleMeetChatSent,
-            TeamsMeetChatSent,
-            ApiMessageSent,
-            ApiMessageReceived,
-        ),
-    ):
-        # Use contact from event - contact_id must be valid, no silent fallback
-        evt_contact_id = event.contact.get("contact_id")
-        if cm.contact_index.get_contact(contact_id=evt_contact_id):
-            contact_id = evt_contact_id
-        else:
-            LOGGER.warning(
-                f"{DEFAULT_ICON} contact_id {evt_contact_id} not in contact_index, "
-                f"using contact from event",
-            )
-            contact_id = evt_contact_id
-    elif cm.contact_index.get_contact(contact_id=event.contact["contact_id"]):
-        contact_id = event.contact["contact_id"]
+    medium = Medium.UNIFY_MESSAGE
+    role = "Assistant" if isinstance(event, UnifyMessageSent) else "User"
+    contact_id = event.contact["contact_id"]
     if role == "Assistant":
         sender_id, receiver_ids = SESSION_DETAILS.self_contact_id, [contact_id]
     else:
         sender_id, receiver_ids = contact_id, [SESSION_DETAILS.self_contact_id]
 
-    # For browser-meet and Unify Meet utterances, resolve participant names /
-    # contact_ids so receiver_ids reflects all known meeting participants.
-    meet_participants_meta: list[dict] = []
-    if isinstance(
-        event,
-        (
-            InboundGoogleMeetUtterance,
-            OutboundGoogleMeetUtterance,
-            InboundTeamsMeetUtterance,
-            OutboundTeamsMeetUtterance,
-            InboundUnifyMeetUtterance,
-            OutboundUnifyMeetUtterance,
-        ),
-    ):
-        participant_contact_ids = getattr(event, "participant_contact_ids", None) or []
-        participant_names = getattr(event, "participant_names", None) or []
-        resolved_ids: set[int] = set()
-        if participant_contact_ids:
-            for raw_cid in participant_contact_ids:
-                if raw_cid is None:
-                    continue
-                cid = int(raw_cid)
-                resolved_ids.add(cid)
-                meet_participants_meta.append({"name": None, "contact_id": cid})
-        elif participant_names:
-            for name in participant_names:
-                resolved = _resolve_meet_name_to_contact(cm, name)
-                cid = resolved.get("contact_id") if resolved else None
-                if cid is not None:
-                    resolved_ids.add(cid)
-                meet_participants_meta.append(
-                    {"name": name, "contact_id": cid},
-                )
-        if resolved_ids:
-            if role == "Assistant":
-                if contact_id is not None:
-                    resolved_ids.add(contact_id)
-                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
-                if resolved_ids:
-                    receiver_ids = sorted(resolved_ids)
-            else:
-                resolved_ids.add(SESSION_DETAILS.self_contact_id)
-                resolved_ids.discard(sender_id)
-                if resolved_ids:
-                    receiver_ids = sorted(resolved_ids)
+    # Derived on every message, not only when the exchange is unknown: it is
+    # also stamped onto the exchange as the join key that makes the
+    # conversation recoverable after a restart.
+    conversation_key = _conversation_key(contact_id)
+    exchange_id = cm._conversation_exchange_ids.get(conversation_key, UNASSIGNED)
+    if exchange_id == UNASSIGNED:
+        exchange_id = _recover_exchange_id(cm, conversation_key)
 
-    # For emails, resolve to/cc/bcc addresses to contact IDs so that
-    # receiver_ids reflects all known recipients.
-    if isinstance(event, (EmailSent, EmailReceived)):
-        resolved_ids: set[int] = set()
-        for addr in (event.to or []) + (event.cc or []) + (event.bcc or []):
-            resolved = cm.contact_index.get_contact(email=addr)
-            if resolved and resolved.get("contact_id") is not None:
-                resolved_ids.add(resolved["contact_id"])
-        if resolved_ids:
-            if role == "Assistant":
-                receiver_ids = sorted(resolved_ids)
-            else:
-                resolved_ids.add(SESSION_DETAILS.self_contact_id)
-                receiver_ids = sorted(resolved_ids)
-
-    # For Teams, use the conversation roster (already resolved to contact
-    # IDs upstream by comms_manager from the adapter-supplied participants
-    # list) so receiver_ids reflects everyone in the chat/channel.
-    if isinstance(
-        event,
-        (
-            TeamsMessageReceived,
-            TeamsChannelMessageReceived,
-            TeamsMessageSent,
-            TeamsChannelMessageSent,
-        ),
-    ):
-        resolved_ids: set[int] = set(getattr(event, "participants", []) or [])
-        if resolved_ids:
-            if role == "Assistant":
-                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
-                if resolved_ids:
-                    receiver_ids = sorted(resolved_ids)
-            else:
-                resolved_ids.add(SESSION_DETAILS.self_contact_id)
-                resolved_ids.discard(sender_id)
-                if resolved_ids:
-                    receiver_ids = sorted(resolved_ids)
-
-    # For Unify team/group rooms, expand receiver_ids to every known room
-    # member contact (already resolved on the event, or via org roster).
-    if isinstance(event, (UnifyMessageReceived, UnifyMessageSent)) and (
-        getattr(event, "team_id", None) is not None
-        or getattr(event, "group_id", None) is not None
-    ):
-        resolved_ids: set[int] = set(
-            getattr(event, "participant_contact_ids", None) or [],
-        )
-        if not resolved_ids:
-            from unify.conversation_manager.domains.comms_utils import (
-                resolve_unify_room_member_contact_ids,
-            )
-
-            room_ids, _room_error = resolve_unify_room_member_contact_ids(
-                team_id=getattr(event, "team_id", None),
-                group_id=getattr(event, "group_id", None),
-            )
-            resolved_ids = set(room_ids)
-        if resolved_ids:
-            if role == "Assistant":
-                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
-                if resolved_ids:
-                    receiver_ids = sorted(resolved_ids)
-            else:
-                resolved_ids.add(SESSION_DETAILS.self_contact_id)
-                resolved_ids.discard(sender_id)
-                if resolved_ids:
-                    receiver_ids = sorted(resolved_ids)
-
-    exchange_id = getattr(event, "exchange_id", UNASSIGNED)
-
-    # For pre-hire messages, reuse the cached exchange_id if available
-    # This ensures all messages from a pre-hire chat batch go into the same exchange
-    if isinstance(event, PreHireMessage):
-        if _pre_hire_exchange_id is not None:
-            exchange_id = _pre_hire_exchange_id
-        # else: stays UNASSIGNED, will create new exchange
-    elif medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL):
-        exchange_id = cm.call_manager.call_exchange_id
-    elif medium == Medium.UNIFY_MEET:
-        exchange_id = cm.call_manager.unify_meet_exchange_id
-    elif medium == Medium.GOOGLE_MEET:
-        exchange_id = cm.call_manager.google_meet_exchange_id
-    elif medium == Medium.TEAMS_MEET:
-        exchange_id = cm.call_manager.teams_meet_exchange_id
-
-    # Group messages into conversation-thread exchanges (SMS / WhatsApp / Discord
-    # / MS Teams bot / Slack DMs and channels, and email). Inbound and outbound
-    # resolve to the same key, so an assistant reply lands in the same exchange it
-    # answers. 1:1 DMs reuse a single exchange per contact and provider-thread
-    # channels (group channels, email) reuse for the whole thread — both with no
-    # inactivity window. Durable mediums (DMs and email) additionally recover their
-    # exchange from Exchanges metadata on a cold (post-restart) cache.
-    # Derived whenever the medium groups, not only when the exchange is
-    # unknown: it is also stamped onto the message row as the join key that
-    # makes routing recoverable per message, and an already-resolved exchange
-    # is the common case.
-    conversation_key: str | None = None
-    if medium in _DM_MEDIA or medium in _PROVIDER_THREAD_MEDIA:
-        conversation_key = _derive_conversation_key(
-            event,
-            medium,
-            contact_id,
-        )
-    # An exchange handed to us by a live call session or carried on the event
-    # is not this conversation's own thread, so it must neither be bound to
-    # the conversation key nor repaired as though it were.
-    exchange_preset = exchange_id != UNASSIGNED
-    exchange_grouped = False
-    if not exchange_preset and conversation_key is not None:
-        cached = cm._conversation_exchange_ids.get(conversation_key)
-        if cached is not None:
-            exchange_id = cached
-            exchange_grouped = True
-        elif medium in _DURABLE_MEDIA:
-            recovered = _recover_exchange_id(cm, medium, conversation_key)
-            if recovered is not None:
-                exchange_id = recovered
-                exchange_grouped = True
-
-    # A spoken line's audible start, when the voice agent observed one. The
-    # event's own timestamp marks the commit that follows the line, so using it
-    # places the utterance at the moment the speaker *finished* -- past its
-    # position in any recording by the length of the line.
-    speech_started_at = getattr(event, "speech_started_at", None)
-    spoken_at = _parse_iso(speech_started_at) or event.timestamp
-    call_utterance_timestamp = call_utterance_stamp(
-        call_start_for_medium(cm.call_manager, medium),
-        spoken_at,
-    )
-
-    implicit_destinations = ContextRegistry.implicit_shared_destinations()
-    primary_destination = implicit_destinations[0]
-
-    # publish transcript on a separate thread
     def _publish_transcript() -> int:
-        global _pre_hire_exchange_id
-        message_ids_by_destination: dict[str | None, int] = {}
+        nonlocal exchange_id
         try:
-            nonlocal exchange_id
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] Logging message: {event.to_dict()}",
             )
-
-            # Extract attachments from event if present (now always list[dict])
-            attachments = getattr(event, "attachments", [])
-
-            # Build medium-specific metadata for the transcript record.
-            metadata = None
-            if isinstance(event, EmailReceived):
-                metadata = {
-                    "email_id": event.email_id,
-                    "to": event.to,
-                    "cc": event.cc,
-                    "bcc": event.bcc,
-                }
-                if event.thread_id:
-                    metadata["thread_id"] = event.thread_id
-            elif isinstance(event, EmailSent):
-                metadata = {
-                    "email_id_replied_to": event.email_id_replied_to,
-                    "to": event.to,
-                    "cc": event.cc,
-                    "bcc": event.bcc,
-                }
-                if getattr(event, "thread_id", None):
-                    metadata["thread_id"] = event.thread_id
-            elif isinstance(event, (UnifyMessageReceived, UnifyMessageSent)):
-                # Mirror the unified chat-store scope onto the Transcripts
-                # row: thread_id keys the conversation, team_id/group_id mark
-                # room traffic (vs the private assistant DM), and
-                # chat_message_id links back to the store row (reactions).
-                metadata = {}
-                if event.thread_id is not None:
-                    metadata["thread_id"] = event.thread_id
-                if event.chat_message_id is not None:
-                    metadata["chat_message_id"] = event.chat_message_id
-                if event.team_id is not None:
-                    metadata["team_id"] = event.team_id
-                if event.group_id is not None:
-                    metadata["group_id"] = event.group_id
-                metadata = metadata or None
-            elif isinstance(
-                event,
-                (
-                    MsTeamsBotMessageReceived,
-                    MsTeamsBotMessageSent,
-                    MsTeamsBotChannelMessageReceived,
-                    MsTeamsBotChannelMessageSent,
-                ),
-            ):
-                # An outbound Teams bot reply routes on
-                # (tenant_id, conversation_id), and the Bot Framework will not
-                # let us open a conversation to recover them. Recording them on
-                # every message — not only in the exchange metadata written
-                # once at exchange creation — is what lets a later run that saw
-                # no inbound activity still reply into the same conversation.
-                # ``conversation_key`` is stored alongside as the join key, so
-                # the lookup is an exact server-side match rather than a scan.
-                metadata = {}
-                for attr in (
-                    "tenant_id",
-                    "conversation_id",
-                    "channel_id",
-                    "team_id",
-                    "thread_id",
-                ):
-                    if value := getattr(event, attr, "") or "":
-                        metadata[attr] = value
-                if metadata and conversation_key is not None:
-                    metadata[conversation_keys.CONVERSATION_KEY_FIELD] = (
-                        conversation_key
-                    )
-                metadata = metadata or None
-            elif isinstance(
-                event,
-                (
-                    InboundGoogleMeetUtterance,
-                    OutboundGoogleMeetUtterance,
-                    InboundTeamsMeetUtterance,
-                    OutboundTeamsMeetUtterance,
-                    InboundUnifyMeetUtterance,
-                    OutboundUnifyMeetUtterance,
-                ),
-            ):
-                if meet_participants_meta:
-                    metadata = metadata or {}
-                    metadata["meet_participants"] = meet_participants_meta
-                if isinstance(
-                    event,
-                    (InboundUnifyMeetUtterance, OutboundUnifyMeetUtterance),
-                ):
-                    call_key = (
-                        cm.call_manager.unify_meet_call_session_id
-                        or cm.call_manager.room_name
-                    )
-                    if call_key:
-                        metadata = metadata or {}
-                        metadata["call_id"] = call_key
-            elif isinstance(
-                event,
-                (
-                    GoogleMeetChatMessage,
-                    TeamsMeetChatMessage,
-                    GoogleMeetChatSent,
-                    TeamsMeetChatSent,
-                ),
-            ):
-                # Mirrors the tag on the call-store row. The content here is the
-                # bare message -- the ``<meeting chat>`` marker the contact
-                # thread carries is a prompt affordance, not part of the record.
-                metadata = {"kind": "chat"}
-
-            # Voice-derived speaker attribution (all diarized voice channels).
-            dia_sid = getattr(event, "diarization_speaker_id", None)
-            if dia_sid:
-                metadata = metadata or {}
-                metadata["diarization_speaker_id"] = dia_sid
-            speaker_label = getattr(event, "speaker_label", None)
-            if speaker_label:
-                metadata = metadata or {}
-                metadata["speaker_label"] = speaker_label
-            speaker_label_source = getattr(event, "speaker_label_source", None)
-            if speaker_label_source:
-                metadata = metadata or {}
-                metadata["speaker_label_source"] = speaker_label_source
-            if call_utterance_timestamp:
-                metadata = metadata or {}
-                metadata["call_utterance_timestamp"] = call_utterance_timestamp
-
-            if speech_started_at:
-                # Kept raw as well as in the MM.SS stamp: readers that align a
-                # transcript to audio need the instant, not a truncated offset
-                # from a call-start that predates the recording.
-                metadata = metadata or {}
-                metadata["speech_started_at"] = speech_started_at
-
-            onboarding_metadata = {
-                key: value
-                for key in (
-                    "onboarding_trigger_step_id",
-                    "onboarding_reply_step_id",
-                    "onboarding_request_id",
-                    "onboarding_origin_event_id",
-                )
-                if isinstance((value := getattr(event, key, None)), str) and value
+            msg_data = {
+                "medium": medium,
+                "sender_id": sender_id,
+                "receiver_ids": receiver_ids,
+                "timestamp": event.timestamp,
+                "content": event.content,
             }
-            if onboarding_metadata:
-                metadata = metadata or {}
-                metadata.update(onboarding_metadata)
+            attachments = getattr(event, "attachments", [])
+            if attachments:
+                msg_data["attachments"] = attachments
 
-            provider_message_sid = getattr(event, "provider_message_sid", None)
-            if isinstance(provider_message_sid, str) and provider_message_sid.strip():
-                metadata = metadata or {}
-                metadata["provider_message_sid"] = provider_message_sid.strip()
-
-            tm_message_id = None
             if exchange_id == UNASSIGNED:
-                msg_data = {
-                    "medium": medium,
-                    "sender_id": sender_id,
-                    "receiver_ids": receiver_ids,
-                    "timestamp": event.timestamp,
-                    "content": content,
-                }
-                if attachments:
-                    msg_data["attachments"] = attachments
-                if metadata:
-                    msg_data["metadata"] = metadata
-                exchange_initial_metadata = (
-                    _conversation_exchange_metadata(event, medium, conversation_key)
-                    if conversation_key is not None
-                    else None
-                )
-                exchange_id, tm_message_id = (
+                exchange_id, _ = (
                     cm.transcript_manager.log_first_message_in_new_exchange(
                         msg_data,
-                        exchange_initial_metadata=exchange_initial_metadata,
-                        destination=primary_destination,
+                        exchange_initial_metadata={
+                            "medium": medium.value,
+                            _CONVERSATION_KEY_FIELD: conversation_key,
+                        },
                     )
                 )
-                if tm_message_id is not None:
-                    message_ids_by_destination[primary_destination] = tm_message_id
-                for destination in implicit_destinations[1:]:
-                    replicated_message = {
-                        **msg_data,
-                        "exchange_id": exchange_id,
-                    }
-                    replica_logs = cm.transcript_manager.log_messages(
-                        replicated_message,
-                        synchronous=True,
-                        destination=destination,
-                    )
-                    if isinstance(replica_logs, list) and replica_logs:
-                        replica_message_id = replica_logs[0].message_id
-                        if replica_message_id is not None:
-                            message_ids_by_destination[destination] = replica_message_id
-                # Cache the exchange_id for subsequent pre-hire messages in the batch
-                if isinstance(event, PreHireMessage):
-                    _pre_hire_exchange_id = exchange_id
-                    LOGGER.debug(
-                        f"{ICONS['managers_worker']} [ManagersWorker] Cached pre-hire exchange_id: {exchange_id}",
-                    )
             else:
-                if exchange_grouped and conversation_key is not None:
-                    _backfill_exchange_routing(
-                        cm,
-                        exchange_id=exchange_id,
-                        event=event,
-                        medium=medium,
-                        conversation_key=conversation_key,
-                    )
-                msg_data = {
-                    "medium": medium,
-                    "sender_id": sender_id,
-                    "receiver_ids": receiver_ids,
-                    "timestamp": event.timestamp,
-                    "content": content,
-                    "exchange_id": exchange_id,
-                }
-                if attachments:
-                    msg_data["attachments"] = attachments
-                if metadata:
-                    msg_data["metadata"] = metadata
-                for destination in implicit_destinations:
-                    logged_msgs = cm.transcript_manager.log_messages(
-                        msg_data,
-                        synchronous=True,
-                        destination=destination,
-                    )
-                    if not logged_msgs:
-                        continue
-                    destination_message_id = logged_msgs[0].message_id
-                    if destination_message_id is None:
-                        continue
-                    message_ids_by_destination[destination] = destination_message_id
-                    if tm_message_id is None:
-                        tm_message_id = destination_message_id
-
-            if local_message_id is not None and tm_message_id is not None:
-                cm._local_to_global_message_ids[local_message_id] = tm_message_id
-            if local_message_id is not None and message_ids_by_destination:
-                cm._local_to_global_message_ids_by_destination[local_message_id] = (
-                    message_ids_by_destination
+                cm.transcript_manager.log_messages(
+                    {**msg_data, "exchange_id": exchange_id},
+                    synchronous=True,
                 )
-                cm._local_message_destinations[local_message_id] = primary_destination
 
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] Logged message: {medium}"
@@ -1847,46 +489,16 @@ async def log_message(
             LOGGER.error(
                 f"{ICONS['managers_worker']} [ManagersWorker] Error logging message: {e}",
             )
+            return UNASSIGNED
 
     exchange_id = await asyncio.to_thread(_publish_transcript)
 
-    # Cache the exchange_id on the call manager immediately so that
-    # subsequent queued utterances in the same call reuse it.  The
-    # LogMessageResponse handler also sets this, but it runs
-    # asynchronously on the event loop — by which time the worker may
-    # have already started the next log_message call and created a
-    # duplicate exchange.
-    if exchange_id is not None and exchange_id != UNASSIGNED:
-        # The destination is cached with the id: the exchange lives in whichever
-        # root the transcript was authored under, and hangup/recording writes
-        # address it by (id, destination).
-        if (
-            medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL)
-            and cm.call_manager.call_exchange_id == UNASSIGNED
-        ):
-            cm.call_manager.call_exchange_id = exchange_id
-            cm.call_manager.call_exchange_destination = primary_destination
-        elif (
-            medium == Medium.UNIFY_MEET
-            and cm.call_manager.unify_meet_exchange_id == UNASSIGNED
-        ):
-            cm.call_manager.unify_meet_exchange_id = exchange_id
-            cm.call_manager.call_exchange_destination = primary_destination
-        elif (
-            medium == Medium.GOOGLE_MEET
-            and cm.call_manager.google_meet_exchange_id == UNASSIGNED
-        ):
-            cm.call_manager.google_meet_exchange_id = exchange_id
-            cm.call_manager.call_exchange_destination = primary_destination
-        elif (
-            medium == Medium.TEAMS_MEET
-            and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
-        ):
-            cm.call_manager.teams_meet_exchange_id = exchange_id
-            cm.call_manager.call_exchange_destination = primary_destination
-        elif conversation_key is not None and not exchange_preset:
-            # Record the exchange so the next message in this conversation reuses it.
-            cm._conversation_exchange_ids[conversation_key] = exchange_id
+    # Cache the exchange immediately so the next message in this conversation
+    # reuses it. The LogMessageResponse handler runs asynchronously on the
+    # event loop, by which time the worker may already have started the next
+    # log_message call and would otherwise create a duplicate exchange.
+    if exchange_id != UNASSIGNED:
+        cm._conversation_exchange_ids[conversation_key] = exchange_id
 
     # publish reply as event envelope
     await event_broker.publish(
@@ -1894,224 +506,11 @@ async def log_message(
         LogMessageResponse(
             medium=medium,
             exchange_id=exchange_id,
-            destination=primary_destination,
         ).to_json(),
     )
     LOGGER.debug(
         f"{ICONS['managers_worker']} [ManagersWorker] Published exchange_id {exchange_id}",
     )
-
-
-def _reaction_contact_name(contact: dict | None) -> str:
-    if not contact:
-        return "Someone"
-    return _get_sender_name(contact)
-
-
-def _normalize_reaction_emoji(emoji: str | None) -> str | None:
-    if emoji is None:
-        return None
-    cleaned = str(emoji).strip()
-    return cleaned or None
-
-
-def _apply_reaction_delta(
-    existing: list[dict],
-    *,
-    contact_id: int,
-    emoji: str | None,
-    timestamp,
-) -> tuple[list[dict], str | None, Literal["added", "changed", "removed"]]:
-    reactions = [dict(item) for item in existing if isinstance(item, dict)]
-    previous = next(
-        (item for item in reactions if item.get("contact_id") == contact_id),
-        None,
-    )
-    previous_emoji = previous.get("emoji") if previous else None
-    reactions = [item for item in reactions if item.get("contact_id") != contact_id]
-    normalized = _normalize_reaction_emoji(emoji)
-    if normalized is None:
-        if previous_emoji is None:
-            return reactions, None, "removed"
-        return reactions, previous_emoji, "removed"
-    if previous_emoji is None:
-        action: Literal["added", "changed", "removed"] = "added"
-    elif previous_emoji == normalized:
-        return reactions, previous_emoji, "removed"
-    else:
-        action = "changed"
-    reactions.append(
-        {
-            "contact_id": contact_id,
-            "emoji": normalized,
-            "updated_at": timestamp.isoformat(),
-        },
-    )
-    return reactions, previous_emoji, action
-
-
-def _build_reaction_audit_content(
-    *,
-    reactor_name: str,
-    action: str,
-    target_message_id: int,
-    target_content: str,
-    emoji: str | None,
-    previous_emoji: str | None,
-) -> str:
-    preview = (target_content or "").strip().replace("\n", " ")
-    if len(preview) > 120:
-        preview = preview[:117] + "..."
-    quoted = f'"{preview}"' if preview else f"message #{target_message_id}"
-    if action == "added" and emoji:
-        return f"[{reactor_name} reacted {emoji} to message #{target_message_id}: {quoted}]"
-    if action == "changed" and emoji:
-        return (
-            f"[{reactor_name} changed reaction on message #{target_message_id} "
-            f"from {previous_emoji} to {emoji}]"
-        )
-    if action == "removed" and previous_emoji:
-        return f"[{reactor_name} removed {previous_emoji} from message #{target_message_id}]"
-    return f"[{reactor_name} updated reaction on message #{target_message_id}]"
-
-
-async def log_reaction(
-    cm: "ConversationManager",
-    event: Event,
-) -> Literal["added", "changed", "removed"] | None:
-    """Patch emoji reactions on a transcript message and append an audit row."""
-    ensure_runtime_context()
-    if isinstance(event, UnifyMessageReactionChanged):
-        reaction_medium = Medium.UNIFY_REACTION
-    elif isinstance(event, WhatsAppReactionChanged):
-        reaction_medium = Medium.WHATSAPP_REACTION
-    else:
-        LOGGER.error(
-            f"{DEFAULT_ICON} Unsupported reaction event: {event.__class__.__name__}",
-        )
-        return None
-
-    contact_id = event.contact.get("contact_id")
-    if contact_id is None:
-        LOGGER.error(f"{DEFAULT_ICON} Reaction event missing contact_id")
-        return None
-
-    implicit_destinations = ContextRegistry.implicit_shared_destinations()
-    primary_destination = implicit_destinations[0]
-    target_message_id = int(getattr(event, "target_message_id", 0) or 0)
-    if target_message_id <= 0:
-        chat_message_id = getattr(event, "chat_message_id", None)
-        if chat_message_id:
-            target_message_id = (
-                cm.transcript_manager.resolve_message_id_by_chat_message_id(
-                    int(chat_message_id),
-                    destination=primary_destination,
-                )
-                or 0
-            )
-    if target_message_id <= 0:
-        provider_sid = getattr(event, "provider_message_sid", "") or ""
-        target_message_id = (
-            cm.transcript_manager.resolve_message_id_by_provider_sid(
-                provider_sid,
-                destination=primary_destination,
-            )
-            or 0
-        )
-    if target_message_id <= 0:
-        LOGGER.error(
-            f"{DEFAULT_ICON} Could not resolve target transcript message for reaction",
-        )
-        return None
-
-    target_row = cm.transcript_manager.get_message_by_id(
-        target_message_id,
-        destination=primary_destination,
-    )
-    if not target_row:
-        LOGGER.error(
-            f"{DEFAULT_ICON} Reaction target message_id={target_message_id} not found",
-        )
-        return None
-
-    target_metadata = dict(target_row.get("metadata") or {})
-    existing_reactions = list(target_metadata.get("reactions") or [])
-    requested_emoji = _normalize_reaction_emoji(getattr(event, "emoji", None))
-    reactions, previous_emoji, action = _apply_reaction_delta(
-        existing_reactions,
-        contact_id=contact_id,
-        emoji=requested_emoji,
-        timestamp=event.timestamp,
-    )
-
-    exchange_id = int(target_row.get("exchange_id") or UNASSIGNED)
-    target_content = str(target_row.get("content") or "")
-    reactor_name = _reaction_contact_name(event.contact)
-    audit_content = _build_reaction_audit_content(
-        reactor_name=reactor_name,
-        action=action,
-        target_message_id=target_message_id,
-        target_content=target_content,
-        emoji=requested_emoji if action != "removed" else None,
-        previous_emoji=previous_emoji,
-    )
-
-    def _persist_reaction() -> None:
-        for destination in implicit_destinations:
-            cm.transcript_manager.update_message_reactions(
-                target_message_id,
-                reactions,
-                destination=destination,
-            )
-        audit_metadata = {
-            "target_message_id": target_message_id,
-            "reaction_action": action,
-        }
-        if previous_emoji:
-            audit_metadata["previous_emoji"] = previous_emoji
-        if requested_emoji and action != "removed":
-            audit_metadata["emoji"] = requested_emoji
-        audit_message = {
-            "medium": reaction_medium,
-            "sender_id": contact_id,
-            "receiver_ids": [SESSION_DETAILS.self_contact_id],
-            "timestamp": event.timestamp,
-            "content": audit_content,
-            "exchange_id": exchange_id,
-            "metadata": audit_metadata,
-        }
-        if exchange_id == UNASSIGNED:
-            cm.transcript_manager.log_first_message_in_new_exchange(
-                audit_message,
-                destination=primary_destination,
-            )
-        else:
-            cm.transcript_manager.log_messages(
-                audit_message,
-                synchronous=True,
-                destination=primary_destination,
-            )
-
-    await asyncio.to_thread(_persist_reaction)
-
-    # Console reaction frames are published by Orchestra when the reaction is
-    # toggled in the unified chat store; this handler only maintains the
-    # assistant's own Transcripts mirror.
-    LOGGER.debug(
-        f"{DEFAULT_ICON} Logged reaction on message_id={target_message_id} action={action}",
-    )
-    return action
-
-
-# OAuth secret sync
-
-
-async def sync_assistant_secrets() -> None:
-    """Pull OAuth tokens from Orchestra into the SecretManager's Secrets context."""
-    from unify.manager_registry import ManagerRegistry
-
-    sm = ManagerRegistry.get_secret_manager()
-    sm.sync_assistant_secrets_if_stale(force=True, reason="assistant_update")
 
 
 # Contact updates
@@ -2127,15 +526,11 @@ async def update_session_contacts(
     user_surname: str,
     user_number: str,
     user_email: str,
-    assistant_whatsapp_number: str | None = None,
-    user_whatsapp_number: str | None = None,
     assistant_job_title: str | None = None,
 ) -> None:
     """
     Update the resolved assistant and boss contacts in the ContactManager when
     session details change.
-
-    Called when an AssistantUpdateEvent is received.
     """
     if cm.contact_manager is None:
         LOGGER.info(
@@ -2149,7 +544,6 @@ async def update_session_contacts(
         surname: str,
         phone_number: str,
         email_address: str,
-        whatsapp_number: str | None = None,
         job_title: str | None = None,
     ):
         try:
@@ -2160,8 +554,6 @@ async def update_session_contacts(
                 first_name=first_name,
                 surname=surname,
             )
-            if whatsapp_number is not None:
-                kwargs["whatsapp_number"] = whatsapp_number
             if job_title is not None and contact_id == SESSION_DETAILS.self_contact_id:
                 kwargs["job_title"] = job_title
             await asyncio.to_thread(
@@ -2182,10 +574,6 @@ async def update_session_contacts(
         assistant_surname,
         assistant_number,
         assistant_email,
-        assistant_whatsapp_number,
-        # Pass through assistant_job_title so the AssistantUpdateEvent flow
-        # keeps contact 0 in sync with the backend's value (and triggers the
-        # backend sync helper, which is a no-op when the value matches).
         assistant_job_title,
     )
 
@@ -2195,7 +583,6 @@ async def update_session_contacts(
         user_surname,
         user_number,
         user_email,
-        user_whatsapp_number,
     )
 
 
@@ -2275,9 +662,9 @@ async def wait_for_initialization(
     Wait for initialization to complete.
 
     Polls cm.initialized with no timeout. Initialization failures are
-    surfaced by init_conv_manager itself (logged errors, pod inactivity
-    shutdown). A timeout here would silently kill the operations queue
-    processor on slow cold starts, causing queued work to be orphaned.
+    surfaced by init_conv_manager itself (logged errors). A timeout here
+    would silently kill the operations queue processor on slow cold starts,
+    causing queued work to be orphaned.
     """
     while not cm.initialized:
         await asyncio.sleep(0.1)
@@ -2343,31 +730,18 @@ def _init_managers(
     """
     start_time = perf_counter()
 
-    # 0. Initialize unity (idempotent — SESSION_DETAILS.assistant.agent_id is
-    #    already set by the startup handler, so unify.init() reads it for context).
+    # 0. Initialize the runtime (idempotent — SESSION_DETAILS.assistant.agent_id
+    #    is already populated, so unify.init() reads it for the context root).
     LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Initializing unify...")
     local_start_time = perf_counter()
     unify.init()
-    _unity_init_dur = perf_counter() - local_start_time
     LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] Unity initialized in {_unity_init_dur:.2f} seconds",
+        f"{ICONS['managers_worker']} [ManagersWorker] Runtime initialized in "
+        f"{perf_counter() - local_start_time:.2f} seconds",
     )
-    per_manager_init.record(_unity_init_dur, {"manager": "unity"})
-
-    # Get API key from SESSION_DETAILS (set by ConversationManager on startup)
-    api_key = SESSION_DETAILS.unify_key or None
 
     # 1. Configure EventBus
-    LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Configuring EventBus...")
-    local_start_time = perf_counter()
-    if api_key:
-        EVENT_BUS._get_logger().session.headers["Authorization"] = f"Bearer {api_key}"
     EVENT_BUS.set_window("Comms", 100)
-    _eventbus_dur = perf_counter() - local_start_time
-    LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] EventBus configured in {_eventbus_dur:.2f} seconds",
-    )
-    per_manager_init.record(_eventbus_dur, {"manager": "event_bus"})
 
     # 1b. Kick off hydration concurrently — it only needs unify.init() and
     # EventBus config (both done). Runs on the main event loop while the
@@ -2392,28 +766,10 @@ def _init_managers(
     )
     # Wire up ContactManager to ContactIndex for always-fresh contact data
     cm.contact_index.set_contact_manager(cm.contact_manager)
-
-    # Sync a manually recorded voice enrollment (account-page upload) onto the
-    # boss contact in the background; call dispatch reads the embedding later.
-    def _sync_manual_voice_enrollment() -> None:
-        try:
-            cm.contact_manager.sync_manual_voice_enrollment()
-        except Exception as e:  # noqa: BLE001
-            LOGGER.warning(
-                f"{ICONS['managers_worker']} [ManagersWorker] Manual voice "
-                f"enrollment sync failed: {e}",
-            )
-
-    asyncio.run_coroutine_threadsafe(
-        asyncio.to_thread(_sync_manual_voice_enrollment),
-        loop,
-    )
-    _contact_dur = perf_counter() - local_start_time
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] ContactManager ({type(cm.contact_manager).__name__}) initialized in "
-        f"{_contact_dur:.2f} seconds",
+        f"{perf_counter() - local_start_time:.2f} seconds",
     )
-    per_manager_init.record(_contact_dur, {"manager": "contact_manager"})
 
     # 3. Initialize TranscriptManager (respects SETTINGS.transcript.IMPL)
     LOGGER.info(
@@ -2424,21 +780,12 @@ def _init_managers(
         description="production deployment",
         contact_manager=cm.contact_manager,
     )
-    _transcript_dur = perf_counter() - local_start_time
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] TranscriptManager ({type(cm.transcript_manager).__name__}) initialized in "
-        f"{_transcript_dur:.2f} seconds",
+        f"{perf_counter() - local_start_time:.2f} seconds",
     )
-    per_manager_init.record(_transcript_dur, {"manager": "transcript_manager"})
 
-    # 4. Configure TranscriptManager logger (only for real implementation)
-    # Check hasattr instead of SETTINGS to be defensive against implementation mismatches
-    if api_key and hasattr(cm.transcript_manager, "_get_logger"):
-        cm.transcript_manager._get_logger().session.headers[
-            "Authorization"
-        ] = f"Bearer {api_key}"
-
-    # 5. Initialize MemoryManager (optional - respects SETTINGS.memory.ENABLED and IMPL)
+    # 4. Initialize MemoryManager (optional - respects SETTINGS.memory.ENABLED and IMPL)
     if SETTINGS.memory.ENABLED:
         try:
             from unify.memory_manager.memory_manager import MemoryManager
@@ -2461,11 +808,10 @@ def _init_managers(
                 config=mem_cfg,
                 loop=loop,
             )
-            _memory_dur = perf_counter() - local_start_time
             LOGGER.info(
-                f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager initialized in {_memory_dur:.2f} seconds",
+                f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager initialized in "
+                f"{perf_counter() - local_start_time:.2f} seconds",
             )
-            per_manager_init.record(_memory_dur, {"manager": "memory_manager"})
         except Exception as e:
             LOGGER.warning(
                 f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager init failed (degraded): {e}",
@@ -2475,7 +821,7 @@ def _init_managers(
             f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager disabled (SETTINGS.memory.ENABLED=False)",
         )
 
-    # 6. Initialize ConversationManagerHandle (respects SETTINGS.conversation.IMPL)
+    # 5. Initialize ConversationManagerHandle (respects SETTINGS.conversation.IMPL)
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] Initializing ConversationManagerHandle...",
     )
@@ -2499,63 +845,12 @@ def _init_managers(
                 conversation_manager=cm,
             )
         )
-    _cmhandle_dur = perf_counter() - local_start_time
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] ConversationManagerHandle ({type(cm._conversation_manager_handle).__name__}) initialized in "
-        f"{_cmhandle_dur:.2f} seconds",
+        f"{perf_counter() - local_start_time:.2f} seconds",
     )
-    per_manager_init.record(_cmhandle_dur, {"manager": "conversation_manager_handle"})
 
-    # 7. Run startup hooks (environment-gated plugin discovery)
-    _startup_config: dict | None = None
-    _hook_group = os.environ.get("_UNITY_STARTUP_HOOK_GROUP")
-    _hook_package = os.environ.get("_UNITY_STARTUP_HOOK_PACKAGE")
-    if _hook_group:
-        try:
-            from importlib.metadata import entry_points as _eps
-
-            for ep in _eps(group=_hook_group):
-                if _hook_package and ep.dist.name != _hook_package:
-                    LOGGER.warning(
-                        f"{ICONS['managers_worker']} [ManagersWorker] "
-                        f"Ignoring startup hook from unexpected package: {ep.dist.name}",
-                    )
-                    continue
-                LOGGER.info(
-                    f"{ICONS['managers_worker']} [ManagersWorker] "
-                    f"Running startup hook: {ep.name}",
-                )
-                local_start_time = perf_counter()
-                hook_fn = ep.load()
-                _startup_config = hook_fn(cm, SESSION_DETAILS)
-                _runtime_backends = (_startup_config or {}).get("runtime_backends")
-                if _runtime_backends:
-                    from unify.deploy_runtime import (
-                        DeployRuntimeBackends,
-                        register_deploy_runtime,
-                    )
-
-                    if isinstance(_runtime_backends, DeployRuntimeBackends):
-                        register_deploy_runtime(_runtime_backends)
-                    else:
-                        register_deploy_runtime(
-                            session=_runtime_backends.get("session"),
-                            jobs=_runtime_backends.get("jobs"),
-                            metrics=_runtime_backends.get("metrics"),
-                            logs=_runtime_backends.get("logs"),
-                        )
-                _hook_dur = perf_counter() - local_start_time
-                LOGGER.info(
-                    f"{ICONS['managers_worker']} [ManagersWorker] "
-                    f"Startup hook '{ep.name}' completed in {_hook_dur:.2f}s",
-                )
-        except Exception as e:
-            LOGGER.warning(
-                f"{ICONS['managers_worker']} [ManagersWorker] "
-                f"Startup hook failed (degraded): {e}",
-            )
-
-    # 8. Initialize Actor (use provided actor or create via ManagerRegistry)
+    # 6. Initialize Actor (use provided actor or create via ManagerRegistry)
     LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Initializing Actor...")
     try:
         local_start_time = perf_counter()
@@ -2566,17 +861,8 @@ def _init_managers(
             # Create via ManagerRegistry (respects SETTINGS.actor.IMPL)
             from unify.actor.environments import (
                 StateManagerEnvironment,
-                ComputerEnvironment,
                 ActorEnvironment,
             )
-            from unify.function_manager.primitives import ComputerPrimitives, Primitives
-
-            cp = ComputerPrimitives()
-            if _startup_config and _startup_config.get("url_mappings"):
-                cp.url_mappings = _startup_config["url_mappings"]
-
-            extra_envs = (_startup_config or {}).get("environments", [])
-            actor_kwargs = (_startup_config or {}).get("actor_kwargs", {})
 
             cm.actor = ManagerRegistry.get_actor(
                 description="production deployment",
@@ -2584,26 +870,21 @@ def _init_managers(
                     StateManagerEnvironment(
                         Primitives(primitive_scope=default_runtime_scope()),
                     ),
-                    ComputerEnvironment(cp),
                     ActorEnvironment(),
-                ]
-                + extra_envs,
-                **actor_kwargs,
+                ],
             )
-        _actor_dur = perf_counter() - local_start_time
         actor_cls = type(cm.actor).__name__
         LOGGER.info(
             f"{ICONS['managers_worker']} [ManagersWorker] Actor ({actor_cls}) initialized in "
-            f"{_actor_dur:.2f} seconds",
+            f"{perf_counter() - local_start_time:.2f} seconds",
         )
-        per_manager_init.record(_actor_dur, {"manager": "actor"})
     except Exception as e:
         LOGGER.error(
             f"{ICONS['managers_worker']} [ManagersWorker] Error initializing Actor: {e}",
         )
 
-    # 11. Initialize FileManager (eagerly, so the FileRecords context exists
-    #     before any file operations or background tasks attempt to use it)
+    # 7. Initialize FileManager (eagerly, so the FileRecords context exists
+    #    before any file operations or background tasks attempt to use it)
     try:
         LOGGER.info(
             f"{ICONS['managers_worker']} [ManagersWorker] Initializing FileManager...",
@@ -2615,32 +896,28 @@ def _init_managers(
         # ThreadPoolExecutor workers where ContextVars may not propagate — eager
         # init avoids the resulting empty-context / double-slash paths.
         _ = fm._data_manager  # noqa: F841
-        _file_dur = perf_counter() - local_start_time
         LOGGER.info(
             f"{ICONS['managers_worker']} [ManagersWorker] FileManager initialized in "
-            f"{_file_dur:.2f} seconds",
+            f"{perf_counter() - local_start_time:.2f} seconds",
         )
-        per_manager_init.record(_file_dur, {"manager": "file_manager"})
     except Exception as e:
         LOGGER.warning(
             f"{ICONS['managers_worker']} [ManagersWorker] FileManager init failed (degraded): {e}",
         )
 
-    # U2: Total manager init duration
-    _total_dur = perf_counter() - start_time
     LOGGER.info(
-        f"{ICONS['managers_worker']} [ManagersWorker] All managers initialized in {_total_dur:.2f} seconds",
+        f"{ICONS['managers_worker']} [ManagersWorker] All managers initialized in "
+        f"{perf_counter() - start_time:.2f} seconds",
     )
-    manager_init_total.record(_total_dur)
 
-    # 12. Static primitives live in the global builtins catalogue (seeded at
-    #     deploy time), so no per-assistant primitive sync is needed here.
+    # 8. Static primitives live in the global builtins catalogue (seeded at
+    #    start-up), so no per-assistant primitive sync is needed here.
     _init_fm = ManagerRegistry.get_function_manager()
 
-    # 13. Pre-warm embedding columns for all managers (best-effort, avoids
-    #     cold-start latency on the first vector search after a fresh hire).
-    #     Also explicitly warm the FunctionManager (not in the singleton cache
-    #     due to _force_new=True) so Primitives embeddings are ready.
+    # 9. Pre-warm embedding columns for all managers (best-effort, avoids
+    #    cold-start latency on the first vector search after a fresh hire).
+    #    Also explicitly warm the FunctionManager (not in the singleton cache
+    #    due to _force_new=True) so Primitives embeddings are ready.
     try:
         LOGGER.debug(
             f"{ICONS['managers_worker']} [ManagersWorker] Warming embedding columns...",
@@ -2648,130 +925,14 @@ def _init_managers(
         local_start_time = perf_counter()
         ManagerRegistry.warm_all_embeddings()
         _init_fm.warm_embeddings()
-        _warm_dur = perf_counter() - local_start_time
         LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Embedding columns warmed in {_warm_dur:.2f} seconds",
+            f"{ICONS['managers_worker']} [ManagersWorker] Embedding columns warmed in "
+            f"{perf_counter() - local_start_time:.2f} seconds",
         )
     except Exception as e:
         LOGGER.warning(
             f"{ICONS['managers_worker']} [ManagersWorker] Embedding warm-up failed (degraded): {e}",
         )
-
-
-async def _start_file_sync() -> bool:
-    """Start file sync with managed VM after managers are initialized.
-
-    This starts rclone-based file synchronization between the assistant local
-    workspace and the managed desktop when ``desktop_url`` is configured in
-    ``SESSION_DETAILS``.
-
-    Returns
-    -------
-    bool
-        True when sync started successfully, False otherwise.
-    """
-    from unify.session_details import SESSION_DETAILS
-
-    if not SESSION_DETAILS.assistant.desktop_url:
-        LOGGER.debug(
-            f"{ICONS['managers_worker']} [ManagersWorker] No desktop_url configured, skipping file sync",
-        )
-        log_startup_timing(
-            LOGGER,
-            "⏱️ [StartupTiming] managers.file_sync skipped reason=no_desktop_url",
-        )
-        return False
-
-    _file_sync_t0 = perf_counter()
-    try:
-        from unify.file_manager.managers.local import LocalFileManager
-
-        local_fm = LocalFileManager()
-        adapter = local_fm._adapter
-
-        if not hasattr(adapter, "start_sync"):
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] Adapter does not support file sync",
-            )
-            return False
-
-        if not adapter._enable_sync:
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] File sync disabled by configuration",
-            )
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] managers.file_sync skipped reason=adapter_disabled duration=%.2fs",
-                perf_counter() - _file_sync_t0,
-            )
-            return False
-
-        LOGGER.debug(
-            f"{ICONS['managers_worker']} [ManagersWorker] Starting file sync with managed VM...",
-        )
-        success = await adapter.start_sync()
-        log_startup_timing(
-            LOGGER,
-            "⏱️ [StartupTiming] managers.file_sync.start_sync duration=%.2fs success=%s",
-            perf_counter() - _file_sync_t0,
-            success,
-        )
-        if success:
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] File sync started successfully",
-            )
-        else:
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] File sync not enabled or failed to start",
-            )
-        return bool(success)
-
-    except Exception as e:
-        LOGGER.error(
-            f"{ICONS['managers_worker']} [ManagersWorker] Failed to start file sync: {e}",
-        )
-        import traceback
-
-        traceback.print_exc()
-        return False
-    finally:
-        log_startup_timing(
-            LOGGER,
-            "⏱️ [StartupTiming] managers.file_sync.total duration=%.2fs",
-            perf_counter() - _file_sync_t0,
-        )
-
-
-async def _register_computer_act_completed_callback(cm: "ConversationManager") -> None:
-    """Bridge ``ComputerActCompleted`` events from the in-process EventBUS to the
-    CM's ``event_broker`` so both the slow brain and fast brain see them.
-
-    Only publishes when the assistant is actively screen-sharing on a meet.
-    """
-    from unify.conversation_manager.events import ComputerActCompleted
-
-    async def _on_computer_act_completed(events):  # noqa: ANN001
-        if not cm.assistant_screen_share_active:
-            return
-        for evt in events:
-            payload = evt.payload if isinstance(evt.payload, dict) else {}
-            cm_event = ComputerActCompleted(
-                instruction=payload.get("instruction", ""),
-                summary=payload.get("summary", ""),
-            )
-            await cm.event_broker.publish(
-                "app:actor:computer_act_completed",
-                cm_event.to_json(),
-            )
-
-    try:
-        await EVENT_BUS.register_callback(
-            event_type="ComputerActCompleted",
-            callback=_on_computer_act_completed,
-            every_n=1,
-        )
-    except Exception:
-        pass
 
 
 async def init_conv_manager(
@@ -2815,7 +976,7 @@ async def init_conv_manager(
             loop = asyncio.get_running_loop()
 
             # Anchor the canonical session root before and after worker init.
-            # unify.init() inside _init_managers sets Unify ContextVars
+            # unify.init() inside _init_managers sets the store ContextVars
             # (CONTEXT_READ/CONTEXT_WRITE) but asyncio.to_thread runs on a
             # copy of the caller's context — changes don't propagate back.
             # Re-apply the context afterwards so any lazily-created managers
@@ -2894,31 +1055,11 @@ async def init_conv_manager(
                 finally:
                     cm._hydration_future = None
 
-            _t0 = perf_counter()
-            await _register_computer_act_completed_callback(cm)
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] managers.init_conv_manager.register_callbacks duration=%.2fs",
-                perf_counter() - _t0,
-            )
-
-            os.environ["UNIFY_CM_INITIALIZED"] = "1"
-
-            # Best-effort: learn whether the boss's WhatsApp free-form window is
-            # already open so the brain's send_whatsapp docstring can warn up
-            # front when a first send would only deliver a template placeholder.
-            # Fire-and-forget so it never blocks or fails startup.
-            boss_contact_id = SESSION_DETAILS.boss_contact_id
-            if boss_contact_id is not None:
-                asyncio.create_task(cm.seed_whatsapp_window(int(boss_contact_id)))
-
-            # Start the in-process activation scheduler (local installs only).
-            # In hosted mode this resolves to ``NoopMaterializer`` and is a
-            # no-op; in local mode it starts the asyncio supervisor that
-            # fires scheduled tasks without going through Communication +
-            # Cloud Tasks. Must run after managers are initialised because
-            # the scheduler reads ``Tasks/Executions`` through the same
-            # storage layer the managers configure.
+            # Start the in-process activation scheduler: the asyncio
+            # supervisor that fires scheduled tasks onto the event broker.
+            # Must run after managers are initialised because the scheduler
+            # reads ``Tasks/Executions`` through the same storage layer the
+            # managers configure.
             try:
                 from unify.task_scheduler.local_scheduler import build_materializer
 
@@ -2951,59 +1092,15 @@ async def init_conv_manager(
                 perf_counter() - _t0,
             )
 
-            _init_dur = perf_counter() - start_time
             LOGGER.info(
-                f"{ICONS['managers_worker']} [ManagersWorker] Initialization complete in {_init_dur:.2f} seconds",
+                f"{ICONS['managers_worker']} [ManagersWorker] Initialization complete in "
+                f"{perf_counter() - start_time:.2f} seconds",
             )
-
-            try:
-                from unify.conversation_manager.memory_dump import (
-                    write_memory_dump,
-                )
-
-                loop = asyncio.get_running_loop()
-
-                def _on_dump_done(fut):
-                    try:
-                        dump_path = fut.result()
-                        if dump_path:
-                            LOGGER.info(
-                                f"{ICONS['managers_worker']} [ManagersWorker] "
-                                f"Startup memory dump written to {dump_path}",
-                            )
-                    except Exception as exc:
-                        LOGGER.warning(
-                            f"{ICONS['managers_worker']} [ManagersWorker] "
-                            f"Startup memory dump failed: {exc}",
-                        )
-
-                fut = loop.run_in_executor(
-                    None,
-                    write_memory_dump,
-                    "startup_memory_dump.txt",
-                )
-                fut.add_done_callback(_on_dump_done)
-            except Exception as exc:
-                LOGGER.warning(
-                    f"{ICONS['managers_worker']} [ManagersWorker] "
-                    f"Startup memory dump failed: {exc}",
-                )
 
         except Exception as e:
             LOGGER.error(
                 f"{ICONS['managers_worker']} [ManagersWorker] Error during initialization: {e}",
             )
-            publish_system_error(
-                "The assistant failed to initialize and may not respond "
-                "correctly. Please try again shortly.",
-                error_type="init_failed",
-            )
-            # The raise below unwinds into a bare create_task that nobody
-            # awaits, so on its own it ends here and the pod carries on
-            # looking healthy with no actor and no managers. Recording it on
-            # the ConversationManager is what lets the inactivity loop retire
-            # the pod instead.
-            cm.unserviceable_reason = f"manager initialization failed: {e}"
             raise
         finally:
             # Idempotent: hydration completion normally reopened this long

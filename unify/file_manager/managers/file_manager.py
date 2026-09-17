@@ -707,7 +707,7 @@ class FileManager(BaseFileManager):
                     "Filesystem adapter does not support write_file; "
                     "custom file sync requires LocalFileSystemAdapter",
                 )
-            write_file(dest_path, source_path, overwrite=True, sync=True)
+            write_file(dest_path, source_path, overwrite=True)
             logger.info("Wrote required custom file: %s", dest_path)
 
         # Index + ingest when newly written, or when the file exists on disk

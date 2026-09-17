@@ -44,8 +44,6 @@ _shutdown_reason: Optional[str] = None
 async def start_async(
     *,
     project_name: str = "Assistants",
-    enable_comms_manager: bool | None = None,
-    apply_test_mocks: bool | None = None,
 ) -> "ConversationManager":
     """
     Start ConversationManager in-process (async entry point).
@@ -55,11 +53,6 @@ async def start_async(
 
     Args:
         project_name: Project name for logging
-        enable_comms_manager: Whether to start CommsManager for external
-            communications (GCP PubSub). If None, defaults to True unless
-            TEST env is set.
-        apply_test_mocks: Whether to apply test mocks. If None, defaults to
-            True if TEST env var is set.
 
     Returns:
         The running ConversationManager instance.
@@ -84,11 +77,7 @@ async def start_async(
     # Import here to avoid circular imports
     from unify.conversation_manager.main import run_conversation_manager
 
-    _conversation_manager = await run_conversation_manager(
-        project_name=project_name,
-        enable_comms_manager=enable_comms_manager,
-        apply_test_mocks=apply_test_mocks,
-    )
+    _conversation_manager = await run_conversation_manager(project_name=project_name)
 
     return _conversation_manager
 
@@ -97,13 +86,12 @@ async def stop_async(reason: str = "manual_stop") -> None:
     """
     Stop the ConversationManager.
 
-    An explicit stop is a retirement, not an idle timeout: it goes through
-    the same ``_request_shutdown`` sequence the inactivity route uses (record
-    the reason, log ``session_end``, set ``stop``, close the event broker),
-    then runs ``cleanup()`` — which discards in-flight actions rather than
-    waiting on them — and flushes buffered EventBus writes. The whole
-    sequence completes in seconds so an in-process successor can boot over
-    the same durable world immediately.
+    An explicit stop is a retirement: it goes through the ``_request_shutdown``
+    sequence (record the reason, log ``session_end``, set ``stop``, close the
+    event broker), then runs ``cleanup()`` — which discards in-flight actions
+    rather than waiting on them — and flushes buffered EventBus writes. The
+    whole sequence completes in seconds so an in-process successor can boot
+    over the same durable world immediately.
 
     Args:
         reason: Reason for stopping (recorded as the shutdown reason)
@@ -126,8 +114,8 @@ async def stop_async(reason: str = "manual_stop") -> None:
                 f"Explicit shutdown requested ({reason})",
             )
         else:
-            # An internal exit (idle timeout, drain, …) already ran the
-            # retirement sequence; don't overwrite its recorded reason.
+            # An internal exit already ran the retirement sequence; don't
+            # overwrite its recorded reason.
             _conversation_manager.stop.set()
 
         await _conversation_manager.cleanup()
@@ -185,8 +173,6 @@ def get_status() -> Dict[str, Any]:
     Returns:
         dict: Status information including running state, assistant ID, etc.
     """
-    global _shutdown_reason
-
     if _conversation_manager is not None:
         return {
             "running": True,

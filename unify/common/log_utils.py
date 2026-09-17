@@ -4,9 +4,7 @@ Wrappers around db.log/create_logs with:
 2. _user_id injection (user ID from SESSION_DETAILS)
 3. _assistant injection (assistant ID, matches assistant_context path component)
 4. _assistant_id injection (assistant's agent_id from SESSION_DETAILS.assistant.agent_id)
-5. _org injection (organization ID from SESSION_DETAILS, None for personal context)
-6. _org_id injection (organization ID from SESSION_DETAILS, None for personal context)
-7. Automatic addition to aggregation contexts by reference (copy=False)
+5. Automatic addition to aggregation contexts by reference (copy=False)
 
 Usage
 -----
@@ -20,8 +18,8 @@ Replace direct db.log/create_logs calls with these wrappers:
     # Instead of: db.create_logs(context=ctx, entries=entries_list)
     create_logs(context=ctx, entries=entries_list)
 
-The wrappers automatically inject _user, _user_id, _assistant, _assistant_id,
-_org, _org_id as private fields.
+The wrappers automatically inject _user, _user_id, _assistant and
+_assistant_id as private fields.
 """
 
 from __future__ import annotations
@@ -70,24 +68,8 @@ def _get_assistant_id() -> Optional[str]:
     return str(aid) if aid is not None else None
 
 
-def _get_org_id() -> Optional[int]:
-    """Retrieve organization ID from SESSION_DETAILS.
-
-    Returns None for personal (non-org) context.
-    """
-    return SESSION_DETAILS.org_id
-
-
-def _get_org_context() -> Optional[str]:
-    """Retrieve organization name from SESSION_DETAILS.
-
-    Returns None/empty for personal (non-org) context.
-    """
-    return SESSION_DETAILS.org_name or None
-
-
 def _inject_private_fields(entries: Dict[str, Any]) -> Dict[str, Any]:
-    """Inject _user, _user_id, _assistant, _assistant_id, _org, and _org_id into entries."""
+    """Inject _user, _user_id, _assistant and _assistant_id into entries."""
     result = dict(entries)
 
     user_ctx = _get_user_context()
@@ -105,14 +87,6 @@ def _inject_private_fields(entries: Dict[str, Any]) -> Dict[str, Any]:
     assistant_id = _get_assistant_id()
     if assistant_id is not None:
         result["_assistant_id"] = assistant_id
-
-    org_ctx = _get_org_context()
-    if org_ctx is not None:
-        result["_org"] = org_ctx
-
-    org_id = _get_org_id()
-    if org_id is not None:
-        result["_org_id"] = org_id
 
     return result
 

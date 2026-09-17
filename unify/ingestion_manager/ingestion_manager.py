@@ -1,4 +1,4 @@
-"""IngestionManager over Unify contexts, the shared ingest core, and the fleet.
+"""IngestionManager over Unify contexts and the shared ingest core.
 
 Storage mirrors the other catalogue managers: runs and their events are rows in
 contexts this manager declares, and all row I/O goes through DataManager so
@@ -11,18 +11,15 @@ with an id that can be inspected and resumed, rather than an exception that went
 past. It is also why ``submit`` returns immediately: the record is the handle, and
 the work follows it.
 
-**Both tiers run the same code.** Rows are written by
-:class:`~unify.common.pipeline.checkpointed_ingest.CheckpointedIngest` whether the
-work runs in this process or on the fleet, so leases, checkpoints and the
-completion check are not reimplemented per tier and cannot drift between them.
-The difference is only which artifact store and queue are bound -- and because
-both write the same layout, a run interrupted in process is adoptable by the
-fleet exactly as one interrupted on a worker is.
+**Every run goes through one engine.** Rows are written by
+:class:`~unify.common.pipeline.checkpointed_ingest.CheckpointedIngest`, so leases,
+checkpoints and the completion check live in one place. A run interrupted in one
+process is resumable from another because the artifact layout is the same.
 
 Neither parser nor inserter is reimplemented. Files go through the existing parse
 pipeline with its per-format backends; rows go through DataManager's chunked
-insert. This manager decides *where* work runs, stages what it needs, and records
-what happened.
+insert. This manager stages what a run needs, executes it on a pool thread, and
+records what happened.
 """
 
 from __future__ import annotations
@@ -54,7 +51,7 @@ from unify.common.pipeline import (
 from unify.common.pipeline.work_queue import PipelineCancelled, RetryWorkItem
 from unify.data_manager.types.ingest import PostIngestConfig
 from unify.ingestion_manager.base import BaseIngestionManager
-from unify.ingestion_manager.policy import choose_tier, next_step, stages_from_events
+from unify.ingestion_manager.policy import next_step, stages_from_events
 from unify.ingestion_manager.settings import IngestionSettings
 from unify.ingestion_manager.types.request import (
     EmbedSpec,
@@ -204,7 +201,7 @@ def _handle_can_yield(handle: Any) -> bool:
 
 
 class IngestionManager(BaseIngestionManager):
-    """Ingestion over Unify contexts, the shared ingest core and the fleet."""
+    """Ingestion over Unify contexts and the shared ingest core."""
 
     class Config:
         """Context registration for the Ingestion namespace."""
@@ -243,33 +240,19 @@ class IngestionManager(BaseIngestionManager):
         )
         self._lock = threading.RLock()
         self._store = self._build_artifact_store()
-        # Control flags for runs executing in this process, keyed by run key.
-        # In-process is the one tier where cancel and pause can act between
-        # chunks immediately rather than through a queue -- and an inline run
-        # dies with the process anyway, so nothing durable is needed to steer it.
+        # Control flags for running runs, keyed by run key. Cancel and pause act
+        # between chunks immediately, and a run dies with the process anyway,
+        # so nothing durable is needed to steer it.
         self._inline_control: Dict[str, Dict[str, bool]] = {}
-        # Run keys whose two-phase dispatch (stage, upload, publish) is in
-        # flight in this process. Uploads only ever run in the submitting
-        # process, so a queued dispatched-tier row with no dispatch_id and no
-        # entry here is not "still uploading" -- its submitter died before
-        # publish, and no worker will ever pick it up. Membership is what lets
-        # a status read make that call deterministically, without timers.
-        self._dispatching: set[str] = set()
-        # Cached answer to "is the fleet actually reachable", resolved on first
-        # use rather than at construction so a manager can be built in a process
-        # that never ingests without paying for a probe.
-        self._fleet_probe: Optional[bool] = None
         logger.debug("IngestionManager initialized")
 
     # ── plumbing ──────────────────────────────────────────────────────────
 
     def _build_artifact_store(self) -> Any:
-        """Bind the artifact store this deployment ingests through.
+        """Bind the artifact store runs stage requests and checkpoints in.
 
-        The hosted deployment overrides this with its object-store adapter. The
-        local one is a full implementation of the same port, not a stub: it
-        fences and checkpoints, so a self-host run is as resumable as a hosted
-        one and the two are not different code paths.
+        The local store fences and checkpoints, so a run interrupted in one
+        process resumes from another.
         """
         from unify.session_details import SESSION_DETAILS
 
@@ -410,26 +393,14 @@ class IngestionManager(BaseIngestionManager):
             destination=destination,
         )
 
-        # Every destination this run will create, checked against the backend's
-        # own naming rule before anything is published. The backend reports a
-        # violation by naming the rule and not the value, from a worker pod the
-        # caller cannot read, four retries into a dispatch -- so an unacceptable
-        # name became a poison message the fleet retried indefinitely rather
-        # than a refusal at the call that named it.
+        # Every destination this run will create, checked against the store's
+        # own naming rule before anything is recorded, so an unacceptable name
+        # is refused at the call that named it.
         assert_all_valid(self._destinations_for(request), what="destination")
 
-        # Counted before the tier is chosen, so the decision rests on a
-        # measurement. A stored table is counted by one server-side aggregate
-        # rather than by reading it, which is what keeps the count cheap enough
-        # to take before committing to anything.
+        # Counted before anything runs, so the run row carries a measurement.
+        # A stored table is counted by one aggregate rather than by reading it.
         declared = self._count_source(request)
-        fleet = self._fleet_reachable()
-        tier = choose_tier(
-            request,
-            self._settings,
-            row_count=declared,
-            has_fleet=fleet,
-        )
 
         key = _run_key()
         runs_context = self._write_table(RUNS_TABLE, destination)
@@ -441,7 +412,6 @@ class IngestionManager(BaseIngestionManager):
         record = IngestionRunRecord(
             run_key=key,
             state="queued",
-            executed_as=tier,
             source_kind=source.kind,
             target_kind=target.kind,
             request_key=request_key,
@@ -450,41 +420,15 @@ class IngestionManager(BaseIngestionManager):
         )
         self._get_dm().insert_rows(runs_context, [record.model_dump(exclude_none=True)])
 
-        if not fleet and source.kind in {"files", "folder"}:
-            # Files are meant to parse off this process, and a deployment whose
-            # control plane cannot reach its backends reads as having no fleet
-            # at all -- correctly, since dispatching there would send work
-            # nowhere. But the fallback then does the very thing the boundary
-            # exists to prevent, and it did so silently on staging for three
-            # files of 130-346 MB. Recording it means the run itself says so.
-            #
-            # Stageless on purpose: this is a fact about the run rather than
-            # progress through one, and naming a stage would fabricate progress
-            # for a stage that has not started.
-            self._record_event(
-                key,
-                destination=destination,
-                level="warning",
-                message=(
-                    "No worker fleet is reachable, so these files parse in the "
-                    "assistant's own process. Configure the pipeline control "
-                    "plane to move file parsing off it."
-                ),
-            )
-
-        self._start(key, runs_context, request, tier=tier, declared=declared)
-        return IngestionRun(run_id=key, state="queued", executed_as=tier)
+        self._start(key, runs_context, request, declared=declared)
+        return IngestionRun(run_id=key, state="queued")
 
     def _count_source(self, request: IngestionRequest) -> Optional[int]:
         """Measure the source exactly, or return ``None`` when it cannot be.
 
-        Rows in hand are counted directly. A stored table is counted server-side,
-        which is one cheap query even on a large context -- unlike reading it,
-        which would cost the whole table just to decide where to run.
-
-        Files return ``None``: what a file holds is unknowable before parsing it,
-        and guessing from bytes or count is the error this design removes rather
-        than refines.
+        Rows in hand are counted directly. A stored table is counted by one
+        aggregate, which is cheap even on a large context. Files return
+        ``None``: what a file holds is unknowable before parsing it.
         """
         source = request.source
         if source.kind == "rows":
@@ -505,8 +449,7 @@ class IngestionManager(BaseIngestionManager):
 
         Staged rather than embedded so a retry or resume can rebuild the work
         without the caller reconstructing it, and without a bulk payload ever
-        landing in a log row. This is also what a worker reads when the run is
-        dispatched, so one representation serves both tiers.
+        landing in a log row.
         """
         key = f"jobs/{run_key}/request.json"
         self._store.put_json(key, request.model_dump(mode="json"))
@@ -523,59 +466,21 @@ class IngestionManager(BaseIngestionManager):
         runs_context: str,
         request: IngestionRequest,
         *,
-        tier: str,
         declared: Optional[int],
     ) -> None:
-        if tier == "inline":
-            # Registered before the pool picks the run up, so a cancel that
-            # arrives while it is still queued is seen at the very first check.
-            with self._lock:
-                self._inline_control[run_key] = {"cancel": False, "pause": False}
-            self._pool.submit(
-                self._execute,
-                run_key,
-                runs_context,
-                request,
-                declared,
-            )
-            return
-        # Registered before the pool picks it up, for the same reason as the
-        # inline flags: a status read racing the pool must see the dispatch as
-        # in flight, not as dead.
+        # Registered before the pool picks the run up, so a cancel that
+        # arrives while it is still queued is seen at the very first check.
         with self._lock:
-            self._dispatching.add(run_key)
-        # Off the caller's thread: staging and uploading a multi-hundred-MB
-        # source takes as long as the uplink takes, and `submit` promises a
-        # handle immediately. Failures land on the run row, exactly as an
-        # inline run's do.
-        self._pool.submit(self._dispatch_guarded, run_key, runs_context, request)
+            self._inline_control[run_key] = {"cancel": False, "pause": False}
+        self._pool.submit(
+            self._execute,
+            run_key,
+            runs_context,
+            request,
+            declared,
+        )
 
     # ── execution ─────────────────────────────────────────────────────────
-
-    def _fleet_reachable(self) -> bool:
-        """Whether a worker fleet can actually take work right now.
-
-        Configured is not the same as reachable, and the difference matters in
-        one direction only: dispatching to a plane that cannot publish leaves a
-        run queued forever, while running in process when a fleet exists costs
-        latency and nothing else. So this asks, and a negative answer routes the
-        work here.
-
-        Cached for the process's life. The probe is a network round trip and the
-        tier decision happens on every submit; a plane that appears later is
-        picked up by the next process, and anything it left behind is adoptable
-        because both tiers write the same layout.
-        """
-        if not self._settings.resolved_pipeline_url():
-            return False
-        with self._lock:
-            if self._fleet_probe is None:
-                from unify.ingestion_manager.dispatch import probe
-
-                self._fleet_probe = probe(
-                    base_url=self._settings.resolved_pipeline_url(),
-                )
-            return self._fleet_probe
 
     def _control(self, run_key: str) -> Dict[str, bool]:
         with self._lock:
@@ -589,13 +494,11 @@ class IngestionManager(BaseIngestionManager):
     def _pod_work(label: str, run_key: str):
         """Declare pool work to the runtime for as long as it runs.
 
-        `submit` promises a handle immediately, so both tiers hand the real work
-        to a pool thread and return. That work therefore outlives the call that
-        started it -- and outlives the actor plan whose own ACTIVE_WORK record
-        was the only thing telling the runtime not to retire the pod. Row writes
-        go through DataManager, which publishes nothing, so without this the
-        work is invisible to every idle clock and an inactivity shutdown can
-        land in the middle of it.
+        `submit` promises a handle immediately, so the real work goes to a pool
+        thread and outlives the call that started it -- and the actor plan
+        whose own ACTIVE_WORK record was the only thing declaring it. Row
+        writes go through DataManager, which publishes nothing, so without this
+        the work is invisible to anything watching for live work.
         """
         from unify.events.active_work import ACTIVE_WORK
 
@@ -909,11 +812,8 @@ class IngestionManager(BaseIngestionManager):
     ) -> tuple[int, List[str], int]:
         """Parse and store files in this process.
 
-        Only reachable when no worker fleet is configured -- with one, files
-        always dispatch, because parsing shares this process's memory limit.
-        Accepting that risk here is deliberate: a deployment without workers
-        (local development, a bare self-host) still has to be able to store an
-        attachment, and refusing would fail every file it receives.
+        Parsing shares this process's memory limit, and that is accepted:
+        refusing would fail every file the assistant receives.
 
         A table target goes through the shared checkpointed engine, so it is
         resumable chunk by chunk like any rows ingestion. A collection target
@@ -1018,7 +918,7 @@ class IngestionManager(BaseIngestionManager):
         below ``TABULAR_INLINE_ROW_LIMIT`` and above it returns the columns, the
         dialect and the row count with ``rows`` deliberately empty, because the
         rows are meant to be streamed from the source. Reading ``rows`` directly
-        therefore saw nothing for every table of consequence, and this tier
+        therefore saw nothing for every table of consequence, and this path
         failed each one as "no tabular content" -- a 346 MB CSV of 622k rows
         included. Sharing the helper also means ``declared_rows`` is the
         parser's count rather than the length of whatever happened to be
@@ -1077,8 +977,6 @@ class IngestionManager(BaseIngestionManager):
                 if handle is None or not _handle_can_yield(handle):
                     # The parser counted rows this transport cannot reach, so
                     # writing what is reachable would be a silent under-ingest.
-                    # The dispatched tier refuses the same case for the same
-                    # reason.
                     unusable.append(f"{path}:{table.label or table.table_id}")
                     continue
                 work.append(
@@ -1124,11 +1022,8 @@ class IngestionManager(BaseIngestionManager):
         Paged by offset because the backend serves at most a page per read, so a
         single large read would silently return a prefix.
 
-        The rows do end up in memory, unbounded by anything here: every table
-        source runs in process today, because the fleet's unit of work is a
-        staged file and no rows job type exists yet. ``MAX_INLINE_ROWS`` is the
-        boundary such a job type would restore; until then a very large table
-        costs this process memory in exchange for actually executing.
+        The rows do end up in memory, unbounded by anything here: a very large
+        table costs this process memory in exchange for actually executing.
 
         One consequence worth knowing: a resumed run re-reads the source rather
         than a frozen copy of it, so if the source has been written to in between,
@@ -1161,115 +1056,11 @@ class IngestionManager(BaseIngestionManager):
             row_count=len(rows),
         )
 
-    def _dispatch_guarded(
-        self,
-        run_key: str,
-        runs_context: str,
-        request: IngestionRequest,
-    ) -> None:
-        """Run the dispatch, landing any failure on the run row.
-
-        A dispatch that raises without recording anything leaves the row
-        `queued` forever -- the one state whose next step is "keep polling",
-        which is exactly wrong for a run that will never start. The failure is
-        the run's outcome, so it is written where every other outcome lives.
-        """
-        try:
-            with self._pod_work("ingestion_dispatch_upload", run_key):
-                self._dispatch(run_key, runs_context, request)
-        except Exception as error:
-            self._update_run(
-                run_key,
-                runs_context,
-                {
-                    "state": "failed",
-                    "error": str(error),
-                    "finished_at": _now(),
-                },
-            )
-            self._record_event(
-                run_key,
-                destination=request.destination,
-                stage="parse",
-                level="error",
-                message=f"Dispatch to the worker fleet failed: {error}",
-            )
-        finally:
-            with self._lock:
-                self._dispatching.discard(run_key)
-
-    def _dispatch(
-        self,
-        run_key: str,
-        runs_context: str,
-        request: IngestionRequest,
-    ) -> None:
-        """Hand a run to the pipeline control plane.
-
-        The staged request is what the fleet reads, so nothing about the work is
-        re-described here. If no control plane is configured the tier decision
-        would not have chosen dispatch, so reaching this without one is a
-        misconfiguration rather than a size problem, and it says so.
-        The staged request travels with the run rather than being re-described:
-        the control plane stages it alongside the sources, and the workers read
-        the same document an in-process resume would.
-        """
-        from unify.ingestion_manager.dispatch import dispatch_run
-
-        if not self._settings.resolved_pipeline_url():
-            raise RuntimeError(
-                "This run needs the worker fleet and no pipeline control plane is "
-                "reachable (neither UNIFY_INGESTION_PIPELINE_URL nor "
-                "UNIFY_COMMS_URL is set). Files are "
-                "always parsed off the assistant's process, so configure a control "
-                "plane or run the self-host worker services.",
-            )
-
-        paths = self._resolve_paths(request.source)
-        if not paths:
-            # The fleet's unit of work is a staged file, and publishing a
-            # dispatch with zero jobs succeeds while its status folds to
-            # `queued` forever. A source that stages no files cannot dispatch;
-            # refusing here turns an infinite hang into a run-row failure.
-            raise RuntimeError(
-                f"A {request.source.kind!r} source stages no files, and the "
-                "worker fleet only executes staged files. This run should have "
-                "been routed in process; submit it again.",
-            )
-
-        dispatch_id = dispatch_run(
-            base_url=self._settings.resolved_pipeline_url(),
-            run_key=run_key,
-            request=request,
-            request_key=f"jobs/{run_key}/request.json",
-            request_payload=request.model_dump(mode="json"),
-            paths=paths,
-            # Where the fleet should journal this run's events: the same two
-            # contexts an in-process run writes, so `get_status` reads one
-            # history whichever tier executed the work.
-            observability={
-                "run_key": run_key,
-                "runs_context": runs_context,
-                "events_context": self._write_table(
-                    EVENTS_TABLE,
-                    request.destination,
-                ),
-            },
-        )
-        self._update_run(run_key, runs_context, {"dispatch_id": dispatch_id})
-        self._record_event(
-            run_key,
-            destination=request.destination,
-            stage="parse",
-            state="queued",
-            message=f"Dispatched to the worker fleet as {dispatch_id}.",
-        )
-
     def _resolve_paths(self, source: Any) -> List[str]:
         """List the files a source names, walking a folder when it is one.
 
         A walk needs no parsing, so this is measurement rather than prediction --
-        it fixes the membership of the set the fleet will process, so a file added
+        it fixes the membership of the set the run will process, so a file added
         mid-run is not silently half-included.
         """
         if source.kind == "files":
@@ -1385,23 +1176,12 @@ class IngestionManager(BaseIngestionManager):
         staged request names the files, and per-file events carry state, rows
         and destination -- so this reads rather than measures.
 
-        On the in-process tier a file with no event yet is genuinely queued and
-        unclaimed: the same process writes those events, so their absence is
-        evidence. Unclaimed means waiting for capacity and claimed-but-
-        uncommitted means working, and collapsing the two is what made a starved
-        batch indistinguishable from a slow one.
-
-        On the dispatched tier absence of an event is **not** evidence -- the
-        fleet executes the work and does not write per-file events, so nothing
-        here measured the file at all. Those are reported ``observed=False``
-        with every measurement left unset, rather than as "queued": claiming a
-        file is waiting when nobody looked is the more expensive error of the
-        two, because it reads as a finding.
+        A file with no event yet is genuinely queued and unclaimed: the same
+        process writes those events, so their absence is evidence. Unclaimed
+        means waiting for capacity and claimed-but-uncommitted means working,
+        and collapsing the two is what made a starved batch indistinguishable
+        from a slow one.
         """
-        # A dispatched run's per-file truth lives with the fleet, which reports
-        # only aggregates back. Until it emits per-file events, the honest answer
-        # here is that these were not observed.
-        dispatched = bool(row.get("dispatch_id"))
         paths = [str(p) for p in (row.get("source_paths") or [])]
         attempts = self._attempt_states(str(row.get("run_key") or ""))
         by_path: Dict[str, Dict[str, Any]] = {}
@@ -1415,15 +1195,11 @@ class IngestionManager(BaseIngestionManager):
         progress: List[FileProgress] = []
         for path in paths or sorted(by_path):
             event = by_path.get(path) or {}
-            if not event and dispatched:
-                progress.append(FileProgress(path=path, observed=False))
-                continue
             rows_written = int(event.get("rows_written") or 0)
             has_event = bool(event)
             progress.append(
                 FileProgress(
                     path=path,
-                    observed=True,
                     state=str(  # type: ignore[arg-type]
                         event.get("state")
                         or ("queued" if not has_event else "running"),
@@ -1496,7 +1272,6 @@ class IngestionManager(BaseIngestionManager):
         if row is None:
             raise ValueError(f"No ingestion run {run_id!r}.")
 
-        row = self._fold_fleet_status(row, runs_context)
         events = self._events_for(row["run_key"])
         contexts = row.get("contexts") or []
         parked = int(row.get("parked") or 0)
@@ -1512,7 +1287,6 @@ class IngestionManager(BaseIngestionManager):
             run_id=str(row["run_key"]),
             state=state,  # type: ignore[arg-type]
             files=files,
-            executed_as=row.get("executed_as"),
             stages=stages_from_events(events, run_state=state),
             contexts=contexts,
             rows_written=int(row.get("rows_written") or 0),
@@ -1526,117 +1300,11 @@ class IngestionManager(BaseIngestionManager):
                 state=state,
                 parked=parked,
                 error=row.get("error"),
-                executed_as=row.get("executed_as"),
                 contexts=contexts,
                 files_claimed=sum(1 for f in files if f.claimed),
                 files_total=len(files) or None,
             ),
         )
-
-    def _fold_fleet_status(
-        self,
-        row: Dict[str, Any],
-        runs_context: str,
-    ) -> Dict[str, Any]:
-        """Reconcile a dispatched run's row with the fleet's view of it.
-
-        The workers own the truth about a dispatched run while it executes, and
-        nothing else updates the row -- so a read is the moment to reconcile.
-        The fleet's answer is advisory until terminal; a terminal answer is
-        written back so later reads need not ask again and `wait` can end.
-
-        An unreachable control plane leaves the row as it stands: a stale
-        answer that says so via `next_step` beats an exception on a read path.
-        """
-        dispatch_id = row.get("dispatch_id")
-        if row.get("state") in TERMINAL_STATES:
-            return row
-        if not dispatch_id:
-            if row.get("executed_as") != "dispatched":
-                return row
-            with self._lock:
-                still_dispatching = row["run_key"] in self._dispatching
-            if still_dispatching:
-                # Sources are still being staged and uploaded; the fleet has
-                # not heard of this run yet, and that is fine.
-                return row
-            # Uploads only run in the submitting process, so a dispatched row
-            # with no dispatch id and no upload in flight here was orphaned by
-            # its submitter dying before publish. No worker will ever pick it
-            # up; leaving it `queued` tells the caller to poll forever.
-            failed = dict(row)
-            failed["state"] = "failed"
-            failed["error"] = (
-                "The dispatch never reached the worker fleet (the submitting "
-                "process ended before the run was published). Nothing was "
-                "stored; submit again."
-            )
-            failed["finished_at"] = _now()
-            self._update_run(
-                row["run_key"],
-                runs_context,
-                {
-                    "state": failed["state"],
-                    "error": failed["error"],
-                    "finished_at": failed["finished_at"],
-                },
-            )
-            return failed
-        if not self._settings.resolved_pipeline_url():
-            return row
-
-        from unify.ingestion_manager.dispatch import fetch_status
-
-        try:
-            fleet = fetch_status(
-                base_url=self._settings.resolved_pipeline_url(),
-                dispatch_id=str(dispatch_id),
-            )
-        except Exception as error:  # noqa: BLE001 -- read path stays readable
-            logger.warning(
-                "Pipeline control plane unreachable for %s: %s",
-                dispatch_id,
-                error,
-            )
-            return row
-
-        state = fleet.get("state")
-        if not state or state == row.get("state"):
-            merged = dict(row)
-        else:
-            merged = dict(row)
-            merged["state"] = state
-        for field in ("rows_written", "files_processed", "parked"):
-            value = fleet.get(field)
-            if isinstance(value, int):
-                merged[field] = value
-        contexts = fleet.get("contexts")
-        if isinstance(contexts, list) and contexts:
-            merged["contexts"] = contexts
-        error_text = fleet.get("error")
-        if error_text:
-            merged["error"] = error_text
-
-        if merged.get("state") in TERMINAL_STATES:
-            merged.setdefault("finished_at", _now())
-            self._update_run(
-                row["run_key"],
-                runs_context,
-                {
-                    key: merged.get(key)
-                    for key in (
-                        "state",
-                        "rows_written",
-                        "files_processed",
-                        "parked",
-                        "contexts",
-                        "error",
-                        "finished_at",
-                    )
-                    if merged.get(key) is not None
-                },
-            )
-        return merged
 
     def _events_for(self, run_key: str) -> List[Dict[str, Any]]:
         """Read a run's events, paging until they are exhausted.
@@ -1811,13 +1479,11 @@ class IngestionManager(BaseIngestionManager):
             )
 
         request = self._load_request(row)
-        if only == "all" and not row.get("dispatch_id"):
+        if only == "all":
             # The checkpoints are what make a resume skip committed work, so
             # re-attempting everything means discarding them. Done explicitly
             # here rather than left implicit, because it is the one scope that
-            # rewrites rows that were already correct. A dispatched run's
-            # checkpoints live on the fleet's store; the control plane owns
-            # clearing those as part of the retry it serialises.
+            # rewrites rows that were already correct.
             #
             # Narrowed to the named files when there are any: the other
             # fourteen files' marks describe rows that committed correctly, and
@@ -1846,27 +1512,12 @@ class IngestionManager(BaseIngestionManager):
             state="queued",
         )
 
-        dispatch_id = row.get("dispatch_id")
-        if dispatch_id:
-            # Asked of the control plane rather than re-published from here: it
-            # owns the transition, so a retry cannot race a stale-recovery into
-            # two live attempts on one table.
-            from unify.ingestion_manager.dispatch import request_retry
-
-            request_retry(
-                base_url=self._require_pipeline_url(dispatch_id),
-                dispatch_id=dispatch_id,
-                scope=only,
-                files=list(targeted) or None,
-            )
-        else:
-            self._start(
-                row["run_key"],
-                runs_context,
-                request,
-                tier="inline",
-                declared=row.get("declared_rows"),
-            )
+        self._start(
+            row["run_key"],
+            runs_context,
+            request,
+            declared=row.get("declared_rows"),
+        )
 
         return RetryResult(
             run_id=run_id,
@@ -1949,23 +1600,6 @@ class IngestionManager(BaseIngestionManager):
                 ids.append(artifact_id)
         return ids
 
-    def _require_pipeline_url(self, dispatch_id: Any) -> str:
-        """The control plane URL, or a plain refusal when none is configured.
-
-        A dispatched run's work lives on the fleet, so a recovery verb without
-        a reachable control plane cannot act on it -- and an empty base URL
-        would otherwise surface as an obscure malformed-request error.
-        """
-        url = self._settings.resolved_pipeline_url()
-        if not url:
-            raise RuntimeError(
-                f"Run {dispatch_id} was dispatched to the worker fleet, but no "
-                "pipeline control plane is configured "
-                "reachable, so it cannot be "
-                "steered from here.",
-            )
-        return url
-
     @functools.wraps(BaseIngestionManager.cancel, updated=())
     def cancel(self, run_id: str) -> bool:
         return self._transition(run_id, "cancelled", "Cancelled by request.")
@@ -1990,66 +1624,38 @@ class IngestionManager(BaseIngestionManager):
             state="queued",
         )
 
-        dispatch_id = row.get("dispatch_id")
-        if dispatch_id:
-            from unify.ingestion_manager.dispatch import request_resume
-
-            request_resume(
-                base_url=self._require_pipeline_url(dispatch_id),
-                dispatch_id=dispatch_id,
-            )
-        else:
-            self._start(
-                row["run_key"],
-                runs_context,
-                request,
-                tier="inline",
-                declared=row.get("declared_rows"),
-            )
+        self._start(
+            row["run_key"],
+            runs_context,
+            request,
+            declared=row.get("declared_rows"),
+        )
         return True
 
     def _transition(self, run_id: str, state: str, message: str) -> bool:
-        """Move a live run to *state*, telling the fleet when it owns the work.
-
-        The run row is the record either way, but a dispatched run also has
-        messages in flight -- so recording the state without telling the control
-        plane would leave workers writing to a run the ledger calls cancelled.
-        """
+        """Move a live run to *state* through its control flags."""
         row, runs_context = self._find_run(run_id)
         if row is None or row.get("state") in TERMINAL_STATES:
             return False
         request = self._load_request(row)
 
-        dispatch_id = row.get("dispatch_id")
-        if dispatch_id:
-            from unify.ingestion_manager.dispatch import (
-                request_cancel,
-                request_pause,
-            )
-
-            ask = request_cancel if state == "cancelled" else request_pause
-            ask(
-                base_url=self._require_pipeline_url(dispatch_id),
-                dispatch_id=dispatch_id,
-            )
-        else:
-            if (
-                row.get("state") == "running"
-                and row.get("source_kind") in ("files", "folder")
-                and row.get("target_kind") == "collection"
-            ):
-                # The document pipeline has no chunk boundaries to stop at, so
-                # a running collection ingest cannot be steered mid-flight.
-                # Refusing is honest; recording "cancelled" while the work
-                # completes anyway would make the ledger lie either way.
-                return False
-            # An in-process run is steered through its control flags, checked
-            # between chunks. Cancel abandons the rest; pause surrenders at the
-            # checkpoint so resume() re-does at most one chunk.
-            with self._lock:
-                control = self._inline_control.get(row["run_key"])
-                if control is not None:
-                    control["cancel" if state == "cancelled" else "pause"] = True
+        if (
+            row.get("state") == "running"
+            and row.get("source_kind") in ("files", "folder")
+            and row.get("target_kind") == "collection"
+        ):
+            # The document pipeline has no chunk boundaries to stop at, so a
+            # running collection ingest cannot be steered mid-flight. Refusing
+            # is honest; recording "cancelled" while the work completes anyway
+            # would make the ledger lie either way.
+            return False
+        # A run is steered through its control flags, checked between chunks.
+        # Cancel abandons the rest; pause surrenders at the checkpoint so
+        # resume() re-does at most one chunk.
+        with self._lock:
+            control = self._inline_control.get(row["run_key"])
+            if control is not None:
+                control["cancel" if state == "cancelled" else "pause"] = True
 
         updates: Dict[str, Any] = {"state": state}
         if state == "cancelled":

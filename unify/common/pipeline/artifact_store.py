@@ -109,8 +109,7 @@ class ArtifactStore(Protocol):
     4. **Checkpoints** -- record committed progress monotonically, so a
        resumed attempt skips what already landed instead of duplicating it.
 
-    ``LocalArtifactStore`` implements all four on the filesystem; the hosted
-    deployment binds an object-store adapter with identical semantics.
+    ``LocalArtifactStore`` implements all four on the filesystem.
     """
 
     def materialize_table_input(

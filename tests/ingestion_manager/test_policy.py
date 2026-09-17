@@ -1,14 +1,9 @@
 """The decisions ingestion makes without asking anyone.
 
-Two of them are load-bearing and neither is visible in a result, which is why they
-are tested directly rather than through a run:
-
-* **Where a request runs.** Getting it wrong means either parsing a large file in
-  the assistant's own process, or paying queue latency for work that would have
-  finished sooner than the round trip.
-* **What a caller should do next.** A status that has to be interpreted eventually
-  is, and the two ways that goes wrong are a retry that duplicates data and a
-  failure nobody notices.
+The one that matters most is not visible in a result, which is why it is tested
+directly rather than through a run: **what a caller should do next.** A status
+that has to be interpreted eventually is, and the two ways that goes wrong are a
+retry that duplicates data and a failure nobody notices.
 
 The validation tests cover the refusals that prevent data loss rather than merely
 tidy input -- most sharply the collection name that could alias a file's own
@@ -20,27 +15,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from unify.ingestion_manager.policy import (
-    choose_tier,
-    next_step,
-    stages_from_events,
-)
-from unify.ingestion_manager.settings import IngestionSettings
+from unify.ingestion_manager.policy import next_step, stages_from_events
 from unify.ingestion_manager.types import (
     CollectionTarget,
     FilesSource,
-    FolderSource,
     IngestionRequest,
     RowsSource,
-    TableSource,
     TableTarget,
-)
-
-# A fleet is configured, so the tier decision is a real choice rather than the
-# single-option fallback. The ceiling is small so the tests read clearly.
-SETTINGS = IngestionSettings(
-    MAX_INLINE_ROWS=100,
-    PIPELINE_URL="https://comms.example/",
 )
 
 
@@ -51,92 +32,6 @@ def request(source, target=None) -> IngestionRequest:
     )
 
 
-class TestTierSelection:
-    def test_a_small_pull_stays_in_process(self):
-        # An API page or connected-app pull finishes faster than a queue round
-        # trip, and the next step in the plan usually wants it immediately.
-        assert (
-            choose_tier(request(RowsSource(rows=[{"a": 1}] * 10)), SETTINGS) == "inline"
-        )
-
-    def test_a_large_row_set_runs_in_process(self):
-        """Even past the ceiling, because the fleet cannot execute it.
-
-        The fleet's unit of work is a staged file: dispatching a rows source
-        publishes zero jobs, and a zero-job dispatch folds to `queued` forever.
-        A slow, checkpointed inline run beats an eternal hang; the ceiling
-        returns to routing the day a rows job type exists.
-        """
-        assert (
-            choose_tier(request(RowsSource(rows=[{"a": 1}] * 500)), SETTINGS)
-            == "inline"
-        )
-
-    @pytest.mark.parametrize(
-        "source",
-        [
-            FilesSource(paths=["one.pdf"]),
-            FilesSource(paths=["a.csv", "b.csv", "c.csv"]),
-            FolderSource(path="/exports", pattern="*.xlsx"),
-        ],
-    )
-    def test_files_always_dispatch(self, source):
-        """No file count runs in process, including a single file.
-
-        Parsing loads the file and its model into whatever process does it, and a
-        thread shares that process's memory limit -- so an overrun takes the
-        assistant down with the ingestion. There is also no number that predicts
-        the risk: bytes and count say nothing about page count or density. The
-        answer is therefore a boundary, not a threshold, and the boundary is the
-        process.
-        """
-        assert choose_tier(request(source), SETTINGS) == "dispatched"
-
-    def test_file_size_is_never_consulted(self, tmp_path):
-        # A large file and a small one take the same route, because size does not
-        # predict cost in either direction.
-        big = tmp_path / "big.csv"
-        big.write_bytes(b"x" * 4_000_000)
-        assert choose_tier(request(FilesSource(paths=[str(big)])), SETTINGS) == (
-            choose_tier(request(FilesSource(paths=["tiny.csv"])), SETTINGS)
-        )
-
-    def test_a_table_runs_in_process_whatever_its_count(self):
-        # Same reason as rows: a table source stages no file, so there is no
-        # job the fleet could run for it.
-        source = TableSource(context="Data/Source")
-        assert choose_tier(request(source), SETTINGS, row_count=10) == "inline"
-        assert choose_tier(request(source), SETTINGS, row_count=10_000) == "inline"
-        assert choose_tier(request(source), SETTINGS, row_count=None) == "inline"
-
-    def test_without_a_fleet_everything_runs_in_process(self):
-        """Safe rather than merely tolerated.
-
-        Both tiers write the same artifacts and checkpoints, so a run interrupted
-        here leaves progress in the layout a fleet reads -- one configured later
-        adopts it instead of starting over.
-        """
-        local = IngestionSettings(MAX_INLINE_ROWS=100, PIPELINE_URL="")
-        assert choose_tier(request(FilesSource(paths=["a.pdf"])), local) == "inline"
-        assert (
-            choose_tier(request(RowsSource(rows=[{"a": 1}] * 5000)), local) == "inline"
-        )
-
-    def test_the_caller_cannot_choose(self):
-        """There is no mode field to override the decision with.
-
-        Withheld on purpose: the choice follows a measurement and a deployment
-        fact, and offering a knob would invite a guess in the one direction that
-        hurts -- parsing a large file in the assistant's own process.
-        """
-        with pytest.raises(ValidationError):
-            IngestionRequest(
-                source=RowsSource(rows=[{"a": 1}]),
-                target=TableTarget(context="Data/Target"),
-                mode="inline",
-            )
-
-
 class TestNextStep:
     """Every state has to name a concrete action, including 'none'."""
 
@@ -145,7 +40,6 @@ class TestNextStep:
             state=state,
             parked=parked,
             error=error,
-            executed_as="inline",
             contexts=list(contexts),
         )
 
@@ -191,19 +85,11 @@ class TestNextStep:
         assert "get_status" in step
         assert "wait()" in step
 
-    def test_queued_says_where_it_will_run(self):
-        assert "in process" in next_step(
+    def test_queued_says_to_poll(self):
+        assert "get_status" in next_step(
             state="queued",
             parked=0,
             error=None,
-            executed_as="inline",
-            contexts=[],
-        )
-        assert "fleet" in next_step(
-            state="queued",
-            parked=0,
-            error=None,
-            executed_as="dispatched",
             contexts=[],
         )
 
@@ -365,41 +251,6 @@ class TestRequestValidation:
         # Reporting a successful run that stored nothing would hide the real fault.
         with pytest.raises(ValidationError, match="empty"):
             RowsSource(rows=[])
-
-
-class TestControlPlaneResolution:
-    """Where the control plane lives is resolved, not required to be configured.
-
-    The failure this prevents is silent and severe: a deployment that forgot a
-    second env var reads as "no fleet", so files parse inside the assistant's
-    own process -- the one boundary the tier rule exists to hold -- and the run
-    still reports success, so nothing surfaces it.
-    """
-
-    def test_an_explicit_override_wins(self, monkeypatch):
-        monkeypatch.setenv("UNIFY_INGESTION_PIPELINE_URL", "https://plane.example")
-        assert IngestionSettings().resolved_pipeline_url() == "https://plane.example"
-
-    def test_it_falls_back_to_the_communication_service(self, monkeypatch):
-        # The control plane is mounted on the comms app, so the URL the pod
-        # already has is the right answer rather than a second thing to set.
-        monkeypatch.delenv("UNIFY_INGESTION_PIPELINE_URL", raising=False)
-        from unify.settings import SETTINGS
-
-        monkeypatch.setattr(
-            SETTINGS.conversation,
-            "COMMS_URL",
-            "https://comms.example/",
-            raising=False,
-        )
-        assert IngestionSettings().resolved_pipeline_url() == "https://comms.example"
-
-    def test_neither_configured_means_no_fleet(self, monkeypatch):
-        monkeypatch.delenv("UNIFY_INGESTION_PIPELINE_URL", raising=False)
-        from unify.settings import SETTINGS
-
-        monkeypatch.setattr(SETTINGS.conversation, "COMMS_URL", "", raising=False)
-        assert IngestionSettings().resolved_pipeline_url() == ""
 
 
 class TestActorSurface:

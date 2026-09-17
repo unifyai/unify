@@ -5,8 +5,7 @@ over the primitives it calls, the classes of the compositional functions it
 depends on, and the third-party modules it imports. Every primitive in
 ``Functions/Primitives`` has an explicit entry in ``PRIMITIVE_EFFECT_CLASSES``;
 an unclassified name classifies as ``unsafe_effectful`` and is logged as an
-error so the gap is loud. Provider-backed integration primitives are
-classified from their ``action_class`` metadata.
+error so the gap is loud.
 """
 
 from __future__ import annotations
@@ -33,82 +32,9 @@ _S = SideEffectClass
 PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     # actor — a sub-agent may do anything
     "primitives.actor.act": _S.unsafe_effectful,
-    # canvas
-    "primitives.canvas.create_view": _S.unsafe_effectful,
-    "primitives.canvas.delete_view": _S.unsafe_effectful,
-    "primitives.canvas.get_view": _S.read_only,
-    "primitives.canvas.list_invocations": _S.read_only,
-    "primitives.canvas.list_views": _S.read_only,
-    "primitives.canvas.preview": _S.read_only,
-    "primitives.canvas.refresh_props": _S.idempotent_effectful,
-    "primitives.canvas.run_invocation": _S.unsafe_effectful,
-    "primitives.canvas.update_view": _S.idempotent_effectful,
-    # comms — every outbound send is irreversible
-    "primitives.comms.create_teams_channel": _S.unsafe_effectful,
-    "primitives.comms.create_teams_meet": _S.unsafe_effectful,
-    "primitives.comms.make_call": _S.unsafe_effectful,
-    "primitives.comms.make_whatsapp_call": _S.unsafe_effectful,
-    "primitives.comms.resume_inactivity_followups": _S.idempotent_effectful,
-    "primitives.comms.send_api_response": _S.unsafe_effectful,
-    "primitives.comms.send_discord_channel_message": _S.unsafe_effectful,
-    "primitives.comms.send_discord_message": _S.unsafe_effectful,
-    "primitives.comms.send_email": _S.unsafe_effectful,
-    "primitives.comms.send_ms_teams_bot_channel_message": _S.unsafe_effectful,
-    "primitives.comms.send_ms_teams_bot_message": _S.unsafe_effectful,
-    "primitives.comms.send_slack_channel_message": _S.unsafe_effectful,
-    "primitives.comms.send_slack_message": _S.unsafe_effectful,
-    "primitives.comms.send_sms": _S.unsafe_effectful,
-    "primitives.comms.send_teams_message": _S.unsafe_effectful,
-    "primitives.comms.send_unify_message": _S.unsafe_effectful,
-    "primitives.comms.send_whatsapp": _S.unsafe_effectful,
-    "primitives.comms.stop_inactivity_followups": _S.idempotent_effectful,
-    # computer — driving a desktop is unsafe; pure observation is read-only
-    "primitives.computer.act": _S.unsafe_effectful,
-    "primitives.computer.click": _S.unsafe_effectful,
-    "primitives.computer.close_tab": _S.unsafe_effectful,
-    "primitives.computer.double_click": _S.unsafe_effectful,
-    "primitives.computer.drag": _S.unsafe_effectful,
-    "primitives.computer.execute_actions": _S.unsafe_effectful,
-    "primitives.computer.get_content": _S.read_only,
-    "primitives.computer.get_links": _S.read_only,
-    "primitives.computer.get_screenshot": _S.read_only,
-    "primitives.computer.go_back": _S.unsafe_effectful,
-    "primitives.computer.navigate": _S.unsafe_effectful,
-    "primitives.computer.new_tab": _S.unsafe_effectful,
-    "primitives.computer.observe": _S.read_only,
-    "primitives.computer.press_backspace": _S.unsafe_effectful,
-    "primitives.computer.press_enter": _S.unsafe_effectful,
-    "primitives.computer.press_key": _S.unsafe_effectful,
-    "primitives.computer.press_tab": _S.unsafe_effectful,
-    "primitives.computer.query": _S.read_only,
-    "primitives.computer.right_click": _S.unsafe_effectful,
-    "primitives.computer.save_browser_state": _S.idempotent_effectful,
-    "primitives.computer.scroll": _S.unsafe_effectful,
-    "primitives.computer.select_all": _S.unsafe_effectful,
-    "primitives.computer.solve_captcha": _S.unsafe_effectful,
-    "primitives.computer.switch_tab": _S.unsafe_effectful,
-    "primitives.computer.type_text": _S.unsafe_effectful,
-    "primitives.computer.wait_for": _S.read_only,
     # contacts
     "primitives.contacts.ask": _S.read_only,
     "primitives.contacts.update": _S.unsafe_effectful,
-    # coordinator
-    "primitives.coordinator.add_team_member": _S.idempotent_effectful,
-    "primitives.coordinator.commission_colleague_into_team": _S.unsafe_effectful,
-    "primitives.coordinator.create_assistant": _S.unsafe_effectful,
-    "primitives.coordinator.create_team": _S.unsafe_effectful,
-    "primitives.coordinator.delegate_to_colleague": _S.unsafe_effectful,
-    "primitives.coordinator.delete_assistant": _S.unsafe_effectful,
-    "primitives.coordinator.delete_team": _S.unsafe_effectful,
-    "primitives.coordinator.invite_org_member": _S.unsafe_effectful,
-    "primitives.coordinator.list_assistants": _S.read_only,
-    "primitives.coordinator.list_org_members": _S.read_only,
-    "primitives.coordinator.list_team_members": _S.read_only,
-    "primitives.coordinator.list_teams": _S.read_only,
-    "primitives.coordinator.list_teams_for_assistant": _S.read_only,
-    "primitives.coordinator.remove_team_member": _S.idempotent_effectful,
-    "primitives.coordinator.update_assistant_config": _S.idempotent_effectful,
-    "primitives.coordinator.update_team": _S.idempotent_effectful,
     # data
     "primitives.data.claim": _S.unsafe_effectful,
     "primitives.data.create_column": _S.idempotent_effectful,
@@ -162,13 +88,6 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     "primitives.ingestion.retry": _S.idempotent_effectful,
     "primitives.ingestion.submit": _S.unsafe_effectful,
     "primitives.ingestion.wait": _S.read_only,
-    # integrations
-    "primitives.integrations.get_app_usage_mode": _S.read_only,
-    "primitives.integrations.resolve_tool_execution": _S.unsafe_effectful,
-    "primitives.integrations.review_tool_permissions": _S.read_only,
-    "primitives.integrations.search_integrations": _S.read_only,
-    "primitives.integrations.set_app_usage_mode": _S.idempotent_effectful,
-    "primitives.integrations.update_tool_permissions": _S.idempotent_effectful,
     # secrets
     "primitives.secrets.ask": _S.read_only,
     "primitives.secrets.update": _S.unsafe_effectful,
@@ -184,32 +103,6 @@ PRIMITIVE_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
     # a fetch reads the public internet but writes the bytes to a path derived
     # from the URL, so repeating it converges rather than accumulating
     "primitives.web.fetch": _S.idempotent_effectful,
-    # workspace email
-    "primitives.workspace_email.get_message": _S.read_only,
-    "primitives.workspace_email.list_messages": _S.read_only,
-    "primitives.workspace_email.search": _S.read_only,
-    "primitives.workspace_email.send": _S.unsafe_effectful,
-}
-
-# Provider-backed integration primitives carry ``action_class`` in metadata.
-INTEGRATION_ACTION_CLASS_EFFECTS: Dict[str, SideEffectClass] = {
-    "read": _S.read_only,
-    "write": _S.idempotent_effectful,
-    "destructive": _S.unsafe_effectful,
-    "bulk_export": _S.unsafe_effectful,
-}
-
-# Sub-namespaces that are not rows in ``Functions/Primitives`` (dynamic desktop
-# sessions such as ``primitives.computer.user_desktop.session()``): anything
-# under these prefixes that is not listed explicitly drives a desktop and is
-# unsafe. Integration tools resolve through their materialized rows instead.
-PRIMITIVE_PREFIX_EFFECT_CLASSES: Dict[str, SideEffectClass] = {
-    "primitives.computer.": _S.unsafe_effectful,
-}
-
-# ``computer_primitives.<method>`` is the legacy spelling of ``primitives.computer.<method>``.
-_LEGACY_NAMESPACE_ALIASES: Dict[str, str] = {
-    "computer_primitives": "primitives.computer",
 }
 
 # Third-party modules that are pure computation; anything else outside the
@@ -269,14 +162,6 @@ def _dotted_name(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _canonical_primitive_name(dotted: str) -> str:
-    root, _, rest = dotted.partition(".")
-    alias = _LEGACY_NAMESPACE_ALIASES.get(root)
-    if alias is not None:
-        return f"{alias}.{rest}" if rest else alias
-    return dotted
-
-
 def _open_writes(call: ast.Call) -> bool:
     """Return True for ``open(path, 'w'|'a'|'x'|'+…')`` calls."""
     if not (isinstance(call.func, ast.Name) and call.func.id == "open"):
@@ -299,30 +184,13 @@ def primitive_effect_class(
 ) -> Optional[SideEffectClass]:
     """Return the effect class of one primitive, or None when unclassified.
 
-    ``primitive_rows`` (name -> row) lets provider-backed integration rows be
-    classified from their ``action_class`` metadata.
+    ``primitive_rows`` (name -> row) covers materialized primitive rows that
+    are not in the static table; such a row is unknown ground.
     """
-    canonical = _canonical_primitive_name(name)
-    if canonical in PRIMITIVE_EFFECT_CLASSES:
-        return PRIMITIVE_EFFECT_CLASSES[canonical]
-    row = (primitive_rows or {}).get(canonical) or (primitive_rows or {}).get(name)
-    if row is not None:
-        metadata = row.get("metadata") or {}
-        if isinstance(metadata, dict):
-            action_class = metadata.get("action_class")
-            if action_class is None and isinstance(metadata.get("provider"), dict):
-                action_class = metadata["provider"].get("action_class")
-            if action_class in INTEGRATION_ACTION_CLASS_EFFECTS:
-                return INTEGRATION_ACTION_CLASS_EFFECTS[action_class]
-        # A materialized primitive row with no usable action_class is unknown ground.
+    if name in PRIMITIVE_EFFECT_CLASSES:
+        return PRIMITIVE_EFFECT_CLASSES[name]
+    if (primitive_rows or {}).get(name) is not None:
         return _S.unsafe_effectful
-    if canonical.startswith("primitives.integrations."):
-        # A provider tool that has not been materialized locally: no action_class
-        # is available, so the bound is the safe one.
-        return _S.unsafe_effectful
-    for prefix, klass in PRIMITIVE_PREFIX_EFFECT_CLASSES.items():
-        if canonical.startswith(prefix):
-            return klass
     return None
 
 
@@ -345,7 +213,7 @@ def classify_source(
     if not isinstance(fn_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         raise ValueError("classify_source expects a single top-level function.")
 
-    namespaces = set(environment_namespaces) | set(_LEGACY_NAMESPACE_ALIASES)
+    namespaces = set(environment_namespaces)
     deps = collect_dependencies_from_function_node(
         fn_node,
         set(known_function_names),

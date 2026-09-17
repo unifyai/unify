@@ -1,17 +1,4 @@
-"""Settings for IngestionManager.
-
-Deliberately small. An earlier shape carried thresholds for file count and for
-how long an in-process run was allowed to take, and both were unsound: what a
-file costs to parse is unknowable before parsing it, so any number derived from
-count or bytes misroutes work in both directions -- a 40 KB PDF can be hundreds
-of dense pages and a 12 MB spreadsheet one sheet of images.
-
-What remains is a single row ceiling, and it is legitimate for a reason the file
-thresholds were not: a row count is *measured*, exactly and cheaply, before
-anything runs. Rows in hand are counted directly; rows in a context are counted
-by one server-side aggregate. Deciding on a measurement is sound; deciding on a
-prediction is not.
-"""
+"""Settings for IngestionManager."""
 
 from __future__ import annotations
 
@@ -28,47 +15,13 @@ class IngestionSettings(BaseSettings):
 
     IMPL: str = "real"
 
-    # Explicit override for the pipeline control plane's base URL. Normally
-    # unset: the control plane is mounted on the communication service this
-    # deployment already talks to, so `resolved_pipeline_url` falls back to that
-    # rather than requiring a second variable to be set in lockstep. Requiring
-    # one was a real hazard -- a hosted pod missing it reads as "no fleet" and
-    # parses files in the assistant's own process, which is the one thing the
-    # tier rule exists to prevent, and it fails silently by doing the work.
-    PIPELINE_URL: str = ""
-
-    def resolved_pipeline_url(self) -> str:
-        """Base URL of the control plane, or empty when there is genuinely none.
-
-        Empty means no fleet is reachable and every run executes in process --
-        safe rather than merely tolerable, because both tiers write the same
-        artifacts and checkpoints, so a fleet configured later adopts whatever
-        an interrupted local run left behind.
-        """
-        if self.PIPELINE_URL:
-            return self.PIPELINE_URL
-        # Imported lazily: the root settings module imports this one.
-        from unify.settings import SETTINGS
-
-        return (SETTINGS.conversation.COMMS_URL or "").rstrip("/")
-
-    # Row count at or below which a rows or table source would run in process
-    # once the fleet can execute rows work at all. Not consulted by the tier
-    # decision today: the fleet's unit of work is a staged file, so rows and
-    # tables always run in process -- see ``policy.choose_tier``. Kept because
-    # it names the latency boundary a rows job type will restore, and reverting
-    # to routing on it must not require rediscovering the number.
-    MAX_INLINE_ROWS: int = 10_000
-
-    # Threads draining the in-process queue. Small on purpose: in-process work
-    # exists for latency, not throughput, and a deep pool would let a burst of
-    # submissions contend with the assistant it shares a process with.
+    # Threads draining the run queue. Small on purpose: a deep pool would let a
+    # burst of submissions contend with the assistant it shares a process with.
     INLINE_WORKERS: int = 2
 
-    # Rows per page when reading runs or events back. The backend caps a single
-    # read at 1000, so this is a page size and never a total: reads past it
-    # continue by offset rather than truncating, which would silently under-report
-    # a long run's history.
+    # Rows per page when reading runs or events back. This is a page size and
+    # never a total: reads past it continue by offset rather than truncating,
+    # which would silently under-report a long run's history.
     EVENTS_PAGE_SIZE: int = 1_000
 
     # How long a worker holds a unit of work before its lease may be taken over,

@@ -13,24 +13,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from unify.common._async_tool.utils import get_handle_paused_state
 from unify.common.prompt_helpers import get_assistant_timezone
 from unify.common.startup_timing import log_startup_timing
 from unify.conversation_manager.domains.contact_index import (
-    ApiMessage,
-    Message,
-    EmailMessage,
     UnifyMessage,
-    WhatsAppMessage,
-    SlackMessage,
-    SlackChannelMessage,
-    DiscordChannelMessage,
-    TeamsMessage,
-    TeamsChannelMessage,
-    MsTeamsBotMessage,
-    MsTeamsBotChannelMessage,
     GuidanceMessage,
     ConversationState,
     ContactIndex,
@@ -43,11 +32,7 @@ from unify.conversation_manager.task_actions import (
     iter_steering_tools_for_completed_action,
 )
 from unify.logger import LOGGER
-from unify.session_details import SESSION_DETAILS, is_boss_contact
-
-if TYPE_CHECKING:
-    pass
-
+from unify.session_details import is_boss_contact
 
 # =============================================================================
 # Timezone Helpers for Participant Awareness
@@ -109,54 +94,6 @@ def _get_current_time_in_timezone(tz_name: str) -> str:
         success,
     )
     return result
-
-
-def _room_addressing_clause(mentions: list[dict] | None) -> str:
-    """Who a room message named, said from this assistant's point of view.
-
-    A room delivers every message to every member assistant, so "was I asked, or
-    was someone else?" decides whether this one should answer. Two things make
-    that easy to get wrong, and both have:
-
-    * **Say "me", not my name.** A bare list of names leaves the reader to work
-      out which entry is itself, and an assistant that reads its own name as a
-      teammate's stands down from a message addressed straight at it. Identity
-      is matched on the mention's ``id``, never its display name, because two
-      teammates may share a name and a string match would recreate the same
-      confusion it is here to remove.
-    * **Say nothing when nothing is known.** An empty list is not evidence that
-      nobody was addressed — it also means the sender typed the ``@`` by hand
-      rather than picking from autocomplete. Asserting "nobody addressed by
-      name" on that turns a missing signal into a false negative, which reads as
-      permission to stay quiet.
-    """
-    own_agent_id = str(SESSION_DETAILS.assistant.agent_id or "")
-    names: list[str] = []
-    addressed_self = False
-
-    for mention in mentions or []:
-        if not isinstance(mention, dict):
-            continue
-        mention_id = str(mention.get("id") or "")
-        if (
-            mention.get("kind") == "assistant"
-            and own_agent_id
-            and mention_id == own_agent_id
-        ):
-            addressed_self = True
-            continue
-        name = str(mention.get("name") or "").strip()
-        if name:
-            names.append(name)
-
-    if addressed_self and names:
-        return f" addressed to me and {', '.join(names)};"
-    if addressed_self:
-        return " addressed to me;"
-    if names:
-        return f" addressed to {', '.join(names)} (not me);"
-    # Nothing known about addressing: leave the clause out entirely.
-    return ""
 
 
 def _format_timezone_block(
@@ -309,7 +246,7 @@ def _get_message_timezone_block(
     contact_timezone: str | None,
     assistant_timezone: str | None,
 ) -> str | None:
-    """Get timezone block for a simple message (SMS, phone, Unify).
+    """Get the timezone block for a chat message.
 
     Args:
         contact_name: Name of the contact
@@ -323,118 +260,6 @@ def _get_message_timezone_block(
         assistant_tz=assistant_timezone,
         participants=[(contact_name, contact_timezone)],
     )
-
-
-def _get_email_timezone_block(
-    message: "EmailMessage",
-    contact_index: "ContactIndex | None",
-    assistant_timezone: str | None,
-) -> str | None:
-    """Get timezone block for an email message.
-
-    Looks up all recipients and groups by timezone.
-
-    Args:
-        message: The email message with to/cc/bcc recipients
-        contact_index: ContactIndex for looking up contacts by email
-        assistant_timezone: Assistant's timezone or None
-
-    Returns:
-        Formatted timezone block or None
-    """
-    _timing_t0 = perf_counter()
-    if contact_index is None:
-        log_startup_timing(
-            LOGGER,
-            "⏱️ [StartupTiming] timezone.email_block.detail total=%.0fms no_contact_index=True",
-            (perf_counter() - _timing_t0) * 1000,
-        )
-        return None
-
-    # Collect all participant emails
-    _collect_t0 = perf_counter()
-    all_emails: list[str] = []
-    all_emails.extend(message.to or [])
-    all_emails.extend(message.cc or [])
-    all_emails.extend(message.bcc or [])
-    _collect_ms = (perf_counter() - _collect_t0) * 1000
-
-    if not all_emails:
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] timezone.email_block.detail "
-                "total=%.0fms collect=%.0fms lookup_contacts=0ms format_block=0ms "
-                "emails=0 unique=0 contacts_found=0 rendered=False"
-            ),
-            (perf_counter() - _timing_t0) * 1000,
-            _collect_ms,
-        )
-        return None
-
-    # Look up each contact and build participants list
-    participants: list[tuple[str, str | None]] = []
-    seen_emails: set[str] = set()
-    contacts_found = 0
-
-    _lookup_t0 = perf_counter()
-    for email in all_emails:
-        if email.lower() in seen_emails:
-            continue
-        seen_emails.add(email.lower())
-
-        contact = contact_index.get_contact(email=email)
-        if contact:
-            contacts_found += 1
-            first_name = contact.get("first_name") or ""
-            surname = contact.get("surname") or ""
-            name = f"{first_name} {surname}".strip() or email
-            tz = contact.get("timezone")
-            participants.append((name, tz))
-        else:
-            participants.append((email, None))
-    _lookup_ms = (perf_counter() - _lookup_t0) * 1000
-
-    if not participants:
-        log_startup_timing(
-            LOGGER,
-            (
-                "⏱️ [StartupTiming] timezone.email_block.detail "
-                "total=%.0fms collect=%.0fms lookup_contacts=%.0fms "
-                "format_block=0ms emails=%d unique=%d contacts_found=%d rendered=False"
-            ),
-            (perf_counter() - _timing_t0) * 1000,
-            _collect_ms,
-            _lookup_ms,
-            len(all_emails),
-            len(seen_emails),
-            contacts_found,
-        )
-        return None
-
-    _format_t0 = perf_counter()
-    rendered = _format_timezone_block(
-        assistant_tz=assistant_timezone,
-        participants=participants,
-    )
-    _format_ms = (perf_counter() - _format_t0) * 1000
-    log_startup_timing(
-        LOGGER,
-        (
-            "⏱️ [StartupTiming] timezone.email_block.detail "
-            "total=%.0fms collect=%.0fms lookup_contacts=%.0fms "
-            "format_block=%.0fms emails=%d unique=%d contacts_found=%d rendered=%s"
-        ),
-        (perf_counter() - _timing_t0) * 1000,
-        _collect_ms,
-        _lookup_ms,
-        _format_ms,
-        len(all_emails),
-        len(seen_emails),
-        contacts_found,
-        rendered is not None,
-    )
-    return rendered
 
 
 # =============================================================================
@@ -602,34 +427,17 @@ def compute_snapshot_diff(
     return "\n\n".join(diff_parts)
 
 
-def _get_assistant_email_role(message: EmailMessage) -> str | None:
+def _attachment_detail(att: Any) -> str:
+    """One attachment as ``filename (filepath)``.
+
+    Attachments are local files whichever direction they travelled, so the
+    path is what the Actor needs to open one.
     """
-    Determine the assistant's role in an email (To, Cc, Bcc, or sender).
-
-    Returns a human-readable description of the assistant's role, or None
-    if the assistant's email is not found in any field.
-    """
-    assistant_email = SESSION_DETAILS.assistant.email
-    if not assistant_email:
-        return None
-
-    # Normalize for comparison (lowercase)
-    assistant_email_lower = assistant_email.lower()
-
-    # Check if assistant sent this email
-    if message.role == "assistant":
-        return "You sent this email"
-
-    # Check recipient fields for incoming emails
-    if any(email.lower() == assistant_email_lower for email in (message.to or [])):
-        return "You were a direct recipient (To)"
-    if any(email.lower() == assistant_email_lower for email in (message.cc or [])):
-        return "You were CC'd"
-    if any(email.lower() == assistant_email_lower for email in (message.bcc or [])):
-        return "You were BCC'd"
-
-    # Assistant not found in any field (possible for forwarded emails, etc.)
-    return None
+    if isinstance(att, dict):
+        fname = att.get("filename") or "attachment"
+        fpath = att.get("filepath")
+        return f"{fname} ({fpath})" if fpath else str(fname)
+    return str(att)
 
 
 class Renderer:
@@ -647,20 +455,6 @@ class Renderer:
         max_action_history_events: int = 20,
         max_completed_actions: int = 20,
         max_completed_action_history_events: int = 5,
-        assistant_screen_share_active: bool = False,
-        user_screen_share_active: bool = False,
-        user_webcam_active: bool = False,
-        user_remote_control_active: bool = False,
-        google_meet_active: bool = False,
-        teams_meet_active: bool = False,
-        meet_screen_share_active: bool = False,
-        active_web_sessions: list | None = None,
-        managers_initialized: bool = True,
-        vm_ready: bool = True,
-        file_sync_complete: bool = True,
-        has_desktop: bool = False,
-        console_open: bool = False,
-        console_action_catalogue: str = "",
     ) -> SnapshotState:
         """Render the full conversation state.
 
@@ -682,30 +476,6 @@ class Renderer:
         message_elements: list[MessageElement] = []
         notification_elements: list[NotificationElement] = []
         action_elements: list[ActionElement] = []
-
-        infra_render = self.render_infrastructure_state(
-            managers_initialized=managers_initialized,
-            vm_ready=vm_ready,
-            file_sync_complete=file_sync_complete,
-            has_desktop=has_desktop,
-        )
-        _infra_ms = _mark_step()
-
-        meet_render = self.render_meet_interaction_state(
-            assistant_screen_share_active=assistant_screen_share_active,
-            user_screen_share_active=user_screen_share_active,
-            user_webcam_active=user_webcam_active,
-            user_remote_control_active=user_remote_control_active,
-            google_meet_active=google_meet_active,
-            teams_meet_active=teams_meet_active,
-            meet_screen_share_active=meet_screen_share_active,
-        )
-        _meet_ms = _mark_step()
-
-        web_sessions_render = self.render_active_web_sessions(
-            active_web_sessions or [],
-        )
-        _web_sessions_ms = _mark_step()
 
         notif_render = self.render_notification_bar(
             notification_bar,
@@ -737,31 +507,19 @@ class Renderer:
         )
         _conversations_ms = _mark_step()
 
-        console_render = self.render_console_state(
-            console_open=console_open,
-            console_action_catalogue=console_action_catalogue,
-        )
-
         # The wall clock closes the snapshot rather than living in the system
         # prompt: a minute rollover then only re-tokenizes the snapshot tail
         # instead of invalidating the provider's system+tools cache.
         time_render = f"Current time: {prompt_now()}."
 
-        # The console pane sits late for the same reason the clock sits last:
-        # both flip with per-turn state, and churn near the end of the
-        # snapshot re-tokenizes the fewest trailing tokens.
         sections = [
             s
             for s in [
-                infra_render,
-                meet_render,
-                web_sessions_render,
                 notif_render,
                 actions_render,
                 completed_render,
                 recent_tools_render,
                 convs_render,
-                console_render,
                 time_render,
             ]
             if s
@@ -782,15 +540,12 @@ class Renderer:
             LOGGER,
             (
                 "⏱️ [StartupTiming] llm_preamble.render_state.detail "
-                "total=%.0fms infra=%.0fms meet=%.0fms web_sessions=%.0fms "
-                "notifications=%.0fms in_flight=%.0fms completed=%.0fms "
-                "conversations=%.0fms join=%.0fms snapshot=%.0fms "
-                "chars=%d messages=%d notifications_count=%d actions=%d sections=%d"
+                "total=%.0fms notifications=%.0fms in_flight=%.0fms "
+                "completed=%.0fms conversations=%.0fms join=%.0fms "
+                "snapshot=%.0fms chars=%d messages=%d notifications_count=%d "
+                "actions=%d sections=%d"
             ),
             (perf_counter() - _render_t0) * 1000,
-            _infra_ms,
-            _meet_ms,
-            _web_sessions_ms,
             _notifications_ms,
             _in_flight_ms,
             _completed_ms,
@@ -805,240 +560,6 @@ class Renderer:
         )
 
         return snapshot_state
-
-    @staticmethod
-    def render_console_state(
-        *,
-        console_open: bool,
-        console_action_catalogue: str,
-    ) -> str:
-        """Render Console presence and, while it is open, its navigation targets.
-
-        This pane is the live half of the console contract: the orientation
-        text stays in the system prompt for the whole session (blanking it
-        with presence would wipe the provider's all-or-nothing system+tools
-        cache — see ``ConversationManager.console_guidance``), so whether
-        ``show_in_console`` would land right now is answered here instead.
-
-        The pane renders only while a catalogue is published: open renders
-        the drivable targets, closed renders a one-line notice. No catalogue
-        — a session the Console never joined, or a Console that publishes an
-        empty catalogue because navigation is disallowed — renders no pane,
-        and ``show_in_console`` answers with a corrective error either way.
-        """
-        if not console_action_catalogue:
-            return ""
-        if not console_open:
-            return (
-                "<console status='closed'>\n"
-                "The user's Console is closed right now — `show_in_console` "
-                "would return an error instead of moving anything. Do not "
-                "offer to show pages until this pane reads open again.\n"
-                "</console>"
-            )
-        return (
-            "<console status='open'>\n"
-            "The user has the Console open — `show_in_console` can move it "
-            "right now.\n\n"
-            f"{console_action_catalogue}\n"
-            "</console>"
-        )
-
-    @staticmethod
-    def render_infrastructure_state(
-        *,
-        managers_initialized: bool = True,
-        vm_ready: bool,
-        file_sync_complete: bool,
-        has_desktop: bool,
-    ) -> str:
-        """Render pending infrastructure state (init, VM boot, filesystem sync).
-
-        Returns XML sections only while the relevant subsystem is still
-        initialising.  Once everything is ready, returns an empty string
-        so the snapshot is not cluttered.
-        """
-        parts: list[str] = []
-
-        if not managers_initialized:
-            parts.append(
-                "<infrastructure status='initializing'>\n"
-                "Your system is still initializing. Complex actions (act, "
-                "contact queries, transcript queries) are not available yet — "
-                "these tools will appear once initialization completes. "
-                "Conversation history from previous sessions is also still "
-                "loading; messages above may only reflect the current session. "
-                "If the user sends a message, acknowledge it promptly and "
-                "respond as best you can with the context available. "
-                "You will receive a notification once initialization is "
-                "complete, at which point you will have full conversation "
-                "history and all tools. Use that turn to review your earlier "
-                "responses and follow up — correct, elaborate, or confirm "
-                "as needed.\n"
-                "</infrastructure>",
-            )
-
-        if not has_desktop:
-            return "\n".join(parts)
-
-        if not vm_ready:
-            meet_note = (
-                ""
-                if SESSION_DETAILS.is_private_coordinator
-                else "Note: join_google_meet and join_teams_meet do NOT depend "
-                "on the desktop VM — they use a local browser and are "
-                "available immediately.\n"
-            )
-            parts.append(
-                "<infrastructure status='vm_pending'>\n"
-                "Your managed desktop VM is still booting. Computer actions "
-                "(desktop_act, web_act, screenshot, etc.) are not available "
-                "yet. Do not attempt computer actions until you receive a "
-                "notification that the VM is ready. If a user asks you to do "
-                "something on the computer, let them know you will action it "
-                f"in just a moment.\n{meet_note}"
-                "</infrastructure>",
-            )
-
-        if not file_sync_complete:
-            parts.append(
-                "<infrastructure status='sync_pending'>\n"
-                "Your local filesystem is being synced from persistent "
-                "storage. Files from previous sessions (Attachments/, "
-                "functions/, downloaded files, etc.) DO NOT EXIST on disk "
-                "yet — any attempt to open, read, or reference them will "
-                "fail. You MUST wait for the sync-complete notification "
-                "before performing any file operations. If the user asks "
-                "about a file, tell them your files are still loading and "
-                "you will get to it once they've finished syncing, and then "
-                "wait for the explicit notification that the files have "
-                "synced before proceeding with any action.\n"
-                "</infrastructure>",
-            )
-
-        return "\n".join(parts)
-
-    @staticmethod
-    def render_meet_interaction_state(
-        *,
-        assistant_screen_share_active: bool = False,
-        user_screen_share_active: bool = False,
-        user_webcam_active: bool = False,
-        user_remote_control_active: bool = False,
-        google_meet_active: bool = False,
-        teams_meet_active: bool = False,
-        meet_screen_share_active: bool = False,
-    ) -> str:
-        """Render active meet interaction states as top-level sections.
-
-        Each active state gets its own prominent, self-contained XML section
-        with clear context explaining what is happening and what it means.
-        Inactive states produce no output — no clutter for text-only sessions.
-
-        The browser-meeting block is the exception that does render when
-        inactive: "nobody is sharing" is worth saying out loud, because silence
-        there was read as "the last screen I saw is still up".
-        """
-        parts: list[str] = []
-
-        if assistant_screen_share_active:
-            parts.append(
-                "<assistant_screen_share status='active'>\n"
-                "Your desktop is currently being shared with the user — they "
-                "can see everything on your screen in real time. Any actions "
-                "you take (navigation, typing, file operations) are visible "
-                "to the user as you perform them.\n"
-                "</assistant_screen_share>",
-            )
-
-        if user_screen_share_active:
-            parts.append(
-                "<user_screen_share status='active'>\n"
-                "The user is currently sharing their screen with you. You can "
-                "see what they are looking at. If they reference something on "
-                "their screen or ask for help with what they see, you have "
-                "visual context available.\n"
-                "</user_screen_share>",
-            )
-
-        if user_webcam_active:
-            parts.append(
-                "<user_webcam status='active'>\n"
-                "The user's webcam is currently on. You can see them via "
-                "captured frames paired with their speech. If they reference "
-                "their appearance or something visible on camera, you have "
-                "visual context available.\n"
-                "</user_webcam>",
-            )
-
-        if user_remote_control_active:
-            parts.append(
-                "<user_remote_control status='active'>\n"
-                "The user currently has remote control of your desktop — they "
-                "are operating your mouse and keyboard directly. Do not "
-                "perform any computer actions that would conflict with or "
-                "interrupt the user's input. Wait for them to release control "
-                "before resuming desktop operations.\n"
-                "</user_remote_control>",
-            )
-
-        # Driven by whether a share is actually up, never by the meeting being in
-        # progress. The previous block was emitted for the whole meeting under the
-        # name ``google_meet_visual status='active'``, and a status attribute in a
-        # block named after a visual outvotes any amount of conditional prose
-        # inside it: the assistant went on describing the last screen it had seen
-        # long after the presenter stopped.
-        if google_meet_active or teams_meet_active:
-            platform = "Google Meet" if google_meet_active else "Microsoft Teams"
-            if meet_screen_share_active:
-                parts.append(
-                    "<meet_shared_screen status='live'>\n"
-                    f"Someone in the {platform} meeting is sharing their screen "
-                    "right now, and snapshots of it are attached to this state, "
-                    "labelled with whose screen it is. What you see is the "
-                    "sharer's own machine -- not yours, and not the meeting's "
-                    "gallery view, so you cannot see participants' faces or the "
-                    "meeting UI.\n"
-                    "</meet_shared_screen>",
-                )
-            else:
-                parts.append(
-                    "<meet_shared_screen status='none'>\n"
-                    f"Nobody in the {platform} meeting is sharing a screen. I "
-                    "cannot see anything. If a screen was shared earlier, what I "
-                    "saw is history -- I do not describe it as though it were "
-                    "still up, and I say plainly that nothing is being shared if "
-                    "asked.\n"
-                    "</meet_shared_screen>",
-                )
-
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def render_active_web_sessions(web_sessions: list) -> str:
-        """Render active visible web sessions for the slow brain snapshot.
-
-        Accepts either a list of ``WebSessionHandle`` objects (backward compat)
-        or a list of metadata dicts from ``list_sessions_with_metadata``.
-        Only produces output when there are active sessions to show.
-        """
-        if not web_sessions:
-            return ""
-        lines = ["<active_web_sessions>"]
-        for entry in web_sessions:
-            if isinstance(entry, dict):
-                sid = entry.get("session_id", "?")
-                label = entry.get("label", "")
-                url = entry.get("url", "")
-                lines.append(
-                    f'  <session id="{sid}" label="{label}" url="{url}" />',
-                )
-            else:
-                sid = getattr(entry, "session_id", "?")
-                label = getattr(entry, "label", "")
-                lines.append(f'  <session id="{sid}" label="{label}" />')
-        lines.append("</active_web_sessions>")
-        return "\n".join(lines)
 
     def render_notification_bar(
         self,
@@ -1078,7 +599,7 @@ class Renderer:
                     ),
                 )
 
-        return f"<notifications>\n" + "\n".join(rendered_lines) + "\n</notifications>"
+        return "<notifications>\n" + "\n".join(rendered_lines) + "\n</notifications>"
 
     @staticmethod
     def _render_action_history(
@@ -1237,7 +758,7 @@ class Renderer:
         """Render active conversations derived from the shared global thread.
 
         Only contacts with messages in the global thread are rendered. Per-contact
-        and per-medium views are derived from the shared deque at render time.
+        views are derived from the shared deque at render time.
         """
         _render_t0 = perf_counter()
         # Fetch assistant's timezone once for all contacts
@@ -1261,7 +782,6 @@ class Renderer:
                 max_contact_medium_messages=max_contact_medium_messages,
                 last_snapshot=last_snapshot,
                 elements_out=elements_out,
-                contact_index=contact_index,
                 assistant_timezone=assistant_timezone,
             )
             contacts.append(rendered)
@@ -1301,13 +821,12 @@ class Renderer:
         max_contact_medium_messages: int = 25,
         last_snapshot: datetime = None,
         elements_out: list[MessageElement] | None = None,
-        contact_index: ContactIndex | None = None,
         assistant_timezone: str | None = None,
     ) -> str:
         """Render a single contact's conversation.
 
-        The global thread view is the full list of entries. Per-medium views
-        are derived by grouping entries by medium and capping each.
+        Entries are grouped by medium and each medium's thread is capped, so
+        the contact block reads as one thread per medium the contact used.
         """
         _contact_t0 = perf_counter()
         contact_id = conv_state.contact_id
@@ -1315,7 +834,6 @@ class Renderer:
         surname = contact_info.get("surname") or ""
         phone_number = contact_info.get("phone_number") or ""
         email_address = contact_info.get("email_address") or ""
-        discord_id = contact_info.get("discord_id") or ""
         timezone = contact_info.get("timezone") or ""
         bio = contact_info.get("bio") or ""
         rolling_summary = contact_info.get("rolling_summary") or ""
@@ -1331,26 +849,6 @@ class Renderer:
             entries = []
         _metadata_ms = (perf_counter() - _contact_t0) * 1000
 
-        # Global thread: all messages for this contact (already capped by deque size)
-        _global_t0 = perf_counter()
-        all_messages = [e.message for e in entries]
-        global_thread = ""
-        if all_messages:
-            global_thread = self.render_thread(
-                "global",
-                all_messages,
-                contact_id=contact_id,
-                max_messages=len(all_messages),
-                last_snapshot=last_snapshot,
-                elements_out=elements_out,
-                contact_index=contact_index,
-                contact_name=contact_name,
-                contact_timezone=contact_timezone,
-                assistant_timezone=assistant_timezone,
-            )
-        _global_ms = (perf_counter() - _global_t0) * 1000
-
-        # Per-medium threads: group entries by medium, cap each
         _medium_group_t0 = perf_counter()
         medium_messages: dict[str, list] = {}
         for entry in entries:
@@ -1361,7 +859,7 @@ class Renderer:
         _medium_group_ms = (perf_counter() - _medium_group_t0) * 1000
 
         _medium_render_t0 = perf_counter()
-        per_medium_threads = "\n\n".join(
+        threads_content = "\n\n".join(
             self.render_thread(
                 medium_name,
                 msgs,
@@ -1369,7 +867,6 @@ class Renderer:
                 max_messages=max_contact_medium_messages,
                 last_snapshot=last_snapshot,
                 elements_out=elements_out,
-                contact_index=contact_index,
                 contact_name=contact_name,
                 contact_timezone=contact_timezone,
                 assistant_timezone=assistant_timezone,
@@ -1379,16 +876,10 @@ class Renderer:
         )
         _medium_render_ms = (perf_counter() - _medium_render_t0) * 1000
         _join_t0 = perf_counter()
-        threads_content = (
-            f"{global_thread}\n\n{per_medium_threads}"
-            if global_thread
-            else per_medium_threads
-        )
         rendered = (
             f'<contact contact_id="{contact_id}" first_name="{first_name}" surname="{surname}" '
             f'is_boss="{is_boss}" phone_number="{phone_number}" email_address="{email_address}" '
-            f'discord_id="{discord_id}" '
-            f'timezone="{timezone}" on_call="{conv_state.on_call}" should_respond="{should_respond}">\n'
+            f'timezone="{timezone}" should_respond="{should_respond}">\n'
             f"<bio>{bio}</bio>\n"
             f"<rolling_summary>{rolling_summary}</rolling_summary>\n"
             f"<response_policy>{response_policy}</response_policy>\n"
@@ -1401,19 +892,17 @@ class Renderer:
             LOGGER,
             (
                 "⏱️ [StartupTiming] llm_preamble.render_state.contact "
-                "contact_id=%s total=%.0fms metadata=%.0fms global=%.0fms "
+                "contact_id=%s total=%.0fms metadata=%.0fms "
                 "medium_group=%.0fms medium_render=%.0fms format=%.0fms "
-                "entries=%d global_messages=%d mediums=%d chars=%d"
+                "entries=%d mediums=%d chars=%d"
             ),
             contact_id,
             (perf_counter() - _contact_t0) * 1000,
             _metadata_ms,
-            _global_ms,
             _medium_group_ms,
             _medium_render_ms,
             _format_ms,
             len(entries),
-            len(all_messages),
             len(medium_messages),
             len(rendered),
         )
@@ -1428,7 +917,6 @@ class Renderer:
         max_messages: int = 25,
         last_snapshot: datetime = None,
         elements_out: list[MessageElement] | None = None,
-        contact_index: ContactIndex | None = None,
         contact_name: str | None = None,
         contact_timezone: str | None = None,
         assistant_timezone: str | None = None,
@@ -1443,7 +931,6 @@ class Renderer:
             rendered = self.render_message(
                 m,
                 last_snapshot,
-                contact_index=contact_index,
                 contact_name=contact_name,
                 contact_timezone=contact_timezone,
                 assistant_timezone=assistant_timezone,
@@ -1467,23 +954,8 @@ class Renderer:
 
     def render_message(
         self,
-        message: (
-            Message
-            | EmailMessage
-            | UnifyMessage
-            | WhatsAppMessage
-            | SlackMessage
-            | SlackChannelMessage
-            | DiscordChannelMessage
-            | TeamsMessage
-            | TeamsChannelMessage
-            | MsTeamsBotMessage
-            | MsTeamsBotChannelMessage
-            | ApiMessage
-            | GuidanceMessage
-        ),
+        message: UnifyMessage | GuidanceMessage,
         last_snapshot: datetime = None,
-        contact_index: ContactIndex | None = None,
         contact_name: str | None = None,
         contact_timezone: str | None = None,
         assistant_timezone: str | None = None,
@@ -1493,554 +965,18 @@ class Renderer:
         new_marker = "**NEW** " if is_new else ""
         timestamp_str = message.timestamp.strftime("%A, %B %d, %Y at %I:%M %p")
 
-        if isinstance(message, EmailMessage):
-            attachments_line = ""
-            if message.attachments:
-
-                def _email_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _email_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f"Attachments: {', '.join(attachment_details)}\n"
-            # Render recipients (for reply-all context)
-            recipients_lines = ""
-            if message.to:
-                recipients_lines += f"To: {', '.join(message.to)}\n"
-            if message.cc:
-                recipients_lines += f"Cc: {', '.join(message.cc)}\n"
-            if message.bcc:
-                recipients_lines += f"Bcc: {', '.join(message.bcc)}\n"
-            thread_id_line = (
-                f"Thread ID: {message.thread_id}\n" if message.thread_id else ""
-            )
-            # Show contact's role in this email for clarity in contact-specific threads
-            # This helps the LLM understand the contact's relationship to the email
-            contact_role_line = ""
-            if message.contact_role:
-                role_descriptions = {
-                    "sender": "This contact SENT this email",
-                    "to": "This contact was a DIRECT RECIPIENT (To)",
-                    "cc": "This contact was CC'd on this email",
-                    "bcc": "This contact was BCC'd on this email",
-                }
-                contact_role_line = f"[Context: {role_descriptions.get(message.contact_role, message.contact_role)}]\n"
-
-            # Show assistant's role in this email (To, Cc, Bcc, or sender)
-            # This helps the LLM understand its own relationship to the email
-            assistant_role_line = ""
-            assistant_role = _get_assistant_email_role(message)
-            if assistant_role:
-                assistant_role_line = f"[Your role: {assistant_role}]\n"
-
-            # Show participant timezone info with current local times
-            # This helps the assistant be aware of recipients' local times
-            tz_block_line = ""
-            tz_block = _get_email_timezone_block(
-                message,
-                contact_index,
-                assistant_timezone,
-            )
-            if tz_block:
-                tz_block_line = f"{tz_block}\n"
-
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}]:\n"
-                f"{contact_role_line}"
-                f"{assistant_role_line}"
-                f"Subject: {message.subject}\n"
-                f"Email ID: {message.email_id}\n"
-                f"{thread_id_line}"
-                f"{recipients_lines}"
-                f"{tz_block_line}"
-                f"{attachments_line}"
-                f"Body:\n"
-                f"{message.body}"
-            )
-
-        if isinstance(message, (UnifyMessage, WhatsAppMessage)):
-            attachments_line = ""
-            if message.attachments:
-
-                def _unify_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _unify_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            # Show timezone info for the contact
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            # Room-scoped Unify messages (team group chat / org chat group)
-            # are visible to the whole room; annotate the scope so replies
-            # target the room via send_unify_message(team_id=/group_id=).
-            room_line = ""
-            if isinstance(message, UnifyMessage):
-                addressed_line = _room_addressing_clause(message.mentions)
-                if message.group_id is not None:
-                    room_line = (
-                        f' [group chat group_id="{message.group_id}" — visible to '
-                        f"the whole group;{addressed_line} reply with "
-                        f"send_unify_message(group_id={message.group_id})]"
-                    )
-                elif message.team_id is not None:
-                    room_line = (
-                        f' [team chat team_id="{message.team_id}" — visible to '
-                        f"the whole team;{addressed_line} reply with "
-                        f"send_unify_message(team_id={message.team_id})]"
-                    )
-
-            return f"{new_marker}[{message.name} @ {timestamp_str}]:{room_line} {message.content}{attachments_line}{tz_block_line}"
-
-        if isinstance(message, TeamsMessage):
-            attachments_line = ""
-            if message.attachments:
-
-                def _teams_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _teams_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            # Surface the Teams chat_id so the LLM can reply into the same
-            # thread via send_teams_message(chat_id=...).
-            ids_line = ""
-            if message.chat_id:
-                ids_line = f' [chat_id="{message.chat_id}"]'
-
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}]: "
-                f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
-            )
-
-        if isinstance(message, TeamsChannelMessage):
-            attachments_line = ""
-            if message.attachments:
-
-                def _teams_channel_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _teams_channel_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            # Surface team_id, channel_id, and thread_id so the LLM can reply
-            # into the same channel thread via send_teams_message(...).
-            id_bits: list[str] = []
-            if message.team_id:
-                id_bits.append(f'team_id="{message.team_id}"')
-            if message.channel_id:
-                id_bits.append(f'channel_id="{message.channel_id}"')
-            if message.thread_id:
-                id_bits.append(f'thread_id="{message.thread_id}"')
-            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
-
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}]: "
-                f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
-            )
-
-        if isinstance(message, (MsTeamsBotMessage, MsTeamsBotChannelMessage)):
-            attachments_line = ""
-            if message.attachments:
-
-                def _ms_teams_bot_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _ms_teams_bot_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            # Surface tenant_id + conversation_id (and channel identity) so the
-            # LLM can reply into the same Teams conversation via
-            # send_ms_teams_bot_message / send_ms_teams_bot_channel_message.
-            id_bits: list[str] = []
-            if message.tenant_id:
-                id_bits.append(f'tenant_id="{message.tenant_id}"')
-            if message.conversation_id:
-                id_bits.append(f'conversation_id="{message.conversation_id}"')
-            if getattr(message, "team_id", ""):
-                id_bits.append(f'team_id="{message.team_id}"')
-            if message.channel_id:
-                id_bits.append(f'channel_id="{message.channel_id}"')
-            if getattr(message, "thread_id", ""):
-                id_bits.append(f'thread_id="{message.thread_id}"')
-            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
-
-            # Surface Orchestra-side routing context (token addressing,
-            # coordinator fallback) so the assistant understands why it
-            # received the message.
-            routing_line = ""
-            if message.routing_metadata:
-                hints: list[str] = []
-                via_token = message.routing_metadata.get("via_token")
-                if via_token:
-                    hints.append(f"addressed via token '{via_token}'")
-                if message.routing_metadata.get("coordinator_fallback"):
-                    hints.append(
-                        "coordinator fallback (no token matched; reply as coordinator)",
-                    )
-                if message.routing_metadata.get("thread_inherited"):
-                    hints.append("inherited routing from existing thread")
-                if hints:
-                    routing_line = f"\n[Routing: {'; '.join(hints)}]"
-
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}]: "
-                f"{message.content}{ids_line}{attachments_line}{tz_block_line}{routing_line}"
-            )
-
-        if isinstance(message, (SlackMessage, SlackChannelMessage)):
-            attachments_line = ""
-            if message.attachments:
-
-                def _slack_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _slack_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            # Surface team_id, channel_id, thread_ts so the LLM can reply into
-            # the same DM/channel thread via send_slack_message(...) /
-            # send_slack_channel_message(...).
-            id_bits: list[str] = []
-            if message.team_id:
-                id_bits.append(f'team_id="{message.team_id}"')
-            if message.channel_id:
-                id_bits.append(f'channel_id="{message.channel_id}"')
-            # For channel messages, fall back to the message's own ts so a
-            # top-level @mention starts a thread when replied to; DMs only
-            # carry thread_ts when the conversation is already threaded.
-            effective_thread_ts = message.thread_ts
-            if isinstance(message, SlackChannelMessage) and not effective_thread_ts:
-                effective_thread_ts = getattr(message, "event_ts", "")
-            if effective_thread_ts:
-                id_bits.append(f'thread_ts="{effective_thread_ts}"')
-            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
-
-            # Surface Orchestra-side routing context so the assistant
-            # understands why it received the message (token addressing,
-            # coordinator fallback, ambiguous token, etc.).
-            routing_line = ""
-            if message.routing_metadata:
-                hints: list[str] = []
-                via_token = message.routing_metadata.get("via_token")
-                if via_token:
-                    hints.append(f"addressed via token '{via_token}'")
-                if message.routing_metadata.get("coordinator_fallback"):
-                    hints.append(
-                        "coordinator fallback (no token matched; reply as coordinator)",
-                    )
-                ambiguous = message.routing_metadata.get("ambiguous_token")
-                if ambiguous:
-                    hints.append(f"ambiguous token '{ambiguous}'")
-                known = message.routing_metadata.get("known_assistants") or []
-                if known:
-                    formatted = ", ".join(
-                        f"{a.get('first_name','?')} (id={a.get('agent_id','?')})"
-                        for a in known
-                    )
-                    hints.append(f"known org assistants: {formatted}")
-                if message.routing_metadata.get("thread_inherited"):
-                    hints.append("inherited routing from existing thread")
-                if hints:
-                    routing_line = f"\n[Routing: {'; '.join(hints)}]"
-
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}]: "
-                f"{message.content}{ids_line}{attachments_line}{tz_block_line}{routing_line}"
-            )
-
-        if isinstance(message, DiscordChannelMessage):
-            attachments_line = ""
-            if message.attachments:
-
-                def _discord_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _discord_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            # Surface channel_id / guild_id so the LLM can reply into the same
-            # channel via send_discord_channel_message(channel_id="...").
-            id_bits: list[str] = []
-            if message.channel_id:
-                id_bits.append(f'channel_id="{message.channel_id}"')
-            if message.guild_id:
-                id_bits.append(f'guild_id="{message.guild_id}"')
-            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
-
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}]: "
-                f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
-            )
-
-        if isinstance(message, ApiMessage):
-            attachments_line = ""
-            if message.attachments:
-
-                def _api_att_detail(att, is_self: bool) -> str:
-                    if isinstance(att, dict):
-                        fname = att.get(
-                            "filename",
-                            f"attachment_{att.get('id', 'unknown')}",
-                        )
-                        att_id = att.get("id")
-                        id_part = f"id: {att_id}, " if att_id else ""
-                        if is_self:
-                            fpath = att.get("filepath")
-                            if fpath:
-                                return f"{fname} ({id_part}attached from {fpath})"
-                            return (
-                                f"{fname} ({id_part}attached)"
-                                if id_part
-                                else f"{fname} (attached)"
-                            )
-                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
-                    return (
-                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
-                    )
-
-                attachment_details = [
-                    _api_att_detail(att, message.name == "You")
-                    for att in message.attachments
-                ]
-                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
-
-            tags_line = ""
-            if message.tags:
-                tags_line = f" [Tags: {', '.join(message.tags)}]"
-
-            tz_block_line = ""
-            if contact_name:
-                tz_block = _get_message_timezone_block(
-                    contact_name,
-                    contact_timezone,
-                    assistant_timezone,
-                )
-                if tz_block:
-                    tz_block_line = f"\n{tz_block}"
-
-            return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}{attachments_line}{tags_line}{tz_block_line}"
-
         if isinstance(message, GuidanceMessage):
-            # An assistant guidance line: either spoken to the caller (the slow
-            # brain's guide_voice_agent line) or silent awareness guidance
-            # (should_speak=False notifications). Treated as already delivered; if
-            # a barge-in cut a spoken one off, an explicit [... interrupted ...]
-            # note reports the unheard remainder.
+            # Silent awareness guidance the assistant issued to itself; already
+            # delivered, so it carries no attachments or timezone block.
             return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}"
 
-        # Simple Message (SMS, phone call utterances)
+        attachments_line = ""
+        if message.attachments:
+            attachment_details = [
+                _attachment_detail(att) for att in message.attachments
+            ]
+            attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
+
         # Show timezone info for the contact
         tz_block_line = ""
         if contact_name:
@@ -2052,11 +988,7 @@ class Renderer:
             if tz_block:
                 tz_block_line = f"\n{tz_block}"
 
-        screenshots_line = ""
-        if isinstance(message, Message) and message.screenshots:
-            screenshots_line = f" [Screenshots: {', '.join(message.screenshots)}]"
-
-        return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}{screenshots_line}{tz_block_line}"
+        return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}{attachments_line}{tz_block_line}"
 
     def render_completed_actions(
         self,

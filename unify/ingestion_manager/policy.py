@@ -1,73 +1,15 @@
 """Decisions that are pure functions of a request or a run.
 
 Kept out of the manager so they can be reasoned about and tested without a
-backend, and so the two that matter most -- where a request runs, and what a
-caller should do next -- are stated once each rather than inferred from control
-flow at several call sites.
+backend, and so the one that matters most -- what a caller should do next -- is
+stated once rather than inferred from control flow at several call sites.
 """
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import List, Optional
 
-from unify.ingestion_manager.settings import IngestionSettings
-from unify.ingestion_manager.types.request import IngestionRequest
 from unify.ingestion_manager.types.run import TERMINAL_STATES, StageProgress
-
-Tier = Literal["inline", "dispatched"]
-
-
-def choose_tier(
-    request: IngestionRequest,
-    settings: Optional[IngestionSettings] = None,
-    *,
-    row_count: Optional[int] = None,
-    has_fleet: Optional[bool] = None,
-) -> Tier:
-    """Decide where a request runs. Deterministic, and never a caller's choice.
-
-    Two rules, and the reason they differ is the whole design:
-
-    **Files always dispatch.** Parsing loads the file and its model into the
-    process that does it, and a thread does not change that -- threads share one
-    address space and one memory limit, so a parse that overruns takes down the
-    assistant sharing the process, not just the ingestion. There is also no
-    number that predicts the risk: bytes and file count say nothing about page
-    count or density. So the answer cannot be a threshold; it has to be a
-    boundary, and the boundary is the process.
-
-    **Rows and tables run in process, whatever their size.** The fleet's unit
-    of work is a staged *file*: dispatching publishes one parse message per
-    uploaded source, so a rows or table request -- which stages no file --
-    would publish zero jobs and sit ``queued`` forever, unrecoverable by
-    anything short of reading the manifest. Until the fleet grows a rows job
-    type, in process is the only tier that can actually execute this work, and
-    it executes it correctly: the inline engine checkpoints, verifies against
-    the declared count, and resumes, so size costs the assistant latency and
-    contention rather than correctness. ``MAX_INLINE_ROWS`` remains the
-    documented ceiling a rows job type will restore the boundary at.
-
-    ``row_count`` is the exact count: ``len(rows)`` for rows in hand, or one
-    server-side aggregate for a stored table.
-
-    Both tiers write the same artifacts and the same checkpoints, so choosing
-    dispatch for work that would have been quick costs latency, and nothing else:
-    the run is still resumable, still recoverable, and still asked about the same
-    way.
-    """
-    config = settings or IngestionSettings()
-    fleet = bool(config.PIPELINE_URL) if has_fleet is None else has_fleet
-
-    # No fleet reachable: in process is the only tier there is. Safe rather than
-    # merely tolerable -- the artifacts and checkpoints land in the layout a
-    # fleet reads, so one configured later can adopt whatever was left behind.
-    if not fleet:
-        return "inline"
-
-    if request.source.kind in {"files", "folder"}:
-        return "dispatched"
-
-    return "inline"
 
 
 def next_step(
@@ -75,7 +17,6 @@ def next_step(
     state: str,
     parked: int,
     error: Optional[str],
-    executed_as: Optional[str],
     contexts: List[str],
     files_claimed: Optional[int] = None,
     files_total: Optional[int] = None,
@@ -88,7 +29,6 @@ def next_step(
     including that there is nothing to do.
     """
     if state == "queued":
-        where = "on the worker fleet" if executed_as == "dispatched" else "in process"
         # "Queued" covers two conditions that need different responses, and
         # collapsing them made a starved batch indistinguishable from a slow one:
         # polling is right for work that has been taken up, and useless for work
@@ -97,14 +37,13 @@ def next_step(
         if files_total and files_claimed is not None and files_claimed < files_total:
             waiting = files_total - files_claimed
             return (
-                f"Queued {where}: {files_claimed} of {files_total} file(s) taken "
-                f"up by a worker, {waiting} still unclaimed. Unclaimed work is "
-                "waiting on capacity rather than making slow progress, so "
-                "polling will not change it -- check whether other runs are "
-                "holding the fleet before resubmitting anything. Per-file state "
-                "is in status.files."
+                f"Queued: {files_claimed} of {files_total} file(s) taken up by "
+                f"a worker, {waiting} still unclaimed. Unclaimed work is waiting "
+                "on capacity rather than making slow progress, so polling will "
+                "not change it -- check whether other runs are holding the pool "
+                "before resubmitting anything. Per-file state is in status.files."
             )
-        return f"Nothing yet -- this is queued to run {where}. Poll get_status again."
+        return "Nothing yet -- this is queued to run. Poll get_status again."
 
     if state == "running":
         return (

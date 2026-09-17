@@ -1160,12 +1160,7 @@ class TaskScheduler(BaseTaskScheduler):
                 state=ExecutionState.running.value,
             )
 
-        workflow_slug, installation_settings = self._workflow_run_settings(task)
-        task_request = build_task_execution_request(
-            task,
-            installation_settings=installation_settings,
-            workflow_slug=workflow_slug,
-        )
+        task_request = build_task_execution_request(task)
 
         # The successor is projected by Orchestra when this run is marked
         # running: recurrence is a ledger invariant, not something each
@@ -1321,9 +1316,6 @@ class TaskScheduler(BaseTaskScheduler):
         Defaults to the full open-state set (scheduled/triggerable/running).
         """
 
-        # Typed provider-event definitions have no Tasks log mirror, so the
-        # store-only lookup cannot resolve them; use the same typed fallback
-        # as authored mutations.
         task = self._resolve_task_for_mutation(task_id)
         kwargs: Dict[str, Any] = {
             "task_id": int(task_id),
@@ -1364,8 +1356,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         Reads ``Tasks/Executions`` rather than the definition: whether a run is
         happening is a fact about the run. Scoped to ``running`` only —
-        ``scheduled``/``triggerable`` rows (e.g. an armed provider-event task)
-        are not mutation hazards and must not block this guard.
+        ``scheduled``/``triggerable`` rows are not mutation hazards and must
+        not block this guard.
         """
 
         ids = [task_ids] if isinstance(task_ids, int) else list(task_ids)
@@ -1448,8 +1440,6 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy: Optional[str] = None,
         entrypoint: Optional[int] = None,
         offline: bool = False,
-        requires_filesystem: bool = False,
-        requires_computer: bool = False,
         enabled: bool = True,
         destination: str | None = None,
         _root_applied: bool = False,
@@ -1495,8 +1485,6 @@ class TaskScheduler(BaseTaskScheduler):
                     response_policy=response_policy,
                     entrypoint=entrypoint,
                     offline=offline,
-                    requires_filesystem=requires_filesystem,
-                    requires_computer=requires_computer,
                     enabled=enabled,
                     destination=effective_destination,
                     _root_applied=True,
@@ -1558,8 +1546,6 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
-            requires_filesystem=requires_filesystem,
-            requires_computer=requires_computer,
             enabled=enabled,
         ).to_post_json()
 
@@ -1637,8 +1623,6 @@ class TaskScheduler(BaseTaskScheduler):
                 "response_policy",
                 "entrypoint",
                 "offline",
-                "requires_filesystem",
-                "requires_computer",
                 "enabled",
             ):
                 if key in spec:
@@ -1924,45 +1908,6 @@ class TaskScheduler(BaseTaskScheduler):
             touched.append(int(task_id))
         return touched
 
-    def _workflow_run_settings(
-        self,
-        task: Task,
-    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """The installed settings of the workflow that planted *task*, if any.
-
-        Resolved once at run start and carried on the run request, so the
-        run's configuration is a deterministic input rather than something
-        the actor has to discover mid-run. Best-effort by design: a task
-        whose settings cannot be read still runs, with the request saying
-        nothing about settings rather than something wrong about them.
-        """
-        if not task.custom_hash:
-            return None, None
-        try:
-            managed_by, released = self._task_reconcile_owner(int(task.task_id))
-            if released or not managed_by or managed_by == MANAGED_BY_DEPLOYMENT:
-                return None, None
-            from unify.manager_registry import ManagerRegistry
-
-            manager = ManagerRegistry.get_workflow_manager()
-            if manager is None:
-                return None, None
-            settings = manager.get_installation_params(
-                slug=managed_by,
-                destination=task.destination,
-            )
-        except Exception:
-            logger.warning(
-                "Could not resolve installation settings for task %s; the "
-                "run proceeds without them",
-                task.task_id,
-                exc_info=True,
-            )
-            return None, None
-        if not isinstance(settings, dict):
-            return None, None
-        return managed_by, settings
-
     def _task_reconcile_owner(self, task_id: int) -> tuple[Optional[str], bool]:
         """Who reconciles this row, and whether the user already owns it.
 
@@ -1995,8 +1940,6 @@ class TaskScheduler(BaseTaskScheduler):
         trigger: Any = _UNSET,
         entrypoint: Any = _UNSET,
         offline: Any = _UNSET,
-        requires_filesystem: Any = _UNSET,
-        requires_computer: Any = _UNSET,
         enabled: Any = _UNSET,
         destination: str | None = None,
         _root_applied: bool = False,
@@ -2043,8 +1986,6 @@ class TaskScheduler(BaseTaskScheduler):
                     trigger=trigger,
                     entrypoint=entrypoint,
                     offline=offline,
-                    requires_filesystem=requires_filesystem,
-                    requires_computer=requires_computer,
                     enabled=enabled,
                     destination=resolved_destination,
                     _root_applied=True,
@@ -2054,8 +1995,6 @@ class TaskScheduler(BaseTaskScheduler):
 
         trigger_provided = trigger is not _UNSET
         offline_provided = offline is not _UNSET
-        requires_filesystem_provided = requires_filesystem is not _UNSET
-        requires_computer_provided = requires_computer is not _UNSET
         enabled_provided = enabled is not _UNSET
         start_at_provided = start_at is not _UNSET
         deadline_provided = deadline is not _UNSET
@@ -2091,8 +2030,6 @@ class TaskScheduler(BaseTaskScheduler):
                     ("trigger", trigger_provided),
                     ("entrypoint", entrypoint is not _UNSET),
                     ("offline", offline_provided),
-                    ("requires_filesystem", requires_filesystem_provided),
-                    ("requires_computer", requires_computer_provided),
                 )
                 if provided
             )
@@ -2122,8 +2059,6 @@ class TaskScheduler(BaseTaskScheduler):
             and not trigger_provided
             and entrypoint is _UNSET
             and not offline_provided
-            and not requires_filesystem_provided
-            and not requires_computer_provided
             and not enabled_provided
         ):
             raise ValueError("At least one field must be provided for an update.")
@@ -2248,30 +2183,6 @@ class TaskScheduler(BaseTaskScheduler):
             else:
                 offline = bool(offline)
             entries["offline"] = offline
-        if requires_filesystem_provided:
-            if isinstance(requires_filesystem, str):
-                normalized_requires_filesystem = requires_filesystem.strip().lower()
-                if normalized_requires_filesystem in {"true", "1"}:
-                    requires_filesystem = True
-                elif normalized_requires_filesystem in {"false", "0"}:
-                    requires_filesystem = False
-                else:
-                    raise ValueError("requires_filesystem must be a boolean value")
-            else:
-                requires_filesystem = bool(requires_filesystem)
-            entries["requires_filesystem"] = requires_filesystem
-        if requires_computer_provided:
-            if isinstance(requires_computer, str):
-                normalized_requires_computer = requires_computer.strip().lower()
-                if normalized_requires_computer in {"true", "1"}:
-                    requires_computer = True
-                elif normalized_requires_computer in {"false", "0"}:
-                    requires_computer = False
-                else:
-                    raise ValueError("requires_computer must be a boolean value")
-            else:
-                requires_computer = bool(requires_computer)
-            entries["requires_computer"] = requires_computer
         if enabled_provided:
             if isinstance(enabled, str):
                 normalized_enabled = enabled.strip().lower()
@@ -2933,12 +2844,6 @@ class TaskScheduler(BaseTaskScheduler):
         tags = payload.pop("tags", None)
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
-        requires_filesystem, requires_computer = resolve_task_resource_requirements(
-            {
-                "requires_filesystem": payload.pop("requires_filesystem", False),
-                "requires_computer": payload.pop("requires_computer", False),
-            },
-        )
         name = payload.pop("name")
         description = payload.pop("description")
         require_consumed(payload, kind="tasks", custom_key=custom_key)
@@ -2978,8 +2883,6 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
-            requires_filesystem=requires_filesystem,
-            requires_computer=requires_computer,
             enabled=False,
             destination=destination_arg,
             _root_applied=True,
@@ -3010,12 +2913,6 @@ class TaskScheduler(BaseTaskScheduler):
         tags = payload.pop("tags", None)
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
-        requires_filesystem, requires_computer = resolve_task_resource_requirements(
-            {
-                "requires_filesystem": payload.pop("requires_filesystem", False),
-                "requires_computer": payload.pop("requires_computer", False),
-            },
-        )
         name = payload.pop("name", None)
         description = payload.pop("description", None)
         require_consumed(payload, kind="tasks", custom_key=custom_key)
@@ -3065,8 +2962,6 @@ class TaskScheduler(BaseTaskScheduler):
             "tags": tags,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
-            "requires_filesystem": requires_filesystem,
-            "requires_computer": requires_computer,
         }
         if repeat is not None:
             normalized_repeat = normalize_repeat_patterns(
@@ -3097,7 +2992,7 @@ class TaskScheduler(BaseTaskScheduler):
             for key in ("custom_key", "custom_hash", "managed_by")
             if key in entries
         }
-        provider_entries = {
+        field_entries = {
             key: value for key, value in entries.items() if key not in sync_meta
         }
 
@@ -3106,8 +3001,8 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
-        if provider_entries:
-            self._write_log_entries(logs=log_ids, entries=provider_entries)
+        if field_entries:
+            self._write_log_entries(logs=log_ids, entries=field_entries)
         if sync_meta:
             self._write_log_entries(logs=log_ids, entries=sync_meta)
 

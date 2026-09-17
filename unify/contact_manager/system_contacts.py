@@ -94,15 +94,6 @@ def provision_assistant_contact(
             "surname": ast.surname if populated else PLACEHOLDER_ASSISTANT_SURNAME,
             "email_address": ast.email if populated else PLACEHOLDER_ASSISTANT_EMAIL,
             "phone_number": ast.number if populated else PLACEHOLDER_ASSISTANT_PHONE,
-            "whatsapp_number": (
-                ast.whatsapp_number if populated and ast.whatsapp_number else None
-            ),
-            "discord_id": (
-                ast.discord_bot_id if populated and ast.discord_bot_id else None
-            ),
-            "slack_user_id": (
-                ast.slack_bot_user_id if populated and ast.slack_bot_user_id else None
-            ),
             "bio": ast.about if populated else PLACEHOLDER_ASSISTANT_BIO,
             "job_title": (ast.job_title or None) if populated else None,
             "timezone": (ast.timezone or "UTC") if populated else "UTC",
@@ -116,15 +107,6 @@ def provision_assistant_contact(
             fetched_bio = ast.about if populated else None
             fetched_tz = ast.timezone if populated else None
             fetched_phone = ast.number if populated else None
-            fetched_whatsapp = (
-                ast.whatsapp_number if populated and ast.whatsapp_number else None
-            )
-            fetched_discord = (
-                ast.discord_bot_id if populated and ast.discord_bot_id else None
-            )
-            fetched_slack = (
-                ast.slack_bot_user_id if populated and ast.slack_bot_user_id else None
-            )
             fetched_first_name = ast.first_name if populated else None
             fetched_surname = ast.surname if populated else None
             fetched_job_title = (ast.job_title or None) if populated else None
@@ -135,15 +117,6 @@ def provision_assistant_contact(
                 populated and (entries.get("job_title") or None) != fetched_job_title
             )
             needs_phone = fetched_phone and entries.get("phone_number") != fetched_phone
-            needs_whatsapp = (
-                fetched_whatsapp and entries.get("whatsapp_number") != fetched_whatsapp
-            )
-            needs_discord = (
-                fetched_discord and entries.get("discord_id") != fetched_discord
-            )
-            needs_slack = (
-                fetched_slack and entries.get("slack_user_id") != fetched_slack
-            )
             needs_is_system = entries.get("is_system") is not True
             needs_first_name = (
                 fetched_first_name and entries.get("first_name") != fetched_first_name
@@ -157,9 +130,6 @@ def provision_assistant_contact(
                 or needs_bio
                 or needs_job_title
                 or needs_phone
-                or needs_whatsapp
-                or needs_discord
-                or needs_slack
                 or needs_is_system
                 or needs_first_name
                 or needs_surname
@@ -176,12 +146,6 @@ def provision_assistant_contact(
                     update_kwargs["job_title"] = fetched_job_title
                 if needs_phone:
                     update_kwargs["phone_number"] = fetched_phone
-                if needs_whatsapp:
-                    update_kwargs["whatsapp_number"] = fetched_whatsapp
-                if needs_discord:
-                    update_kwargs["discord_id"] = fetched_discord
-                if needs_slack:
-                    update_kwargs["slack_user_id"] = fetched_slack
                 if needs_is_system:
                     update_kwargs["is_system"] = True
                 if needs_first_name:
@@ -196,7 +160,7 @@ def provision_assistant_contact(
             pass
         return
 
-    # Insert the assistant row. Race conditions are handled by Orchestra's
+    # Insert the assistant row. Race conditions are handled by the store's
     # field-level uniqueness enforcement on email_address / phone_number.
     try:
         outcome = self._create_contact(
@@ -237,9 +201,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
             "surname": user_info.get("last_name"),
             "email_address": user_info.get("email"),
             "phone_number": user_info.get("phone_number"),
-            "whatsapp_number": user_info.get("whatsapp_number"),
-            "discord_id": user_info.get("discord_id"),
-            "slack_user_id": user_info.get("slack_user_id"),
             "bio": user_info.get("bio"),
             "response_policy": self.USER_MANAGER_RESPONSE_POLICY,
         },
@@ -268,22 +229,10 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
             fetched_bio = user_info.get("bio")
             fetched_tz = user_info.get("timezone")
             fetched_phone = user_info.get("phone_number")
-            fetched_whatsapp = user_info.get("whatsapp_number")
-            fetched_discord = user_info.get("discord_id")
-            fetched_slack = user_info.get("slack_user_id")
 
             needs_timezone = fetched_tz and entries.get("timezone") != fetched_tz
             needs_bio = fetched_bio and entries.get("bio") != fetched_bio
             needs_phone = fetched_phone and entries.get("phone_number") != fetched_phone
-            needs_whatsapp = (
-                fetched_whatsapp and entries.get("whatsapp_number") != fetched_whatsapp
-            )
-            needs_discord = (
-                fetched_discord and entries.get("discord_id") != fetched_discord
-            )
-            needs_slack = (
-                fetched_slack and entries.get("slack_user_id") != fetched_slack
-            )
             # Backfilled, not just set on insert. A boss contact provisioned
             # before the session carried a user id keeps a null one forever
             # otherwise: this sync runs on every boot and would walk past the
@@ -298,9 +247,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                 needs_timezone
                 or needs_bio
                 or needs_phone
-                or needs_whatsapp
-                or needs_discord
-                or needs_slack
                 or needs_is_system
                 or needs_user_id
             ):
@@ -314,12 +260,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                     update_kwargs["bio"] = fetched_bio
                 if needs_phone:
                     update_kwargs["phone_number"] = fetched_phone
-                if needs_whatsapp:
-                    update_kwargs["whatsapp_number"] = fetched_whatsapp
-                if needs_discord:
-                    update_kwargs["discord_id"] = fetched_discord
-                if needs_slack:
-                    update_kwargs["slack_user_id"] = fetched_slack
                 if needs_is_system:
                     update_kwargs["is_system"] = True
                 if needs_user_id:
@@ -332,7 +272,7 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
             pass
         return
 
-    # Insert the user row. Race conditions are handled by Orchestra's
+    # Insert the user row. Race conditions are handled by the store's
     # field-level uniqueness enforcement on email_address / phone_number.
     try:
         outcome = self._create_contact(

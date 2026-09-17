@@ -9,7 +9,7 @@ early in prompts and referenced throughout.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Union
+from typing import Callable, Dict, List, Union
 
 from .types.task import Task
 from .types.activated_by import ActivatedBy
@@ -22,25 +22,8 @@ from ..common.prompt_helpers import (
 )
 
 
-def build_task_execution_request(
-    task: Task,
-    *,
-    installation_settings: Dict[str, Any] | None = None,
-    workflow_slug: str | None = None,
-) -> str:
-    """Build the actor-facing request for one task instance.
-
-    ``installation_settings`` are the recorded settings of the workflow that
-    planted this task, resolved by the caller at run start. Carrying them on
-    the request makes the run deterministic about its own configuration:
-    the actor honours what is written here instead of having to discover
-    and call a settings tool mid-run.
-
-    The instruction lives in this section rather than in the general run
-    guidelines so that a task with no settings produces a byte-identical
-    request — every non-workflow task run keeps its prompt, and its cache,
-    untouched.
-    """
+def build_task_execution_request(task: Task) -> str:
+    """Build the actor-facing request for one task instance."""
 
     lines = [
         "Execute this TaskScheduler task as a contained task run.",
@@ -51,17 +34,6 @@ def build_task_execution_request(
         "Task description:",
         task.description or task.name,
     ]
-    if installation_settings is not None:
-        source = f" of workflow {workflow_slug!r}" if workflow_slug else ""
-        lines.extend(
-            [
-                "",
-                f"Installation settings{source} (already resolved for this "
-                "run — honour them as given and do not look them up again; "
-                "empty values mean the default described in the task):",
-                json.dumps(installation_settings, sort_keys=True),
-            ],
-        )
     if task.response_policy:
         lines.extend(["", "Task response policy:", task.response_policy])
     if task.schedule is not None:
@@ -370,9 +342,6 @@ def build_update_prompt(
             "Offline is a delivery lane, not an execution style. An offline task may be agentic (`entrypoint=None`) or symbolic (`entrypoint=<function_id>`).",
             "Offline Jobs already run under `asyncio.run`. Sync symbolic entrypoints/helpers must not nest another `asyncio.run` — prefer `async def` + `await`, or `run_coro_sync(factory)`.",
             "A stored entrypoint can still call `query_llm(...)` for bounded semantic judgment such as summarization, classification, ranking, or drafting.",
-            "Resource opt-ins are independent of delivery: `requires_filesystem=True` waits for assistant Local (~/Unity/Local) to be ready; `requires_computer=True` waits for a computer-use desktop to be connected.",
-            "The simplest offline symbolic task leaves both resource flags false (standalone function, no Local, no VM). The fullest live task sets both true so ConversationManager can steer with Local and computer use available.",
-            "Default both resource flags to false unless the task clearly needs Local files or desktop computer use.",
             "",
             "Repeat field examples",
             "---------------------",

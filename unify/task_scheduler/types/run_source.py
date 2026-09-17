@@ -20,7 +20,6 @@ class RunSource(StrEnum):
     scheduled = "scheduled"
     triggered = "triggered"
     explicit = "explicit"
-    provider_event = "provider_event"
 
     @classmethod
     def normalize(cls, value: str | RunSource | None) -> RunSource:

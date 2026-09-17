@@ -51,8 +51,6 @@ _EXECUTION_QUERY_FIELDS = [
     "entrypoint",
     "recurring",
     "revision",
-    "requires_filesystem",
-    "requires_computer",
     # What a run actually did. Omitting these meant no read path in the
     # runtime could see whether an execution had started, when it finished or
     # why it failed -- so nothing here could answer "did the briefing run this
@@ -111,8 +109,6 @@ class TaskExecutionSnapshot:
     trigger_recurring: bool = False
     entrypoint: int | None = None
     max_runtime_seconds: int | None = None
-    requires_filesystem: bool = False
-    requires_computer: bool = False
     recurring: bool = False
     revision: str | None = None
 
@@ -888,8 +884,6 @@ def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
         max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
         recurring=bool(entries.get("recurring", False)),
         revision=_coerce_str(entries.get("revision")),
-        requires_filesystem=bool(entries.get("requires_filesystem", False)),
-        requires_computer=bool(entries.get("requires_computer", False)),
     )
 
 

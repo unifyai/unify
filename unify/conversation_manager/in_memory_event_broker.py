@@ -215,8 +215,8 @@ class InMemoryEventBroker:
 
     def __init__(self):
         self._subscriptions: list[_Subscription] = []
-        # Subscriptions may be created/removed from different event loops/threads
-        # (e.g., voice agent threads). Use a thread-safe lock for coordination.
+        # Subscriptions may be created/removed from different event loops/threads.
+        # Use a thread-safe lock for coordination.
         self._subs_lock = threading.RLock()
         self._closed = False
 

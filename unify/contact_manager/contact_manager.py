@@ -18,7 +18,7 @@ from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
 
 from unify import db
-from .types.contact import Contact, VOICE_ENROLLMENT_FIELDS
+from .types.contact import Contact
 from .types.meta import ContactMeta
 from .custom_contacts import compute_custom_contacts_hash
 from ..common.log_utils import create_logs as unity_create_logs
@@ -81,7 +81,7 @@ class ContactManager(BaseContactManager):
             TableContext(
                 name=CONTACTS_TABLE,
                 description="List of contacts, with all contact details stored.",
-                fields={**model_to_fields(Contact), **VOICE_ENROLLMENT_FIELDS},
+                fields=model_to_fields(Contact),
                 unique_keys={"contact_id": "int"},
                 auto_counting={"contact_id": None},
             ),

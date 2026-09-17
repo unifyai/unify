@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from time import perf_counter
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from unify.common.startup_timing import log_startup_timing
 from unify.common.prompt_helpers import PromptParts
 from unify.conversation_manager.prompt_builders import build_system_prompt
-from unify.conversation_manager.runtime_status import (
-    deployment_runtime_reconcile_prompt_note,
-)
-from unify.conversation_manager.cm_types import ScreenshotEntry
-from unify.logger import LOGGER
 from unify.session_details import SESSION_DETAILS
 
 if TYPE_CHECKING:
@@ -32,111 +25,13 @@ class BrainSpec:
 
     system_prompt: PromptParts
     state_prompt: str
-    # Buffered screenshots captured during screen sharing, aligned with user turns.
-    screenshots: list[ScreenshotEntry] = field(default_factory=list)
-    # Relative file paths for each screenshot (parallel to screenshots list).
-    screenshot_paths: list[str] = field(default_factory=list)
 
     def state_message(self) -> dict:
         # Mark this as a state snapshot so the async tool loop can treat it as
         # transient state (e.g., keep only the latest snapshot when generating).
-        if not self.screenshots:
-            return {
-                "role": "user",
-                "content": self.state_prompt,
-                "_cm_state_snapshot": True,
-            }
-
-        # Build multimodal content: text state + screenshot blocks aligned with
-        # the user utterances that triggered them.
-        sources = {s.source for s in self.screenshots}
-        if len(sources) > 1:
-            header = (
-                "The following screenshots were captured from multiple visual "
-                "sources (desktop, user screen, meeting view, and/or webcam), "
-                "each paired with what the user said at that moment. They are "
-                "in chronological order."
-            )
-        elif "google_meet" in sources:
-            header = (
-                "The following screenshots are the screen a participant is "
-                "sharing in the Google Meet call -- their machine, not yours, "
-                "and not the meeting's own gallery view. They are paired with "
-                "what was said at each moment and are in chronological order."
-            )
-        elif "teams_meet" in sources:
-            header = (
-                "The following screenshots are the screen a participant is "
-                "sharing in the Microsoft Teams meeting -- their machine, not "
-                "yours, and not the meeting's own gallery view. They are paired "
-                "with what was said at each moment and are in chronological "
-                "order."
-            )
-        elif "user" in sources:
-            header = (
-                "The following screenshots were captured from the user's screen "
-                "during screen sharing, each paired with what the user said "
-                "at that moment. They are in chronological order."
-            )
-        elif "webcam" in sources:
-            header = (
-                "The following frames were captured from the user's webcam, "
-                "each paired with what the user said at that moment. "
-                "They are in chronological order."
-            )
-        else:
-            header = (
-                "The following screenshots were captured from your desktop "
-                "during screen sharing, each paired with what the user said "
-                "at that moment. They are in chronological order."
-            )
-
-        content_parts: list[dict] = [
-            {"type": "text", "text": self.state_prompt},
-            {
-                "type": "text",
-                "text": (
-                    f"\n\n<screen_share_snapshots>\n{header}\n"
-                    "</screen_share_snapshots>"
-                ),
-            },
-        ]
-        source_labels = {
-            "assistant": "Assistant's Screen",
-            "user": "User's Screen",
-            "webcam": "User's Webcam",
-            "google_meet": "Google Meet Shared Screen",
-            "teams_meet": "Microsoft Teams Shared Screen",
-        }
-        for i, entry in enumerate(self.screenshots, 1):
-            label = source_labels.get(entry.source, "Screenshot")
-            # A meeting has many people in it, so a shared screen belongs to one
-            # of them by name -- without that the model can only say "a screen".
-            if entry.attribution:
-                label = f"{label} - shared by {entry.attribution}"
-            path_suffix = ""
-            if i <= len(self.screenshot_paths):
-                path_suffix = f" -- {self.screenshot_paths[i - 1]}"
-            content_parts.append(
-                {
-                    "type": "text",
-                    "text": (
-                        f"\n[{label} - Screenshot {i}/{len(self.screenshots)}"
-                        f"{path_suffix}] "
-                        f'User said: "{entry.utterance}"'
-                    ),
-                },
-            )
-            content_parts.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{entry.b64}"},
-                },
-            )
-
         return {
             "role": "user",
-            "content": content_parts,
+            "content": self.state_prompt,
             "_cm_state_snapshot": True,
         }
 
@@ -144,15 +39,11 @@ class BrainSpec:
 def build_brain_spec(
     cm: "ConversationManager",
     snapshot_state: "SnapshotState",
-    screenshots: list[ScreenshotEntry] | None = None,
-    screenshot_paths: list[str] | None = None,
-    acting_user_id: str | None = None,
 ) -> BrainSpec:
     """
     Build the prompt inputs for a single Main CM Brain run.
 
-    The returned spec is *pure* (no side effects) and can be used by either the
-    legacy single-shot generate path or the async tool loop path.
+    The returned spec is *pure* (no side effects).
 
     Parameters
     ----------
@@ -161,155 +52,32 @@ def build_brain_spec(
     snapshot_state : SnapshotState
         Pre-rendered conversation state (caller computes this once and reuses it
         for both the BrainSpec and incremental-diff tracking).
-    screenshots : list[ScreenshotEntry] | None
-        Buffered screenshots from screen sharing (assistant and/or user), each
-        paired with the user utterance that triggered capture and a timestamp.
-    screenshot_paths : list[str] | None
-        Relative file paths corresponding to each screenshot (parallel list).
-    acting_user_id : str | None
-        The user acting in this turn (the inbound message sender when it maps to
-        a system user, else the workspace owner). Used to resolve the *speaker's*
-        linked desktop. Falls back to the session owner when not provided.
     """
-    acting_user_id = acting_user_id or SESSION_DETAILS.user.id
-    from unify.settings import SETTINGS
-
-    _brain_t0 = perf_counter()
-    _last_step = _brain_t0
-
-    def _mark_step() -> float:
-        nonlocal _last_step
-        now = perf_counter()
-        elapsed_ms = (now - _last_step) * 1000
-        _last_step = now
-        return elapsed_ms
-
     prompt = snapshot_state.full_render
-    _prompt_ms = _mark_step()
 
     boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss_contact = cm.contact_index.get_contact(boss_contact_id) or {}
-    _boss_contact_ms = _mark_step()
-    is_internal_call = cm.mode.is_voice and bool(
-        (cm.get_active_contact() or {}).get("is_system", False),
-    )
-    authorized_humans: list[dict] | None = None
-    if cm.initialized:
-        from unify.coordinator_manager.coordinator_manager import CoordinatorManager
 
-        coordinator_manager = CoordinatorManager()
-        if SESSION_DETAILS.is_coordinator and SESSION_DETAILS.org_id is not None:
-            authorized_humans = coordinator_manager.get_org_members()
+    assistant = SESSION_DETAILS.assistant
+    bio_parts: list[str] = []
+    job_title = assistant.job_title.strip()
+    if job_title:
+        bio_parts.append(f"Role / specialization: {job_title}.")
+    if assistant.about:
+        bio_parts.append(assistant.about)
 
-    _active_contact_ms = _mark_step()
-    # Twin sessions carry fixed intro scaffolding in the prompt builder.
-    # Regular assistants prepend job title into the bio block when set.
-    _bio_parts: list[str] = []
-    if not SESSION_DETAILS.is_coordinator:
-        _job_title = (cm.assistant_job_title or "").strip()
-        if _job_title:
-            _bio_parts.append(f"Role / specialization: {_job_title}.")
-    if cm.assistant_about:
-        _bio_parts.append(cm.assistant_about)
-    _bio_text = "\n".join(_bio_parts)
-    _bio_ms = _mark_step()
-    runtime_setup_note = deployment_runtime_reconcile_prompt_note(cm)
-    _runtime_status_ms = _mark_step()
-    _user_desktop_link = SESSION_DETAILS.assistant.user_desktop_for(acting_user_id)
     system_prompt = build_system_prompt(
-        bio=_bio_text,
+        bio="\n".join(bio_parts),
         contact_id=boss_contact_id,
         first_name=boss_contact.get("first_name") or "",
         surname=boss_contact.get("surname") or "",
         phone_number=boss_contact.get("phone_number"),
         email_address=boss_contact.get("email_address"),
-        is_voice_call=cm.mode.is_voice,
-        is_internal_call=is_internal_call,
-        on_voice_call=cm.in_voice_session,
-        hang_up_gate_reason=cm.call_manager.hang_up_gate_reason,
-        outbound_voice_line_ready=cm.call_manager.is_ready_for_outbound_call,
-        computer_fast_path=cm.computer_fast_path_eligible,
-        assistant_has_phone=bool(cm.assistant_number),
-        assistant_has_email=bool(cm.assistant_email),
-        assistant_has_whatsapp=bool(cm.assistant_whatsapp_number),
-        assistant_has_discord=bool(cm.assistant_discord_bot_id),
-        assistant_has_slack=bool(cm.assistant_slack_bot_user_id),
-        assistant_has_ms_teams_bot=bool(cm.assistant_has_ms_teams_bot),
-        assistant_has_teams=bool(cm.assistant_has_teams),
-        has_linked_user_desktop=_user_desktop_link is not None,
-        user_filesys_consented=bool(
-            _user_desktop_link and _user_desktop_link.filesys_sync,
-        ),
-        user_filesys_available=bool(
-            _user_desktop_link and _user_desktop_link.filesys_available,
-        ),
-        acting_user_id=acting_user_id,
-        runtime_setup_note=runtime_setup_note,
-        team_summaries=getattr(cm, "team_summaries", []),
-        is_coordinator=SESSION_DETAILS.is_coordinator,
-        is_multiplayer=SESSION_DETAILS.is_multiplayer,
-        twin_name=SESSION_DETAILS.assistant.name,
-        authorized_humans=authorized_humans,
-        is_org_workspace=SESSION_DETAILS.org_id is not None,
-        console_ui_present=SETTINGS.UNIFY_CONSOLE_UI,
-        # Empty until Console first publishes it, then kept for the session
-        # (presence flips must not reshape the system prompt). The Coordinator
-        # walks users around the UI, so it takes the deeper variant Console
-        # publishes; regular assistants take the surface list. The live
-        # open/closed signal and navigation catalogue ride in the state
-        # snapshot instead.
-        console_guidance=cm.console_guidance(
-            "full" if SESSION_DETAILS.is_coordinator else "brief",
-        ),
-        coordinator_onboarding_active=cm.coordinator_onboarding_active,
-        coordinator_onboarding_render=cm.coordinator_onboarding_render,
-        coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,
-        # Empty off-call and on telephony; two or more names means the assistant
-        # is in a room where a turn may belong to someone else.
-        call_participant_names=cm.call_manager.other_call_participant_names,
-        # Org calls only. One teammate is enough to make a turn possibly not
-        # mine, so this is not folded into the human count above.
-        call_assistant_names=cm.call_manager.other_call_assistant_names,
+        assistant_has_phone=bool(assistant.number),
+        assistant_has_email=bool(assistant.email),
     )
-    _system_prompt_ms = _mark_step()
 
     # Validate we can JSON-encode state prompt early (helps catch accidental objects)
     json.dumps({"state_prompt": prompt})
-    _json_validate_ms = _mark_step()
 
-    spec = BrainSpec(
-        system_prompt=system_prompt,
-        state_prompt=prompt,
-        screenshots=screenshots or [],
-        screenshot_paths=screenshot_paths or [],
-    )
-    _spec_ms = _mark_step()
-
-    log_startup_timing(
-        LOGGER,
-        (
-            "⏱️ [StartupTiming] llm_preamble.brain_spec.detail "
-            "total=%.0fms prompt_ref=%.0fms boss_contact=%.0fms "
-            "active_contact=%.0fms bio=%.0fms runtime_status=%.0fms "
-            "system_prompt=%.0fms json_validate=%.0fms "
-            "spec=%.0fms state_chars=%d system_chars=%d system_parts=%d "
-            "screenshots=%d runtime_note=%s mode=%s"
-        ),
-        (perf_counter() - _brain_t0) * 1000,
-        _prompt_ms,
-        _boss_contact_ms,
-        _active_contact_ms,
-        _bio_ms,
-        _runtime_status_ms,
-        _system_prompt_ms,
-        _json_validate_ms,
-        _spec_ms,
-        len(prompt),
-        len(system_prompt.flatten()),
-        len(system_prompt.to_list()),
-        len(screenshots or []),
-        runtime_setup_note is not None,
-        cm.mode,
-    )
-
-    return spec
+    return BrainSpec(system_prompt=system_prompt, state_prompt=prompt)

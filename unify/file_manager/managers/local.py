@@ -1,4 +1,4 @@
-"""Local file manager with optional managed VM file sync."""
+"""Local file manager over the workspace directory."""
 
 from __future__ import annotations
 
@@ -8,16 +8,10 @@ from unify.manager_registry import SingletonABCMeta
 
 
 class LocalFileManager(FileManager, metaclass=SingletonABCMeta):
-    """Local file manager with optional managed VM file sync.
-
-    Sync functionality is handled by the underlying LocalFileSystemAdapter.
-    Access sync methods via: manager._adapter.start_sync(), etc.
-    """
+    """Local file manager over the workspace directory."""
 
     def __init__(
         self,
         root: str | None = None,
-        *,
-        enable_sync: bool = True,
     ):
-        super().__init__(adapter=LocalFileSystemAdapter(root, enable_sync=enable_sync))
+        super().__init__(adapter=LocalFileSystemAdapter(root))

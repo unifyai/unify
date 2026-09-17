@@ -741,7 +741,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "## What Can Be Stored\n\n"
     "Any code that executed successfully in `execute_code` during "
     "this trajectory can be stored as a function. Environment-provided "
-    "namespaces (`primitives`, `primitives.computer`, `primitives.actor`) and "
+    "namespaces (`primitives`, `primitives.actor`) and "
     "other stored functions referenced in the code are automatically "
     "detected from the source and injected at runtime — you do not "
     "need to add imports or worry about whether these names will be "
@@ -906,7 +906,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "What you can do is store functions that are cheap to verify and hard "
     "to get wrong:\n\n"
     "- **Thin effects.** A function that performs an irreversible effect "
-    "(send, post, delete, pay, drive a desktop) must do only that. Compute "
+    "(send, post, delete, pay) must do only that. Compute "
     "in one function, perform the effect in another, and let the root "
     "compose them. This is what makes a failed verdict cheap to repair and "
     "blame precise: the computation can be re-run and corrected without "
@@ -2896,7 +2896,7 @@ class CodeActActor(BaseCodeActActor):
         Args:
             environments: List of execution environments to install. Each environment
                 injects a namespace into the sandbox (e.g. ``primitives``,
-                ``primitives.computer``, ``primitives.actor``). Pass ``None`` or ``[]``
+                ``primitives.actor``). Pass ``None`` or ``[]``
                 for a bare actor with no environments.
             function_manager: Manages a library of reusable functions. Exposes read-only tools
                 (list_functions, search_functions, filter_functions) to the LLM.
@@ -2973,8 +2973,7 @@ class CodeActActor(BaseCodeActActor):
                 # undocumented primitives must stay searchable. State manager
                 # primitives declare an empty set (their method docs are not
                 # inlined), so core methods like `ask`/`update` are
-                # searchable; computer-control tools remain excluded because
-                # their name index stays in the prompt.
+                # searchable.
                 _documented = getattr(env, "prompt_documented_names", None)
                 for tool_name, tool_meta in env.get_tools().items():
                     if tool_meta.function_id is not None:
@@ -3256,112 +3255,6 @@ class CodeActActor(BaseCodeActActor):
             session_id=session_id,
         )
 
-    async def _execute_on_surface(
-        self,
-        *,
-        surface_name: str,
-        code: str,
-        language: str,
-        state_mode: str,
-        session_id: int | None,
-        session_name: str | None,
-        venv_id: int | None,
-        user_id: str | None,
-    ) -> dict[str, Any]:
-        """Run code on a non-local surface (assistant desktop or user desktop).
-
-        Remote surfaces are stateless one-shots: sessions and venvs are
-        local-only concepts, so a session/venv request is rejected with a
-        structured error the model can self-correct against, rather than being
-        silently ignored.
-        """
-        import time as _surface_time
-
-        from unify.actor.execution.surface import ExecutionSurface
-        from unify.actor.execution.targets import (
-            TargetUnavailableError,
-            get_target,
-        )
-
-        def _err(message: str, suggestion: str) -> dict[str, Any]:
-            return {
-                "stdout": "",
-                "stderr": "",
-                "result": None,
-                "error": message,
-                "suggestion": suggestion,
-                "language": language,
-                "state_mode": state_mode,
-                "session_id": None,
-                "session_name": None,
-                "venv_id": None,
-                "session_created": False,
-                "duration_ms": 0,
-                "surface": surface_name,
-            }
-
-        try:
-            surface = ExecutionSurface(surface_name)
-        except ValueError:
-            return _err(
-                f"Unknown surface: {surface_name!r}",
-                "Use one of: 'local', 'assistant_desktop', 'user_desktop'.",
-            )
-
-        if (
-            state_mode != "stateless"
-            or session_id is not None
-            or session_name is not None
-            or venv_id is not None
-        ):
-            return _err(
-                f"Surface {surface_name!r} supports only stateless execution.",
-                "Remove state_mode/session_id/session_name/venv_id (remote "
-                "surfaces are stateless), or use surface='local' for sessions "
-                "and venvs.",
-            )
-
-        t0 = _surface_time.perf_counter()
-        try:
-            target = get_target(
-                surface,
-                user_id=user_id,
-                session_executor=self._session_executor,
-                function_manager=self.function_manager,
-            )
-            await target.ensure_ready()
-            if language == "python":
-                res = await target.run_python(code)
-            else:
-                res = await target.run_shell(code)
-        except TargetUnavailableError as e:
-            return _err(
-                str(e),
-                "Check that the desktop is linked, reachable, and (for the "
-                "user desktop) that the user has granted access.",
-            )
-        except ValueError as e:
-            return _err(
-                str(e),
-                "Adjust the request to match the surface's capabilities.",
-            )
-
-        return {
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-            "result": res.result if res.result is not None else res.returncode,
-            "error": res.error,
-            "returncode": res.returncode,
-            "language": language,
-            "state_mode": "stateless",
-            "session_id": None,
-            "session_name": None,
-            "venv_id": None,
-            "session_created": False,
-            "duration_ms": int((_surface_time.perf_counter() - t0) * 1000),
-            "surface": surface_name,
-        }
-
     async def _run_active_work_heartbeat(
         self,
         active_work: ActiveWorkHandle,
@@ -3479,8 +3372,6 @@ class CodeActActor(BaseCodeActActor):
             session_id: int | None = None,
             session_name: str | None = None,
             venv_id: int | None = None,
-            surface: str = "local",
-            user_id: str | None = None,
             _notification_up_q: asyncio.Queue[dict] | None = None,
             _clarification_up_q: asyncio.Queue[str] | None = None,
             _clarification_down_q: asyncio.Queue[str] | None = None,
@@ -3501,16 +3392,10 @@ class CodeActActor(BaseCodeActActor):
             Key concepts
             -----------
             - **language**: "python" | "bash" | "zsh" | "sh" | "powershell"
-            - **surface**: "local" (default; the only surface with stateful
-              sessions and venvs), "assistant_desktop" (managed VM),
-              "user_desktop" (the user's own linked machine; pass
-              ``user_id`` when more than one is linked). Remote surfaces are
-              **stateless one-shots**: ``state_mode`` must be "stateless"
-              and ``session_id`` / ``session_name`` / ``venv_id`` omitted.
-            - **state_mode**: omit it and a local venv-less Python cell
+            - **state_mode**: omit it and a venv-less Python cell
               runs **stateful in session 0** — the current per-call
               Python sandbox, so variables persist across cells — while
-              shell, venv, and remote cells run stateless. Pass
+              shell and venv cells run stateless. Pass
               "stateless" for an isolated fresh run (environment globals
               and FunctionManager-discovered functions still available),
               "read_only" to read an existing session without
@@ -3533,14 +3418,6 @@ class CodeActActor(BaseCodeActActor):
             ``language``, ``state_mode``, ``session_id``, ``session_name``,
             ``venv_id``, ``session_created``, ``duration_ms``.
 
-            Runtime credential helpers
-            --------------------------
-            Python globals include ``get_oauth_access_token(provider)`` for
-            connected-account OAuth: a local capability handle (not a raw
-            token) used with the workspace proxy base URLs — see
-            ``help(get_oauth_access_token)``. Static API keys stay in
-            ``os.environ``.
-
             Steering while the block runs
             -----------------------------
             Python blocks are steerable in flight: checkpoints sit between
@@ -3557,11 +3434,11 @@ class CodeActActor(BaseCodeActActor):
             """
             _ = thought  # Thought is logged by the LLM; not used programmatically.
             if state_mode is None:
-                # An omitted state_mode resolves per cell type: only local
-                # venv-less Python cells get the persistent per-call sandbox.
+                # An omitted state_mode resolves per cell type: only venv-less
+                # Python cells get the persistent per-call sandbox.
                 state_mode = (
                     "stateful"
-                    if surface == "local" and language == "python" and venv_id is None
+                    if language == "python" and venv_id is None
                     else "stateless"
                 )
             if code is None or code.strip() == "":
@@ -3577,7 +3454,6 @@ class CodeActActor(BaseCodeActActor):
                     "venv_id": venv_id,
                     "session_created": False,
                     "duration_ms": 0,
-                    "surface": surface,
                 }
 
             # ──────────────────────────────────────────────────────────────
@@ -3658,22 +3534,6 @@ class CodeActActor(BaseCodeActActor):
                         "execute_code assistant secret sync failed",
                         exc_info=True,
                     )
-
-                # Route non-local surfaces (assistant/user desktop) through the
-                # execution targets. Remote surfaces are stateless, so they skip
-                # the local session-resolution and pool machinery entirely.
-                if surface != "local":
-                    out = await self._execute_on_surface(
-                        surface_name=surface,
-                        code=code,
-                        language=str(language),
-                        state_mode=state_mode,
-                        session_id=session_id,
-                        session_name=session_name,
-                        venv_id=venv_id,
-                        user_id=user_id,
-                    )
-                    return out
 
                 _rs = self._resolve_session(
                     state_mode=state_mode,
@@ -5828,18 +5688,6 @@ class CodeActActor(BaseCodeActActor):
             "\n\n".join(filter(None, [self._base_guidelines, guidelines])) or None
         )
 
-        # Workspace-OAuth gate for the OAuth helper section — independent of
-        # the integration-packages gate: a workspace-email assistant with
-        # zero packages keeps the OAuth section. Cheap in-memory presence
-        # check; never forces a network sync.
-        has_workspace_oauth = False
-        try:
-            from unify.common.runtime_oauth import has_workspace_oauth_connection
-
-            has_workspace_oauth = has_workspace_oauth_connection()
-        except Exception:
-            has_workspace_oauth = False
-
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] building system prompt")
         system_prompt = build_code_act_prompt(
             environments=sandbox_envs,
@@ -5847,7 +5695,6 @@ class CodeActActor(BaseCodeActActor):
             can_store=effective_can_store,
             guidelines=effective_guidelines,
             discovery_first_policy=self.tool_policy is _USE_DEFAULT,
-            include_oauth_helper=has_workspace_oauth,
             persist=bool(persist),
         )
         logger.debug(

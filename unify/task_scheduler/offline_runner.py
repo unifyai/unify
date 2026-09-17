@@ -92,8 +92,6 @@ class OfflineTaskConfig:
     source_ref: str = ""
     source_medium: str = ""
     source_contact_id: str = ""
-    requires_filesystem: bool = False
-    requires_computer: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -162,8 +160,6 @@ def _load_config_from_env() -> OfflineTaskConfig:
         source_ref=os.environ.get("UNIFY_OFFLINE_TASK_SOURCE_REF", ""),
         source_medium=os.environ.get("UNIFY_OFFLINE_TASK_SOURCE_MEDIUM", ""),
         source_contact_id=os.environ.get("UNIFY_OFFLINE_TASK_SOURCE_CONTACT_ID", ""),
-        requires_filesystem=_bool_env("UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"),
-        requires_computer=_bool_env("UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"),
     )
 
 

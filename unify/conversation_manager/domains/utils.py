@@ -148,14 +148,13 @@ class Debouncer:
     async def cancel_run_by_turn(self, turn_id) -> bool:
         """Cancel exactly the run spawned by ``turn_id``, wherever it sits.
 
-        Used when the fast brain resolves a turn itself (continuation / small
-        talk): only that turn's eagerly-started slow-brain run must be dropped,
-        never a prior still-thinking run or an unrelated (act/SMS) run.
+        Only that turn's slow-brain run is dropped, never a prior
+        still-thinking run or an unrelated run.
 
         - Pending match -> cancel the pending wrapper; the running task (a
           different turn) keeps going.
         - Running match -> cancel it (unless it is already in tool commit, i.e.
-          speaking, in which case it is spared); the pending wrapper then
+          replying, in which case it is spared); the pending wrapper then
           auto-promotes to running.
         - No match (already debounced out / not ours) -> no-op.
 
@@ -189,7 +188,7 @@ class Debouncer:
             and self.running_task_trace_meta.get("turn_id") == turn_id
         ):
             if self._is_tool_committed(self.running_task_trace_meta):
-                # Already producing speech; leave it to finish.
+                # Already producing its reply; leave it to finish.
                 return False
             self.running_task.cancel()
             try:

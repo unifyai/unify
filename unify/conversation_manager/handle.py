@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Optional, Type, TypeVar, TYPE_CHECKING
 from pydantic import BaseModel
 from enum import Enum
@@ -26,10 +25,10 @@ T = TypeVar("T", bound=[BaseModel, Enum])
 
 logger = logging.getLogger(__name__)
 
-# How long a spoken question waits for the user before the loop is told the
-# question went unanswered. Long enough to cover a person thinking, taking a
-# breath, or being talked over mid-call; short enough that a caller who walked
-# away does not hold the loop open indefinitely.
+# How long a question posted to the chat waits for the user before the loop
+# is told the question went unanswered. Long enough to cover a person reading
+# and thinking; short enough that a user who walked away does not hold the
+# loop open indefinitely.
 USER_REPLY_TIMEOUT_S = 120
 
 
@@ -133,16 +132,11 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
 
         cm_handle = self
 
-        ask_start_ts = time.time()
-
         # Build recent transcript from contact_index for LLM context
         recent_transcript_for_prompt: str = ""
         try:
-            contact = (
-                self.conversation_manager.call_manager.call_contact
-                or self.conversation_manager.contact_index.get_contact(
-                    contact_id=self.contact_id,
-                )
+            contact = self.conversation_manager.contact_index.get_contact(
+                contact_id=self.contact_id,
             )
 
             conversation_turns, _ = self.conversation_manager.get_recent_transcript(
@@ -176,18 +170,18 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
         async def ask_question(text: str):
             """
             Asks the user a question and WAITS for a reply.
-            This tool BLOCKS until the user speaks.
+            This tool BLOCKS until the user replies in the chat.
             Use this when you need to ask a clarifying question (PATH 2).
             """
             nonlocal user_reply_future
-            # Speak to user via direct speech (bypasses Main CM Brain)
+            # Post to the chat directly (bypasses the main CM brain).
             await self.event_broker.publish(
                 "app:comms:direct_speech",
                 DirectMessageEvent(content=text).to_json(),
             )
 
             # An interjection may already have delivered the answer before the
-            # question was spoken (patient mode); otherwise wait for the next.
+            # question was posted; otherwise wait for the next.
             if not user_reply_future.done():
                 try:
                     await asyncio.wait_for(

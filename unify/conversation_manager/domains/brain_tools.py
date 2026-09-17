@@ -20,10 +20,6 @@ class ConversationManagerBrainTools:
     def __init__(self, cm: "ConversationManager"):
         self._cm = cm
 
-    def cm_get_mode(self) -> str:
-        """Return the current ConversationManager mode (text/call/unify_meet)."""
-        return str(self._cm.mode)
-
     def cm_get_contact(self, contact_id: int) -> dict | None:
         """Fetch a contact summary by contact_id (threads excluded)."""
         return self._cm.contact_index.get_contact(contact_id=contact_id)
@@ -62,7 +58,6 @@ class ConversationManagerBrainTools:
     def as_tools(self) -> dict[str, "Callable[..., Any]"]:
         """Return the tools dict for start_async_tool_loop."""
         return {
-            "cm_get_mode": self.cm_get_mode,
             "cm_get_contact": self.cm_get_contact,
             "cm_list_in_flight_actions": self.cm_list_in_flight_actions,
             "cm_list_notifications": self.cm_list_notifications,

@@ -52,18 +52,6 @@ from contextlib import redirect_stderr, redirect_stdout
 from queue import Queue
 from typing import Any, Dict
 
-# Defense-in-depth: strip any raw provider OAuth token that may have leaked into
-# this sandbox process via inherited environment. Connected-provider REST is
-# reached only through the trusted localhost proxy (see unify.provider_proxy),
-# never with a raw token held in the sandbox.
-for _leaked_token in (
-    "MICROSOFT_ACCESS_TOKEN",
-    "MICROSOFT_REFRESH_TOKEN",
-    "GOOGLE_ACCESS_TOKEN",
-    "GOOGLE_REFRESH_TOKEN",
-):
-    os.environ.pop(_leaked_token, None)
-
 # ────────────────────────────────────────────────────────────────────────────
 # Signal Handling for Graceful Shutdown
 # ────────────────────────────────────────────────────────────────────────────
@@ -319,40 +307,6 @@ class PrimitivesProxy:
         return self._managers[name]
 
 
-class ComputerPrimitivesProxy:
-    """
-    Proxy for the computer_primitives object.
-
-    Provides access to web/desktop control methods via RPC.
-    Usage: await computer_primitives.click(selector="...")
-    """
-
-    def __init__(self, is_async: bool = True):
-        self._is_async = is_async
-
-    def _make_method(self, method_name: str):
-        """Create a method that makes an RPC call."""
-        path = f"computer.{method_name}"
-
-        if self._is_async:
-
-            async def async_method(**kwargs):
-                return await rpc_call_async(path, kwargs)
-
-            return async_method
-        else:
-
-            def sync_method(**kwargs):
-                return rpc_call_sync(path, kwargs)
-
-            return sync_method
-
-    def __getattr__(self, name: str):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return self._make_method(name)
-
-
 def _response_format_for_rpc(response_format: Any) -> tuple[Any, Any]:
     if response_format is None:
         return None, None
@@ -379,13 +333,11 @@ def _response_format_for_rpc(response_format: Any) -> tuple[Any, Any]:
 
 
 # The RPC proxies below mirror their canonical docstrings verbatim so that
-# ``help(query_llm)`` / ``help(list_llms)`` / ``help(get_oauth_access_token)``
-# teach the same contract inside a venv session as in an in-process session
-# (this file ships standalone into venvs and cannot import unify). Canonical
-# sources: unify.common.reasoning (query_llm, list_llms) and
-# unify.common.runtime_oauth (get_oauth_access_token). Parity is enforced by
-# tests/function_manager/test_venv_runner_docstrings.py; edit the canonical
-# docstring first, then re-mirror here.
+# ``help(query_llm)`` / ``help(list_llms)`` teach the same contract inside a
+# venv session as in an in-process session (this file ships standalone into
+# venvs and cannot import unify). Canonical source: unify.common.reasoning.
+# Parity is enforced by tests/function_manager/test_venv_runner_docstrings.py;
+# edit the canonical docstring first, then re-mirror here.
 async def query_llm(
     prompt: str,
     *,
@@ -671,98 +623,6 @@ def list_llms(provider: str = None) -> list[str]:
     return rpc_call_sync("runtime.list_llms", {"provider": provider})
 
 
-def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
-    """
-    Authorize provider REST calls from ``execute_code`` via the local proxy.
-
-    This does NOT return a raw provider access token. It returns a local
-    capability handle (the workspace proxy nonce) to place in the
-    ``Authorization: Bearer ...`` header. You must ALSO point your base URL at
-    the local proxy so the request is authorized and policy-enforced:
-
-    - Microsoft Graph: base URL ``os.environ["MICROSOFT_GRAPH_BASE"]`` (drop-in
-      for ``https://graph.microsoft.com/v1.0``).
-    - Google APIs: ``os.environ["GOOGLE_DRIVE_BASE"]`` (drop-in for
-      ``https://www.googleapis.com/drive/v3``) or ``GOOGLE_API_BASE`` for other
-      Google services.
-
-    The proxy swaps this handle for the real upstream token and enforces the
-    per-assistant file-access allowlist. Calling the provider hosts directly
-    (``graph.microsoft.com`` / ``www.googleapis.com``) with this handle will
-    fail: the sandbox holds no real token by design.
-
-    The proxy gives you the FULL provider REST API (list, search, read,
-    rename, move, upload, delete, ``$batch``, ...) but enforces the
-    file-access allowlist: files and folders the user has not permitted are
-    masked — absent from listings/search and not-found on direct access, and
-    writes into a non-permitted location are rejected. Treat masked items as
-    nonexistent. Provider SDKs work too — point the client's base/endpoint at
-    the proxy (e.g. msgraph's ``request_adapter.base_url``, googleapiclient's
-    ``client_options.api_endpoint``).
-
-    Parameters
-    ----------
-    provider:
-        Provider name or alias. Built-in aliases include ``"microsoft"``,
-        ``"graph"``, ``"google"``, ``"gmail"``, and ``"drive"``.
-    min_ttl_seconds:
-        Accepted for signature compatibility; token freshness is handled by the
-        proxy on each upstream call.
-
-    Examples
-    --------
-    Multiple providers can be used in one sandbox; request each explicitly::
-
-        microsoft_token = get_oauth_access_token("microsoft")
-        google_token = get_oauth_access_token("google")
-
-    A raw HTTP call through the proxy::
-
-        import os, httpx
-        token = get_oauth_access_token("microsoft")
-        base = os.environ["MICROSOFT_GRAPH_BASE"]  # ~ https://graph.microsoft.com/v1.0
-        resp = httpx.get(
-            f"{base}/me/drive/root/children",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    Scope checks before calling
-    ---------------------------
-    When the provider has a granted-scopes secret (``GOOGLE_GRANTED_SCOPES``
-    / ``MICROSOFT_GRANTED_SCOPES``, space-separated raw OAuth scope strings,
-    not feature names), check the scope the specific API call requires
-    (from the provider's official docs/SDK) against it before calling:
-
-    - Google scopes are full URLs, e.g.
-      ``https://www.googleapis.com/auth/gmail.send``.
-    - Microsoft docs list short names (``Sites.Read.All``); the secret stores
-      them prefixed — search for
-      ``https://graph.microsoft.com/Sites.Read.All``. Only ``offline_access``
-      is stored bare.
-    - Secret missing entirely → proceed normally (expected for
-      admin-consented Microsoft enterprise tenants and self-managed tokens).
-      Scope present → proceed. Scope absent → do not attempt the call; tell
-      the user to reconnect the service from the Console Integrations tab
-      with the missing access.
-
-    Reuse in stored functions
-    -------------------------
-    Reusable OAuth integrations should call
-    ``get_oauth_access_token(provider)`` at runtime, each run; never store or
-    capture a concrete handle/token value inside a function implementation.
-
-    Anti-patterns
-    -------------
-    - Do not call ``graph.microsoft.com`` / ``www.googleapis.com`` directly; use
-      the proxy base URLs above.
-    - Do not print, log, return, or store this handle.
-    """
-    return rpc_call_sync(
-        "runtime.get_oauth_access_token",
-        {"provider": provider, "min_ttl_seconds": min_ttl_seconds},
-    )
-
-
 # ────────────────────────────────────────────────────────────────────────────
 # Steering Checkpoint Shims
 # ────────────────────────────────────────────────────────────────────────────
@@ -957,11 +817,10 @@ def create_safe_globals(is_async: bool = True):
         "Set": typing.Set,
         "Union": typing.Union,
         "Literal": typing.Literal,
-        # Primitives proxy (computer and actor accessible via primitives.computer.* etc.)
+        # Primitives proxy (managers accessible via primitives.<manager>.*)
         "primitives": PrimitivesProxy(is_async=is_async),
         "query_llm": query_llm,
         "list_llms": list_llms,
-        "get_oauth_access_token": get_oauth_access_token,
         # Steering probes: parent-instrumented source calls these; inert
         # until a control directive arrives.
         "_cp": _cp,
