@@ -1,6 +1,6 @@
 """Steering the direct function-execution path.
 
-``FunctionManager._execute_in_default_env`` runs a stored function in-process
+``FunctionManager._execute_python_function`` runs a stored function in-process
 without going through the sandbox, so it needs its own probes. Without them the
 same stored function is correctable or not depending purely on which route
 reached it — via the actor's synthesised preamble, or called here directly.
@@ -63,7 +63,7 @@ class _Prims:
 def _manager() -> FunctionManager:
     """A FunctionManager instance without touching its constructor's I/O.
 
-    Only ``_execute_in_default_env`` is under test, and it reads nothing from
+    Only ``_execute_python_function`` is under test, and it reads nothing from
     the instance except the in-process session dict.
     """
     manager = FunctionManager.__new__(FunctionManager)
@@ -79,10 +79,9 @@ async def _execute(
     session_id: int = 0,
     parent_chat_context: list | None = None,
 ) -> dict:
-    return await manager._execute_in_default_env(
+    return await manager._execute_python_function(
         implementation=IMPLEMENTATION,
         call_kwargs={"vendors": list(VENDORS)},
-        is_async=True,
         state_mode=state_mode,
         session_id=session_id,
         extra_namespaces={"primitives": _Prims(comms)},
@@ -121,12 +120,11 @@ async def test_runs_normally_with_no_session():
 
 @pytest.mark.asyncio
 async def test_sync_function_still_runs():
-    """`is_async=False` must keep working once the invoke path is rewritten."""
+    """A synchronous function runs on the same path as an async one."""
     manager = _manager()
-    out = await manager._execute_in_default_env(
+    out = await manager._execute_python_function(
         implementation="def add(a, b):\n    return a + b\n",
         call_kwargs={"a": 2, "b": 3},
-        is_async=False,
         extra_namespaces={},
     )
     assert out["error"] is None, out["error"]
@@ -136,10 +134,9 @@ async def test_sync_function_still_runs():
 @pytest.mark.asyncio
 async def test_missing_definition_still_errors():
     manager = _manager()
-    out = await manager._execute_in_default_env(
+    out = await manager._execute_python_function(
         implementation="x = 1\n",
         call_kwargs={},
-        is_async=False,
         extra_namespaces={},
     )
     assert "No function definition found" in (out["error"] or "")
@@ -195,10 +192,9 @@ async def test_pending_stop_reaches_a_sync_function():
     session.interruption = InterruptionRequest(reason="task revoked", stop=True)
 
     with use_session(session):
-        out = await manager._execute_in_default_env(
+        out = await manager._execute_python_function(
             implementation="def add(a, b):\n    return a + b\n",
             call_kwargs={"a": 2, "b": 3},
-            is_async=False,
             extra_namespaces={},
         )
 

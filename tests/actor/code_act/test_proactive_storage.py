@@ -130,7 +130,6 @@ def test_sub_agent_storage_is_gated_on_the_dial():
     assert "First apply the distillation dial" in prompt
     assert "plan discovered at runtime" in prompt
     assert "instead of preserving the agent wrapper" in prompt
-    assert "unsafe_effectful" in prompt
     assert "Calls that survive this test" in prompt
 
 

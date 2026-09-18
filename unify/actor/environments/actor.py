@@ -324,6 +324,13 @@ class _ActorRunner:
           the same code block (use ``execute_code`` with stateful sessions).
         - The sub-task is trivial (single tool call) — the overhead of an
           actor is not worth it.
+        - The sub-task is your own task, or most of it, restated. A child
+          actor has the same tools and the same unknowns you have, so
+          handing it the task you were given adds a layer of prompts and
+          no knowledge, and the child may do the same again. Explore
+          yourself with ``execute_code`` (list the directory, read the
+          files, grep) and spawn actors only for parts that are
+          independent of each other or of your own next step.
 
         Best practices
         --------------
