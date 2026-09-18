@@ -67,8 +67,9 @@ class SimulatedFunctionManager(BaseFunctionManager):
             f"\n\nIMPORTANT – This instance has a filter_scope applied: {self._filter_scope!r}. "
             "Every query (list, filter, search) MUST only return functions whose metadata "
             "satisfies this boolean expression. For example, if the scope is "
-            "\"language == 'python'\", never include shell/bash functions in results. "
-            "Treat the scope as an implicit 'AND' condition on every read query."
+            "\"'data' in docstring\", never include functions whose docstring lacks "
+            "'data' in results. Treat the scope as an implicit 'AND' condition on "
+            "every read query."
             if self._filter_scope
             else ""
         )

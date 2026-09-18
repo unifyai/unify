@@ -18,7 +18,6 @@ async def test_execute_code_can_run_without_bound_sandbox():
     out = await execute_code(
         "run",
         "print('x')",
-        language="python",
         state_mode="stateful",
         session_id=0,
         venv_id=None,

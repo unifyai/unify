@@ -274,7 +274,6 @@ class TestFormatLlmResponseForLog:
                         "arguments": json.dumps(
                             {
                                 "thought": "Render the PDF",
-                                "language": "python",
                                 "code": "\nimport os\nprint(os.getcwd())\n",
                             },
                         ),
@@ -322,7 +321,7 @@ class TestFormatLlmResponseForLog:
 
     def test_does_not_mutate_original_message(self):
         """The original message dict is not modified."""
-        original_args = json.dumps({"code": "x = 1\ny = 2\n", "language": "python"})
+        original_args = json.dumps({"code": "x = 1\ny = 2\n"})
         msg = {
             "role": "assistant",
             "tool_calls": [

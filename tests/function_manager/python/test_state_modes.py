@@ -158,8 +158,8 @@ async def test_stateful_mode_persists_state(
 
     try:
         # Add functions (no venv by default, we'll use target_venv_id override)
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Execute set_var in stateful mode with venv override
         result1 = await fm.execute_function(
@@ -199,7 +199,7 @@ async def test_stateful_mode_requires_venv_pool(function_manager_factory):
 
     try:
         # Add function
-        fm.add_functions(implementations=SIMPLE_FUNC, language="python")
+        fm.add_functions(implementations=SIMPLE_FUNC)
 
         with pytest.raises(
             ValueError,
@@ -234,8 +234,8 @@ async def test_read_only_mode_reads_state(function_manager_factory, venv_pool_fa
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # First, set state using stateful mode
         result1 = await fm.execute_function(
@@ -278,8 +278,8 @@ async def test_read_only_mode_does_not_persist_changes(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Set initial state to 100
         await fm.execute_function(
@@ -328,7 +328,7 @@ async def test_read_only_mode_requires_venv_pool(function_manager_factory):
 
     try:
         # Add function
-        fm.add_functions(implementations=SIMPLE_FUNC, language="python")
+        fm.add_functions(implementations=SIMPLE_FUNC)
 
         with pytest.raises(
             ValueError,
@@ -366,8 +366,8 @@ async def test_stateless_mode_fresh_each_time(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=CHECK_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=CHECK_VAR_FUNC)
 
         # Set state in stateful mode
         await fm.execute_function(
@@ -405,7 +405,7 @@ async def test_stateless_mode_no_venv_pool_required(function_manager_factory):
 
     try:
         # Add function
-        fm.add_functions(implementations=SIMPLE_FUNC, language="python")
+        fm.add_functions(implementations=SIMPLE_FUNC)
 
         # Should work without venv_pool
         result = await fm.execute_function(
@@ -437,8 +437,8 @@ async def test_stateless_mode_does_not_affect_stateful_state(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Set initial state to 42 (stateful)
         await fm.execute_function(
@@ -493,8 +493,8 @@ async def test_state_serialization_primitives(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_PRIMITIVES_FUNC, language="python")
-        fm.add_functions(implementations=GET_PRIMITIVES_FUNC, language="python")
+        fm.add_functions(implementations=SET_PRIMITIVES_FUNC)
+        fm.add_functions(implementations=GET_PRIMITIVES_FUNC)
 
         # Set state in stateful mode
         await fm.execute_function(
@@ -540,8 +540,8 @@ async def test_state_serialization_collections(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_COLLECTIONS_FUNC, language="python")
-        fm.add_functions(implementations=GET_COLLECTIONS_FUNC, language="python")
+        fm.add_functions(implementations=SET_COLLECTIONS_FUNC)
+        fm.add_functions(implementations=GET_COLLECTIONS_FUNC)
 
         # Set state in stateful mode
         await fm.execute_function(
@@ -580,7 +580,7 @@ async def test_no_venv_ignores_state_mode(function_manager_factory):
     """Functions without venv should execute regardless of state_mode."""
     fm = function_manager_factory()
 
-    fm.add_functions(implementations=SIMPLE_FUNC, language="python")
+    fm.add_functions(implementations=SIMPLE_FUNC)
 
     # All state modes should work (state_mode is ignored for no-venv functions)
     for mode in ["stateful", "read_only", "stateless"]:

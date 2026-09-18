@@ -961,7 +961,8 @@ class ToolsData:
         # machinery that turns failures into tool results. Convert it
         # into a task-level failure so the model sees the error and
         # self-corrects instead of the whole trajectory dying (seen in
-        # prod: act dispatch killed by execute_code missing `language`).
+        # prod: act dispatch killed by execute_code missing a required
+        # argument).
         # The sync branch is already safe: asyncio.to_thread defers
         # binding into the task.
         if asyncio.iscoroutinefunction(fn):

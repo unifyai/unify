@@ -45,7 +45,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--home",
         metavar="DIR",
-        help="where the store, embeddings cache, workspace and logs live "
+        help="where the store, workspace and logs live "
         "(default: UNIFY_HOME or ~/.unify)",
     )
     parser.add_argument(

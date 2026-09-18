@@ -263,14 +263,13 @@ The ConversationManager uses a `Debouncer` that coalesces rapid-fire events (new
 
 ## The local store
 
-**Files:** `unify/db/engine.py`, `unify/db/expressions.py`, `unify/db/embeddings.py`
+**Files:** `unify/db/engine.py`, `unify/db/expressions.py`
 
 `unify.db` is an in-process SQLite engine with the shape of a document store:
 
 - **Projects** hold **contexts** (tables), and contexts hold **rows** of JSON with typed **fields**.
 - A context can declare **unique keys**, **auto-counted ids**, **foreign keys** (with `CASCADE` / `SET NULL` propagation through scalar, list and nested-list references) and **derived columns** whose equations are evaluated on every write.
-- **Filters and sort keys** are Python expressions evaluated per row by an AST walker (never `eval`), with SQL-style `None` propagation and builtins such as `exists`, `now`, `embed` and `cosine`, so a derived vector column and a nearest-neighbour sort need no external service.
-- **Embeddings** come from a local `fastembed` model by default (or `<model>@openrouter`) and are cached on disk by `(model, text)`.
+- **Filters and sort keys** are Python expressions evaluated per row by an AST walker (never `eval`), with SQL-style `None` propagation and builtins such as `exists` and `now`.
 - **Commits** snapshot a context or a whole project and can be rolled back, which is what the test fixtures use to reset scenarios.
 
 The public API (`db.get_logs`, `db.create_logs`, `db.update_logs`, `db.create_context`, …) is what every manager reads and writes through, and the whole assistant is one file under `UNIFY_HOME`.
@@ -382,8 +381,7 @@ unify/
 │   ├── workspace.py                    # The assistant's working directory
 │   ├── db/
 │   │   ├── engine.py                   # The store: contexts, rows, derived columns, commits
-│   │   ├── expressions.py              # The row expression language
-│   │   └── embeddings.py               # Local / OpenRouter embeddings with a disk cache
+│   │   └── expressions.py              # The row expression language
 │   ├── common/
 │   │   ├── async_tool_loop.py          # SteerableToolHandle, start_async_tool_loop
 │   │   └── _async_tool/

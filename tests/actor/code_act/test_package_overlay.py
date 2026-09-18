@@ -218,7 +218,7 @@ async def test_packages_not_importable_after_act_completes():
     try:
         handle = await actor.act(
             "Use the install_python_packages tool to install the package "
-            "'cowsay'. Then use execute_code with language='python' to run: "
+            "'cowsay'. Then use execute_code to run: "
             "import cowsay; print('INSTALL_OK'). "
             "Report 'done' when finished.",
         )

@@ -206,9 +206,6 @@ class FunctionStoreEnvironment(BaseEnvironment):
             fid = row.get("function_id")
             if fid is not None:
                 header_parts.append(f"function_id: {fid}")
-            lang = row.get("language")
-            if lang:
-                header_parts.append(f"language: {lang}")
             if row.get("is_primitive"):
                 header_parts.append("primitive")
             header_tag = f" [{', '.join(header_parts)}]" if header_parts else ""

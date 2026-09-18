@@ -447,7 +447,6 @@ async def test_get_all_sessions_returns_metadata(function_manager_factory):
         sessions = pool.get_all_sessions()
         assert len(sessions) == 1
         s0 = sessions[0]
-        assert s0["language"] == "python"
         assert s0["venv_id"] == venv_id
         assert s0["session_id"] == 0
         assert "created_at" in s0 and "last_used" in s0

@@ -22,21 +22,21 @@ I didn't expect that to earn its place and it turns out to be the mode I'd least
 
 ## The other axis: where
 
-A mode isn't enough on its own, because the same three modes have to work across genuinely different machinery. In-process Python is one thing. A subprocess running a different interpreter with different packages is another. A shell where the meaningful state is the working directory and your exported variables is a third. And code running on a machine that isn't this one is a fourth.
+A mode isn't enough on its own, because the same three modes have to work across genuinely different machinery. In-process Python is one thing. A subprocess running a different interpreter with different packages is another. And code running on a machine that isn't this one is a third. Every cell is Python — a command-line tool is run from Python via `subprocess`, so its output arrives as data the same cell can work on, rather than as a separate language with its own state to track.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/execution-matrix-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/execution-matrix-light.png" alt="A matrix of three state modes (stateless, stateful, read_only) against four backends (in-process python, a dedicated venv, a shell, a remote machine). Every combination is filled in except stateful and read_only on a remote machine, which are marked not available." width="820">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/execution-matrix-light.png" alt="A matrix of three state modes (stateless, stateful, read_only) against three backends (in-process python, a dedicated venv, a remote machine). Every combination is filled in except stateful and read_only on a remote machine, which are marked not available." width="820">
   </picture>
 </p>
 
-So an execution isn't a call, it's a point: which language, which surface, which state mode, which session, which environment. The model names the coordinates it wants and the runtime resolves them. Sessions are keyed by the tuple of language, venv and session id, which is why a `python` session 0 and a `bash` session 0 can coexist without knowing about each other.
+So an execution isn't a call, it's a point: which surface, which state mode, which session, which environment. The model names the coordinates it wants and the runtime resolves them. Sessions are keyed by the pair of venv and session id, which is why session 0 in the default environment and session 0 in venv 3 can coexist without knowing about each other.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/execution-coordinates-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/execution-coordinates-light.png" alt="Four calls in one task: a stateless bash call checking a folder, a stateful python session named audit loading a 2 GB ledger, a read_only call against that same session trying a risky reshape, and a stateful call in venv 3 running a model with pinned dependencies." width="820">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/execution-coordinates-light.png" alt="Four calls in one task: a stateless call checking a folder, a stateful session named audit loading a 2 GB ledger, a read_only call against that same session trying a risky reshape, and a stateful call in venv 3 running a model with pinned dependencies." width="820">
   </picture>
 </p>
 
@@ -72,7 +72,7 @@ Python execution keeps REPL semantics: a trailing expression is rewritten into a
 
 ## Why one tool
 
-The alternative to all this is five tools: `run_python`, `run_python_stateful`, `run_in_venv`, `run_shell`, `run_remote`. It's a reasonable instinct and we went the other way, because a tool surface that grows with the cross-product of your options is a surface nobody can hold in their head — model included. Every new capability multiplies rather than adds, the docstrings drift apart, and the model ends up choosing between tools whose differences it has to infer from their names.
+The alternative to all this is four tools: `run_python`, `run_python_stateful`, `run_in_venv`, `run_remote`. It's a reasonable instinct and we went the other way, because a tool surface that grows with the cross-product of your options is a surface nobody can hold in their head — model included. Every new capability multiplies rather than adds, the docstrings drift apart, and the model ends up choosing between tools whose differences it has to infer from their names.
 
 One tool with orthogonal arguments asks a different question. Not "which of my five executors is this?" but "do I need this to persist? does it need special dependencies? whose machine?" Those are properties of the work, and a model reasons about properties considerably better than it picks from a menu.
 

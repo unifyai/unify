@@ -207,8 +207,8 @@ def test_get_prompt_context_warns_not_to_search(fm_factory):
 
 
 @_handle_project
-def test_get_prompt_context_includes_function_id_and_language(fm_factory):
-    """get_prompt_context() renders function_id and language in the header."""
+def test_get_prompt_context_includes_function_id(fm_factory):
+    """get_prompt_context() renders function_id in the header."""
     fm = fm_factory()
     fm.add_functions(implementations=[_PY_ALPHA])
 
@@ -216,7 +216,6 @@ def test_get_prompt_context_includes_function_id_and_language(fm_factory):
     context = env.get_prompt_context()
 
     assert "function_id:" in context
-    assert "language: python" in context
 
 
 @_handle_project

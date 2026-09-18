@@ -16,14 +16,13 @@ from ..common.federated_search import (
     FederatedSearchContext,
     federated_count,
     federated_filter,
-    federated_ranked_search,
+    federated_text_search,
     is_missing_context_error,
 )
 from ..common.builtins import builtins_project
 from .base import BaseGuidanceManager
 from .builtins_catalog import BUILTINS_GUIDANCE_CONTEXT
 from .types.guidance import Guidance
-from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
 from ..common.stale_reason import StaleReason, merge_stale_reasons
@@ -291,16 +290,6 @@ class GuidanceManager(BaseGuidanceManager):
         except Exception:
             pass
 
-    def warm_embeddings(self) -> None:
-        try:
-            ensure_vector_column(
-                self._ctx,
-                embed_column="_content_emb",
-                source_column="content",
-            )
-        except Exception:
-            pass
-
     def _provision_storage(self) -> None:
         """Ensure Guidance context and schema exist (idempotent)."""
         self._store = TableStore(
@@ -399,7 +388,6 @@ class GuidanceManager(BaseGuidanceManager):
             context=self._ctx,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
-            exclude_fields=list_private_fields(self._ctx),
         )
         if not logs:
             raise ValueError(
@@ -463,7 +451,6 @@ class GuidanceManager(BaseGuidanceManager):
         funcs = db.get_logs(
             context=context,
             filter=filt,
-            exclude_fields=list_private_fields(context),
         )
 
         out: List[Dict[str, Any]] = []
@@ -549,7 +536,6 @@ class GuidanceManager(BaseGuidanceManager):
             context=self._ctx,
             filter=filter_expr,
             limit=1000,
-            exclude_fields=list_private_fields(self._ctx),
         )
         available = self._available_functions_by_id()
         stale_guidance_ids: list[int] = []
@@ -590,7 +576,7 @@ class GuidanceManager(BaseGuidanceManager):
         k: int = 10,
     ) -> List[Guidance]:
         allowed_fields = list(self._BUILTIN_FIELDS)
-        rows = federated_ranked_search(
+        rows = federated_text_search(
             [
                 self._read_spec(
                     row_filter=self._scoped_filter(None),

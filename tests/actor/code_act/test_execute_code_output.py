@@ -135,7 +135,6 @@ decision = await query_llm(
     out = await execute_code(
         "test query_llm structured output",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -170,7 +169,6 @@ print(f"ANSWER: {result}")
     out = await execute_code(
         "test primitive stdout",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -209,7 +207,6 @@ await handle.result()
     out = await execute_code(
         "test result field",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -237,7 +234,6 @@ print("AFTER")
     out = await execute_code(
         "test multiple prints",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -278,7 +274,6 @@ print(f"SECOND: {r2}")
     out = await execute_code(
         "test sequential calls",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -318,7 +313,6 @@ print(f"RESULT2: {r2}")
     out = await execute_code(
         "test concurrent calls",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -356,7 +350,6 @@ except AttributeError as e:
     out = await execute_code(
         "test error handling",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -386,7 +379,6 @@ handle = await primitives.nonexistent_manager.act("test")
     out = await execute_code(
         "test unhandled error",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -428,7 +420,6 @@ print("END")
     out = await execute_code(
         "test stdout isolation",
         code,
-        language="python",
         state_mode="stateless",
     )
 
@@ -459,7 +450,6 @@ handle = await primitives.actor.act("How many records?")
 stored_result = await handle.result()
 print(f"STORED: {stored_result}")
 """,
-        language="python",
         state_mode="stateful",
         session_id=0,
     )
@@ -473,7 +463,6 @@ print(f"STORED: {stored_result}")
         """
 print(f"RETRIEVED: {stored_result}")
 """,
-        language="python",
         state_mode="stateful",
         session_id=0,
     )
@@ -512,7 +501,6 @@ print(f"ANSWER: {result}")
     out = await execute_code(
         "test llm content",
         code,
-        language="python",
         state_mode="stateless",
     )
 

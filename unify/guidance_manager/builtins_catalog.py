@@ -39,7 +39,6 @@ from ..common.builtins import (
     read_seed_hashes,
     write_seed_hashes,
 )
-from ..common.embed_utils import ensure_vector_column
 from ..common.model_to_fields import model_to_fields
 from .types.guidance import Guidance
 
@@ -48,13 +47,6 @@ logger = logging.getLogger(__name__)
 BUILTINS_GUIDANCE_CONTEXT = "Guidance"
 BUILTINS_GUIDANCE_META_CONTEXT = "Guidance/Meta"
 _HASH_MAP_KEY = "guidance_hash_by_skill"
-
-# The backend refuses to embed inputs above ~8000 estimated tokens (0.25 per
-# UTF-8 byte, i.e. ~32KB). Imported skills with inlined scripts routinely
-# exceed that, so the content embedding ranks on a truncated head of the
-# entry — where the description and body intro carry the retrieval signal —
-# while the stored ``content`` column keeps the full text.
-CONTENT_EMBED_HEAD_CHARS = 24000
 
 SNAPSHOT_PATH = Path(__file__).with_name("builtins_guidance.json")
 
@@ -193,10 +185,7 @@ def seed_builtin_guidance(
     """Seed the global builtins guidance catalogue from the snapshot.
 
     Idempotent and hash-guarded per skill: only skills whose title/content
-    changed (or disappeared from the snapshot) are deleted and re-inserted,
-    so embeddings recompute only for written rows. Always ensures the ``content`` and ``title`` vector columns exist
-    when the catalogue has rows, so read-only consumers can run ranked
-    semantic search without any write access.
+    changed (or disappeared from the snapshot) are deleted and re-inserted.
 
     Returns True when any rows were written or removed, False when already
     up to date.
@@ -269,22 +258,6 @@ def seed_builtin_guidance(
             "skipping row rewrites",
             project,
             len(entries),
-        )
-
-    if desired:
-        logger.info("Ensuring builtins guidance embedding columns project=%s", project)
-        ensure_vector_column(
-            BUILTINS_GUIDANCE_CONTEXT,
-            embed_column="_content_emb",
-            source_column="_content_head",
-            derived_expr=f"str({{content}})[:{CONTENT_EMBED_HEAD_CHARS}]",
-            project=project,
-        )
-        ensure_vector_column(
-            BUILTINS_GUIDANCE_CONTEXT,
-            embed_column="_title_emb",
-            source_column="title",
-            project=project,
         )
     return bool(changed_keys or removed_keys)
 

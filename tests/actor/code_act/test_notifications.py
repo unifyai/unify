@@ -76,7 +76,6 @@ async def test_execute_code_tracks_and_clears_active_work():
             execute_code(
                 "run silent async work",
                 "import asyncio\nawait asyncio.sleep(0.05)\n'done'",
-                language="python",
                 state_mode="stateless",
             ),
         )
@@ -108,7 +107,6 @@ async def test_execute_code_clears_active_work_after_exception_timeout_and_cance
         error_result = await execute_code(
             "raise an exception",
             "raise RuntimeError('boom')",
-            language="python",
             state_mode="stateless",
         )
         assert error_result.error is not None
@@ -117,7 +115,6 @@ async def test_execute_code_clears_active_work_after_exception_timeout_and_cance
         timeout_result = await execute_code(
             "timeout async work",
             "import asyncio\nawait asyncio.sleep(1)",
-            language="python",
             state_mode="stateless",
         )
         assert "timed out" in str(timeout_result.error)
@@ -127,7 +124,6 @@ async def test_execute_code_clears_active_work_after_exception_timeout_and_cance
             execute_code(
                 "cancel async work",
                 "import asyncio\nawait asyncio.sleep(1)",
-                language="python",
                 state_mode="stateless",
             ),
         )
@@ -161,7 +157,6 @@ async def test_execute_code_fallback_progress():
         await execute_code(
             "run silent work long enough for fallback progress",
             "import asyncio\nawait asyncio.sleep(0.06)",
-            language="python",
             state_mode="stateless",
             _notification_up_q=notification_q,
         )

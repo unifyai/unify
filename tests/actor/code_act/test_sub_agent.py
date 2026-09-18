@@ -142,8 +142,8 @@ def test_actor_discovery_scope_used_directly():
     """
     from unify.actor.environments.actor import _build_scoped_fm
 
-    fm = _build_scoped_fm("language == 'python'")
-    assert fm.filter_scope == "language == 'python'"
+    fm = _build_scoped_fm("'data' in docstring")
+    assert fm.filter_scope == "'data' in docstring"
 
     fm_none = _build_scoped_fm(None)
     assert fm_none.filter_scope is None

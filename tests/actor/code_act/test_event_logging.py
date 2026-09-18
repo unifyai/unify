@@ -76,7 +76,6 @@ async def test_execute_code_boundary_publishes_events_and_cleans_lineage(monkeyp
             "stderr": "",
             "result": 1,
             "error": None,
-            "language": "python",
             "state_mode": "stateless",
             "session_id": 0,
             "venv_id": None,
@@ -93,7 +92,6 @@ async def test_execute_code_boundary_publishes_events_and_cleans_lineage(monkeyp
             out = await execute_code(
                 thought="run",
                 code="print('hi')",
-                language="python",
                 state_mode="stateless",
                 session_id=None,
                 session_name=None,
@@ -142,7 +140,6 @@ async def test_execute_code_boundary_marks_error_when_executor_raises(monkeypatc
         out = await execute_code(
             thought="run",
             code="print('hi')",
-            language="python",
             state_mode="stateless",
             session_id=None,
             session_name=None,
@@ -183,7 +180,6 @@ class _StubFunctionManager:
         return {
             "name": name,
             "implementation": f"def {name}(**kwargs):\n    return 'ok'",
-            "language": "python",
         }
 
     def _get_primitive_data_by_name(self, *, name: str):
@@ -193,7 +189,6 @@ class _StubFunctionManager:
         self,
         *,
         implementations,
-        language: str = "python",
         preconditions=None,
         overwrite: bool = False,
         raise_on_error: bool = True,
@@ -230,7 +225,6 @@ class _BoomFunctionManager(_StubFunctionManager):
             "implementation": (
                 f"def {name}(**kwargs):\n    raise RuntimeError('boom')"
             ),
-            "language": "python",
         }
 
 
@@ -338,7 +332,6 @@ async def test_execute_function_propagates_lineage_to_nested_manager():
                     "    from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE\n"
                     "    return list(TOOL_LOOP_LINEAGE.get([]))\n"
                 ),
-                "language": "python",
             }
 
     actor = CodeActActor(
@@ -418,7 +411,6 @@ async def test_execute_code_function_boundary_to_manager_includes_full_hierarchy
             res = await execute_code(
                 thought="run",
                 code=code,
-                language="python",
                 state_mode="stateful",
                 session_id=0,
                 session_name=None,
@@ -485,7 +477,6 @@ async def test_concurrent_function_boundaries_do_not_cross_talk_lineage_or_calli
             res = await execute_code(
                 thought="run",
                 code=code,
-                language="python",
                 state_mode="stateful",
                 session_id=0,
                 session_name=None,
@@ -559,7 +550,6 @@ async def test_function_boundary_error_restores_lineage_and_surfaces_error():
         res = await execute_code(
             thought="run",
             code="await boom()\n",
-            language="python",
             state_mode="stateful",
             session_id=0,
             session_name=None,

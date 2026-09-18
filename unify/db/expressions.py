@@ -20,7 +20,6 @@ single row.
 from __future__ import annotations
 
 import ast
-import math
 import operator
 import re
 import statistics
@@ -216,56 +215,6 @@ def _fn_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _vector(value: Any) -> list[float] | None:
-    if value is None:
-        return None
-    if isinstance(value, (list, tuple)):
-        try:
-            return [float(x) for x in value]
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
-def cosine_distance(a: Any, b: Any) -> float | None:
-    """Cosine distance (1 - cosine similarity); ``None`` when undefined."""
-    va, vb = _vector(a), _vector(b)
-    if va is None or vb is None or len(va) != len(vb) or not va:
-        return None
-    dot = sum(x * y for x, y in zip(va, vb))
-    na = math.sqrt(sum(x * x for x in va))
-    nb = math.sqrt(sum(y * y for y in vb))
-    if na == 0.0 or nb == 0.0:
-        return None
-    return 1.0 - dot / (na * nb)
-
-
-def l2_distance(a: Any, b: Any) -> float | None:
-    va, vb = _vector(a), _vector(b)
-    if va is None or vb is None or len(va) != len(vb):
-        return None
-    return math.sqrt(sum((x - y) ** 2 for x, y in zip(va, vb)))
-
-
-def inner_product_distance(a: Any, b: Any) -> float | None:
-    va, vb = _vector(a), _vector(b)
-    if va is None or vb is None or len(va) != len(vb):
-        return None
-    return -sum(x * y for x, y in zip(va, vb))
-
-
-def _fn_embed(
-    text: Any,
-    model: str | None = None,
-    **_ignored: Any,
-) -> list[float] | None:
-    if text is None:
-        return None
-    from . import embeddings
-
-    return embeddings.embed(str(text), model=model)
-
-
 def _fn_exists(value: Any) -> bool:
     return value is not None
 
@@ -316,10 +265,6 @@ FUNCTIONS: dict[str, Callable[..., Any]] = {
     "enumerate": enumerate,
     "mean": _null_tolerant(statistics.fmean),
     "exists": _fn_exists,
-    "embed": _fn_embed,
-    "cosine": cosine_distance,
-    "l2": l2_distance,
-    "ip": inner_product_distance,
     "now": _fn_now,
     "datetime": _fn_datetime,
     "date": _fn_date,

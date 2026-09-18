@@ -6,10 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
 from ..common.state_managers import BaseStateManager
 
-# Supported function languages
-FunctionLanguage = Literal["python", "bash", "zsh", "sh", "powershell"]
-
-# State modes for Python function execution
+# State modes for function execution
 StateMode = Literal["stateful", "read_only", "stateless"]
 
 
@@ -47,7 +44,6 @@ class BaseFunctionManager(BaseStateManager):
         self,
         *,
         implementations: Union[str, List[str]],
-        language: FunctionLanguage = "python",
         preconditions: Optional[Dict[str, Dict]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
@@ -59,13 +55,9 @@ class BaseFunctionManager(BaseStateManager):
         Parameters
         ----------
         implementations : str | list[str]
-            Function source strings. Python: exactly one top-level ``def`` /
+            Python function source strings: exactly one top-level ``def`` /
             ``async def`` per string, starting at column 0; signatures and
-            docstrings are extracted automatically. Shell (bash, zsh, sh,
-            powershell): metadata comes from leading comments — ``# @name:``
-            (required), ``# @args:`` and ``# @description:`` (optional).
-        language : default ``"python"``
-            Language/interpreter; one language per call.
+            docstrings are extracted automatically.
         preconditions : dict[str, dict] | None
             Mapping of function name → precondition payload, stored as the
             record's ``precondition`` field.
@@ -270,9 +262,9 @@ class BaseFunctionManager(BaseStateManager):
             membership tests (in / not in), and boolean combinators (and, or,
             not) over field names and literal values, plus a fixed set of
             helpers (``len()``, string methods like ``.lower()`` /
-            ``.startswith()``, ``embed()``). Arbitrary Python calls outside
-            that set — e.g. ``' '.join(depends_on)`` or a list comprehension —
-            are rejected.
+            ``.startswith()``). Arbitrary Python calls outside that set —
+            e.g. ``' '.join(depends_on)`` or a list comprehension — are
+            rejected.
         offset : int, default ``0``
             Zero‑based index of the first result to return.
         limit : int, default ``100``
@@ -331,10 +323,14 @@ class BaseFunctionManager(BaseStateManager):
         _also_return_metadata: bool = False,
     ) -> List[Dict[str, Any]]:
         """
-        Search for functions by semantic similarity to a natural‑language query.
+        Search for functions whose name, docstring or metadata contain the
+        words of a query.
 
-        Results are ranked like memory, not just like an index: semantic
-        similarity dominates, and a function's *standing* — how often and
+        Matching is case-insensitive on whole words and their prefixes
+        (``parse`` also finds ``parser``), so describe the function in the
+        words its name and docstring would use rather than as a full
+        sentence. Results are ranked like memory, not just like an index:
+        the word match dominates, and a function's *standing* — how often and
         how recently it has actually been used, judged against its own
         usage rhythm — acts as the tiebreaker. Functions whose standing has
         fully lapsed drop out of results entirely (they still exist and
@@ -344,7 +340,7 @@ class BaseFunctionManager(BaseStateManager):
         first use.
 
         Every result carries the ranking components in the open:
-        ``_similarity`` (semantic match, 0–1), ``_standing`` (usage-based
+        ``_similarity`` (fraction of query words found, 0–1), ``_standing`` (usage-based
         memory strength, 0–1 — recency against the function's own rhythm ×
         log-saturating call count), and ``_retrieval_score`` (the combined
         rank, ``similarity × (floor + (1−floor) × standing)``), beside the
@@ -360,9 +356,9 @@ class BaseFunctionManager(BaseStateManager):
         Parameters
         ----------
         query : str, default ``""``
-            Natural‑language text describing the desired function(s). An empty
-            query is allowed (soft models sometimes omit it during discovery)
-            and returns a broad backfilled sample rather than failing.
+            Words describing the desired function(s). An empty query is
+            allowed (soft models sometimes omit it during discovery) and
+            returns a broad sample of the catalogue rather than failing.
         n : int, default ``5``
             Number of similar results to return.
         include_implementations : bool, default ``True``
@@ -389,9 +385,8 @@ class BaseFunctionManager(BaseStateManager):
         Returns
         -------
         list[dict[str, Any]] | list[Callable[..., Any]] | dict[str, Any]
-            - When ``_return_callable=False``: up to ``n`` results ordered by similarity.
-              Each element SHOULD include the fields of the ``Function`` model and MAY
-              include an additional ``score`` field (``float``) representing similarity.
+            - When ``_return_callable=False``: up to ``n`` results, best match first.
+              Each element SHOULD include the fields of the ``Function`` model.
               When ``include_implementations=False``, the ``implementation`` field
               is omitted.
             - When ``_return_callable=True``: list of callables corresponding to the
@@ -417,7 +412,6 @@ class BaseFunctionManager(BaseStateManager):
         state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
         session_id: int = 0,
         venv_pool: Optional[Any] = None,
-        shell_pool: Optional[Any] = None,
         extra_namespaces: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -433,7 +427,6 @@ class BaseFunctionManager(BaseStateManager):
             state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
             session_id: int = 0,
             venv_pool: VenvPool | None = None,
-            shell_pool: ShellPool | None = None,
             extra_namespaces: dict[str, Any] | None = None,
         ) -> dict[str, Any]
 
@@ -442,11 +435,9 @@ class BaseFunctionManager(BaseStateManager):
         function_name : str
             Name of the function to execute (must exist in the function table).
         call_kwargs : dict[str, Any] | None, default ``None``
-            Keyword arguments to pass to the function. For Python functions, these
-            are passed as keyword arguments. For shell functions, they may be converted
-            to positional arguments or environment variables depending on the argspec.
+            Keyword arguments to pass to the function.
         target_venv_id : int | None, default ``USE_FUNCTION_DEFAULT``
-            Override the execution environment (Python functions only):
+            Override the execution environment:
             - ``USE_FUNCTION_DEFAULT`` (``...``): Use the function's stored ``venv_id``
               from the function table. This is the default behavior.
             - ``None``: Execute in the default Python environment (no custom venv).
@@ -456,41 +447,36 @@ class BaseFunctionManager(BaseStateManager):
             This allows running simple/compatible functions in a different venv
             than they were originally associated with. The caller is responsible
             for ensuring the target venv has the required packages.
-            Ignored for shell functions.
         state_mode : Literal["stateful", "read_only", "stateless"], default ``"stateless"``
             Controls how global state is handled during execution:
             - ``"stateless"``: Executes with fresh globals/no inherited state.
-              Every execution starts with a clean environment. This is the default
-              for backward compatibility and is useful for pure functions that should
-              not depend on or affect session state.
+              Every execution starts with a clean environment; the default, and
+              the right choice for pure functions that should not depend on or
+              affect session state.
             - ``"stateful"``: Uses a persistent globals dict (in-process) or subprocess
               connection (venv). Variables and state from previous executions persist.
               Enables Jupyter-notebook-style incremental development. Requires
-              ``venv_pool`` for venv functions, ``shell_pool`` for shell functions.
-              For in-process Python functions (no venv), state is stored internally.
+              ``venv_pool`` for venv functions. For in-process functions (no
+              venv), state is stored internally.
             - ``"read_only"``: Reads the current state from the persistent session
               but executes in a fresh environment. Changes are not persisted.
-              Useful for "what-if" exploration. Requires the appropriate pool for
-              venv/shell functions.
+              Useful for "what-if" exploration. Requires ``venv_pool`` for venv
+              functions.
 
             All three modes are supported for both in-process (no venv) and
-            subprocess (venv) Python function execution.
+            subprocess (venv) execution.
         session_id : int, default ``0``
             The session ID within the execution environment. Multiple sessions allow
             independent stateful execution contexts. Each session has its own process
             and state, enabling concurrent "notebook panes" with isolated state.
             Only applies to ``state_mode="stateful"`` or ``state_mode="read_only"``.
         venv_pool : VenvPool | None, default ``None``
-            The VenvPool instance for stateful Python execution. Required when
+            The VenvPool instance for stateful venv execution. Required when
             ``state_mode="stateful"`` or ``state_mode="read_only"`` and the function
-            is Python with a venv. If not provided for these modes, an error is raised.
-        shell_pool : ShellPool | None, default ``None``
-            The ShellPool instance for stateful shell execution. Required when
-            ``state_mode="stateful"`` or ``state_mode="read_only"`` and the function
-            is a shell script. If not provided for these modes, an error is raised.
+            has a venv. If not provided for these modes, an error is raised.
         extra_namespaces : dict[str, Any] | None, default ``None``
             Named objects to inject into the function's execution namespace.
-            For in-process Python execution, all entries are injected into the
+            For in-process execution, all entries are injected into the
             globals dict. For venv/subprocess execution, ``"primitives"`` and
             ``"primitives"`` entries are bridged via RPC; other entries
             are only available in-process.
@@ -499,7 +485,7 @@ class BaseFunctionManager(BaseStateManager):
         -------
         dict[str, Any]
             Execution result with keys:
-            - ``result``: The return value (Python) or exit code (shell).
+            - ``result``: The function's return value.
             - ``error``: Error message if execution failed, ``None`` otherwise.
             - ``stdout``: Captured stdout from the function.
             - ``stderr``: Captured stderr from the function.
@@ -513,19 +499,12 @@ class BaseFunctionManager(BaseStateManager):
 
         Examples
         --------
-        >>> # Execute Python function statefully
+        >>> # Execute a function statefully
         >>> result = await fm.execute_function(
         ...     function_name="my_func",
         ...     call_kwargs={"x": 1},
         ...     state_mode="stateful",
         ...     venv_pool=venv_pool,
-        ... )
-
-        >>> # Execute shell function statefully
-        >>> result = await fm.execute_function(
-        ...     function_name="my_shell_func",
-        ...     state_mode="stateful",
-        ...     shell_pool=shell_pool,
         ... )
 
         >>> # Execute with extra namespaces (e.g. sub-agent environment)

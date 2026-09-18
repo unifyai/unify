@@ -23,7 +23,6 @@ from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import embeddings
 from .engine import Store, get_store, reset_store, store_home, store_path
 from .errors import (
     AlreadyExists,
@@ -64,7 +63,6 @@ __all__ = [
     "delete_fields",
     "delete_logs",
     "delete_project",
-    "embeddings",
     "get_active_context",
     "get_context",
     "get_context_commits",

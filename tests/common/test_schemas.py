@@ -384,11 +384,11 @@ async def _wrapped_schema_target(
     thought: str,
     code: str | None = None,
     *,
-    language: str,
+    session_name: str,
     state_mode: str = "stateless",
     _notification_up_q=None,
 ):
-    """Execute arbitrary code in a specified language and state mode."""
+    """Execute arbitrary Python code in a specified state mode."""
     return None
 
 
@@ -411,12 +411,12 @@ def test_method_to_schema_preserves_wrapped_execute_code_signature():
 
     assert "thought" in params
     assert "code" in params
-    assert "language" in params
+    assert "session_name" in params
     assert "state_mode" in params
     assert "_notification_up_q" not in params
     assert "thought" in required
-    assert "language" in required
-    assert "Execute arbitrary code in a specified language and state mode." in desc
+    assert "session_name" in required
+    assert "Execute arbitrary Python code in a specified state mode." in desc
 
 
 @pytest.mark.asyncio

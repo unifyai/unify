@@ -1,5 +1,15 @@
+"""Reads that span several contexts as if they were one table.
+
+The skill libraries keep a user's own rows in one context and the read-only
+builtins catalogue in another; every list, count, reduction and search here
+merges the two. Search is a plain text match: the libraries hold tens to
+hundreds of entries, so every candidate row is fetched and ranked in Python
+by how many query tokens it contains.
+"""
+
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from functools import cmp_to_key
@@ -9,11 +19,6 @@ from unify import db
 from unify.db import InvalidExpression, NotFound
 
 from .metrics_utils import SUPPORTED_REDUCTION_METRICS, reduce_logs
-from .semantic_search import (
-    backfill_rows,
-    fetch_top_k_by_terms_with_score,
-    vector_for_source_read_path,
-)
 from .tool_outcome import ToolErrorException
 
 SOURCE_FIELD = "_federated_source"
@@ -21,6 +26,8 @@ CONTEXT_FIELD = "_federated_context"
 SCORE_FIELD = "_federated_score"
 
 _PAGE_SIZE = 1000
+
+_TOKEN = re.compile(r"[a-z0-9]+")
 
 # Metrics whose global value can be combined exactly from per-context
 # server-side results, without fetching rows client-side.
@@ -72,10 +79,6 @@ class SortSpec:
     missing: Literal["first", "last"] = "last"
 
 
-RankedFetcher = Callable[
-    [FederatedSearchContext, Mapping[str, str], int],
-    tuple[list[dict], str],
-]
 FilterFetcher = Callable[
     [FederatedSearchContext, Optional[str], Sequence[SortSpec], int],
     list[dict],
@@ -112,38 +115,115 @@ def _id_key(value: Any) -> Any:
         return value
 
 
-def default_ranked_fetcher(
-    spec: FederatedSearchContext,
-    references: Mapping[str, str],
-    limit: int,
-) -> tuple[list[dict], str]:
-    """Fetch ranked rows from one context and expose the score column.
+def query_tokens(text: str) -> list[str]:
+    """Distinct lower-case alphanumeric tokens of ``text``, in first-seen order."""
+    return list(dict.fromkeys(_TOKEN.findall(str(text).lower())))
 
-    Strictly read-only for every context: embedding columns are provisioned
-    at manager startup and row coverage is owned by the write path, so a
-    search never creates or backfills anything. Terms whose embedding column
-    does not exist yet are treated as having no embeddings in that context
-    (consistent with the per-row missing-embedding semantics of multi-term
-    scoring).
+
+def text_match(
+    row: Mapping[str, Any],
+    references: Mapping[str, str],
+) -> tuple[int, int]:
+    """Count how many query tokens ``row`` contains.
+
+    ``references`` maps a field name to the text to look for in it. A token
+    hits a field when some word of the field's value starts with it, so
+    ``slide`` finds ``slides`` and ``deploy`` finds ``deploying``; a token
+    of one or two characters must match a whole word, so ``a`` does not
+    hit ``and``. Returns ``(matched, hits)``: the number of distinct tokens
+    found in at least one field, and the total number of (token, field)
+    hits, which ranks a row whose name and docstring both carry a token
+    above one where only the docstring does.
     """
-    terms: list[tuple[str, str]] = []
-    for source_expr, ref_text in references.items():
-        embed_col = vector_for_source_read_path(
-            spec.context,
-            source_expr,
-            project=spec.project,
-        )
-        if embed_col is None:
+    matched: set[str] = set()
+    hits = 0
+    for field, text in references.items():
+        value = row.get(field)
+        if value is None:
             continue
-        terms.append((embed_col, str(ref_text)))
-    return fetch_top_k_by_terms_with_score(
-        spec.context,
-        terms,
-        k=limit,
-        row_filter=spec.row_filter,
-        allowed_fields=list(spec.allowed_fields) if spec.allowed_fields else None,
-        project=spec.project,
+        words = set(_TOKEN.findall(str(value).lower()))
+        for token in query_tokens(text):
+            if len(token) < 3:
+                found = token in words
+            else:
+                found = any(word.startswith(token) for word in words)
+            if found:
+                matched.add(token)
+                hits += 1
+    return len(matched), hits
+
+
+def federated_text_search(
+    contexts: Sequence[FederatedSearchContext],
+    references: Optional[Mapping[str, str]],
+    *,
+    limit: int = 10,
+    unique_id_field: Optional[str] = None,
+    backfill: bool = False,
+    annotate: bool = True,
+) -> list[dict]:
+    """Rank every row across ``contexts`` by how many query tokens it contains.
+
+    All candidate rows are read in one federated round trip (each spec's
+    ``row_filter`` and field projection apply) and scored with
+    :func:`text_match`. Rows containing at least one token come first, by
+    distinct tokens matched, then total hits, then source order. With
+    ``backfill=True`` the window is topped up with the remaining rows,
+    newest first by ``unique_id_field``, so a vague query still returns a
+    sample of the library. When ``annotate`` is set each row carries
+    ``_federated_score``: the fraction of distinct query tokens it matched.
+    """
+    if limit <= 0 or not contexts:
+        return []
+    references = {
+        field: text for field, text in (references or {}).items() if str(text).strip()
+    }
+    if not references and not backfill:
+        return []
+
+    response = _server_federated_read(
+        contexts,
+        filter=None,
+        sorting=(),
+        offset=0,
+        limit=None,
+        unique_id_field=unique_id_field,
+        annotate=annotate,
     )
+    rows = response["logs"]
+    total_tokens = len(
+        {token for text in references.values() for token in query_tokens(text)},
+    )
+
+    scored: list[tuple[int, int, int, dict]] = []
+    rest: list[tuple[Any, int, dict]] = []
+    for order, row in enumerate(rows):
+        matched, hits = text_match(row, references)
+        if matched:
+            scored.append((matched, hits, order, row))
+        else:
+            recency = _id_key(row.get(unique_id_field)) if unique_id_field else None
+            rest.append((recency, order, row))
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+
+    ranked: list[dict] = []
+    for matched, _hits, _order, row in scored:
+        if annotate:
+            row[SCORE_FIELD] = matched / total_tokens
+        ranked.append(row)
+    if backfill and len(ranked) < limit:
+        rest.sort(
+            key=lambda item: (
+                item[0] is None,
+                -item[0] if isinstance(item[0], int) else 0,
+                item[1],
+            ),
+        )
+        for _recency, _order, row in rest:
+            if annotate:
+                row[SCORE_FIELD] = 0.0
+            ranked.append(row)
+    return ranked[:limit]
 
 
 def _sorting_payload(sorting: Sequence[SortSpec]) -> list[dict]:
@@ -162,7 +242,7 @@ FILTER_GRAMMAR_HINT = (
     "comparisons (==, !=, <, <=, >, >=), membership tests (in / not in), and "
     "boolean combinators (and, or, not) over field names and literal values, "
     "plus a fixed set of helpers (len(), string methods like .lower() / "
-    ".startswith(), embed()). Arbitrary Python calls outside that set, e.g. "
+    ".startswith()). Arbitrary Python calls outside that set, e.g. "
     "' '.join(x) or a list comprehension, are rejected."
 )
 
@@ -279,50 +359,6 @@ def _dedup_rows(rows: list[dict], unique_id_field: Optional[str]) -> list[dict]:
     return deduped
 
 
-def merge_ranked_batches(
-    batches: Sequence[tuple[FederatedSearchContext, list[dict], str]],
-    *,
-    offset: int = 0,
-    limit: int = 10,
-    unique_id_field: Optional[str] = None,
-    annotate: bool = True,
-) -> list[dict]:
-    """Merge per-context ranked result batches into one globally ranked window.
-
-    Each batch is already sorted by ascending distance within its own context.
-    The merge is exact when every context was fetched with at least
-    ``offset + limit`` rows: a row outside that local window cannot appear in
-    the global window because its own context already has ``offset + limit``
-    better rows ahead of it. Cross-context deduplication (``unique_id_field``)
-    keeps the best-scoring instance; exactness then assumes the same logical
-    row is absent from (or equally ranked in) other contexts.
-    """
-    if offset < 0:
-        raise ValueError("offset must be >= 0")
-    if limit <= 0:
-        return []
-
-    annotated: list[tuple[float, int, int, dict]] = []
-    for source_order, (spec, batch_rows, raw_score_field) in enumerate(batches):
-        for local_order, row in enumerate(batch_rows):
-            merged = _annotate(row, spec) if annotate else dict(row)
-            try:
-                score = float(merged.get(raw_score_field, float("inf")))
-            except (TypeError, ValueError):
-                score = float("inf")
-
-            if raw_score_field and raw_score_field != SCORE_FIELD:
-                merged.pop(raw_score_field, None)
-            if annotate:
-                merged[SCORE_FIELD] = score
-            annotated.append((score, source_order, local_order, merged))
-
-    annotated.sort(key=lambda item: (item[0], item[1], item[2]))
-    rows = [row for *_unused, row in annotated]
-    rows = _dedup_rows(rows, unique_id_field)
-    return rows[offset : offset + limit]
-
-
 def merge_sorted_batches(
     batches: Sequence[tuple[FederatedSearchContext, list[dict]]],
     *,
@@ -417,71 +453,6 @@ def federated_filter(
         unique_id_field=unique_id_field,
         annotate=annotate,
     )
-
-
-def federated_ranked_search(
-    contexts: Sequence[FederatedSearchContext],
-    references: Optional[Mapping[str, str]],
-    *,
-    offset: int = 0,
-    limit: int = 10,
-    fetcher: RankedFetcher = default_ranked_fetcher,
-    unique_id_field: Optional[str] = None,
-    backfill: bool = False,
-    annotate: bool = True,
-) -> list[dict]:
-    """Run an exact federated top-k semantic search across multiple contexts.
-
-    The helper fans out to every context with ``offset + limit`` as the local
-    fetch size, then globally merges by ascending score and applies the final
-    window once. With ``backfill=True``, results short of the window are
-    topped up with deterministic recent rows (``unique_id_field`` descending)
-    drawn from each context in order, mirroring single-context backfill.
-    """
-    if offset < 0:
-        raise ValueError("offset must be >= 0")
-    if limit <= 0 or not contexts:
-        return []
-
-    window = offset + limit
-    if references:
-        batches = [(spec, *fetcher(spec, references, window)) for spec in contexts]
-        rows = merge_ranked_batches(
-            batches,
-            offset=0,
-            limit=window,
-            unique_id_field=unique_id_field,
-            annotate=annotate,
-        )
-    else:
-        if not backfill:
-            return []
-        rows = []
-
-    if backfill and len(rows) < window:
-        for spec in contexts:
-            before = len(rows)
-            filled = backfill_rows(
-                spec.context,
-                rows,
-                window,
-                row_filter=spec.row_filter,
-                unique_id_field=unique_id_field,
-                allowed_fields=(
-                    list(spec.allowed_fields) if spec.allowed_fields else None
-                ),
-                project=spec.project,
-            )
-            if annotate:
-                rows = filled[:before] + [
-                    _annotate(row, spec) for row in filled[before:]
-                ]
-            else:
-                rows = filled
-            if len(rows) >= window:
-                break
-
-    return rows[offset : offset + limit]
 
 
 def default_metric_fetcher(
@@ -749,19 +720,18 @@ __all__ = [
     "FederatedSearchContext",
     "FilterFetcher",
     "MetricFetcher",
-    "RankedFetcher",
     "SCORE_FIELD",
     "SOURCE_FIELD",
     "SortSpec",
     "default_metric_fetcher",
-    "default_ranked_fetcher",
     "federated_count",
     "federated_filter",
-    "federated_ranked_search",
+    "federated_text_search",
     "federated_reduce",
     "is_missing_context_error",
-    "merge_ranked_batches",
     "merge_sorted_batches",
     "reduce_grouped_rows",
     "reduce_rows",
+    "query_tokens",
+    "text_match",
 ]

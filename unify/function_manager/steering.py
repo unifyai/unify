@@ -32,8 +32,8 @@ have changed underneath it, because the block is still the one that is running.
 
 Code that runs in another process is steered at two grains. Every primitive
 dispatch already blocks the child on the parent's JSON-RPC reply, so the reply
-is a checkpoint (:func:`dispatch_with_steering`) — venv and shell both get
-this without instrumentation. Between dispatches, venv children additionally
+is a checkpoint (:func:`dispatch_with_steering`) — a venv child gets this
+without instrumentation. Between dispatches, venv children additionally
 run parent-instrumented source whose probes read a pushed control directive
 (:meth:`SteeringSession.relay_corrections`), so a loop that makes no primitive
 call is still interruptible; on retry the parent re-sends patched source
@@ -127,7 +127,7 @@ class InterruptionRequest:
 
     ``stop`` means the remaining work should be abandoned rather than
     redirected — the decision when there is nothing a patch can rewrite (a
-    shell script, a block defining no functions) or when the correction
+    block defining no functions) or when the correction
     simply revokes the task. A stop fires at the next checkpoint wherever the
     work runs, and ends the call instead of retrying it.
     """
@@ -422,9 +422,8 @@ class SteeringSession:
         gives the parent a chance to collect interjections, let alone act on
         them. This watches the intake while an attempt runs and, once a
         correction applies to the running block, hands it to *deliver* — a
-        venv attempt pushes an interrupt directive down its control channel, a
-        shell attempt terminates the subprocess. Runs until then, or until the
-        attempt ends and cancels it.
+        venv attempt pushes an interrupt directive down its control channel.
+        Runs until then, or until the attempt ends and cancels it.
         """
         while True:
             await self._collect()
@@ -947,17 +946,16 @@ class MemoisedDispatch:
 def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
     """Whether a correction is aimed at the block running out-of-process.
 
-    A stop applies to whatever is running, whichever language it is written
-    in — that is its purpose, since it exists for exactly the source a patch
-    cannot name.
+    A stop applies to whatever is running — that is its purpose, since it
+    exists for exactly the source a patch cannot name.
 
     For patches: in-process, ``_int(name)`` fires only inside the function a
     patch names. The parent cannot see which function a child process is
     inside, so the nearest sound reading is "the patch names a function this
     block defines": firing early costs one replay-backed retry, whereas not
     firing would let the remaining dispatches run under a correction that
-    asked them not to. Source that is not Python defines nothing a patch can
-    name, so patches never fire on it.
+    asked them not to. Source that defines no function is nothing a patch
+    can name, so patches never fire on it.
     """
     if request.stop:
         return True

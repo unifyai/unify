@@ -416,8 +416,7 @@ def pytest_sessionstart(session):
     # ------------------------------------------------------------------
     #  Seed the global builtins catalogues (primitives + guidance). Each
     #  process owns its store, so this is a cold seed every session; both
-    #  seeders are hash-guarded and the embeddings they compute come from
-    #  the cross-process embeddings cache.
+    #  seeders are hash-guarded.
     # ------------------------------------------------------------------
     from unify.function_manager.builtins_catalog import seed_builtin_primitives
     from unify.guidance_manager.builtins_catalog import seed_builtin_guidance

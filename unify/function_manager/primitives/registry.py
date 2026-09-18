@@ -636,11 +636,6 @@ class ToolSurfaceRegistry:
             "function_id": _get_stable_id(class_name, method_name),
             "argspec": signature,
             "docstring": docstring,
-            "embedding_text": (
-                f"Function Name: {qualified_name}\n"
-                f"Signature: {signature}\n"
-                f"Docstring: {docstring}"
-            ),
             "implementation": None,
             "is_primitive": True,
             "depends_on": [],

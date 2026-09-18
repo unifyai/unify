@@ -3,7 +3,7 @@
 The federated layer is monkeypatched (the same seam test_federated_reads
 uses), so these tests pin the wiring — overfetch, activation ordering,
 scope dropout, include_dormant, primitive immunity, and the disabled
-master switch — without touching embeddings or the backend.
+master switch — without touching the store.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _patch_search(monkeypatch: pytest.MonkeyPatch, rows: List[Dict[str, Any]]):
         calls["limit"] = limit
         return [dict(r) for r in rows]
 
-    monkeypatch.setattr(fm_module, "federated_ranked_search", _fake)
+    monkeypatch.setattr(fm_module, "federated_text_search", _fake)
     # Search-hit bumps would hit the backend for rows that do not exist.
     monkeypatch.setattr(
         FunctionManager,
@@ -76,8 +76,8 @@ def test_dormant_functions_drop_out_of_search(monkeypatch) -> None:
     seen = _patch_search(
         monkeypatch,
         [
-            _row("fresh", score=0.10, days_dormant=1, calls=8),
-            _row("lapsed_daily", score=0.05, days_dormant=90, calls=8),
+            _row("fresh", score=0.5, days_dormant=1, calls=8),
+            _row("lapsed_daily", score=0.5, days_dormant=90, calls=8),
         ],
     )
     rows = fm.search_functions(query="anything", n=5)
@@ -93,8 +93,8 @@ def test_include_dormant_restores_the_lapsed(monkeypatch) -> None:
     _patch_search(
         monkeypatch,
         [
-            _row("fresh", score=0.10, days_dormant=1, calls=8),
-            _row("lapsed_daily", score=0.05, days_dormant=90, calls=8),
+            _row("fresh", score=0.5, days_dormant=1, calls=8),
+            _row("lapsed_daily", score=0.5, days_dormant=90, calls=8),
         ],
     )
     rows = fm.search_functions(query="anything", n=5, include_dormant=True)
@@ -107,8 +107,8 @@ def test_standing_breaks_similarity_ties(monkeypatch) -> None:
     _patch_search(
         monkeypatch,
         [
-            _row("dusty", score=0.20, days_dormant=25, calls=1),
-            _row("workhorse", score=0.20, days_dormant=1, calls=15),
+            _row("dusty", score=0.5, days_dormant=25, calls=1),
+            _row("workhorse", score=0.5, days_dormant=1, calls=15),
         ],
     )
     rows = fm.search_functions(query="anything", n=5)
@@ -121,8 +121,8 @@ def test_similarity_still_dominates_standing(monkeypatch) -> None:
     _patch_search(
         monkeypatch,
         [
-            _row("strong_match_newborn", score=0.05, created_days_ago=0.5),
-            _row("weak_match_workhorse", score=2.0, days_dormant=1, calls=20),
+            _row("strong_match_newborn", score=1.0, created_days_ago=0.5),
+            _row("weak_match_workhorse", score=0.2, days_dormant=1, calls=20),
         ],
     )
     rows = fm.search_functions(query="anything", n=5)
@@ -138,7 +138,7 @@ def test_primitives_never_drop_out(monkeypatch) -> None:
     fm = _FM()
     _patch_search(
         monkeypatch,
-        [_row("platform_method", score=0.10, is_primitive=True)],
+        [_row("platform_method", score=0.5, is_primitive=True)],
     )
     rows = fm.search_functions(query="anything", n=5)
     assert [r["name"] for r in rows] == ["platform_method"]
@@ -150,8 +150,8 @@ def test_master_switch_off_restores_pre_activation_behaviour(monkeypatch) -> Non
     seen = _patch_search(
         monkeypatch,
         [
-            _row("lapsed_daily", score=0.05, days_dormant=90, calls=8),
-            _row("fresh", score=0.10, days_dormant=1, calls=8),
+            _row("lapsed_daily", score=0.5, days_dormant=90, calls=8),
+            _row("fresh", score=0.5, days_dormant=1, calls=8),
         ],
     )
     monkeypatch.setattr(

@@ -13,7 +13,7 @@ becoming a zombie.
 
 import pytest
 import pytest_asyncio
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from tests.helpers import scenario_file_lock
 
@@ -82,30 +82,6 @@ class TestDegradableStepResilience:
             side_effect=ConnectionError("store unreachable"),
         ):
             await _init(cm, "resilience_guidance", actor=actor)
-
-        assert cm.initialized is True
-
-    @pytest.mark.asyncio
-    async def test_function_manager_warmup_failure(self, resilience_cm):
-        cm = resilience_cm
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_function_manager",
-        ) as mock_fm:
-            mock_instance = MagicMock()
-            mock_instance.warm_embeddings.side_effect = RuntimeError("warm error")
-            mock_fm.return_value = mock_instance
-            await _init(cm, "resilience_prim")
-
-        assert cm.initialized is True
-
-    @pytest.mark.asyncio
-    async def test_embedding_warmup_failure(self, resilience_cm):
-        cm = resilience_cm
-        with patch(
-            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.warm_all_embeddings",
-            side_effect=ConnectionError("store unreachable"),
-        ):
-            await _init(cm, "resilience_embed")
 
         assert cm.initialized is True
 

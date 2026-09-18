@@ -65,7 +65,6 @@ async def test_code_act_can_compose_false_executes_best_matching_function():
     _fn_data_full = {
         **_fn_metadata[0],
         "implementation": _fn_impl,
-        "language": "python",
     }
     fm = make_fm_mock()
     fm.search_functions = MagicMock(return_value={"metadata": _fn_metadata})

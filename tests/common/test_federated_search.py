@@ -7,83 +7,12 @@ from unify.common.federated_search import (
     SortSpec,
     federated_count,
     federated_filter,
-    federated_ranked_search,
     federated_reduce,
-    merge_ranked_batches,
+    federated_text_search,
     merge_sorted_batches,
+    query_tokens,
+    text_match,
 )
-
-
-def _row(name: str, score: float) -> dict:
-    return {"name": name, "_score": score}
-
-
-def test_merge_ranked_batches_applies_global_offset_and_limit():
-    assistant = FederatedSearchContext("assistant/Guidance", "assistant")
-    builtins = FederatedSearchContext("Builtins/Guidance", "builtins")
-
-    rows = merge_ranked_batches(
-        [
-            (assistant, [_row("a1", 0.1), _row("a2", 0.3), _row("a3", 0.5)], "_score"),
-            (builtins, [_row("b1", 0.2), _row("b2", 0.4), _row("b3", 0.6)], "_score"),
-        ],
-        offset=1,
-        limit=3,
-    )
-
-    assert [row["name"] for row in rows] == ["b1", "a2", "b2"]
-    assert [row["_federated_score"] for row in rows] == [0.2, 0.3, 0.4]
-    assert rows[0]["_federated_source"] == "builtins"
-    assert rows[0]["_federated_context"] == "Builtins/Guidance"
-    assert "_score" not in rows[0]
-
-
-def test_merge_ranked_batches_uses_source_and_local_order_as_tie_breakers():
-    first = FederatedSearchContext("ctx/first", "first")
-    second = FederatedSearchContext("ctx/second", "second")
-
-    rows = merge_ranked_batches(
-        [
-            (first, [_row("first-1", 0.1), _row("first-2", 0.1)], "_score"),
-            (second, [_row("second-1", 0.1)], "_score"),
-        ],
-        limit=3,
-    )
-
-    assert [row["name"] for row in rows] == ["first-1", "first-2", "second-1"]
-
-
-def test_merge_ranked_batches_dedups_by_unique_id_keeping_best_score():
-    first = FederatedSearchContext("ctx/first", "first")
-    second = FederatedSearchContext("ctx/second", "second")
-
-    rows = merge_ranked_batches(
-        [
-            (first, [{"id": 1, "_score": 0.3}, {"id": 2, "_score": 0.5}], "_score"),
-            (second, [{"id": 1, "_score": 0.1}, {"id": 3, "_score": 0.4}], "_score"),
-        ],
-        limit=10,
-        unique_id_field="id",
-    )
-
-    assert [(row["id"], row["_federated_score"]) for row in rows] == [
-        (1, 0.1),
-        (3, 0.4),
-        (2, 0.5),
-    ]
-    assert rows[0]["_federated_source"] == "second"
-
-
-def test_merge_ranked_batches_without_annotation_returns_clean_rows():
-    spec = FederatedSearchContext("ctx", "source")
-
-    rows = merge_ranked_batches(
-        [(spec, [_row("a", 0.1)], "_score")],
-        limit=1,
-        annotate=False,
-    )
-
-    assert rows == [{"name": "a"}]
 
 
 def test_merge_sorted_batches_applies_explicit_global_sorting():
@@ -235,7 +164,7 @@ def test_federated_filter_without_fetcher_delegates_to_server(monkeypatch):
             FederatedSearchContext(
                 "Builtins/Guidance",
                 "builtins",
-                excluded_fields=["_embedding"],
+                excluded_fields=["implementation"],
                 project="Builtins",
             ),
         ],
@@ -259,7 +188,7 @@ def test_federated_filter_without_fetcher_delegates_to_server(monkeypatch):
                 {
                     "context": "Builtins/Guidance",
                     "source": "builtins",
-                    "exclude_fields": ["_embedding"],
+                    "exclude_fields": ["implementation"],
                     "project_name": "Builtins",
                 },
             ],
@@ -306,123 +235,173 @@ def test_federated_count_delegates_to_server_count_only_read(monkeypatch):
     assert federated_count([], key="row_id") == 0
 
 
-def test_federated_ranked_search_fetches_offset_plus_limit_per_context():
-    contexts = [
-        FederatedSearchContext("assistant/Guidance", "assistant"),
-        FederatedSearchContext("Builtins/Guidance", "builtins"),
-    ]
-    calls: list[tuple[str, dict, int]] = []
-
-    def fetcher(spec, references, limit):
-        calls.append((spec.source, dict(references), limit))
-        if spec.source == "assistant":
-            return [_row("assistant-best", 0.1), _row("assistant-next", 0.4)], "_score"
-        return [_row("builtin-best", 0.2), _row("builtin-next", 0.3)], "_score"
-
-    rows = federated_ranked_search(
-        contexts,
-        {"content": "how to use GitHub"},
-        offset=1,
-        limit=2,
-        fetcher=fetcher,
-    )
-
-    assert calls == [
-        ("assistant", {"content": "how to use GitHub"}, 3),
-        ("builtins", {"content": "how to use GitHub"}, 3),
-    ]
-    assert [row["name"] for row in rows] == ["builtin-best", "builtin-next"]
-
-
-def test_federated_ranked_search_backfills_to_limit_across_contexts(monkeypatch):
-    contexts = [
-        FederatedSearchContext("ctx/a", "a", row_filter="active"),
-        FederatedSearchContext("ctx/b", "b"),
+def test_query_tokens_are_distinct_lowercase_words():
+    assert query_tokens("Fill out PDF form-fields, fill PDF!") == [
+        "fill",
+        "out",
+        "pdf",
+        "form",
+        "fields",
     ]
 
-    def fetcher(spec, references, limit):
-        if spec.source == "a":
-            return [{"id": 1, "_score": 0.1}], "_score"
-        return [], "_score"
 
-    backfill_calls = []
+def test_text_match_counts_distinct_tokens_and_per_field_hits():
+    row = {
+        "name": "parse_csv_report",
+        "docstring": "Parse a CSV report and summarise its rows.",
+    }
+    references = {"name": "parse csv totals", "docstring": "parse csv totals"}
 
-    def fake_backfill(
-        context,
-        initial_rows,
-        k,
-        *,
-        row_filter,
-        unique_id_field,
-        allowed_fields,
-        project=None,
-    ):
-        backfill_calls.append((context, len(initial_rows), k, row_filter))
-        if context == "ctx/a":
-            # id 1 already present; contributes one new row.
-            return list(initial_rows) + [{"id": 5}]
-        return list(initial_rows) + [{"id": 9}]
+    matched, hits = text_match(row, references)
 
-    monkeypatch.setattr(
-        "unify.common.federated_search.backfill_rows",
-        fake_backfill,
-    )
-
-    rows = federated_ranked_search(
-        contexts,
-        {"content": "x"},
-        limit=3,
-        fetcher=fetcher,
-        unique_id_field="id",
-        backfill=True,
-    )
-
-    assert [row["id"] for row in rows] == [1, 5, 9]
-    assert rows[1]["_federated_source"] == "a"
-    assert rows[2]["_federated_source"] == "b"
-    assert backfill_calls == [("ctx/a", 1, 3, "active"), ("ctx/b", 2, 3, None)]
+    # ``parse`` and ``csv`` are found (``totals`` is not); each hits both
+    # fields, so the row scores two distinct tokens and four hits.
+    assert (matched, hits) == (2, 4)
+    # A token matches on word prefix, never mid-word: ``port`` is inside
+    # ``report`` but not at the start of any word.
+    assert text_match(row, {"docstring": "port"}) == (0, 0)
+    assert text_match(row, {"docstring": "summar"}) == (1, 1)
+    assert text_match(row, {"missing": "parse"}) == (0, 0)
 
 
-def test_federated_ranked_search_without_references_backfills_only(monkeypatch):
-    contexts = [FederatedSearchContext("ctx/a", "a")]
-
-    monkeypatch.setattr(
-        "unify.common.federated_search.backfill_rows",
-        lambda context, initial_rows, k, **kwargs: [{"id": 1}, {"id": 2}],
-    )
-
-    assert federated_ranked_search(contexts, None) == []
-    rows = federated_ranked_search(contexts, None, limit=2, backfill=True)
-    assert [row["id"] for row in rows] == [1, 2]
-
-
-def test_federated_ranked_search_returns_empty_without_contexts_or_references():
+def _patch_rows(monkeypatch, rows):
     calls = []
 
-    def fetcher(spec, references, limit):
-        calls.append((spec, references, limit))
-        return [], "_score"
+    def fake_get_logs_federated(**kwargs):
+        calls.append(kwargs)
+        return {"logs": [dict(row) for row in rows], "count": len(rows), "counts": {}}
 
-    assert federated_ranked_search([], {"content": "x"}, fetcher=fetcher) == []
+    monkeypatch.setattr(
+        "unify.common.federated_search.db.get_logs_federated",
+        fake_get_logs_federated,
+    )
+    return calls
+
+
+def test_federated_text_search_ranks_by_tokens_matched_then_hits(monkeypatch):
+    contexts = [
+        FederatedSearchContext("assistant/Guidance", "assistant"),
+        FederatedSearchContext("Builtins/Guidance", "builtins", project="Builtins"),
+    ]
+    calls = _patch_rows(
+        monkeypatch,
+        [
+            {"guidance_id": 1, "title": "docx", "content": "Create Word documents."},
+            {
+                "guidance_id": 2,
+                "title": "pptx",
+                "content": "Create PowerPoint slide decks and presentations.",
+            },
+            {
+                "guidance_id": 3,
+                "title": "slides",
+                "content": "Slide layout tips for any deck.",
+            },
+        ],
+    )
+
+    rows = federated_text_search(
+        contexts,
+        {"content": "create a powerpoint slide deck"},
+        limit=2,
+        unique_id_field="guidance_id",
+    )
+
+    assert [row["guidance_id"] for row in rows] == [2, 3]
+    assert rows[0]["_federated_score"] == 0.8  # create, powerpoint, slide, deck
+    assert rows[1]["_federated_score"] == 0.4  # slide, deck
+    # One full read: no offset, no limit, every spec forwarded.
+    assert len(calls) == 1
+    assert calls[0]["limit"] is None
+    assert calls[0]["offset"] == 0
+    assert [spec["source"] for spec in calls[0]["contexts"]] == [
+        "assistant",
+        "builtins",
+    ]
+    assert calls[0]["unique_id_field"] == "guidance_id"
+
+
+def test_federated_text_search_matches_across_reference_fields(monkeypatch):
+    _patch_rows(
+        monkeypatch,
+        [
+            {"guidance_id": 1, "title": "pdf", "content": "Read and split files."},
+            {
+                "guidance_id": 2,
+                "title": "forms",
+                "content": "Fill out pdf form fields.",
+            },
+        ],
+    )
+
+    rows = federated_text_search(
+        [FederatedSearchContext("ctx", "source")],
+        {"content": "fill out pdf form fields", "title": "pdf"},
+        limit=5,
+        annotate=False,
+    )
+
+    # Row 2 matches every content token; row 1 matches ``pdf`` via its
+    # title only. Without annotation no score field is written.
+    assert [row["guidance_id"] for row in rows] == [2, 1]
+    assert "_federated_score" not in rows[0]
+
+
+def test_federated_text_search_backfills_newest_unmatched_rows(monkeypatch):
+    _patch_rows(
+        monkeypatch,
+        [
+            {"function_id": 1, "name": "alpha"},
+            {"function_id": 3, "name": "gamma"},
+            {"function_id": 2, "name": "beta_match"},
+        ],
+    )
+    contexts = [FederatedSearchContext("ctx", "source")]
+
+    assert federated_text_search(contexts, {"name": "match"}, limit=5) == [
+        {"function_id": 2, "name": "beta_match", "_federated_score": 1.0},
+    ]
+
+    rows = federated_text_search(
+        contexts,
+        {"name": "match"},
+        limit=5,
+        unique_id_field="function_id",
+        backfill=True,
+    )
+    assert [(row["function_id"], row["_federated_score"]) for row in rows] == [
+        (2, 1.0),
+        (3, 0.0),
+        (1, 0.0),
+    ]
+    # Without references the search is a plain newest-first sample.
+    assert federated_text_search(contexts, None, limit=2) == []
+    sample = federated_text_search(
+        contexts,
+        None,
+        limit=2,
+        unique_id_field="function_id",
+        backfill=True,
+    )
+    assert [row["function_id"] for row in sample] == [3, 2]
+
+
+def test_federated_text_search_returns_empty_without_contexts_or_limit(monkeypatch):
+    calls = _patch_rows(monkeypatch, [{"name": "row"}])
+
+    assert federated_text_search([], {"name": "row"}) == []
     assert (
-        federated_ranked_search(
+        federated_text_search(
             [FederatedSearchContext("ctx", "source")],
-            {},
-            fetcher=fetcher,
+            {"name": "row"},
+            limit=0,
         )
         == []
     )
     assert calls == []
 
 
-def test_federated_ranked_search_and_filter_validate_offset():
-    with pytest.raises(ValueError, match="offset"):
-        federated_ranked_search(
-            [FederatedSearchContext("ctx", "source")],
-            {"content": "x"},
-            offset=-1,
-            fetcher=lambda *_args: ([], "_score"),
-        )
+def test_federated_filter_validates_offset():
     with pytest.raises(ValueError, match="offset"):
         federated_filter(
             [FederatedSearchContext("ctx", "source")],

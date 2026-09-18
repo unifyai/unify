@@ -22,7 +22,6 @@ from ..common.builtins import (
     read_seed_hashes,
     write_seed_hashes,
 )
-from ..common.embed_utils import ensure_vector_column, list_private_fields
 from .primitives.registry import get_registry
 from .primitives.scope import PrimitiveScope
 from .types.function import Function
@@ -57,14 +56,7 @@ def _ensure_catalog_storage(project: str) -> None:
 
 def _read_existing_rows(project: str) -> List[Any]:
     """Return all stored primitive rows (entries + log id) for reconciliation."""
-    return db.get_logs(
-        project=project,
-        context=BUILTINS_PRIMITIVES_CONTEXT,
-        exclude_fields=list_private_fields(
-            BUILTINS_PRIMITIVES_CONTEXT,
-            project=project,
-        ),
-    )
+    return db.get_logs(project=project, context=BUILTINS_PRIMITIVES_CONTEXT)
 
 
 def _name_prefix(manager_alias: str) -> str:
@@ -178,9 +170,7 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
     stored rows have drifted from the current shape -- missing, or written
     under a stale ``primitive_class`` (e.g. after a package rename). Rows are
     upserted on the stable ``function_id`` unique key, so re-seeding never
-    collides even when the branded class path changes. Always ensures the
-    ``embedding_text`` vector column exists so read-only consumers can run
-    ranked semantic search without any write access.
+    collides even when the branded class path changes.
 
     Returns True when any rows were written, False when already up to date.
     """
@@ -258,14 +248,6 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
             project,
             len(manager_aliases),
         )
-
-    logger.info("Ensuring builtins primitive embedding column project=%s", project)
-    ensure_vector_column(
-        BUILTINS_PRIMITIVES_CONTEXT,
-        embed_column="_embedding_text_emb",
-        source_column="embedding_text",
-        project=project,
-    )
     return bool(pending)
 
 

@@ -82,7 +82,7 @@ def test_code_act_prompt_defers_tool_contracts_to_schemas_and_no_legacy_name():
         assert name in tools
         assert _inspect.getdoc(unwrap_tool_callable(tools[name]))
     ec_doc = _inspect.getdoc(unwrap_tool_callable(tools["execute_code"])) or ""
-    assert "Execute arbitrary code in a specified language and state mode." in ec_doc
+    assert "Execute arbitrary Python code in a specified state mode." in ec_doc
     assert "multi-step composition" in ec_doc.lower()
 
     # Selection policy (not contract) stays inline in the prompt.

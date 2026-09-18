@@ -25,15 +25,15 @@ def test_search_includes_builtins_catalog_spec(monkeypatch):
     gm._filter_scope = "title != 'hidden'"
     captured = {}
 
-    def fake_ranked_search(contexts, references, *, limit, **kwargs):
+    def fake_text_search(contexts, references, *, limit, **kwargs):
         captured["contexts"] = contexts
         captured["references"] = references
         captured["limit"] = limit
         return []
 
     monkeypatch.setattr(
-        "unify.guidance_manager.guidance_manager.federated_ranked_search",
-        fake_ranked_search,
+        "unify.guidance_manager.guidance_manager.federated_text_search",
+        fake_text_search,
     )
 
     gm.search(references={"content": "how to deploy"}, k=4)

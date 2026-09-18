@@ -3,7 +3,7 @@
 Each test seeds a dedicated public-read builtins project (unique name per
 test, settings-overridden) so parallel runs never contend on the shared
 platform catalogue, then exercises the GuidanceManager read federation,
-multi-term read-only search, delta seeding, and mutation refusal.
+multi-field text search, delta seeding, and mutation refusal.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from unify import db
 from tests.helpers import _handle_project
 from unify.guidance_manager.builtins_catalog import (
     BUILTINS_GUIDANCE_CONTEXT,
-    CONTENT_EMBED_HEAD_CHARS,
     default_guidance_entries,
     load_snapshot,
     seed_builtin_guidance,
@@ -126,11 +125,6 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
     entries = default_guidance_entries()
     assert entries == snapshot
 
-    # Several skills exceed the backend's per-input embedding limit; seeding
-    # must still succeed because ranking embeds a truncated content head.
-    assert any(
-        len(entry["content"]) > CONTENT_EMBED_HEAD_CHARS for entry in snapshot.values()
-    )
     assert seed_builtin_guidance() is True
 
     gm = GuidanceManager()
@@ -153,7 +147,7 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
     assert truncated, "expected at least one truncated preview"
 
     # get_guidance returns the complete content verbatim, including entries
-    # far beyond both the preview cap and the embedding head window.
+    # far beyond the preview cap.
     by_title = {entry["title"]: entry for entry in entries.values()}
     for row in truncated:
         full = gm.get_guidance(guidance_id=row.guidance_id)
@@ -162,7 +156,7 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
 
 
 @_handle_project
-def test_default_library_semantic_search(builtins_test_project):
+def test_default_library_text_search(builtins_test_project):
     seed_builtin_guidance()
     gm = GuidanceManager()
 

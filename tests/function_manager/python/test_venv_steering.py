@@ -217,11 +217,11 @@ async def test_pending_correction_interrupts_at_the_dispatch_boundary():
 
 
 @pytest.mark.asyncio
-async def test_correction_for_shell_source_does_not_fire():
-    """Shell source defines nothing a patch can name, so nothing interrupts."""
+async def test_correction_for_function_free_source_does_not_fire():
+    """Source defining no function is nothing a patch can name, so nothing interrupts."""
     comms = _Comms()
     session = SteeringSession()
-    session.bind_source("unify-primitive comms send --to eu-alpha\n")
+    session.bind_source("await primitives.comms.send(to='eu-alpha')\n")
     session.interruption = InterruptionRequest(
         reason="stop",
         patches=[Patch(function_name="notify_vendors", source=EU_ONLY_PATCH)],

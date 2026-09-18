@@ -195,12 +195,12 @@ def test_build_id_exclusion_multiple_ids_sorted():
 def test_scoped_filter_includes_compositional_exclusion():
     """_scoped_filter applies compositional exclusions to compositional queries."""
     fm = _make_fm_stub(
-        filter_scope="language == 'python'",
+        filter_scope="'data' in docstring",
         exclude_compositional_ids={42},
     )
     result = fm._scoped_filter("name == 'foo'")
     assert "name == 'foo'" in result
-    assert "language == 'python'" in result
+    assert "'data' in docstring" in result
     assert "function_id != 42" in result
 
 
@@ -211,7 +211,7 @@ def test_scoped_filter_ignores_primitive_exclusion():
     with compositional auto-incremented IDs.
     """
     fm = _make_fm_stub(
-        filter_scope="language == 'python'",
+        filter_scope="'data' in docstring",
         exclude_primitive_ids={42},
     )
     result = fm._scoped_filter("name == 'foo'")
@@ -220,9 +220,9 @@ def test_scoped_filter_ignores_primitive_exclusion():
 
 def test_scoped_filter_filter_scope_only():
     """_scoped_filter works with only filter_scope (no exclusions)."""
-    fm = _make_fm_stub(filter_scope="language == 'python'")
+    fm = _make_fm_stub(filter_scope="'data' in docstring")
     result = fm._scoped_filter(None)
-    assert result == "language == 'python'"
+    assert result == "'data' in docstring"
 
 
 def test_scoped_filter_compositional_exclusion_only():

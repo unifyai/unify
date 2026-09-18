@@ -149,7 +149,6 @@ def test_collect_primitives_returns_expected_fields():
     assert row["argspec"].startswith("(self, request")
     assert "guidelines" in row["argspec"]
     assert row["docstring"].startswith("Spawn an actor to work on a focused sub-task.")
-    assert "primitives.actor.act" in row["embedding_text"]
     assert row["is_primitive"] is True
     assert row["implementation"] is None
 

@@ -25,12 +25,8 @@ def _FM(**kwargs) -> FunctionManager:
 _PY_ALPHA = 'def alpha(x):\n    """double x"""\n    return x * 2\n'
 _PY_BETA = 'def beta(y):\n    """square y"""\n    return y ** 2\n'
 
-_SH_HELLO = (
-    "#!/bin/sh\n"
-    "# @name: hello_world\n"
-    "# @args: ()\n"
-    "# @description: Prints hello world\n"
-    'echo "Hello, World!"'
+_PY_HELLO = (
+    'def hello_world():\n    """Prints hello world"""\n    print("Hello, World!")\n'
 )
 
 
@@ -44,13 +40,13 @@ def test_filter_scope_filters_list_functions():
     """A scoped instance's list_functions only returns matching rows."""
     fm_all = _FM()
     fm_all.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
-    fm_all.add_functions(implementations=_SH_HELLO, language="sh")
+    fm_all.add_functions(implementations=_PY_HELLO)
 
     # Unscoped – should see all three
     assert set(fm_all.list_functions().keys()) == {"alpha", "beta", "hello_world"}
 
-    # Scoped to Python – should exclude the shell function
-    fm_py = _FM(filter_scope="language == 'python'")
+    # Scoped away from hello_world – should exclude it
+    fm_py = _FM(filter_scope="name != 'hello_world'")
     listing = fm_py.list_functions()
     assert "alpha" in listing
     assert "beta" in listing
@@ -67,11 +63,11 @@ def test_entrypoint_id_catalogue_ignores_runtime_discovery_scope():
     """
     fm_all = _FM()
     fm_all.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
-    fm_all.add_functions(implementations=_SH_HELLO, language="sh")
+    fm_all.add_functions(implementations=_PY_HELLO)
     all_ids = fm_all.list_function_name_to_ids()
 
     fm_scoped = _FM(
-        filter_scope="language == 'python'",
+        filter_scope="name != 'hello_world'",
         exclude_compositional_ids={all_ids["alpha"], all_ids["hello_world"]},
     )
 
@@ -89,9 +85,9 @@ def test_filter_scope_filters_filter_functions_no_caller_filter():
     """filter_functions with no explicit filter still applies the scope."""
     fm = _FM()
     fm.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
-    fm.add_functions(implementations=_SH_HELLO, language="sh")
+    fm.add_functions(implementations=_PY_HELLO)
 
-    fm_py = _FM(filter_scope="language == 'python'")
+    fm_py = _FM(filter_scope="name != 'hello_world'")
     hits = fm_py.filter_functions()
     names = {h["name"] for h in hits}
     assert "alpha" in names
@@ -104,12 +100,12 @@ def test_filter_scope_composes_with_caller_filter():
     """When the caller also supplies a filter, both are ANDed together."""
     fm = _FM()
     fm.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
-    fm.add_functions(implementations=_SH_HELLO, language="sh")
+    fm.add_functions(implementations=_PY_HELLO)
 
-    fm_py = _FM(filter_scope="language == 'python'")
+    fm_py = _FM(filter_scope="name != 'hello_world'")
     hits = fm_py.filter_functions(filter="'double' in docstring")
     names = {h["name"] for h in hits}
-    # Only alpha has 'double' in its docstring AND is Python
+    # Only alpha has 'double' in its docstring AND is in scope
     assert names == {"alpha"}
 
 
@@ -120,16 +116,16 @@ def test_filter_scope_composes_with_caller_filter():
 
 @_handle_project
 def test_filter_scope_filters_search_functions():
-    """Semantic search on a scoped instance never returns out-of-scope rows."""
+    """Search on a scoped instance never returns out-of-scope rows."""
     fm = _FM()
     fm.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
-    fm.add_functions(implementations=_SH_HELLO, language="sh")
+    fm.add_functions(implementations=_PY_HELLO)
 
-    fm_py = _FM(filter_scope="language == 'python'")
+    fm_py = _FM(filter_scope="name != 'hello_world'")
     hits = fm_py.search_functions(query="hello world", n=10)
     for h in hits:
         assert (
-            h.get("language", "python") != "sh"
+            h["name"] != "hello_world"
         ), f"search_functions returned out-of-scope row: {h['name']}"
 
 
@@ -143,16 +139,15 @@ def test_filter_scope_filters_get_precondition():
     """A scoped instance can't see a function outside its scope via get_precondition."""
     fm = _FM()
     fm.add_functions(
-        implementations=_SH_HELLO,
-        language="sh",
+        implementations=_PY_HELLO,
         preconditions={"hello_world": {"needs_auth": True}},
     )
 
     # Unscoped can retrieve it
     assert fm.get_precondition(function_name="hello_world") is not None
 
-    # Scoped to Python – hello_world is invisible
-    fm_py = _FM(filter_scope="language == 'python'")
+    # Scoped away from hello_world – it is invisible
+    fm_py = _FM(filter_scope="name != 'hello_world'")
     assert fm_py.get_precondition(function_name="hello_world") is None
 
 
@@ -166,7 +161,7 @@ def test_filter_scope_none_is_unscoped():
     """filter_scope=None (default) behaves identically to no scope."""
     fm = _FM()
     fm.add_functions(implementations=[_PY_ALPHA])
-    fm.add_functions(implementations=_SH_HELLO, language="sh")
+    fm.add_functions(implementations=_PY_HELLO)
 
     fm_none = _FM(filter_scope=None)
     assert set(fm_none.list_functions().keys()) == {"alpha", "hello_world"}
@@ -180,9 +175,9 @@ def test_filter_scope_none_is_unscoped():
 @_handle_project
 def test_filter_scope_does_not_affect_writes():
     """A scoped instance can still add functions outside its own scope."""
-    fm_py = _FM(filter_scope="language == 'python'")
-    # Add a shell function through the scoped instance
-    result = fm_py.add_functions(implementations=_SH_HELLO, language="sh")
+    fm_py = _FM(filter_scope="name != 'hello_world'")
+    # Add an out-of-scope function through the scoped instance
+    result = fm_py.add_functions(implementations=_PY_HELLO)
     assert result == {"hello_world": "added"}
 
     # The scoped instance can't see it (correct – out of scope)
@@ -203,14 +198,14 @@ def test_two_scoped_instances_see_different_subsets():
     """Non-overlapping scopes produce disjoint views of the same data."""
     fm = _FM()
     fm.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
-    fm.add_functions(implementations=_SH_HELLO, language="sh")
+    fm.add_functions(implementations=_PY_HELLO)
 
-    fm_py = _FM(filter_scope="language == 'python'")
-    fm_sh = _FM(filter_scope="language == 'sh'")
+    fm_math = _FM(filter_scope="name != 'hello_world'")
+    fm_hello = _FM(filter_scope="name == 'hello_world'")
 
-    py_names = set(fm_py.list_functions().keys())
-    sh_names = set(fm_sh.list_functions().keys())
+    math_names = set(fm_math.list_functions().keys())
+    hello_names = set(fm_hello.list_functions().keys())
 
-    assert py_names == {"alpha", "beta"}
-    assert sh_names == {"hello_world"}
-    assert py_names & sh_names == set()
+    assert math_names == {"alpha", "beta"}
+    assert hello_names == {"hello_world"}
+    assert math_names & hello_names == set()

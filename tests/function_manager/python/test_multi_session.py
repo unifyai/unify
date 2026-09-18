@@ -120,8 +120,8 @@ async def test_sessions_have_independent_state(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Set my_var=100 in session 0
         await fm.execute_function(
@@ -206,7 +206,7 @@ async def test_session_state_persists_independently(
 
     try:
         # Add increment counter function
-        fm.add_functions(implementations=INCREMENT_COUNTER_FUNC, language="python")
+        fm.add_functions(implementations=INCREMENT_COUNTER_FUNC)
 
         # Increment in session 0 three times
         for _ in range(3):
@@ -271,8 +271,8 @@ async def test_default_session_is_zero(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Set value without specifying session_id (should use 0)
         await fm.execute_function(
@@ -321,8 +321,8 @@ async def test_read_only_respects_session_id(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Set different values in different sessions
         await fm.execute_function(
@@ -387,8 +387,8 @@ async def test_read_only_does_not_affect_session(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Set initial value in session 0
         await fm.execute_function(
@@ -448,8 +448,8 @@ async def test_stateless_ignores_session_id(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=CHECK_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=CHECK_VAR_FUNC)
 
         # Set value in session 0 (stateful)
         await fm.execute_function(
@@ -498,8 +498,8 @@ async def test_modifying_one_session_doesnt_affect_another(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
-        fm.add_functions(implementations=GET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
+        fm.add_functions(implementations=GET_VAR_FUNC)
 
         # Initialize both sessions
         await fm.execute_function(
@@ -630,7 +630,7 @@ async def test_venv_pool_get_connection_state_respects_session(
 
     try:
         # Add functions
-        fm.add_functions(implementations=SET_VAR_FUNC, language="python")
+        fm.add_functions(implementations=SET_VAR_FUNC)
 
         # Set different values in different sessions
         await fm.execute_function(

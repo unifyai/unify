@@ -209,21 +209,20 @@ pytestmark_eval = pytest.mark.eval
 @pytest.mark.llm_call
 def test_filter_scope_respected_in_list_functions():
     """
-    A SimulatedFunctionManager with filter_scope="language == 'python'" should
-    only return Python functions from list_functions.
+    A SimulatedFunctionManager with filter_scope="'data' in docstring" should
+    only return functions whose docstring mentions data from list_functions.
     """
     fm = SimulatedFunctionManager(
-        description="A mixed catalogue of Python and bash utility functions",
-        filter_scope="language == 'python'",
+        description="A mixed catalogue of data-processing and networking utility functions",
+        filter_scope="'data' in docstring",
     )
     listing = fm.list_functions()
     assert isinstance(listing, dict) and listing
-    # Every entry should report language as 'python' (or omit it, defaulting to python)
     for name, meta in listing.items():
-        lang = meta.get("language", "python")
+        docstring = meta.get("docstring", "")
         assert (
-            lang == "python"
-        ), f"filter_scope='language == \"python\"' but {name!r} has language={lang!r}"
+            "data" in docstring
+        ), f"filter_scope=\"'data' in docstring\" but {name!r} has docstring={docstring!r}"
 
 
 # --------------------------------------------------------------------------- #
@@ -236,8 +235,8 @@ def test_filter_scope_setter():
     fm = SimulatedFunctionManager()
     assert fm.filter_scope is None
 
-    fm.filter_scope = "language == 'python'"
-    assert fm.filter_scope == "language == 'python'"
+    fm.filter_scope = "'data' in docstring"
+    assert fm.filter_scope == "'data' in docstring"
 
     fm.filter_scope = None
     assert fm.filter_scope is None

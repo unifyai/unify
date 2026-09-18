@@ -1,4 +1,3 @@
-import sys
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,7 +9,6 @@ from unify.actor.execution import (
 )
 from unify.common.tool_errors import ToolInputError
 from unify.function_manager.function_manager import VenvPool
-from unify.function_manager.shell_pool import ShellPool
 
 
 class _FakeFunctionManager:
@@ -33,7 +31,6 @@ class _FakeFunctionManager:
                 state_mode="stateless",
                 session_id=0,
                 session_name=None,
-                language="bash",
             ),
             "Cannot use state_mode='stateless' with a session",
         ),
@@ -42,28 +39,15 @@ class _FakeFunctionManager:
                 state_mode="read_only",
                 session_id=None,
                 session_name=None,
-                language="python",
             ),
             "Cannot use state_mode='read_only' without specifying a session",
-        ),
-        (
-            dict(
-                state_mode="stateless",
-                session_id=None,
-                session_name=None,
-                language="ruby",
-            ),
-            "Unsupported language",
         ),
         (
             dict(
                 state_mode="stateful",
                 session_id=1,
                 session_name="repo_nav",
-                language="bash",
-                resolve_session_name=lambda n: (
-                    ("bash", None, 0) if n == "repo_nav" else None
-                ),
+                resolve_session_name=lambda n: ((None, 0) if n == "repo_nav" else None),
             ),
             "refer to different sessions",
         ),
@@ -72,7 +56,6 @@ class _FakeFunctionManager:
                 state_mode="read_only",
                 session_id=None,
                 session_name="does_not_exist",
-                language="python",
                 resolve_session_name=lambda _n: None,
             ),
             "not found for read_only",
@@ -82,7 +65,6 @@ class _FakeFunctionManager:
                 state_mode="stateful",
                 session_id=None,
                 session_name="new_session",
-                language="python",
                 resolve_session_name=lambda _n: None,
                 max_sessions_total=2,
                 active_session_count=2,
@@ -94,10 +76,9 @@ class _FakeFunctionManager:
                 state_mode="stateful",
                 session_id=99,
                 session_name=None,
-                language="python",
                 max_sessions_total=2,
                 active_session_count=2,
-                session_exists=lambda _l, _v, _s: False,
+                session_exists=lambda _v, _s: False,
             ),
             "Session limit exceeded",
         ),
@@ -106,7 +87,6 @@ class _FakeFunctionManager:
                 state_mode="stateful",
                 session_id=0,
                 session_name=None,
-                language="python",
                 venv_id=0,
                 venv_exists=lambda _v: False,
             ),
@@ -132,7 +112,6 @@ def test_a_refusal_reads_as_itself_not_as_a_traceback():
             state_mode="stateless",
             session_id=5,
             session_name="contact_lookup",
-            language="python",
         )
     rendered = excinfo.value.as_tool_result()
     assert "Cannot use state_mode='stateless' with a session" in rendered
@@ -147,7 +126,6 @@ def test_missing_venv_suggestion_offers_a_way_out():
             state_mode="stateful",
             session_id=0,
             session_name=None,
-            language="python",
             venv_id=7,
             venv_exists=lambda _v: False,
         )
@@ -163,7 +141,6 @@ def test_existing_venv_passes_validation():
             state_mode="stateful",
             session_id=0,
             session_name=None,
-            language="python",
             venv_id=3,
             venv_exists=lambda _v: True,
         )
@@ -182,7 +159,6 @@ def test_venv_is_not_checked_when_none_is_requested():
             state_mode="stateless",
             session_id=None,
             session_name=None,
-            language="python",
             venv_id=None,
             venv_exists=_boom,
         )
@@ -194,7 +170,6 @@ def test_venv_is_not_checked_when_none_is_requested():
 async def test_session_executor_python_stateful_reuses_session():
     ex = SessionExecutor(
         venv_pool=VenvPool(),
-        shell_pool=ShellPool(),
         environments={},  # no primitives injection needed for this unit test
         function_manager=None,
         timeout=5.0,
@@ -202,7 +177,6 @@ async def test_session_executor_python_stateful_reuses_session():
     try:
         r1 = await ex.execute(
             code="x = 1\nx",
-            language="python",
             state_mode="stateful",
             session_id=0,
             venv_id=None,
@@ -212,7 +186,6 @@ async def test_session_executor_python_stateful_reuses_session():
 
         r2 = await ex.execute(
             code="x = x + 1\nx",
-            language="python",
             state_mode="stateful",
             session_id=0,
             venv_id=None,
@@ -230,13 +203,11 @@ async def test_session_executor_stateless_python_uses_venv_subprocess():
     fm = _FakeFunctionManager()
     executor = SessionExecutor(
         venv_pool=None,
-        shell_pool=None,
         function_manager=fm,  # type: ignore[arg-type]
     )
 
     result = await executor.execute(
         code="1 + 1",
-        language="python",
         state_mode="stateless",
         session_id=None,
         venv_id=31,
@@ -253,7 +224,6 @@ async def test_session_executor_stateless_python_uses_venv_subprocess():
 async def test_session_executor_python_read_only_does_not_mutate_state():
     ex = SessionExecutor(
         venv_pool=VenvPool(),
-        shell_pool=ShellPool(),
         environments={},
         function_manager=None,
         timeout=5.0,
@@ -261,7 +231,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
     try:
         r1 = await ex.execute(
             code="x = 1",
-            language="python",
             state_mode="stateful",
             session_id=0,
             venv_id=None,
@@ -270,7 +239,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
 
         ro = await ex.execute(
             code="x = 999",
-            language="python",
             state_mode="read_only",
             session_id=0,
             venv_id=None,
@@ -279,7 +247,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
 
         r2 = await ex.execute(
             code="print(x)",
-            language="python",
             state_mode="stateful",
             session_id=0,
             venv_id=None,
@@ -291,114 +258,9 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
 
 
 @pytest.mark.asyncio
-async def test_session_executor_shell_stateless_executes():
-    if sys.platform == "win32":
-        pytest.skip("shell pool tests are unix-focused")
-    ex = SessionExecutor(
-        venv_pool=VenvPool(),
-        shell_pool=ShellPool(),
-        environments={},
-        function_manager=None,
-        timeout=5.0,
-    )
-    try:
-        r = await ex.execute(
-            code="echo hello",
-            language="bash",
-            state_mode="stateless",
-            session_id=None,
-            venv_id=None,
-        )
-        assert r["error"] is None
-        assert "hello" in r["stdout"]
-        assert r["session_id"] is None
-    finally:
-        await ex.close()
-
-
-@pytest.mark.asyncio
-async def test_session_executor_shell_stateful_persists_env():
-    if sys.platform == "win32":
-        pytest.skip("shell pool tests are unix-focused")
-    ex = SessionExecutor(
-        venv_pool=VenvPool(),
-        shell_pool=ShellPool(),
-        environments={},
-        function_manager=None,
-        timeout=5.0,
-    )
-    try:
-        r1 = await ex.execute(
-            code="export FOO=bar",
-            language="bash",
-            state_mode="stateful",
-            session_id=0,
-            venv_id=None,
-        )
-        assert r1["error"] is None
-        assert r1["result"] == 0
-
-        r2 = await ex.execute(
-            code="echo $FOO",
-            language="bash",
-            state_mode="stateful",
-            session_id=0,
-            venv_id=None,
-        )
-        assert r2["error"] is None
-        assert "bar" in r2["stdout"]
-    finally:
-        await ex.close()
-
-
-@pytest.mark.asyncio
-async def test_session_executor_shell_read_only_does_not_mutate_state():
-    if sys.platform == "win32":
-        pytest.skip("shell pool tests are unix-focused")
-    ex = SessionExecutor(
-        venv_pool=VenvPool(),
-        shell_pool=ShellPool(),
-        environments={},
-        function_manager=None,
-        timeout=5.0,
-    )
-    try:
-        r1 = await ex.execute(
-            code="export FOO=bar",
-            language="bash",
-            state_mode="stateful",
-            session_id=0,
-            venv_id=None,
-        )
-        assert r1["error"] is None
-
-        ro = await ex.execute(
-            code="export FOO=baz",
-            language="bash",
-            state_mode="read_only",
-            session_id=0,
-            venv_id=None,
-        )
-        assert ro["error"] is None
-
-        r2 = await ex.execute(
-            code="echo $FOO",
-            language="bash",
-            state_mode="stateful",
-            session_id=0,
-            venv_id=None,
-        )
-        assert r2["error"] is None
-        assert "bar" in (r2["stdout"] or "")
-    finally:
-        await ex.close()
-
-
-@pytest.mark.asyncio
 async def test_session_executor_isolation_between_python_sessions():
     ex = SessionExecutor(
         venv_pool=VenvPool(),
-        shell_pool=ShellPool(),
         environments={},
         function_manager=None,
         timeout=5.0,
@@ -406,14 +268,12 @@ async def test_session_executor_isolation_between_python_sessions():
     try:
         a1 = await ex.execute(
             code="x = 1",
-            language="python",
             state_mode="stateful",
             session_id=0,
             venv_id=None,
         )
         b1 = await ex.execute(
             code="x = 2",
-            language="python",
             state_mode="stateful",
             session_id=1,
             venv_id=None,
@@ -423,14 +283,12 @@ async def test_session_executor_isolation_between_python_sessions():
 
         a2 = await ex.execute(
             code="print(x)",
-            language="python",
             state_mode="stateful",
             session_id=0,
             venv_id=None,
         )
         b2 = await ex.execute(
             code="print(x)",
-            language="python",
             state_mode="stateful",
             session_id=1,
             venv_id=None,

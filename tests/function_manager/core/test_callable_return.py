@@ -226,12 +226,12 @@ async def test_similarity_search_return_callable_monkeypatched(monkeypatch):
         "is_primitive": False,
     }
 
-    def _fake_ranked_search(contexts, references, **kwargs):
+    def _fake_text_search(contexts, references, **kwargs):
         return [dict(fake_record)]
 
     monkeypatch.setattr(
-        "unify.function_manager.function_manager.federated_ranked_search",
-        _fake_ranked_search,
+        "unify.function_manager.function_manager.federated_text_search",
+        _fake_text_search,
     )
 
     ns = create_base_globals()
@@ -353,18 +353,18 @@ async def test_similarity_search_return_callable_forward_ref_annotations_just_wo
             "    ret = hints['return']\n"
             "    return (group_by_str, tp.__name__, ret.__name__)\n"
         ),
-        # No dependency graph info available from similarity search in this test.
+        # No dependency graph info available from search in this test.
         "calls": [],
         "venv_id": None,
         "is_primitive": False,
     }
 
-    def _fake_ranked_search(contexts, references, **kwargs):
+    def _fake_text_search(contexts, references, **kwargs):
         return [dict(fake_record)]
 
     monkeypatch.setattr(
-        "unify.function_manager.function_manager.federated_ranked_search",
-        _fake_ranked_search,
+        "unify.function_manager.function_manager.federated_text_search",
+        _fake_text_search,
     )
 
     ns = create_base_globals()

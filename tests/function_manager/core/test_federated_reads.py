@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from unify.common.builtins import builtins_project
-from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.function_manager import (
+    SEARCHED_FUNCTION_FIELDS,
+    FunctionManager,
+)
 
 
 def _manager_stub(*, include_primitives: bool = True) -> FunctionManager:
@@ -22,7 +25,7 @@ def _manager_stub(*, include_primitives: bool = True) -> FunctionManager:
 
 def test_filter_functions_delegates_federated_read_to_server(monkeypatch):
     fm = _manager_stub()
-    fm._filter_scope = "language == 'python'"
+    fm._filter_scope = "'data' in docstring"
     fm._exclude_primitive_ids = frozenset({99})
     builtins = builtins_project()
     calls = []
@@ -47,10 +50,6 @@ def test_filter_functions_delegates_federated_read_to_server(monkeypatch):
         }
 
     monkeypatch.setattr("unify.db.get_logs_federated", fake_get_logs_federated)
-    monkeypatch.setattr(
-        "unify.function_manager.function_manager.list_private_fields",
-        lambda *_args, **_kwargs: ["_embedding"],
-    )
 
     rows = fm.filter_functions(
         filter="'tool' in docstring",
@@ -78,14 +77,12 @@ def test_filter_functions_delegates_federated_read_to_server(monkeypatch):
         {
             "context": "Functions/Compositional",
             "source": "compositional",
-            "filter": "language == 'python'",
-            "exclude_fields": ["_embedding"],
+            "filter": "'data' in docstring",
         },
         {
             "context": "Functions/Primitives",
             "source": "primitives",
             "filter": scoped_primitive_filter,
-            "exclude_fields": ["_embedding"],
             "project_name": builtins,
         },
     ]
@@ -100,10 +97,6 @@ def test_filter_functions_skips_primitive_contexts_when_disabled(monkeypatch):
         return {"logs": [{"name": "comp-1"}], "count": 1, "counts": {}}
 
     monkeypatch.setattr("unify.db.get_logs_federated", fake_get_logs_federated)
-    monkeypatch.setattr(
-        "unify.function_manager.function_manager.list_private_fields",
-        lambda *_args, **_kwargs: [],
-    )
 
     rows = fm.filter_functions(limit=5)
 
@@ -113,14 +106,14 @@ def test_filter_functions_skips_primitive_contexts_when_disabled(monkeypatch):
     ]
 
 
-def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
+def test_search_functions_uses_federated_text_search_contexts(monkeypatch):
     fm = _manager_stub()
-    fm._filter_scope = "language == 'python'"
+    fm._filter_scope = "'data' in docstring"
     fm._exclude_compositional_ids = frozenset({1})
     builtins = builtins_project()
     captured = {}
 
-    def fake_ranked_search(contexts, references, *, limit, **kwargs):
+    def fake_text_search(contexts, references, *, limit, **kwargs):
         captured["contexts"] = contexts
         captured["references"] = references
         captured["limit"] = limit
@@ -129,13 +122,13 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
             {
                 "name": "ranked",
                 "implementation": "def ranked(): pass",
-                "_federated_score": 0.1,
+                "_federated_score": 0.5,
             },
         ]
 
     monkeypatch.setattr(
-        "unify.function_manager.function_manager.federated_ranked_search",
-        fake_ranked_search,
+        "unify.function_manager.function_manager.federated_text_search",
+        fake_text_search,
     )
 
     rows = fm.search_functions(
@@ -148,9 +141,13 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
     # components; the federated fields themselves must pass through intact.
     assert len(rows) == 1
     assert rows[0]["name"] == "ranked"
-    assert rows[0]["_federated_score"] == 0.1
+    assert rows[0]["_federated_score"] == 0.5
+    assert rows[0]["_similarity"] == 0.5
     assert {"_similarity", "_standing", "_retrieval_score"} <= set(rows[0])
-    assert captured["references"] == {"embedding_text": "rank useful functions"}
+    # The query's words are looked for in every searched field.
+    assert captured["references"] == {
+        field: "rank useful functions" for field in SEARCHED_FUNCTION_FIELDS
+    }
     # Search overfetches beyond n so scope-dropped rows cannot leave the
     # caller short; the default policy is max(n + 4, n * 3) capped at 50.
     assert captured["limit"] == 21
@@ -165,7 +162,7 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
         "compositional",
         "primitives",
     ]
-    assert contexts[0].row_filter == "(language == 'python') and (function_id != 1)"
+    assert contexts[0].row_filter == "('data' in docstring) and (function_id != 1)"
     assert contexts[1].row_filter == "primitive_class == 'Primitives'"
-    assert "embedding_text" in contexts[0].allowed_fields
+    assert set(SEARCHED_FUNCTION_FIELDS) <= set(contexts[0].allowed_fields)
     assert contexts[0].allowed_fields == contexts[1].allowed_fields

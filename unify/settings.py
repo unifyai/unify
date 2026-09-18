@@ -67,8 +67,7 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
-    # OpenRouter — used for ``*@openrouter`` endpoints (the default model) and
-    # for embeddings when ``UNIFY_EMBED_MODEL`` names an ``@openrouter`` model.
+    # OpenRouter — used for ``*@openrouter`` endpoints (the default model).
     OPENROUTER_API_KEY: SecretStr = SecretStr("")
     UNIFY_VALIDATE_LLM_PROVIDERS: bool = True
 

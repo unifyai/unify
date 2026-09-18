@@ -118,7 +118,6 @@ async def test_stateless_execute_code_can_call_fm_discovered_function():
         res = await execute_code(
             thought="call the discovered function in a stateless session",
             code="result = sentinel_func()\nprint(result)",
-            language="python",
             state_mode="stateless",
             session_id=None,
             session_name=None,
@@ -157,7 +156,6 @@ async def test_stateless_does_not_inherit_intermediate_variables():
         res = await execute_code(
             thought="create an intermediate variable in session 0",
             code="my_intermediate_var = 42",
-            language="python",
             state_mode="stateful",
             session_id=0,
             session_name=None,
@@ -181,7 +179,6 @@ async def test_stateless_does_not_inherit_intermediate_variables():
                 "    parts.append('NOT_FOUND')\n"
                 "print('|'.join(parts))"
             ),
-            language="python",
             state_mode="stateless",
             session_id=None,
             session_name=None,
@@ -224,7 +221,6 @@ async def test_fm_functions_available_in_stateful_session_gt_zero():
         res = await execute_code(
             thought="call FM function in a different stateful session",
             code="result = sentinel_func()\nprint(result)",
-            language="python",
             state_mode="stateful",
             session_id=1,
             session_name=None,

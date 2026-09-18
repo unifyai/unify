@@ -161,7 +161,6 @@ class ExecutionResult(BaseModel):
     stderr: List[Union[TextPart, ImagePart]] = Field(default_factory=list)
     result: Any = None
     error: Optional[str] = None
-    language: Optional[str] = None
     state_mode: Optional[str] = None
     session_id: Optional[int] = None
     session_name: Optional[str] = None
@@ -189,8 +188,6 @@ class ExecutionResult(BaseModel):
             meta["result"] = self.result
         if self.error is not None:
             meta["error"] = self.error
-        if self.language is not None:
-            meta["language"] = self.language
         if self.state_mode is not None:
             meta["state_mode"] = self.state_mode
         if self.session_id is not None:

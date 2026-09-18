@@ -143,10 +143,9 @@ in-process pub/sub keyed by channel prefix (`app:comms:*`, `app:actor:*`).
 
 `init_conv_manager` runs in a worker thread: it initializes the runtime,
 binds the chat table and starts loading the stored conversation, builds the
-`ConversationManagerHandle` and the `Actor`, and warms the function and
-guidance catalogues' embeddings. The brain serves during that window; the
-initialization-complete notification tells it whether any history was
-restored.
+`ConversationManagerHandle` and the `Actor`. The brain serves during that
+window; the initialization-complete notification tells it whether any
+history was restored.
 
 ## Tests
 

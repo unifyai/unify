@@ -491,27 +491,6 @@ def _init_managers(
             f"{ICONS['managers_worker']} [ManagersWorker] Error initializing Actor: {e}",
         )
 
-    # 4. Warm the function and guidance catalogues' embedding columns so the
-    #    first vector search of the session does not pay the cold-start cost.
-    #    FunctionManager is not a singleton (one per primitive scope), so it is
-    #    warmed explicitly alongside the cached singletons.
-    try:
-        LOGGER.debug(
-            f"{ICONS['managers_worker']} [ManagersWorker] Warming embedding columns...",
-        )
-        local_start_time = perf_counter()
-        ManagerRegistry.get_guidance_manager()
-        ManagerRegistry.warm_all_embeddings()
-        ManagerRegistry.get_function_manager().warm_embeddings()
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Embedding columns warmed in "
-            f"{perf_counter() - local_start_time:.2f} seconds",
-        )
-    except Exception as e:
-        LOGGER.warning(
-            f"{ICONS['managers_worker']} [ManagersWorker] Embedding warm-up failed (degraded): {e}",
-        )
-
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] All managers initialized in "
         f"{perf_counter() - start_time:.2f} seconds",

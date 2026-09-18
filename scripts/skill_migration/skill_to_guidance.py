@@ -285,8 +285,8 @@ def compose_guidance_content(
     """Compose the guidance ``content`` string for a parsed skill.
 
     The skill ``description`` is folded into the body so it is part of the
-    embedded/searchable content (GuidanceManager retrieval ranks on
-    ``content``, not ``title``). Bundled scripts are optionally inlined and a
+    searchable content (GuidanceManager retrieval matches query words
+    against ``content``). Bundled scripts are optionally inlined and a
     provenance footer records where the skill came from.
     """
     sections: List[str] = []

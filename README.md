@@ -56,7 +56,7 @@ Then start chatting:
 > Run it against ~/exports/run-42.csv and plot the deltas.
 ```
 
-Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the embeddings cache, the `workspace/` directory the actor reads and writes files in, and the runtime logs. Delete the directory and you have a fresh assistant. `/help` inside the chat lists the few slash commands (attach a file, quit); `unify --debug` streams the runtime logs to the terminal.
+Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the `workspace/` directory the actor reads and writes files in, and the runtime logs. Delete the directory and you have a fresh assistant. `/help` inside the chat lists the few slash commands (attach a file, quit); `unify --debug` streams the runtime logs to the terminal.
 
 <details>
 <summary>Configuration</summary>
@@ -67,9 +67,8 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 |---|---|
 | `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` | At least one provider key |
 | `UNIFY_MODEL`, `UNIFY_REASONING_EFFORT` | The default model (a unillm `model@provider` endpoint) and effort |
-| `UNIFY_HOME` | Where the store, embeddings cache and workspace live (default `~/.unify`) |
+| `UNIFY_HOME` | Where the store and workspace live (default `~/.unify`) |
 | `UNIFY_STORE_PATH` | An explicit path for the SQLite store |
-| `UNIFY_EMBED_MODEL` | Local `fastembed` model for vector columns, or `<model>@openrouter` |
 | `UNILLM_CACHE` | Cache LLM responses locally; later runs replay identical calls |
 | `ASSISTANT_FIRST_NAME`, `USER_FIRST_NAME`, … | Optional identity for the assistant and its user |
 
@@ -149,7 +148,7 @@ You ──► ConversationManager (slow brain: event-driven, single-shot tool de
         Skill libraries (stored functions + procedures, discovered before writing code)
             │
             ▼
-        unify.db (in-process SQLite store: contexts, rows, derived vector columns)
+        unify.db (in-process SQLite store: contexts, rows, derived columns)
 ```
 
 **Dispatch flows down; steering flows back up the same path.** Every level returns the same `SteerableToolHandle`, so a mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary. It propagates through the live nested call stack as a typed signal any inner manager loop can act on.
@@ -186,7 +185,7 @@ A load → reshape → delegate sequence becomes one coherent plan with real var
 
 ### The local store
 
-`unify.db` is an in-process SQLite engine with the shape of a document store: **projects** hold **contexts** (tables), contexts hold **rows** of JSON with typed **fields**, and a context can declare unique keys, auto-counted ids and **derived columns** whose equations are evaluated on write. Filters and sort keys are ordinary Python expressions evaluated per row (`age > 30 and 'berlin' in city.lower()`), with `embed()` and `cosine()` available so a derived vector column and a nearest-neighbour sort need no external service. Embeddings come from a local `fastembed` model by default and are cached on disk.
+`unify.db` is an in-process SQLite engine with the shape of a document store: **projects** hold **contexts** (tables), contexts hold **rows** of JSON with typed **fields**, and a context can declare unique keys, auto-counted ids and **derived columns** whose equations are evaluated on write. Filters and sort keys are ordinary Python expressions evaluated per row (`age > 30 and 'berlin' in city.lower()`).
 
 Everything the assistant keeps — chat history, functions, procedures — goes through this one API, so the whole assistant is one file you can back up, inspect, or delete.
 

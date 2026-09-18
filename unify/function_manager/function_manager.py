@@ -2,17 +2,14 @@ import ast
 import asyncio
 import builtins
 import concurrent.futures
-import dataclasses
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
 import functools
 import json
 import os
-import re
 import signal
 import sys
-import tempfile
 import logging
 import threading
 from pathlib import Path
@@ -31,15 +28,13 @@ from typing import (
     Union,
 )
 from unify import db
-from .shell_pool import ShellPool
 from unify.db import StoreError as _UnifyRequestError
 from ..common.log_utils import create_logs
-from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.federated_search import (
     SCORE_FIELD,
     FederatedSearchContext,
     federated_filter,
-    federated_ranked_search,
+    federated_text_search,
 )
 from .activation import (
     ActivationSettings,
@@ -47,7 +42,6 @@ from .activation import (
     in_scope,
     merged_usage,
     rank_score,
-    similarity_from_distance,
 )
 from ..common.builtins import builtins_project
 from .builtins_catalog import BUILTINS_PRIMITIVES_CONTEXT
@@ -95,6 +89,9 @@ _VENV_PREPARE_LOCKS: dict[str, asyncio.Lock] = {}
 
 FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
+
+# The fields a search query's words are looked for in, per function row.
+SEARCHED_FUNCTION_FIELDS = ("name", "docstring", "metadata")
 
 
 class _LineageTrackedFunction:
@@ -187,37 +184,6 @@ class _LineageTrackedFunction:
             return _await_and_finalize()
 
         return result
-
-
-# Pattern for shell script metadata comments
-_SHELL_NAME_PATTERN = re.compile(r"^#\s*@name:\s*(.+?)\s*$", re.MULTILINE)
-_SHELL_ARGS_PATTERN = re.compile(r"^#\s*@args:\s*(.+?)\s*$", re.MULTILINE)
-_SHELL_DESC_PATTERN = re.compile(r"^#\s*@description:\s*(.+?)\s*$", re.MULTILINE)
-
-
-def _parse_shell_script_metadata(source: str) -> Dict[str, Optional[str]]:
-    """
-    Parse metadata from shell script comments.
-
-    Expected format at the top of the script::
-
-        #!/bin/sh
-        # @name: my_function
-        # @args: (input_file output_file --verbose)
-        # @description: Brief description of what the function does
-
-    Returns:
-        Dict with keys: name, argspec, docstring (any may be None if not found)
-    """
-    name_match = _SHELL_NAME_PATTERN.search(source)
-    args_match = _SHELL_ARGS_PATTERN.search(source)
-    desc_match = _SHELL_DESC_PATTERN.search(source)
-
-    return {
-        "name": name_match.group(1).strip() if name_match else None,
-        "argspec": args_match.group(1).strip() if args_match else "()",
-        "docstring": desc_match.group(1).strip() if desc_match else "",
-    }
 
 
 def _instrument_for_child(source: str) -> str:
@@ -853,7 +819,6 @@ class VenvPool:
                 self._metadata[(venv_id, session_id)] = md
             out.append(
                 {
-                    "language": "python",
                     "session_id": int(session_id),
                     "venv_id": int(venv_id),
                     "created_at": md.created_at.isoformat(),
@@ -1771,10 +1736,6 @@ class FunctionManager(BaseFunctionManager):
                 "context": spec.context,
                 "project": spec.project,
                 "filter": row_filter,
-                "exclude_fields": list_private_fields(
-                    spec.context,
-                    project=spec.project,
-                ),
             }
             if limit is not None:
                 kwargs["limit"] = limit
@@ -1940,7 +1901,6 @@ class FunctionManager(BaseFunctionManager):
         logs = db.get_logs(
             context=self._compositional_ctx,
             filter=f"function_id == {function_id}",
-            exclude_fields=list_private_fields(self._compositional_ctx),
         )
         if len(logs) == 0:
             if raise_if_missing:
@@ -2106,10 +2066,10 @@ class FunctionManager(BaseFunctionManager):
         n: int,
         include_dormant: bool,
     ) -> List[Dict[str, Any]]:
-        """Order search results by similarity × standing; drop the lapsed.
+        """Order search results by word match × standing; drop the lapsed.
 
-        Similarity dominates (the activation term is capped in settings) and
-        backfilled rows — which carry no score — keep their tail position.
+        The match dominates (the activation term is capped in settings) and
+        backfilled rows — which matched nothing — keep their tail position.
         Primitives never drop out of scope: platform surface is not memory.
         Each surviving row is annotated with the components — ``_similarity``,
         ``_standing``, ``_retrieval_score`` — so the querying model sees WHY
@@ -2135,11 +2095,7 @@ class FunctionManager(BaseFunctionManager):
                 and not in_scope(standing, settings)
             ):
                 continue
-            similarity = (
-                similarity_from_distance(row.get(SCORE_FIELD))
-                if SCORE_FIELD in row
-                else 0.0
-            )
+            similarity = float(row.get(SCORE_FIELD) or 0.0)
             score = rank_score(similarity, standing, settings)
             row["_similarity"] = round(similarity, 4)
             row["_standing"] = round(standing, 4)
@@ -2208,16 +2164,6 @@ class FunctionManager(BaseFunctionManager):
     #  Public API                                                        #
     # ------------------------------------------------------------------ #
 
-    def warm_embeddings(self) -> None:
-        try:
-            ensure_vector_column(
-                self._compositional_ctx,
-                embed_column="_embedding_text_emb",
-                source_column="embedding_text",
-            )
-        except Exception:
-            pass
-
     @functools.wraps(BaseFunctionManager.clear, updated=())
     def clear(self) -> None:
         db.delete_context(self._compositional_ctx)
@@ -2282,7 +2228,6 @@ class FunctionManager(BaseFunctionManager):
                 if doc:
                     summary = get_registry()._extract_summary_and_params(doc)
                     compact["docstring"] = summary or doc[:800]
-                compact.pop("embedding_text", None)
             compact_rows.append(compact)
         return compact_rows
 
@@ -2323,7 +2268,6 @@ class FunctionManager(BaseFunctionManager):
         self,
         *,
         implementations: Union[str, List[str]],
-        language: Literal["python", "bash", "zsh", "sh", "powershell"] = "python",
         preconditions: Optional[Dict[str, Dict]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
@@ -2334,7 +2278,6 @@ class FunctionManager(BaseFunctionManager):
 
         Args:
             implementations: Function source code (single string or list of strings).
-            language: The language/interpreter for the function(s). Default is "python".
             preconditions: Optional preconditions for functions.
             overwrite: If True, update existing functions; if False, skip duplicates.
             raise_on_error: If True (default), raise ValueError when any function
@@ -2355,17 +2298,6 @@ class FunctionManager(BaseFunctionManager):
         if isinstance(implementations, str):
             implementations = [implementations]
 
-        # Branch based on language
-        if language != "python":
-            return self._add_shell_functions(
-                implementations=implementations,
-                language=language,
-                preconditions=preconditions,
-                overwrite=overwrite,
-                raise_on_error=raise_on_error,
-            )
-
-        # Python-specific parsing and validation
         parsed: List[Tuple[str, ast.Module, ast.FunctionDef, str]] = []
         parse_errors: Dict[str, str] = {}
         temp_names: Set[str] = set()
@@ -2467,7 +2399,6 @@ class FunctionManager(BaseFunctionManager):
                 fn_obj = namespace[name]
                 signature = str(inspect.signature(fn_obj))
                 docstring = inspect.getdoc(fn_obj) or ""
-                embedding_text = f"Function Name: {name}\nSignature: {signature}\nDocstring: {docstring}"
                 precondition = preconditions.get(name)
 
                 prior_log = None
@@ -2478,13 +2409,11 @@ class FunctionManager(BaseFunctionManager):
                     )
 
                 entry_data = {
-                    "language": "python",
                     "argspec": signature,
                     "docstring": docstring,
                     "implementation": source,
                     "depends_on": dependencies_list,
                     "third_party_imports": sorted(tp_imports),
-                    "embedding_text": embedding_text,
                     "precondition": precondition,
                     "stale_reasons": [
                         reason.model_dump(mode="json")
@@ -2566,170 +2495,6 @@ class FunctionManager(BaseFunctionManager):
 
         return results
 
-    def _add_shell_functions(
-        self,
-        *,
-        implementations: List[str],
-        language: Literal["bash", "zsh", "sh", "powershell"],
-        preconditions: Dict[str, Dict],
-        overwrite: bool,
-        raise_on_error: bool = True,
-    ) -> Dict[str, str]:
-        """
-        Add shell script functions (bash, zsh, sh, powershell).
-
-        Shell scripts must include metadata comments at the top:
-            # @name: my_function
-            # @args: (input_file output_file --verbose)
-            # @description: Brief description
-
-        The @name comment is required. @args and @description are optional.
-        """
-        results: Dict[str, str] = {}
-        parsed: List[Tuple[str, str, str, str, str]] = (
-            []
-        )  # (name, argspec, docstring, source, language)
-        temp_names: Set[str] = set()
-
-        # Parse metadata from all implementations
-        for i, source in enumerate(implementations):
-            metadata = _parse_shell_script_metadata(source)
-            name = metadata["name"]
-
-            if not name:
-                key = f"implementation_{i+1}"
-                results[key] = (
-                    "error: Shell script must include '# @name: <function_name>' comment"
-                )
-                continue
-
-            parsed.append(
-                (
-                    name,
-                    metadata["argspec"],
-                    metadata["docstring"],
-                    source,
-                    language,
-                ),
-            )
-            temp_names.add(name)
-
-        # Get existing functions for duplicate detection
-        try:
-            existing_functions = self.list_functions()
-            existing_names = set(existing_functions.keys())
-        except Exception as e:
-            logger.warning(f"Failed to list existing functions: {e}")
-            existing_functions = {}
-            existing_names = set()
-
-        # Check for duplicates
-        duplicates_to_skip: Set[str] = set()
-        existing_to_update: Set[str] = set()
-
-        for name in temp_names:
-            if name in existing_names:
-                if overwrite:
-                    existing_to_update.add(name)
-                else:
-                    duplicates_to_skip.add(name)
-                    results[name] = "skipped: already exists"
-
-        # Prepare entries for batch operations
-        entries_to_create: List[Dict[str, Any]] = []
-        entries_to_update: List[Dict[str, Any]] = []
-        log_ids_to_update: List[int] = []
-        log_id_to_name: Dict[int, str] = {}
-
-        for name, argspec, docstring, source, lang in parsed:
-            if name in duplicates_to_skip:
-                continue
-
-            try:
-                embedding_text = f"Function Name: {name}\nLanguage: {lang}\nSignature: {argspec}\nDocstring: {docstring}"
-                precondition = preconditions.get(name)
-
-                entry_data = {
-                    "argspec": argspec,
-                    "docstring": docstring,
-                    "implementation": source,
-                    "language": lang,
-                    "depends_on": [],  # Shell scripts don't have auto-detected dependencies
-                    "embedding_text": embedding_text,
-                    "precondition": precondition,
-                    "stale_reasons": [],
-                }
-
-                if name in existing_to_update:
-                    # Update existing function
-                    log_id = self._get_log_by_function_id(
-                        function_id=existing_functions[name]["function_id"],
-                        raise_if_missing=True,
-                    ).id
-                    log_ids_to_update.append(log_id)
-                    log_id_to_name[log_id] = name
-                    entries_to_update.append(entry_data)
-                    results[name] = "updated"
-                else:
-                    # Create new function
-                    entry_data["name"] = name
-                    entry_data["guidance_ids"] = []
-                    self._stamp_new_function_usage(entry_data, name)
-                    entries_to_create.append(entry_data)
-                    results[name] = "added"
-
-            except Exception as e:
-                results[name] = f"error: {e}"
-                logger.error(
-                    f"Error processing shell function {name}: {e}",
-                    exc_info=True,
-                )
-
-        # Batch create new functions
-        if entries_to_create:
-            try:
-                create_logs(
-                    context=self._compositional_ctx,
-                    entries=entries_to_create,
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to batch create shell function logs: {e}",
-                    exc_info=True,
-                )
-                for entry in entries_to_create:
-                    name = entry["name"]
-                    if results.get(name) == "added":
-                        results[name] = f"error: Failed to create log - {e}"
-
-        # Batch update existing functions
-        if log_ids_to_update and entries_to_update:
-            try:
-                db.update_logs(
-                    logs=log_ids_to_update,
-                    context=self._compositional_ctx,
-                    entries=[entry for entry in entries_to_update],
-                    overwrite=True,
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to batch update shell function logs: {e}",
-                    exc_info=True,
-                )
-                for log_id in log_ids_to_update:
-                    name = log_id_to_name.get(log_id)
-                    if name and results.get(name) == "updated":
-                        results[name] = f"error: Failed to update log - {e}"
-
-        # Check for errors and raise if requested
-        if raise_on_error:
-            errors = {k: v for k, v in results.items() if v.startswith("error")}
-            if errors:
-                error_details = "; ".join(f"{k}: {v}" for k, v in errors.items())
-                raise ValueError(f"Failed to add shell function(s): {error_details}")
-
-        return results
-
     # ------------------------------------------------------------------ #
     #  Callable return + dependency injection                             #
     # ------------------------------------------------------------------ #
@@ -2762,7 +2527,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._compositional_ctx,
                     filter=normalized,
                     limit=1,
-                    exclude_fields=list_private_fields(self._compositional_ctx),
                 )
                 _q_ms = (_time.perf_counter() - _q_t0) * 1000
                 if logs:
@@ -3254,7 +3018,6 @@ class FunctionManager(BaseFunctionManager):
             for lg in db.get_logs(
                 context=self._compositional_ctx,
                 filter=self._scoped_filter(None),
-                exclude_fields=list_private_fields(self._compositional_ctx),
             )
         ]
 
@@ -3278,10 +3041,6 @@ class FunctionManager(BaseFunctionManager):
 
             data: Dict[str, Any] = {
                 "function_id": ent.get("function_id"),
-                "language": ent.get(
-                    "language",
-                    "python",
-                ),  # Default for backward compat
                 "argspec": ent.get("argspec"),
                 "docstring": ent.get("docstring", ""),
                 "depends_on": ent.get("depends_on", []),
@@ -3328,7 +3087,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._compositional_ctx,
             filter=self._scoped_filter(f"name == '{function_name}'"),
             limit=1,
-            exclude_fields=list_private_fields(self._compositional_ctx),
         )
         if not logs and self._include_primitives:
             primitive_rows = self._primitive_logs(
@@ -3380,7 +3138,6 @@ class FunctionManager(BaseFunctionManager):
         if compositional_logs is None:
             compositional_logs = db.get_logs(
                 context=self._compositional_ctx,
-                exclude_fields=list_private_fields(self._compositional_ctx),
             )
         return {
             str(log.entries["name"])
@@ -3439,7 +3196,6 @@ class FunctionManager(BaseFunctionManager):
             logs = db.get_logs(
                 context=context,
                 filter=f"{int(function_id)} in function_ids",
-                exclude_fields=list_private_fields(context),
             )
             for log in logs:
                 existing = coerce_stale_reasons(
@@ -3509,13 +3265,8 @@ class FunctionManager(BaseFunctionManager):
                     f"Cannot delete primitives (system-owned): {prim_names}",
                 )
 
-        exclude_fields = list_private_fields(self._compositional_ctx)
-
         def _load_compositional_logs():
-            return db.get_logs(
-                context=self._compositional_ctx,
-                exclude_fields=exclude_fields,
-            )
+            return db.get_logs(context=self._compositional_ctx)
 
         # Single-id: cheap existence check before any full-table scan.
         if len(function_ids) == 1:
@@ -3638,7 +3389,6 @@ class FunctionManager(BaseFunctionManager):
     ) -> Dict[str, Any]:
         all_logs = db.get_logs(
             context=self._compositional_ctx,
-            exclude_fields=list_private_fields(self._compositional_ctx),
         )
         selected_ids = (
             {int(function_id) for function_id in function_ids}
@@ -3713,17 +3463,6 @@ class FunctionManager(BaseFunctionManager):
         if self._include_primitives:
             contexts.extend(self._primitive_read_specs())
 
-        contexts = [
-            dataclasses.replace(
-                spec,
-                excluded_fields=list_private_fields(
-                    spec.context,
-                    project=spec.project,
-                ),
-            )
-            for spec in contexts
-        ]
-
         try:
             rows = federated_filter(
                 contexts,
@@ -3758,7 +3497,7 @@ class FunctionManager(BaseFunctionManager):
             return {"callables": callables_list, "metadata": metadata_rows}  # type: ignore[return-value]
         return callables_list  # type: ignore[return-value]
 
-    # 5. Semantic Search ------------------------------------------------ #
+    # 5. Text Search ---------------------------------------------------- #
     @functools.wraps(BaseFunctionManager.search_functions, updated=())
     def search_functions(
         self,
@@ -3778,8 +3517,8 @@ class FunctionManager(BaseFunctionManager):
             raise ValueError("_namespace required when _return_callable=True")
 
         # Soft models sometimes call search with ``{}`` / empty query during
-        # discovery. The store rejects embed(""), so fall back to a plain
-        # catalogue sample instead of a vector sort.
+        # discovery; an empty query has nothing to match, so return a plain
+        # catalogue sample instead.
         if not str(query or "").strip():
             return self.filter_functions(
                 filter=None,
@@ -3796,13 +3535,11 @@ class FunctionManager(BaseFunctionManager):
             if _return_callable
             else [
                 "function_id",
-                "language",
                 "name",
                 "argspec",
                 "docstring",
                 "depends_on",
                 "stale_reasons",
-                "embedding_text",
                 "precondition",
                 "guidance_ids",
                 "is_primitive",
@@ -3848,9 +3585,9 @@ class FunctionManager(BaseFunctionManager):
             if activation_settings.enabled
             else n
         )
-        results = federated_ranked_search(
+        results = federated_text_search(
             contexts,
-            {"embedding_text": query},
+            {field: query for field in SEARCHED_FUNCTION_FIELDS},
             limit=fetch_limit,
             unique_id_field="function_id",
             backfill=True,
@@ -3911,7 +3648,6 @@ class FunctionManager(BaseFunctionManager):
             rows = db.get_logs(
                 context=gctx,
                 filter=f"{int(function_id)} in function_ids",
-                exclude_fields=list_private_fields(gctx),
             )
             return [
                 int(r.entries.get("guidance_id"))
@@ -3946,7 +3682,6 @@ class FunctionManager(BaseFunctionManager):
         rows = db.get_logs(
             context=gctx,
             filter=cond or "False",
-            exclude_fields=list_private_fields(gctx),
         )
         out: List[Dict[str, Any]] = []
         for lg in rows:
@@ -3969,7 +3704,6 @@ class FunctionManager(BaseFunctionManager):
         *,
         filter: Optional[str] = None,
         limit: Optional[int] = None,
-        exclude_fields: Optional[List[str]] = None,
         from_fields: Optional[List[str]] = None,
     ) -> List[db.Log]:
         """Best-effort venv reads; treat missing contexts as empty."""
@@ -3984,7 +3718,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._venvs_ctx,
                     filter=filter,
                     limit=limit,
-                    exclude_fields=exclude_fields,
                     from_fields=from_fields,
                 )
                 if logs or filter is None:
@@ -4055,7 +3788,6 @@ class FunctionManager(BaseFunctionManager):
         logs = self._safe_get_venv_logs(
             filter=f"venv_id == {venv_id}",
             limit=1,
-            exclude_fields=list_private_fields(self._venvs_ctx),
         )
         if logs:
             return logs[0].entries
@@ -4068,10 +3800,7 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             List of dicts, each with venv_id and venv content.
         """
-        logs = self._safe_get_venv_logs(
-            exclude_fields=list_private_fields(self._venvs_ctx),
-            from_fields=None,
-        )
+        logs = self._safe_get_venv_logs(from_fields=None)
         return [lg.entries for lg in logs]
 
     def delete_venv(self, *, venv_id: int) -> bool:
@@ -4434,8 +4163,8 @@ class FunctionManager(BaseFunctionManager):
         """
         Handle an RPC call from a subprocess.
 
-        Every out-of-process execution path — one-shot venv, pooled venv, and
-        shell — converges here, so this is where a steering session sees a
+        Every out-of-process execution path — one-shot venv and pooled venv —
+        converges here, so this is where a steering session sees a
         subprocess's dispatches: while a call is in flight they are memoised
         for replay, pause holds the reply, and a pending correction raises
         :class:`ControlledInterruption` for the caller to translate into an
@@ -4937,7 +4666,6 @@ class FunctionManager(BaseFunctionManager):
         state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
         session_id: int = 0,
         venv_pool: Optional["VenvPool"] = None,
-        shell_pool: Optional["ShellPool"] = None,
         extra_namespaces: Optional[Dict[str, Any]] = None,
         _parent_chat_context: Optional[list] = None,
     ) -> Any:
@@ -4957,16 +4685,16 @@ class FunctionManager(BaseFunctionManager):
 
         State modes (composed functions only):
         - "stateless" (default): Fresh subprocess with no inherited state. Pure
-          function behavior. Backward compatible with previous behavior.
+          function behavior.
         - "stateful": Uses persistent pool connection. Variables from previous
-          executions persist. Requires venv_pool (Python) or shell_pool (shell).
+          executions persist. Requires venv_pool for venv functions.
         - "read_only": Reads current state from pool but executes in ephemeral
           subprocess. Changes are NOT persisted. Useful for "what-if" exploration.
 
         Args:
             function_name: Name of the function to execute.
             call_kwargs: Keyword arguments to pass to the function.
-            target_venv_id: Override the execution environment (Python only):
+            target_venv_id: Override the execution environment:
                 - ... (Ellipsis): Use the function's stored venv_id (default)
                 - None: Execute in the default Python environment
                 - int: Execute in this specific venv_id
@@ -4974,8 +4702,7 @@ class FunctionManager(BaseFunctionManager):
             session_id: The session ID within the pool (default 0). Multiple sessions
                 allow independent stateful execution contexts.
                 Only applies to stateful/read_only modes.
-            venv_pool: VenvPool for stateful/read_only modes with Python venv functions.
-            shell_pool: ShellPool for stateful/read_only modes with shell functions.
+            venv_pool: VenvPool for stateful/read_only modes with venv functions.
             extra_namespaces: Named objects to inject into the function's execution
                 namespace. For in-process execution, all entries are injected into
                 globals. For venv/subprocess execution, the "primitives" entry
@@ -5025,33 +4752,17 @@ class FunctionManager(BaseFunctionManager):
         if not isinstance(implementation, str) or not implementation.strip():
             raise ValueError(f"Function '{function_name}' has no implementation")
 
-        # Check language and route appropriately
-        language = func_data.get("language", "python")
-
-        if language == "python":
-            return await self._execute_python_function(
-                func_data=func_data,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                target_venv_id=target_venv_id,
-                state_mode=state_mode,
-                session_id=session_id,
-                venv_pool=venv_pool,
-                extra_namespaces=ns,
-                _parent_chat_context=_parent_chat_context,
-            )
-        elif language in ("bash", "zsh", "sh", "powershell"):
-            return await self._execute_shell_function(
-                func_data=func_data,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                state_mode=state_mode,
-                session_id=session_id,
-                shell_pool=shell_pool,
-                extra_namespaces=ns,
-            )
-        else:
-            raise ValueError(f"Unsupported function language: {language}")
+        return await self._execute_python_function(
+            func_data=func_data,
+            implementation=implementation,
+            call_kwargs=call_kwargs,
+            target_venv_id=target_venv_id,
+            state_mode=state_mode,
+            session_id=session_id,
+            venv_pool=venv_pool,
+            extra_namespaces=ns,
+            _parent_chat_context=_parent_chat_context,
+        )
 
     # ------------------------------------------------------------------ #
     #  Primitive Execution Helpers                                       #
@@ -5214,99 +4925,6 @@ class FunctionManager(BaseFunctionManager):
                 is_async=is_async,
                 primitives=primitives,
             )
-
-    async def _execute_shell_function(
-        self,
-        *,
-        func_data: Dict[str, Any],
-        implementation: str,
-        call_kwargs: Optional[Dict[str, Any]],
-        state_mode: Literal["stateful", "read_only", "stateless"],
-        session_id: int,
-        shell_pool: Optional["ShellPool"],
-        extra_namespaces: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Execute a shell function with state mode support.
-
-        For shell functions:
-        - "stateless": Uses execute_shell_script (fresh subprocess each time)
-        - "stateful": Uses ShellPool for persistent sessions
-        - "read_only": Not yet implemented (requires state snapshot/restore)
-        """
-
-        language = func_data.get("language", "bash")
-
-        if state_mode == "stateless":
-            # Use existing execute_shell_script (fresh subprocess each time)
-            return await self.execute_shell_script(
-                implementation=implementation,
-                language=language,
-                primitives=extra_namespaces.get("primitives"),
-            )
-
-        elif state_mode == "stateful":
-            if shell_pool is None:
-                raise ValueError(
-                    "state_mode='stateful' requires shell_pool for shell functions. "
-                    "Either provide shell_pool or use state_mode='stateless'.",
-                )
-
-            # Execute in persistent session via ShellPool
-            result = await shell_pool.execute(
-                language=language,
-                command=implementation,
-                session_id=session_id,
-            )
-
-            return {
-                "result": result.exit_code,  # For shell, "result" is exit code
-                "error": result.error,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-
-        elif state_mode == "read_only":
-            # Get state from persistent session, execute in ephemeral session
-            if shell_pool is None:
-                raise ValueError(
-                    "state_mode='read_only' requires shell_pool to read existing state. "
-                    "Either provide shell_pool or use state_mode='stateless'.",
-                )
-
-            from .shell_session import ShellSession
-
-            # Get current state from the persistent session
-            session = await shell_pool.get_session(
-                language=language,
-                session_id=session_id,
-            )
-            state = await session.snapshot_state()
-
-            # Execute in fresh ephemeral session with restored state
-            ephemeral = ShellSession(language=language)
-            try:
-                await ephemeral.start()
-                restore_result = await ephemeral.restore_state(state)
-                if restore_result.error:
-                    return {
-                        "result": -1,
-                        "error": f"Failed to restore state: {restore_result.error}",
-                        "stdout": "",
-                        "stderr": "",
-                    }
-
-                # Execute the command in ephemeral session
-                result = await ephemeral.execute(implementation)
-
-                return {
-                    "result": result.exit_code,
-                    "error": result.error,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                }
-            finally:
-                await ephemeral.close()
 
     async def _execute_in_default_env(
         self,
@@ -5490,367 +5108,3 @@ class FunctionManager(BaseFunctionManager):
             pass
         # For other types, convert to string representation
         return str(obj)
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # Shell Script Execution with Primitives Bridge
-    # ────────────────────────────────────────────────────────────────────────────
-
-    def _get_shell_interpreter(self, language: str) -> List[str]:
-        """
-        Get the shell interpreter command for a given language.
-
-        Args:
-            language: One of "sh", "bash", "zsh", "powershell"
-
-        Returns:
-            List of command args to invoke the interpreter
-        """
-        interpreters = {
-            "sh": ["/bin/sh"],
-            "bash": ["/bin/bash"],
-            "zsh": ["/bin/zsh"],
-            "powershell": ["pwsh", "-NoProfile", "-NonInteractive", "-File"],
-        }
-        if language not in interpreters:
-            raise ValueError(f"Unsupported shell language: {language}")
-        return interpreters[language]
-
-    def _get_primitives_metadata(self) -> Dict[str, Any]:
-        """
-        Get metadata about available primitives for shell script introspection.
-
-        Returns:
-            Dict with structure:
-            {
-                "managers": {
-                    "actor": {
-                        "description": "...",
-                        "methods": {
-                            "act": {"signature": "...", "docstring": "..."},
-                        }
-                    },
-                }
-            }
-        """
-        result: Dict[str, Dict[str, Any]] = {"managers": {}}
-
-        # Use the scoped primitive_scope from this FunctionManager
-        for spec in self._registry.manager_specs(self._primitive_scope):
-            manager_name = spec.manager_alias
-            description = spec.description
-
-            # Get primitive rows which contain signature and docstring
-            single_scope = PrimitiveScope(scoped_managers=frozenset({manager_name}))
-            primitives_dict = self._registry.collect_primitives(single_scope)
-
-            methods_info: Dict[str, Dict[str, str]] = {}
-            for row in primitives_dict.values():
-                method_name = row.get("primitive_method", "")
-                methods_info[method_name] = {
-                    "signature": row.get("argspec", ""),
-                    "docstring": row.get("docstring", ""),
-                }
-
-            result["managers"][manager_name] = {
-                "description": description,
-                "methods": methods_info,
-            }
-
-        return result
-
-    async def execute_shell_script(
-        self,
-        *,
-        implementation: str,
-        language: Literal["sh", "bash", "zsh", "powershell"] = "sh",
-        call_args: Optional[List[str]] = None,
-        env: Optional[Dict[str, str]] = None,
-        cwd: Optional[str] = None,
-        primitives: Optional[Any] = None,
-        timeout: float = 300.0,
-    ) -> Dict[str, Any]:
-        """
-        Execute a shell script with access to primitives via RPC.
-
-        This method runs a shell script in a subprocess while providing access
-        to the primitives (``primitives.actor``) via the `unify-primitive`
-        CLI command.
-
-        Shell scripts can call primitives like:
-            result=$(unify-primitive actor act --request "Summarise report.txt")
-
-        Args:
-            implementation: The shell script source code.
-            language: Shell interpreter to use ("sh", "bash", "zsh", "powershell").
-            call_args: Optional list of positional arguments to pass to the script.
-            env: Optional environment variables to add to the script's environment.
-            cwd: Optional working directory for the script.
-            primitives: The Primitives instance for RPC access.
-            timeout: Maximum execution time in seconds (default 5 minutes).
-
-        Returns:
-            Dict with keys:
-            - result: The script's exit code (0 = success)
-            - error: Error message if execution failed, None otherwise
-            - stdout: Captured stdout from the script
-            - stderr: Captured stderr from the script
-        """
-        call_args = call_args or []
-
-        # Create temporary directory for script and socket
-        with tempfile.TemporaryDirectory(prefix="unify_shell_") as tmpdir:
-            tmpdir_path = Path(tmpdir)
-
-            # Write script to temporary file
-            if language == "powershell":
-                script_path = tmpdir_path / "script.ps1"
-            else:
-                script_path = tmpdir_path / "script.sh"
-
-            script_path.write_text(implementation)
-            script_path.chmod(0o755)
-
-            # Create Unix domain socket for RPC
-            socket_path = tmpdir_path / "rpc.sock"
-
-            # Get the path to unify-primitive CLI
-            shell_runner_path = Path(__file__).parent / "shell_runner.py"
-
-            # Build environment for the subprocess (sanitized: no raw provider
-            # tokens, plus localhost proxy endpoints).
-            from unify.function_manager.execution_env import (
-                sandbox_env as build_sandbox_env,
-            )
-
-            script_env = build_sandbox_env()
-            script_env["UNIFY_RPC_SOCKET"] = str(socket_path)
-            # Add the shell_runner.py as unify-primitive command
-            # We create a wrapper script that invokes python with shell_runner.py
-            wrapper_path = tmpdir_path / "unify-primitive"
-            python_path = sys.executable
-            wrapper_path.write_text(
-                f'#!/bin/sh\nexec "{python_path}" "{shell_runner_path}" "$@"\n',
-            )
-            wrapper_path.chmod(0o755)
-            # Prepend tmpdir to PATH so unify-primitive is available
-            script_env["PATH"] = f"{tmpdir}:{script_env.get('PATH', '')}"
-
-            # Add user-provided environment variables
-            if env:
-                script_env.update(env)
-
-            stdout_output: List[str] = []
-            stderr_output: List[str] = []
-
-            async def read_stdout():
-                """Read stdout in background."""
-                while True:
-                    line = await process.stdout.readline()
-                    if not line:
-                        break
-                    stdout_output.append(line.decode())
-
-            async def read_stderr():
-                """Read stderr in background."""
-                while True:
-                    line = await process.stderr.readline()
-                    if not line:
-                        break
-                    stderr_output.append(line.decode())
-
-            async def handle_rpc_client(
-                reader: asyncio.StreamReader,
-                writer: asyncio.StreamWriter,
-            ) -> None:
-                """Answer one request from a unify-primitive invocation.
-
-                Each invocation opens its own connection, sends one line and
-                reads one line back; the stream server owns the connection
-                and the task serving it for that whole exchange.
-                """
-                try:
-                    data = await reader.readline()
-                    if not data:
-                        return
-
-                    request = json.loads(data.decode("utf-8").strip())
-                    request_id = request.get("id", "")
-                    path = request.get("path", "")
-                    kwargs = request.get("kwargs", {})
-
-                    if path == "_introspect.list_primitives":
-                        response = {
-                            "type": "rpc_result",
-                            "id": request_id,
-                            "result": self._get_primitives_metadata(),
-                        }
-                    else:
-                        try:
-                            result = await self._handle_rpc_call(
-                                path=path,
-                                kwargs=kwargs,
-                                primitives=primitives,
-                            )
-                            response = {
-                                "type": "rpc_result",
-                                "id": request_id,
-                                "result": self._make_json_serializable(result),
-                            }
-                        except ControlledInterruption:
-                            request = (
-                                steering.interruption if steering is not None else None
-                            )
-                            if request is None or not request.stop:
-                                raise
-                            await stop_process(request)
-                            return
-                        except Exception as e:
-                            logger.error(f"RPC error for {path}: {e}", exc_info=True)
-                            response = {
-                                "type": "rpc_error",
-                                "id": request_id,
-                                "error": str(e),
-                            }
-
-                    writer.write((json.dumps(response) + "\n").encode("utf-8"))
-                    await writer.drain()
-                finally:
-                    writer.close()
-
-            # Listen before the script starts so its first invocation can
-            # connect without waiting on the parent.
-            rpc_server = await asyncio.start_unix_server(
-                handle_rpc_client,
-                path=str(socket_path),
-            )
-
-            # Start the shell script subprocess
-            interpreter = self._get_shell_interpreter(language)
-            cmd = interpreter + [str(script_path)] + call_args
-
-            use_process_group = sys.platform != "win32"
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=script_env,
-                cwd=cwd,
-                start_new_session=use_process_group,
-            )
-            steering = active_session()
-            if steering is not None:
-                # Shell never reaches run_with_steering (there is no source to
-                # splice), so the script is bound here for the patch author to
-                # read when it decides between stopping and doing nothing.
-                steering.bind_source(implementation)
-            stopped: Optional[ExecutionStopped] = None
-
-            async def stop_process(request: Any) -> None:
-                """Terminate the shell process when a correction abandons it."""
-                nonlocal stopped
-                stopped = ExecutionStopped(request.reason or "steered")
-                if process.returncode is None:
-                    await self._terminate_process_group(process, use_process_group)
-
-            # Start all tasks
-            stdout_task = asyncio.create_task(read_stdout())
-            stderr_task = asyncio.create_task(read_stderr())
-            watcher = (
-                asyncio.create_task(
-                    steering.relay_corrections(implementation, stop_process),
-                )
-                if steering is not None
-                else None
-            )
-            pause_watcher = (
-                asyncio.create_task(
-                    steering.relay_pause(
-                        lambda paused: self._set_process_paused(
-                            process,
-                            use_process_group=use_process_group,
-                            paused=paused,
-                        ),
-                    ),
-                )
-                if steering is not None
-                else None
-            )
-
-            try:
-                # Wait for process to complete with timeout
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    # Process timed out
-                    await self._terminate_process_group(process, use_process_group)
-                    return {
-                        "result": -1,
-                        "error": f"Shell script timed out after {timeout}s",
-                        "stdout": "".join(stdout_output),
-                        "stderr": "".join(stderr_output),
-                    }
-
-                # Wait for stdout/stderr to be fully read
-                await asyncio.gather(stdout_task, stderr_task)
-
-                if stopped is not None:
-                    return {
-                        "result": stopped.outcome,
-                        "error": None,
-                        "stdout": "".join(stdout_output),
-                        "stderr": "".join(stderr_output),
-                    }
-
-                # Build result
-                exit_code = process.returncode
-                return {
-                    "result": exit_code,
-                    "error": (
-                        None
-                        if exit_code == 0
-                        else f"Script exited with code {exit_code}"
-                    ),
-                    "stdout": "".join(stdout_output),
-                    "stderr": "".join(stderr_output),
-                }
-
-            except asyncio.CancelledError:
-                await self._terminate_process_group(process, use_process_group)
-                raise
-
-            except Exception as e:
-                return {
-                    "result": -1,
-                    "error": str(e),
-                    "stdout": "".join(stdout_output),
-                    "stderr": "".join(stderr_output),
-                }
-
-            finally:
-                # Clean up
-                for task in (watcher, pause_watcher):
-                    if task is None:
-                        continue
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-
-                stdout_task.cancel()
-                stderr_task.cancel()
-                try:
-                    await stdout_task
-                except asyncio.CancelledError:
-                    pass
-                try:
-                    await stderr_task
-                except asyncio.CancelledError:
-                    pass
-
-                rpc_server.close()
-                await rpc_server.wait_closed()
-
-                # Ensure process is terminated
-                if process.returncode is None:
-                    await self._terminate_process_group(process, use_process_group)

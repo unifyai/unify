@@ -564,7 +564,6 @@ async def test_execute_code_python_cell_defaults_to_persistent_session_zero():
 
         first = await execute_code(
             thought="define a variable in a default cell",
-            language="python",
             code="answer = 41",
         )
         assert first.error is None
@@ -574,7 +573,6 @@ async def test_execute_code_python_cell_defaults_to_persistent_session_zero():
 
         second = await execute_code(
             thought="read the variable back in a later default cell",
-            language="python",
             code="answer + 1",
         )
         assert second.error is None
@@ -582,7 +580,6 @@ async def test_execute_code_python_cell_defaults_to_persistent_session_zero():
 
         isolated = await execute_code(
             thought="run an isolated cell",
-            language="python",
             state_mode="stateless",
             code=(
                 "try:\n"
@@ -605,11 +602,10 @@ async def test_execute_code_python_cell_defaults_to_persistent_session_zero():
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_execute_code_shell_and_venv_cells_default_to_one_shot():
-    """Omitting state_mode keeps shell and venv cells stateless one-shots.
+async def test_execute_code_venv_cells_default_to_one_shot():
+    """Omitting state_mode keeps venv cells stateless one-shots.
 
-    Only local venv-less python cells run in the persistent bound sandbox;
-    a shell export does not survive to the next shell cell, and a venv cell
+    Only venv-less cells run in the persistent bound sandbox; a venv cell
     resolves stateless rather than targeting the bound sandbox.
     """
     actor = CodeActActor(environments=[])
@@ -618,29 +614,11 @@ async def test_execute_code_shell_and_venv_cells_default_to_one_shot():
     try:
         execute_code = actor._build_tools()["execute_code"]
 
-        exported = await execute_code(
-            thought="export a shell variable",
-            language="bash",
-            code="export FOO=bar",
-        )
-        assert exported["error"] is None
-        assert exported["state_mode"] == "stateless"
-        assert exported["session_id"] is None
-
-        echoed = await execute_code(
-            thought="read the shell variable in a second cell",
-            language="bash",
-            code='echo "${FOO:-UNSET}"',
-        )
-        assert echoed["error"] is None
-        assert "UNSET" in echoed["stdout"]
-
         # The venv need not exist: the structured refusal reports which
         # state_mode the omitted argument resolved to for a venv cell.
         with pytest.raises(ToolInputError) as refusal:
             await execute_code(
                 thought="run a cell in a venv",
-                language="python",
                 venv_id=123,
                 code="print('hi')",
             )
@@ -671,7 +649,6 @@ async def test_execute_code_default_session_is_scoped_to_the_bound_sandbox():
             try:
                 return await execute_code(
                     thought="run a default cell in this act's sandbox",
-                    language="python",
                     code=code,
                 )
             finally:

@@ -26,7 +26,7 @@ come to mind. Three properties fall out, and they are the design:
 
 Every number lives in :class:`ActivationSettings` — a decision, never a
 call-site constant. Ranking caps the activation term (``similarity_floor``)
-so semantic similarity dominates and standing acts as the tiebreaker;
+so the query-word match dominates and standing acts as the tiebreaker;
 without the cap, usage-weighted retrieval feeds usage counts and an
 entrenched mediocre function shadows a better newcomer forever. The other
 half of that guard lives in the supersede path, which transfers the old
@@ -172,18 +172,6 @@ def activation(
     strength = min(1.0, strength)
     floor = settings.newborn_floor
     return recency * (floor + (1.0 - floor) * strength)
-
-
-def similarity_from_distance(distance: object) -> float:
-    """Map a federated-search distance (lower is better, unbounded) into a
-    similarity in (0, 1] for ranking. Backfilled rows arrive with no score;
-    they rank behind every scored row but ahead of nothing else — backfill
-    is already the search's own 'and also these' tier."""
-    try:
-        d = float(distance)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
-    return 1.0 / (1.0 + max(0.0, d))
 
 
 def rank_score(

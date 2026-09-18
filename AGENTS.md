@@ -35,7 +35,7 @@ cp .env.example .env        # add one LLM provider key
 .venv/bin/python -m unify   # chat; `unify` is the same entry point on PATH inside the venv
 ```
 
-- The runtime's home is `UNIFY_HOME` (default `~/.unify`): `store.sqlite`, `embeddings.sqlite`, `workspace/` (the actor's working directory, attachments and downloads) and `logs/`.
+- The runtime's home is `UNIFY_HOME` (default `~/.unify`): `store.sqlite`, `workspace/` (the actor's working directory, attachments and downloads) and `logs/`.
 - `unify --debug` streams runtime logs to the terminal as well as the log files; `unify --home DIR` uses another home.
 - The chat CLI lives in `unify/cli.py`. It publishes `UnifyMessageReceived` events on the in-memory event broker and renders the `UnifyMessageSent` replies, so it is one front end over the same loop any client can drive.
 

@@ -35,12 +35,9 @@ from .session import (
     SessionExecutor,
     SessionKey,
     StateMode,
-    SupportedLanguage,
-    SupportedShellLanguage,
     _CURRENT_ENVIRONMENTS,
     _CURRENT_SANDBOX,
     _PARENT_CHAT_CONTEXT,
-    _execute_shell_stateless,
     _validate_execution_params,
     _wrap_code_as_async_function,
 )
@@ -67,8 +64,6 @@ __all__ = [
     "PackageOverlay",
     "_CURRENT_PACKAGE_OVERLAY",
     # session
-    "SupportedShellLanguage",
-    "SupportedLanguage",
     "StateMode",
     "SessionKey",
     "_CURRENT_ENVIRONMENTS",
@@ -78,5 +73,4 @@ __all__ = [
     "PythonExecutionSession",
     "SessionExecutor",
     "_wrap_code_as_async_function",
-    "_execute_shell_stateless",
 ]

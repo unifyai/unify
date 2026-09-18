@@ -39,7 +39,7 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         references: Optional[Dict[str, str]] = None,
         k: int = 10,
     ) -> List["Guidance"]:
-        """Search for guidance entries by semantic similarity to reference content.
+        """Search for guidance entries whose text contains the words of a query.
 
         Guidance entries contain procedural how-to information: step-by-step
         instructions, operating procedures, software walkthroughs, and
@@ -57,17 +57,20 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         Parameters
         ----------
         references : Dict[str, str] | None, default None
-            Mapping of source expressions to reference text for semantic
-            search.  Keys are column names or descriptive labels; values
-            are the reference text to compare against.
+            Mapping of field name (``title`` or ``content``) to the query
+            text to look for in that field. Matching is case-insensitive
+            on whole words and their prefixes, so ``deploy`` also finds
+            ``deploying``; describe the task in the words its procedure
+            would use rather than as a full sentence.
         k : int, default 10
             Maximum number of results to return. Must be <= 1000.
 
         Returns
         -------
         List[Guidance]
-            Up to *k* rows ranked by similarity, backfilled to *k* when
-            similarity yields fewer rows.
+            Up to *k* rows ranked by how many distinct query words they
+            contain, backfilled with the newest remaining entries when
+            fewer than *k* match.
         """
         raise NotImplementedError
 
@@ -103,9 +106,9 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
             comparisons (==, !=, <, <=, >, >=), membership tests (in / not
             in), and boolean combinators (and, or, not) over field names and
             literal values, plus a fixed set of helpers (``len()``, string
-            methods like ``.lower()`` / ``.startswith()``, ``embed()``).
-            Arbitrary Python calls outside that set — e.g. ``' '.join(x)`` or
-            a list comprehension — are rejected.
+            methods like ``.lower()`` / ``.startswith()``). Arbitrary Python
+            calls outside that set — e.g. ``' '.join(x)`` or a list
+            comprehension — are rejected.
         offset : int, default 0
             Zero-based index of the first result to include.
         limit : int, default 100

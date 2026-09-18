@@ -426,8 +426,8 @@ class _ActorRunner:
         discovery_scope : str, optional
             A boolean filter expression that restricts which functions
             the actor can discover via FunctionManager
-            search/list/filter (e.g., ``"language == 'python'"`` or
-            ``"'data' in docstring"``).
+            search/list/filter (e.g., ``"'data' in docstring"`` or
+            ``"venv_id == 3"``).
 
             When provided, only functions matching this expression are
             visible to the actor's discovery tools.  When omitted, all

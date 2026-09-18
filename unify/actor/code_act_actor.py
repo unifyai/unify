@@ -99,7 +99,7 @@ _DISCOVERY_GATE_TOOLS: frozenset[str] = frozenset(
     },
 )
 
-# Prefer one semantic-search discovery tool per family while the gate is open
+# Prefer one search discovery tool per family while the gate is open
 # so hard tool_choice=required + eager follow-up turns map onto a small set.
 _DISCOVERY_PREFERRED_TOOLS: dict[str, str] = {
     "FunctionManager_": "FunctionManager_search_functions",
@@ -338,7 +338,6 @@ def _default_tool_policy(
 
 
 class _ResolvedSession(NamedTuple):
-    language: str
     venv_id: Optional[int]
     session_id: Optional[int]
 
@@ -1791,7 +1790,7 @@ class _StorageCheckHandle(SteerableToolHandle):
         """End the storage phase now, without waiting for the review to finish.
 
         Called when the actor the review depends on is closing. A review needs
-        that actor's venv pool, shell pool and sandboxes to do anything useful,
+        that actor's venv pool and sandboxes to do anything useful,
         so once they are torn down the review cannot succeed -- it can only
         keep retrying against them. A review left running that way stays
         busy indefinitely, still issuing inference for a run already recorded
@@ -2278,39 +2277,6 @@ def _synthesize_python_call(
     return f"{preamble}{call_expr}"
 
 
-def _synthesize_shell_call(
-    *,
-    function_name: str,
-    call_kwargs: Dict[str, Any],
-    function_manager: Optional["FunctionManager"] = None,
-) -> str:
-    """Build a shell script that runs the stored function with *call_kwargs*.
-
-    Shell functions must have a stored implementation in the FunctionManager.
-    ``call_kwargs`` are exported as environment variables before sourcing the
-    implementation.
-    """
-    impl: str | None = None
-    if function_manager is not None:
-        func_data = function_manager._get_function_data_by_name(name=function_name)
-        if func_data is not None:
-            impl = func_data.get("implementation")
-
-    if not impl or not isinstance(impl, str) or not impl.strip():
-        raise ValueError(
-            f"Shell function '{function_name}' has no stored implementation.",
-        )
-
-    # Export kwargs as environment variables.
-    exports: list[str] = []
-    for k, v in (call_kwargs or {}).items():
-        escaped = str(v).replace("'", "'\\''")
-        exports.append(f"export {k}='{escaped}'")
-
-    parts = exports + [impl]
-    return "\n".join(parts)
-
-
 class CodeActActor(BaseCodeActActor):
     """
     An actor that uses a conversational tool loop and a stateful code execution
@@ -2428,27 +2394,24 @@ class CodeActActor(BaseCodeActActor):
                     _excl_compositional,
                 )
 
-        # Create persistent pools that survive across act() calls
+        # Create a persistent venv pool that survives across act() calls
         from unify.function_manager.function_manager import VenvPool
-        from unify.function_manager.shell_pool import ShellPool
 
         self._venv_pool = VenvPool()
-        self._shell_pool = ShellPool()
         self._session_executor = SessionExecutor(
             venv_pool=self._venv_pool,
-            shell_pool=self._shell_pool,
             environments=self.environments,
             function_manager=self.function_manager,
             timeout=timeout,
         )
 
-        # Session name registry: name -> (language, venv_id, session_id)
+        # Session name registry: name -> (venv_id, session_id)
         self._session_names: Dict[str, SessionKey] = {}
-        # Reverse map: (language, venv_id, session_id) -> set(names)
+        # Reverse map: (venv_id, session_id) -> set(names)
         self._session_names_rev: Dict[SessionKey, set[str]] = {}
-        # Actor-level session cap (global across languages for this actor instance).
+        # Actor-level session cap (global across venvs for this actor instance).
         self._max_sessions_total: int = 20
-        self._next_session_id: dict[tuple[str, Optional[int]], int] = {}
+        self._next_session_id: dict[Optional[int], int] = {}
         # Storage reviews started by this actor and not yet finished, so
         # ``close()`` can end them rather than leave them running against
         # pools it is about to tear down.
@@ -2484,11 +2447,10 @@ class CodeActActor(BaseCodeActActor):
         self,
         *,
         name: str,
-        language: str,
         venv_id: int | None,
         session_id: int,
     ) -> None:
-        key: SessionKey = (language, venv_id, int(session_id))
+        key: SessionKey = (venv_id, int(session_id))
         existing = self._session_names.get(name)
         if existing is not None and existing != key:
             raise ValueError(
@@ -2503,11 +2465,10 @@ class CodeActActor(BaseCodeActActor):
     def _get_session_name(
         self,
         *,
-        language: str,
         venv_id: int | None,
         session_id: int,
     ) -> str | None:
-        key: SessionKey = (language, venv_id, int(session_id))
+        key: SessionKey = (venv_id, int(session_id))
         names = self._session_names_rev.get(key)
         if not names:
             return None
@@ -2531,10 +2492,6 @@ class CodeActActor(BaseCodeActActor):
         except Exception:
             pass
         try:
-            n += len(self._shell_pool.get_active_sessions())
-        except Exception:
-            pass
-        try:
             n += len(self._venv_pool.list_active_sessions())
         except Exception:
             pass
@@ -2543,28 +2500,18 @@ class CodeActActor(BaseCodeActActor):
     def _session_exists(
         self,
         *,
-        language: str,
         venv_id: int | None,
         session_id: int,
     ) -> bool:
-        if language == "python":
-            if venv_id is None:
-                return self._session_executor.has_python_session(
-                    session_id=int(session_id),
-                    venv_id=None,
-                )
-            # venv-backed python session exists if pool has it active
-            try:
-                return (int(venv_id), int(session_id)) in set(
-                    self._venv_pool.list_active_sessions(),
-                )
-            except Exception:
-                return False
-        # shell
-        try:
-            return self._shell_pool.has_session(
-                language=language,  # type: ignore[arg-type]
+        if venv_id is None:
+            return self._session_executor.has_python_session(
                 session_id=int(session_id),
+                venv_id=None,
+            )
+        # A venv-backed session exists if the pool has it active.
+        try:
+            return (int(venv_id), int(session_id)) in set(
+                self._venv_pool.list_active_sessions(),
             )
         except Exception:
             return False
@@ -2575,23 +2522,19 @@ class CodeActActor(BaseCodeActActor):
         state_mode: str,
         session_id: int | None,
         session_name: str | None,
-        language: str,
         venv_id: int | None = None,
     ) -> dict | None:
         return _validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            language=language,
             venv_id=venv_id,
             resolve_session_name=self._resolve_session_name,
-            get_session_name_for_id=lambda l, v, s: self._get_session_name(
-                language=l,
+            get_session_name_for_id=lambda v, s: self._get_session_name(
                 venv_id=v,
                 session_id=s,
             ),
-            session_exists=lambda l, v, s: self._session_exists(
-                language=l,
+            session_exists=lambda v, s: self._session_exists(
                 venv_id=v,
                 session_id=s,
             ),
@@ -2614,7 +2557,6 @@ class CodeActActor(BaseCodeActActor):
         self,
         *,
         state_mode: str,
-        language: str,
         session_id: int | None,
         session_name: str | None,
         venv_id: int | None,
@@ -2637,18 +2579,14 @@ class CodeActActor(BaseCodeActActor):
             if session_name:
                 resolved = self._resolve_session_name(session_name)
                 if resolved is not None:
-                    language, venv_id, session_id = resolved
+                    venv_id, session_id = resolved
                 elif session_id is None:
-                    key = (
-                        str(language),
-                        int(venv_id) if venv_id is not None else None,
-                    )
+                    key = int(venv_id) if venv_id is not None else None
                     next_id = self._next_session_id.get(key, 1)
                     session_id = next_id
                     self._next_session_id[key] = next_id + 1
                     self._register_session_name(
                         name=session_name,
-                        language=str(language),
                         venv_id=venv_id,
                         session_id=int(session_id),
                     )
@@ -2660,7 +2598,6 @@ class CodeActActor(BaseCodeActActor):
             if self._resolve_session_name(session_name) is None:
                 self._register_session_name(
                     name=session_name,
-                    language=str(language),
                     venv_id=venv_id,
                     session_id=int(session_id),
                 )
@@ -2670,12 +2607,10 @@ class CodeActActor(BaseCodeActActor):
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            language=str(language),
             venv_id=venv_id,
         )
 
         return _ResolvedSession(
-            language=str(language),
             venv_id=venv_id,
             session_id=session_id,
         )
@@ -2792,7 +2727,6 @@ class CodeActActor(BaseCodeActActor):
             ],
             code: Optional[str] = None,
             *,
-            language: str,
             state_mode: str | None = None,
             session_id: int | None = None,
             session_name: str | None = None,
@@ -2805,7 +2739,7 @@ class CodeActActor(BaseCodeActActor):
             _parent_chat_context: list[dict] | None = None,
         ) -> Any:
             """
-            Execute arbitrary code in a specified language and state mode.
+            Execute arbitrary Python code in a specified state mode.
 
             **IMPORTANT — single-call rule**: If the task requires only a
             single function or primitive call with no surrounding logic,
@@ -2816,36 +2750,36 @@ class CodeActActor(BaseCodeActActor):
 
             Key concepts
             -----------
-            - **language**: "python" | "bash" | "zsh" | "sh" | "powershell"
-            - **state_mode**: omit it and a venv-less Python cell
-              runs **stateful in session 0** — the current per-call
-              Python sandbox, so variables persist across cells — while
-              shell and venv cells run stateless. Pass
+            - **state_mode**: omit it and a venv-less cell runs **stateful
+              in session 0** — the current per-call sandbox, so variables
+              persist across cells — while venv cells run stateless. Pass
               "stateless" for an isolated fresh run (environment globals
               and FunctionManager-discovered functions still available),
               "read_only" to read an existing session without
               persisting, or "stateful" with a session selector to
-              target a named or shell/venv session.
+              target a named or venv session.
             - **session_id/session_name**: stateful/read_only only.
               Stateful defaults to **session_id=0** — inside a running
-              act() loop, the current per-call Python sandbox. Create an
+              act() loop, the current per-call sandbox. Create an
               additional session with a fresh ``session_name`` (recommended)
               or an explicit ``session_id`` > 0; choose via
               ``list_sessions()`` / ``inspect_state()``.
+            - **Shell commands** run from Python via ``subprocess`` (or
+              ``asyncio.create_subprocess_exec``); there is no shell cell.
 
             Output
             ------
             A dict or ExecutionResult with: ``stdout`` / ``stderr`` (rich
-            List[TextPart | ImagePart] for in-process Python; plain string
-            for shell/venv), ``result`` (last expression's value — a
-            steerable handle as the last expression is automatically adopted
-            by the outer loop for mid-flight steering), ``error``,
-            ``language``, ``state_mode``, ``session_id``, ``session_name``,
-            ``venv_id``, ``session_created``, ``duration_ms``.
+            List[TextPart | ImagePart] in-process; plain string for a
+            venv), ``result`` (last expression's value — a steerable
+            handle as the last expression is automatically adopted by the
+            outer loop for mid-flight steering), ``error``, ``state_mode``,
+            ``session_id``, ``session_name``, ``venv_id``,
+            ``session_created``, ``duration_ms``.
 
             Steering while the block runs
             -----------------------------
-            Python blocks are steerable in flight: checkpoints sit between
+            Blocks are steerable in flight: checkpoints sit between
             top-level statements, at the top of every loop body, and before
             every ``primitives.*`` call. On a correction the block suspends
             and you get a turn with a progress report:
@@ -2860,19 +2794,14 @@ class CodeActActor(BaseCodeActActor):
             _ = thought  # Thought is logged by the LLM; not used programmatically.
             if state_mode is None:
                 # An omitted state_mode resolves per cell type: only venv-less
-                # Python cells get the persistent per-call sandbox.
-                state_mode = (
-                    "stateful"
-                    if language == "python" and venv_id is None
-                    else "stateless"
-                )
+                # cells get the persistent per-call sandbox.
+                state_mode = "stateful" if venv_id is None else "stateless"
             if code is None or code.strip() == "":
                 return {
                     "stdout": "",
                     "stderr": "",
                     "result": None,
                     "error": None,
-                    "language": language,
                     "state_mode": state_mode,
                     "session_id": session_id,
                     "session_name": session_name,
@@ -2925,7 +2854,6 @@ class CodeActActor(BaseCodeActActor):
             active_work = ACTIVE_WORK.begin(
                 label="execute_code",
                 metadata={
-                    "language": language,
                     "state_mode": state_mode,
                     "session_id": session_id,
                     "session_name": session_name,
@@ -2945,16 +2873,11 @@ class CodeActActor(BaseCodeActActor):
                 )
                 _rs = self._resolve_session(
                     state_mode=state_mode,
-                    language=str(language),
                     session_id=session_id,
                     session_name=session_name,
                     venv_id=venv_id,
                 )
-                language, venv_id, session_id = (
-                    _rs.language,
-                    _rs.venv_id,
-                    _rs.session_id,
-                )
+                venv_id, session_id = _rs.venv_id, _rs.session_id
                 # Execute via SessionExecutor. Route primitives if available in current sandbox.
                 primitives = None
                 try:
@@ -2976,7 +2899,6 @@ class CodeActActor(BaseCodeActActor):
                         try:
                             out = await self._session_executor.execute(
                                 code=code,
-                                language=str(language),  # type: ignore[arg-type]
                                 state_mode=state_mode,  # type: ignore[arg-type]
                                 session_id=session_id,
                                 venv_id=venv_id,
@@ -2991,7 +2913,6 @@ class CodeActActor(BaseCodeActActor):
                                 "stderr": "",
                                 "result": None,
                                 "error": tb,
-                                "language": language,
                                 "state_mode": state_mode,
                                 "session_id": session_id,
                                 "session_name": session_name,
@@ -3017,20 +2938,16 @@ class CodeActActor(BaseCodeActActor):
                 # Enrich with session name.
                 if out.get("session_id") is not None:
                     out["session_name"] = self._get_session_name(
-                        language=str(out.get("language")),
                         venv_id=out.get("venv_id"),
                         session_id=int(out["session_id"]),
                     )
                 else:
                     out["session_name"] = None
 
-                # Wrap in-process Python results in ExecutionResult for proper LLM
-                # image formatting. In-process Python has stdout as List[OutputPart];
-                # venv/shell have strings.
-                if out.get("language") == "python" and isinstance(
-                    out.get("stdout"),
-                    list,
-                ):
+                # Wrap in-process results in ExecutionResult for proper LLM
+                # image formatting. In-process stdout is a List[OutputPart];
+                # a venv's is a string.
+                if isinstance(out.get("stdout"), list):
                     out = ExecutionResult(**out)
 
                 return out
@@ -3404,7 +3321,6 @@ class CodeActActor(BaseCodeActActor):
                 function_name: str,
                 call_kwargs: Optional[Dict[str, Any]] = None,
                 *,
-                language: str = "python",
                 state_mode: str = "stateless",
                 session_id: int | None = None,
                 session_name: str | None = None,
@@ -3431,10 +3347,9 @@ class CodeActActor(BaseCodeActActor):
 
                 Resolution order: the current sandbox namespace first, then
                 the FunctionManager store by exact name; otherwise a
-                ``NameError`` is raised. ``language`` / ``state_mode`` /
-                ``session_id`` / ``session_name`` keep ``execute_code``
-                semantics, except ``state_mode`` here defaults to
-                ``"stateless"``.
+                ``NameError`` is raised. ``state_mode`` / ``session_id`` /
+                ``session_name`` keep ``execute_code`` semantics, except
+                ``state_mode`` here defaults to ``"stateless"``.
 
                 Parameters
                 ----------
@@ -3542,22 +3457,11 @@ class CodeActActor(BaseCodeActActor):
                 _ef_fn_t0 = _ef_time.monotonic()
 
                 # ── Synthesize the code string ────────────────────────────
-                code: str | None = None
-
-                if str(language) == "python":
-                    code = _synthesize_python_call(
-                        function_name=function_name,
-                        call_kwargs=call_kwargs,
-                        function_manager=self.function_manager,
-                    )
-                else:
-                    # Shell: look up the stored implementation and append it
-                    # with kwargs serialised as environment variables.
-                    code = _synthesize_shell_call(
-                        function_name=function_name,
-                        call_kwargs=call_kwargs,
-                        function_manager=self.function_manager,
-                    )
+                code = _synthesize_python_call(
+                    function_name=function_name,
+                    call_kwargs=call_kwargs,
+                    function_manager=self.function_manager,
+                )
                 _ef_log.debug(
                     f"⏱️ [execute_function +{_ef_ms()}] code synthesized",
                 )
@@ -3618,7 +3522,6 @@ class CodeActActor(BaseCodeActActor):
                     label="execute_function",
                     metadata={
                         "function_name": function_name,
-                        "language": language,
                         "state_mode": state_mode,
                         "session_id": session_id,
                         "session_name": session_name,
@@ -3640,16 +3543,11 @@ class CodeActActor(BaseCodeActActor):
                     )
                     _rs = self._resolve_session(
                         state_mode=state_mode,
-                        language=str(language),
                         session_id=session_id,
                         session_name=session_name,
                         venv_id=resolved_venv_id,
                     )
-                    language, resolved_venv_id, session_id = (
-                        _rs.language,
-                        _rs.venv_id,
-                        _rs.session_id,
-                    )
+                    resolved_venv_id, session_id = _rs.venv_id, _rs.session_id
                     # Resolve primitives from current sandbox.
                     primitives = None
                     try:
@@ -3674,7 +3572,6 @@ class CodeActActor(BaseCodeActActor):
                             try:
                                 out = await self._session_executor.execute(
                                     code=code,
-                                    language=str(language),  # type: ignore[arg-type]
                                     state_mode=state_mode,  # type: ignore[arg-type]
                                     session_id=session_id,
                                     venv_id=resolved_venv_id,
@@ -3692,7 +3589,6 @@ class CodeActActor(BaseCodeActActor):
                                     "stderr": "",
                                     "result": None,
                                     "error": tb,
-                                    "language": language,
                                     "state_mode": state_mode,
                                     "session_id": session_id,
                                     "session_name": session_name,
@@ -3706,18 +3602,14 @@ class CodeActActor(BaseCodeActActor):
                     # Enrich with session name.
                     if out.get("session_id") is not None:
                         out["session_name"] = self._get_session_name(
-                            language=str(out.get("language")),
                             venv_id=out.get("venv_id"),
                             session_id=int(out["session_id"]),
                         )
                     else:
                         out["session_name"] = None
 
-                    # Wrap in-process Python results in ExecutionResult.
-                    if out.get("language") == "python" and isinstance(
-                        out.get("stdout"),
-                        list,
-                    ):
+                    # Wrap in-process results in ExecutionResult.
+                    if isinstance(out.get("stdout"), list):
                         out = ExecutionResult(**out)
 
                     _ef_result_for_log = (
@@ -3889,7 +3781,7 @@ class CodeActActor(BaseCodeActActor):
 
         async def list_sessions(detail: str = "summary") -> Dict[str, Any]:
             """
-            List all active sessions across all languages (Python + shell).
+            List all active sessions (in-process and venv-backed).
 
             Use this to choose which session a subsequent
             `execute_code(..., state_mode="stateful"/"read_only")` call
@@ -3904,27 +3796,24 @@ class CodeActActor(BaseCodeActActor):
             Returns
             -------
             dict:
-                {"sessions": [...]}; each entry carries language,
-                session_id, venv_id (Python only), session_name,
-                created_at / last_used, and state_summary. Session IDs are
-                **scoped per (language, venv_id)**; the default per-call
-                Python sandbox appears as `python` session_id=0
+                {"sessions": [...]}; each entry carries session_id,
+                venv_id, session_name, created_at / last_used, and
+                state_summary. Session IDs are **scoped per venv_id**; the
+                default per-call sandbox appears as session_id=0
                 (venv_id=None) when bound.
             """
             detail = (detail or "summary").strip()
 
             sessions: list[dict[str, Any]] = []
 
-            # Default sandbox (current act sandbox) as python session 0 (venv_id=None).
+            # Default sandbox (current act sandbox) as session 0 (venv_id=None).
             try:
                 sb = _CURRENT_SANDBOX.get()
                 sessions.append(
                     {
-                        "language": "python",
                         "session_id": 0,
                         "venv_id": None,
                         "session_name": self._get_session_name(
-                            language="python",
                             venv_id=None,
                             session_id=0,
                         ),
@@ -3936,11 +3825,10 @@ class CodeActActor(BaseCodeActActor):
             except Exception:
                 pass
 
-            # In-process python sessions created via SessionExecutor.
+            # In-process sessions created via SessionExecutor.
             for s in self._session_executor.list_in_process_python_sessions():
                 s = dict(s)
                 s["session_name"] = self._get_session_name(
-                    language="python",
                     venv_id=s.get("venv_id"),
                     session_id=int(s["session_id"]),
                 )
@@ -3951,21 +3839,7 @@ class CodeActActor(BaseCodeActActor):
                 for s in self._venv_pool.get_all_sessions():
                     s = dict(s)
                     s["session_name"] = self._get_session_name(
-                        language="python",
                         venv_id=s.get("venv_id"),
-                        session_id=int(s["session_id"]),
-                    )
-                    sessions.append(s)
-            except Exception:
-                pass
-
-            # Shell sessions.
-            try:
-                for s in self._shell_pool.get_all_sessions():
-                    s = dict(s)
-                    s["session_name"] = self._get_session_name(
-                        language=str(s.get("language")),
-                        venv_id=None,
                         session_id=int(s["session_id"]),
                     )
                     sessions.append(s)
@@ -3975,27 +3849,17 @@ class CodeActActor(BaseCodeActActor):
             if detail == "full":
                 # Best-effort enrich state_summary with inspection where cheap.
                 for s in sessions:
+                    if s.get("venv_id") is None:
+                        continue
                     try:
-                        if (
-                            s.get("language") == "python"
-                            and s.get("venv_id") is not None
-                        ):
-                            st = await self._venv_pool.get_session_state(
-                                venv_id=int(s["venv_id"]),
-                                session_id=int(s["session_id"]),
-                                function_manager=self.function_manager,
-                                detail="summary",
-                            )
-                            if isinstance(st, dict) and "count" in st:
-                                s["state_summary"] = f'{st["count"]} names'
-                        elif s.get("language") in ("bash", "zsh", "sh", "powershell"):
-                            st = await self._shell_pool.get_session_state(
-                                language=s["language"],
-                                session_id=int(s["session_id"]),
-                                detail="summary",
-                            )
-                            if isinstance(st, dict) and "summary" in st:
-                                s["state_summary"] = st["summary"]
+                        st = await self._venv_pool.get_session_state(
+                            venv_id=int(s["venv_id"]),
+                            session_id=int(s["session_id"]),
+                            function_manager=self.function_manager,
+                            detail="summary",
+                        )
+                        if isinstance(st, dict) and "count" in st:
+                            s["state_summary"] = f'{st["count"]} names'
                     except Exception:
                         continue
 
@@ -4004,12 +3868,11 @@ class CodeActActor(BaseCodeActActor):
         async def inspect_state(
             session_name: str | None = None,
             session_id: int | None = None,
-            language: str | None = None,
             venv_id: int | None = None,
             detail: str = "summary",
         ) -> Dict[str, Any]:
             """
-            Inspect the state of a specific session (Python or shell).
+            Inspect the state of a specific session.
 
             Use it to decide whether to continue in a session, start fresh,
             run stateless, or do a read_only what-if.
@@ -4018,21 +3881,19 @@ class CodeActActor(BaseCodeActActor):
             ----------
             session_name:
                 Human-friendly alias (preferred when available).
-            session_id + language (+ optional venv_id):
-                Direct identity; `session_id` is scoped per (language,
-                venv_id).
+            session_id (+ optional venv_id):
+                Direct identity; `session_id` is scoped per venv_id.
             detail:
                 "summary" (quick context) | "names" (variable names only) |
                 "full" (sparingly; values truncated/redacted best-effort).
 
-            With no selector, inspects the **current per-call Python
-            sandbox** (python session_id=0, venv_id=None) when bound.
+            With no selector, inspects the **current per-call sandbox**
+            (session_id=0, venv_id=None) when bound.
 
             Returns
             -------
-            dict with `session` ({language, session_id, session_name,
-            venv_id}) and `state` (Python vars; shell
-            cwd/env/functions/aliases).
+            dict with `session` ({session_id, session_name, venv_id}) and
+            `state` (the session's variables).
             """
             detail = (detail or "summary").strip()
 
@@ -4045,8 +3906,8 @@ class CodeActActor(BaseCodeActActor):
                         "error": f"Session {session_name!r} not found",
                         "error_type": "validation",
                     }
-            elif session_id is not None and language is not None:
-                resolved = (str(language), venv_id, int(session_id))
+            elif session_id is not None:
+                resolved = (venv_id, int(session_id))
 
             # Default: current sandbox.
             if resolved is None:
@@ -4084,10 +3945,8 @@ class CodeActActor(BaseCodeActActor):
 
                 return {
                     "session": {
-                        "language": "python",
                         "session_id": 0,
                         "session_name": self._get_session_name(
-                            language="python",
                             venv_id=None,
                             session_id=0,
                         ),
@@ -4096,10 +3955,10 @@ class CodeActActor(BaseCodeActActor):
                     "state": state_obj,
                 }
 
-            lang, resolved_venv_id, sid = resolved
+            resolved_venv_id, sid = resolved
 
-            # Python venv-backed
-            if lang == "python" and resolved_venv_id is not None:
+            # Venv-backed
+            if resolved_venv_id is not None:
                 st = await self._venv_pool.get_session_state(
                     venv_id=int(resolved_venv_id),
                     session_id=int(sid),
@@ -4108,10 +3967,8 @@ class CodeActActor(BaseCodeActActor):
                 )
                 return {
                     "session": {
-                        "language": "python",
                         "session_id": int(sid),
                         "session_name": self._get_session_name(
-                            language="python",
                             venv_id=int(resolved_venv_id),
                             session_id=int(sid),
                         ),
@@ -4120,76 +3977,52 @@ class CodeActActor(BaseCodeActActor):
                     "state": st,
                 }
 
-            # Python in-process session (SessionExecutor)
-            if lang == "python" and resolved_venv_id is None:
-                key = (None, int(sid))
-                sb = self._session_executor._python_sessions.get(
-                    key,
-                )  # pylint: disable=protected-access
-                if sb is None:
-                    return {
-                        "error": f"Python session {sid} not found",
-                        "error_type": "validation",
-                    }
-                names: list[str] = []
-                full_map: dict[str, str] = {}
-                for k, v in sb.global_state.items():
-                    if not isinstance(k, str) or k.startswith("_"):
-                        continue
-                    if callable(v) or isinstance(v, type):
-                        continue
-                    names.append(k)
-                    if detail == "full":
-                        try:
-                            s = repr(v)
-                            if len(s) > 500:
-                                s = s[:500] + "..."
-                        except Exception:
-                            s = f"<{type(v).__name__}>"
-                        full_map[k] = s
-                names = sorted(names)
-                state_obj = {
-                    "variables": full_map if detail == "full" else names,
-                    "functions": [],
-                }
+            # In-process session (SessionExecutor)
+            key = (None, int(sid))
+            sb = self._session_executor._python_sessions.get(
+                key,
+            )  # pylint: disable=protected-access
+            if sb is None:
                 return {
-                    "session": {
-                        "language": "python",
-                        "session_id": int(sid),
-                        "session_name": self._get_session_name(
-                            language="python",
-                            venv_id=None,
-                            session_id=int(sid),
-                        ),
-                        "venv_id": None,
-                    },
-                    "state": state_obj,
+                    "error": f"Session {sid} not found",
+                    "error_type": "validation",
                 }
-
-            # Shell
-            st = await self._shell_pool.get_session_state(
-                language=lang,  # type: ignore[arg-type]
-                session_id=int(sid),
-                detail=detail,
-            )
+            names: list[str] = []
+            full_map: dict[str, str] = {}
+            for k, v in sb.global_state.items():
+                if not isinstance(k, str) or k.startswith("_"):
+                    continue
+                if callable(v) or isinstance(v, type):
+                    continue
+                names.append(k)
+                if detail == "full":
+                    try:
+                        s = repr(v)
+                        if len(s) > 500:
+                            s = s[:500] + "..."
+                    except Exception:
+                        s = f"<{type(v).__name__}>"
+                    full_map[k] = s
+            names = sorted(names)
+            state_obj = {
+                "variables": full_map if detail == "full" else names,
+                "functions": [],
+            }
             return {
                 "session": {
-                    "language": str(lang),
                     "session_id": int(sid),
                     "session_name": self._get_session_name(
-                        language=str(lang),
                         venv_id=None,
                         session_id=int(sid),
                     ),
                     "venv_id": None,
                 },
-                "state": st,
+                "state": state_obj,
             }
 
         async def close_session(
             session_name: str | None = None,
             session_id: int | None = None,
-            language: str | None = None,
             venv_id: int | None = None,
         ) -> Dict[str, Any]:
             """
@@ -4202,14 +4035,14 @@ class CodeActActor(BaseCodeActActor):
             ----------
             session_name:
                 Preferred: close by human-friendly alias.
-            session_id + language (+ optional venv_id):
+            session_id (+ optional venv_id):
                 Close by canonical identity.
 
             Returns
             -------
             dict:
                 closed (bool), reason ("success" | "not_found" | "error"),
-                session ({language, session_id, session_name}).
+                session ({session_id, session_name, venv_id}).
             """
             resolved: SessionKey | None = None
             if session_name:
@@ -4219,59 +4052,55 @@ class CodeActActor(BaseCodeActActor):
                         "closed": False,
                         "reason": "not_found",
                         "session": {
-                            "language": language,
                             "session_id": session_id,
                             "session_name": session_name,
+                            "venv_id": venv_id,
                         },
                     }
-            elif session_id is not None and language is not None:
-                resolved = (str(language), venv_id, int(session_id))
+            elif session_id is not None:
+                resolved = (venv_id, int(session_id))
             else:
                 return {
                     "closed": False,
                     "reason": "error",
-                    "error": "Must provide session_name or (language + session_id).",
+                    "error": "Must provide session_name or session_id.",
                 }
 
-            lang, resolved_venv_id, sid = resolved
-            closed = False
+            resolved_venv_id, sid = resolved
 
-            if lang == "python" and resolved_venv_id is not None:
+            if resolved_venv_id is not None:
                 closed = await self._venv_pool.close_session(
                     venv_id=int(resolved_venv_id),
                     session_id=int(sid),
                 )
-            elif lang == "python" and resolved_venv_id is None:
+            else:
                 closed = await self._session_executor.close_in_process_python_session(
                     session_id=int(sid),
                     venv_id=None,
                 )
-            else:
-                closed = await self._shell_pool.close_session(language=lang, session_id=int(sid))  # type: ignore[arg-type]
 
             # Unregister all aliases for this session.
             self._unregister_all_names_for_session(
-                key=(str(lang), resolved_venv_id, int(sid)),
+                key=(resolved_venv_id, int(sid)),
             )
 
             return {
                 "closed": bool(closed),
                 "reason": "success" if closed else "not_found",
                 "session": {
-                    "language": str(lang),
                     "session_id": int(sid),
                     "session_name": session_name
                     or self._get_session_name(
-                        language=str(lang),
                         venv_id=resolved_venv_id,
                         session_id=int(sid),
                     ),
+                    "venv_id": resolved_venv_id,
                 },
             }
 
         async def close_all_sessions() -> Dict[str, Any]:
             """
-            Close all active sessions across all languages.
+            Close all active sessions, in-process and venv-backed.
 
             Blunt cleanup — prefer `close_session(...)` to discard one
             specific polluted/unused session.
@@ -4279,58 +4108,37 @@ class CodeActActor(BaseCodeActActor):
             Returns
             -------
             dict:
-                closed_count (int), languages (list[str]), details
-                (per-language counts).
+                closed_count (int), details ({"in_process": n, "venv": n}).
             """
-            closed_counts: dict[str, int] = {
-                "python": 0,
-                "bash": 0,
-                "zsh": 0,
-                "sh": 0,
-                "powershell": 0,
-            }
+            closed_counts: dict[str, int] = {"in_process": 0, "venv": 0}
 
-            # Close in-process python sessions.
+            # Close in-process sessions.
             for s in list(self._session_executor.list_in_process_python_sessions()):
                 sid = int(s.get("session_id", 0))
                 if await self._session_executor.close_in_process_python_session(
                     session_id=sid,
                     venv_id=None,
                 ):
-                    closed_counts["python"] += 1
-                    self._unregister_all_names_for_session(key=("python", None, sid))
+                    closed_counts["in_process"] += 1
+                    self._unregister_all_names_for_session(key=(None, sid))
 
-            # Close venv python sessions.
+            # Close venv sessions.
             for vid, sid in list(self._venv_pool.list_active_sessions()):
                 if await self._venv_pool.close_session(
                     venv_id=int(vid),
                     session_id=int(sid),
                 ):
-                    closed_counts["python"] += 1
+                    closed_counts["venv"] += 1
                     self._unregister_all_names_for_session(
-                        key=("python", int(vid), int(sid)),
-                    )
-
-            # Close shell sessions.
-            for lang, sid in list(self._shell_pool.get_active_sessions()):
-                if await self._shell_pool.close_session(
-                    language=lang,
-                    session_id=int(sid),
-                ):
-                    closed_counts[str(lang)] = closed_counts.get(str(lang), 0) + 1
-                    self._unregister_all_names_for_session(
-                        key=(str(lang), None, int(sid)),
+                        key=(int(vid), int(sid)),
                     )
 
             # Clear any remaining aliases.
             self._session_names.clear()
             self._session_names_rev.clear()
 
-            closed_total = sum(closed_counts.values())
-            langs = [k for k, v in closed_counts.items() if v > 0]
             return {
-                "closed_count": closed_total,
-                "languages": langs,
+                "closed_count": sum(closed_counts.values()),
                 "details": closed_counts,
             }
 
@@ -4519,7 +4327,6 @@ class CodeActActor(BaseCodeActActor):
         sandbox = PythonExecutionSession(
             environments=sandbox_envs,
             venv_pool=self._venv_pool,
-            shell_pool=self._shell_pool,
         )
         token = _CURRENT_SANDBOX.set(sandbox)
         env_token = _CURRENT_ENVIRONMENTS.set(sandbox_envs)
@@ -4635,8 +4442,6 @@ class CodeActActor(BaseCodeActActor):
                 "\n"
                 "Key concepts\n"
                 "------------\n"
-                '- **language**: ``"python"`` | ``"bash"`` | ``"zsh"`` | '
-                '``"sh"`` | ``"powershell"``\n'
                 "- **state_mode**:\n"
                 '  - ``"stateless"``: no session; clean execution; no persistence\n'
                 '  - ``"stateful"``: persistent session; state accumulates\n'
@@ -4653,8 +4458,6 @@ class CodeActActor(BaseCodeActActor):
                 "    Keyword arguments to pass to the function. Values keep\n"
                 "    the callee's declared types — numbers/booleans unquoted\n"
                 '    (``{"max_results": 5}``, not ``{"max_results": "5"}``).\n'
-                'language : str, default ``"python"``\n'
-                "    Language of the function.\n"
                 'state_mode : str, default ``"stateless"``\n'
                 "    Execution state mode.\n"
                 "session_id : int | None\n"
@@ -4662,13 +4465,13 @@ class CodeActActor(BaseCodeActActor):
                 "session_name : str | None\n"
                 "    Human-friendly session alias.\n"
                 "venv_id : int | None\n"
-                "    Virtual environment ID (Python only).\n"
+                "    Virtual environment ID.\n"
                 "\n"
                 "Returns\n"
                 "-------\n"
                 "dict | ExecutionResult\n"
                 "    Same shape as code execution output (stdout, stderr, result,\n"
-                "    error, language, state_mode, session_id, session_name, venv_id,\n"
+                "    error, state_mode, session_id, session_name, venv_id,\n"
                 "    session_created, duration_ms).\n"
             )
 
@@ -4907,6 +4710,5 @@ class CodeActActor(BaseCodeActActor):
         except Exception:
             pass
 
-        # Close the pools (terminates persistent subprocess/session connections)
+        # Close the pool (terminates persistent subprocess connections)
         await self._venv_pool.close()
-        await self._shell_pool.close()

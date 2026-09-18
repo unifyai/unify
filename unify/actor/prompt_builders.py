@@ -106,8 +106,8 @@ _TOOL_SELECTION = textwrap.dedent("""
 
     - One exact function or primitive call is
       `execute_function(function_name="...", call_kwargs={...})`. Reach
-      for `execute_code` only for shell commands or genuine multi-step
-      composition (branching, loops, combining intermediate results); a
+      for `execute_code` only for genuine multi-step composition
+      (branching, loops, combining intermediate results); a
       `print()`, `await handle.result()`, or temporary variable around a
       single call is boilerplate, not composition.
     - **Handle adoption:** `execute_function` structurally guarantees the
@@ -141,10 +141,11 @@ _TOOL_SELECTION = textwrap.dedent("""
 _PYTHON_FIRST = textwrap.dedent("""
     ### Python First
 
-    Prefer Python packages over shell CLI tools. Packages install via the
-    `install_python_packages` JSON tool with isolated venvs and dependency
-    resolution; there is no `install_shell_packages`. Reserve shell for
-    tasks that genuinely require it.
+    Every cell is Python. Prefer Python packages over shell CLI tools:
+    packages install via the `install_python_packages` JSON tool with
+    isolated venvs and dependency resolution. When a task genuinely needs
+    a CLI, run it from Python with `subprocess` (or
+    `asyncio.create_subprocess_exec`) and work with its output as data.
 """).strip()
 
 _EXECUTION_RULES = textwrap.dedent("""
@@ -161,7 +162,7 @@ _EXECUTION_RULES = textwrap.dedent("""
        inside one cell, not across cells. `del` bulky intermediates. An
        unexpected `NameError` on a known name usually means the sandbox
        restarted — re-derive or re-fetch, never assume the value came
-       back. Shell and venv cells stay one-shots unless given a session.
+       back. Venv cells stay one-shots unless given a session.
 
     2. **Async parallelism**: never wrap work in bare `asyncio.run(...)`
        — the runtime already owns a loop; a sync façade uses the injected
@@ -545,9 +546,8 @@ def build_code_act_prompt(
         parts.append(
             "### Role\n\n"
             "You are an expert agent that solves tasks by writing and executing code. "
-            "Your primary tool is a multi-language, multi-session execution environment "
-            "for running Python and shell code, backed by a library of stored functions "
-            "and procedures.",
+            "Your primary tool is a multi-session Python execution environment, "
+            "backed by a library of stored functions and procedures.",
         )
 
         parts.append(_TOOLS_SECTION)

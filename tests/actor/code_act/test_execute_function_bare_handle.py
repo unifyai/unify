@@ -193,7 +193,6 @@ async def test_execute_function_uses_stored_venv_when_caller_omits_it():
             "stderr": [],
             "result": "venv ok",
             "error": None,
-            "language": kwargs["language"],
             "state_mode": kwargs["state_mode"],
             "session_id": kwargs["session_id"],
             "venv_id": kwargs["venv_id"],

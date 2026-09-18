@@ -3,7 +3,7 @@ Integration tests for PrimitiveScope across all system layers.
 
 These tests verify that the scoping mechanism works consistently at ALL levels:
 - Tool list (tool_names, ActorEnvironment.get_tools)
-- Catalogue reads and semantic search (FunctionManager)
+- Catalogue reads and search (FunctionManager)
 - Primitives syncing (collect_primitives, per-manager hash tracking)
 - Sandbox runtime vars (Primitives, ActorEnvironment)
 
@@ -83,7 +83,7 @@ def test_actor_env_allowed_methods_filters_tools_and_prompt():
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 2. Catalogue Read and Semantic Search Scoping
+# 2. Catalogue Read and Search Scoping
 # ────────────────────────────────────────────────────────────────────────────
 
 

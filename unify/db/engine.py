@@ -9,13 +9,11 @@ row anywhere in the store.
 
 Filters, sort keys and derived columns are expressions in the row language of
 :mod:`unify.db.expressions`, evaluated in Python over the context's rows.
-Vector columns are derived columns whose equation calls ``embed``; their
-vectors are materialised into the row on write so reads never compute.
+Derived values are materialised into the row on write so reads never compute.
 """
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -27,7 +25,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
-from . import embeddings
 from .errors import (
     AlreadyExists,
     Conflict,
@@ -41,7 +38,6 @@ from .expressions import (
     TIMESTAMP_NAMES,
     Expression,
     compile_expression,
-    rewrite_placeholders,
 )
 
 RESERVED_ENTRY_KEYS = ("explicit_types", "infer_untyped_fields")
@@ -116,7 +112,7 @@ CREATE TABLE IF NOT EXISTS assistants (
 
 
 def store_home() -> Path:
-    """Directory holding the store file, embeddings cache and workspace."""
+    """Directory holding the store file and the workspace."""
     raw = os.environ.get("UNIFY_HOME", "").strip()
     return Path(raw).expanduser() if raw else Path.home() / ".unify"
 
@@ -692,7 +688,6 @@ class Store:
         if not rows or not derived:
             return 0
         for key, expression in derived.items():
-            _prewarm_embeddings(expression, rows)
             for row in rows:
                 scope = _row_scope(row)
                 row["data"][key] = _canonical(expression.evaluate(scope))
@@ -1796,31 +1791,6 @@ def _sort_federated(
     shaped = [{"id": r["id"], "ts": r["ts"], "data": r["entries"]} for r in rows]
     ordered = _sort_rows(shaped, sorting)
     return [{"id": r["id"], "ts": r["ts"], "entries": r["data"]} for r in ordered]
-
-
-def _prewarm_embeddings(expression: Expression, rows: list[dict[str, Any]]) -> None:
-    """Batch the embedding calls an ``embed(...)`` equation will make."""
-    tree = ast.parse(rewrite_placeholders(expression.source).strip(), mode="eval").body
-    if not (
-        isinstance(tree, ast.Call)
-        and isinstance(tree.func, ast.Name)
-        and tree.func.id == "embed"
-    ):
-        return
-    if not tree.args:
-        return
-    model = None
-    for kw in tree.keywords:
-        if kw.arg == "model" and isinstance(kw.value, ast.Constant):
-            model = kw.value.value
-    inner = compile_expression(ast.unparse(tree.args[0]))
-    texts = []
-    for row in rows:
-        value = inner.evaluate(_row_scope(row))
-        if value is not None:
-            texts.append(str(value))
-    if texts:
-        embeddings.embed_many(list(dict.fromkeys(texts)), model=model)
 
 
 class _JoinAliases:

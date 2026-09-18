@@ -2,7 +2,7 @@
 Tests for action primitives in FunctionManager.
 
 Tests the primitives registry, the global builtins catalogue reads, and
-semantic search that includes both user-defined functions and action
+text search that includes both user-defined functions and action
 primitives.
 
 Static primitives are stored once platform-wide in the public-read
@@ -103,7 +103,6 @@ def test_collect_primitives_has_required_fields():
         assert "name" in data
         assert "argspec" in data
         assert "docstring" in data
-        assert "embedding_text" in data
         assert data.get("is_primitive") is True
         assert "primitive_class" in data
         assert "primitive_method" in data
@@ -257,7 +256,7 @@ def test_catalog_rows_resolve_to_runtime_callables(function_manager_factory):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 3. Semantic search with primitives tests
+# 3. Text search with primitives tests
 # ────────────────────────────────────────────────────────────────────────────
 
 

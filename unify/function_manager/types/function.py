@@ -1,16 +1,15 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any
 
 from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
 
 class Function(BaseModel):
     """
-    Represents a function stored in the FunctionManager.
+    Represents a Python function stored in the FunctionManager.
 
-    Functions can be written in multiple languages (Python, Bash, Zsh, Sh, PowerShell)
-    and can be either user-defined (with implementation source code) or primitives
-    (primitive namespace methods with no stored implementation).
+    A function is either user-defined (with implementation source code) or a
+    primitive (a primitive namespace method with no stored implementation).
     """
 
     function_id: Optional[int] = Field(
@@ -20,14 +19,6 @@ class Function(BaseModel):
             "Auto-assigned for user functions, explicit stable IDs for primitives."
         ),
     )
-    language: Literal["python", "bash", "zsh", "sh", "powershell"] = Field(
-        "python",
-        description=(
-            "The language/interpreter for this function. "
-            "Defaults to 'python' for backward compatibility."
-        ),
-        json_schema_extra={"ui_editable": True},
-    )
     name: str = Field(
         ...,
         description="The name of the function.",
@@ -35,11 +26,7 @@ class Function(BaseModel):
     )
     argspec: str = Field(
         ...,
-        description=(
-            "The function's signature. Format varies by language: "
-            "Python: '(x: int, y: int) -> int'. "
-            "Shell: '(input_file output_file --verbose)' or positional description."
-        ),
+        description="The function's signature, e.g. '(x: int, y: int) -> int'.",
         json_schema_extra={"ui_editable": True},
     )
     docstring: str = Field(
@@ -67,10 +54,6 @@ class Function(BaseModel):
     stale_reasons: List[StaleReason] = Field(
         default_factory=list,
         description="Structured records for declared dependencies that no longer resolve.",
-    )
-    embedding_text: str = Field(
-        ...,
-        description="The text used to generate the function's embedding.",
     )
     precondition: Optional[Dict[str, Any]] = Field(
         None,
@@ -120,8 +103,8 @@ class Function(BaseModel):
         None,
         description=(
             "VirtualEnv.venv_id for the Python virtual environment to use when "
-            "executing this function. Only applies when language='python'. "
-            "If None, uses the project's default environment."
+            "executing this function. If None, uses the project's default "
+            "environment."
         ),
         json_schema_extra={"ui_editable": True},
     )

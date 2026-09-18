@@ -220,28 +220,29 @@ async def test_patch_author_declines_when_nothing_needs_changing():
 
 
 # ── stop judgment on unpatchable source ──────────────────────────────────────
-# Shell scripts (and remote runs) cannot be rewritten mid-flight, so the only
+# A block that defines no function cannot be rewritten mid-flight, so the only
 # call the author can make there is stop-or-continue. That judgment is the
-# entire product surface of shell and remote steering: too eager and benign
+# entire product surface of steering such a block: too eager and benign
 # chatter kills real work, too timid and "stop" gets ignored.
 
-SHELL_DEPLOY_SCRIPT = (
-    "#!/bin/bash\n"
-    "aws s3 sync ./build s3://prod-assets --delete\n"
-    "aws cloudfront create-invalidation --distribution-id E2EXAMPLE --paths '/*'\n"
+DEPLOY_SCRIPT = (
+    "import subprocess\n"
+    "subprocess.run(['aws', 's3', 'sync', './build', 's3://prod-assets', '--delete'], check=True)\n"
+    "subprocess.run(['aws', 'cloudfront', 'create-invalidation', "
+    "'--distribution-id', 'E2EXAMPLE', '--paths', '/*'], check=True)\n"
 )
 
 
-async def _shell_stop_decision(correction: str):
+async def _stop_decision(correction: str):
     session = SteeringSession()
-    session.bind_source(SHELL_DEPLOY_SCRIPT)
+    session.bind_source(DEPLOY_SCRIPT)
     author = build_patch_author()
     return await author(interjections=[correction], session=session)
 
 
 @pytest.mark.asyncio
 async def test_model_stops_unpatchable_work_when_the_task_is_revoked():
-    request = await _shell_stop_decision(
+    request = await _stop_decision(
         "Wait, stop — that's deploying to prod and we're not ready.",
     )
     assert request is not None, "a revoking correction was ignored"
@@ -251,7 +252,7 @@ async def test_model_stops_unpatchable_work_when_the_task_is_revoked():
 
 @pytest.mark.asyncio
 async def test_model_does_not_stop_for_a_question():
-    request = await _shell_stop_decision("How long does this usually take?")
+    request = await _stop_decision("How long does this usually take?")
     assert (
         request is None or request.stop is False
     ), "a question about the run must not kill it"
@@ -259,7 +260,7 @@ async def test_model_does_not_stop_for_a_question():
 
 @pytest.mark.asyncio
 async def test_model_does_not_stop_for_encouragement():
-    request = await _shell_stop_decision("Great, looks right — keep going.")
+    request = await _stop_decision("Great, looks right — keep going.")
     assert (
         request is None or request.stop is False
     ), "an approving remark must not kill the run"

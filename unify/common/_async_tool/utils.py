@@ -25,13 +25,11 @@ def try_parse_json(value):
 
 
 def _add_code_delimiters(args: dict) -> None:
-    """Add markdown fenced code block delimiters around the code field."""
+    """Add Python markdown fences around the code field."""
     code = args.get("code", "")
-    lang = args.get("language", "")
     if not code:
         return
-    opening = f"```{lang}" if lang else "```"
-    args["code"] = f"\n{opening}\n{textwrap.dedent(code).strip()}\n```"
+    args["code"] = f"\n```python\n{textwrap.dedent(code).strip()}\n```"
 
 
 def format_json_for_log(body: dict) -> str:
