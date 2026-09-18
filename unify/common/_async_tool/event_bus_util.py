@@ -2,7 +2,6 @@ from typing import Union, Dict, List
 from .loop_config import LoopConfig
 
 
-# ── small helper: publish to the EventBus (if configured) ──────────────
 async def to_event_bus(
     messages: Union[Dict, List[Dict]],
     loop_cfg: LoopConfig,
@@ -10,7 +9,7 @@ async def to_event_bus(
     kind: str | None = None,
 ) -> None:
     """
-    Emit *messages* to the shared EventBus (if configured).
+    Emit *messages* to the shared EventBus.
 
     Every ``ToolLoop`` event carries the raw chat *message*, the *public
     method* that spawned the loop, and a *kind* discriminator so downstream
@@ -28,8 +27,6 @@ async def to_event_bus(
     )
     from ...events.types.tool_loop import ToolLoopPayload, classify_tool_loop_message
 
-    if not EVENT_BUS:
-        return
     if isinstance(messages, dict):
         messages = [messages]
     _lookup = loop_cfg.tool_alias_lookup

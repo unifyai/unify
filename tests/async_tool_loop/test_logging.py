@@ -12,9 +12,6 @@ from unify.common.async_tool_loop import (
 from unify.events.event_bus import EVENT_BUS
 from unify.common.llm_client import new_llm_client, PendingThinkingLog
 
-# All tests in this file require EventBus publishing to verify event behavior
-pytestmark = pytest.mark.enable_eventbus
-
 
 @pytest.mark.asyncio
 @pytest.mark.llm_call
@@ -79,7 +76,7 @@ async def test_nested_logging_hierarchy_labels(llm_config):
     assert final_reply is not None, "Loop should complete with a response"
 
     # Gather recent ToolLoop events
-    events = await EVENT_BUS.search(filter="type == 'ToolLoop'", limit=200)
+    events = EVENT_BUS.search(filter="type == 'ToolLoop'", limit=200)
 
     # Presence checks for hierarchy payloads
     has_outer_only = any(
@@ -147,7 +144,7 @@ async def test_single_loop_logging_hierarchy_label(llm_config):
     final_reply = await handle.result()
     assert final_reply is not None, "Loop should complete with a response"
 
-    events = await EVENT_BUS.search(filter="type == 'ToolLoop'", limit=200)
+    events = EVENT_BUS.search(filter="type == 'ToolLoop'", limit=200)
 
     has_solo = any(
         isinstance((evt.payload or {}).get("hierarchy"), list)

@@ -88,13 +88,6 @@ class ProductionSettings(BaseSettings):
     UNIFY_LOG_DIR: str = ""
 
     # ─────────────────────────────────────────────────────────────────────────
-    # EventBus Publishing
-    # ─────────────────────────────────────────────────────────────────────────
-    # Controls whether EventBus persists published events to the store's
-    # ``Events/*`` contexts. Disabled by default to reduce noise.
-    EVENTBUS_PUBLISHING_ENABLED: bool = False
-
-    # ─────────────────────────────────────────────────────────────────────────
     # Terminal Logging
     # ─────────────────────────────────────────────────────────────────────────
     UNIFY_TERMINAL_LOG: bool = True
@@ -121,7 +114,6 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     @field_validator(
         "UNIFY_TERMINAL_LOG",
-        "EVENTBUS_PUBLISHING_ENABLED",
         "PYTEST_LOG_TO_FILE",
         "TEST",
         "UNIFY_VALIDATE_LLM_PROVIDERS",

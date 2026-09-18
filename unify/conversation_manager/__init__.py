@@ -52,9 +52,8 @@ async def stop_async(reason: str = "manual_stop") -> None:
     An explicit stop is a retirement: it goes through the ``_request_shutdown``
     sequence (record the reason, log ``session_end``, set ``stop``, close the
     event broker), then runs ``cleanup()`` — which discards in-flight actions
-    rather than waiting on them — and flushes buffered EventBus writes. The
-    whole sequence completes in seconds so an in-process successor can boot
-    over the same durable world immediately.
+    rather than waiting on them. The whole sequence completes in seconds so
+    an in-process successor can boot over the same durable world immediately.
 
     Args:
         reason: Reason for stopping (recorded as the shutdown reason)
@@ -82,12 +81,6 @@ async def stop_async(reason: str = "manual_stop") -> None:
             _conversation_manager.stop.set()
 
         await _conversation_manager.cleanup()
-
-        # Buffered EventBus writes must not die with the session.
-        from unify.events.event_bus import EVENT_BUS
-
-        if EVENT_BUS:
-            EVENT_BUS.flush()
 
         LOGGER.debug(f"{ICONS['lifecycle']} ConversationManager stopped")
     except Exception as e:

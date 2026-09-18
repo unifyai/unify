@@ -141,10 +141,10 @@ async def _publish_lifecycle_event(
 ) -> None:
     """Publish a ManagerMethod lifecycle event, degrading to a warning on failure.
 
-    Lifecycle events are observability: a broken or uninitialised EVENT_BUS
-    must never fail the manager method whose lifecycle is being recorded —
-    neither by turning a successful result into a publish error nor by
-    replacing the method's own exception with one.
+    Lifecycle events are observability: a publish failure must never fail
+    the manager method whose lifecycle is being recorded — neither by turning
+    a successful result into a publish error nor by replacing the method's
+    own exception with one.
     """
     try:
         await publish_manager_method_event(

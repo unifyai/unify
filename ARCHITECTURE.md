@@ -283,12 +283,11 @@ The public API (`db.get_logs`, `db.create_logs`, `db.update_logs`, `db.create_co
 The EventBus is an in-process, asyncio-friendly pub/sub system with:
 
 - **Typed payloads** — all events are Pydantic models declared in `events/types/`. Invalid payloads are rejected at publish time.
-- **Searchable history** — events are stored in a windowed deque per type, queryable with filters.
-- **Callback registration** — subscribe to event types with async callbacks.
+- **Searchable history** — recent events sit in one bounded ring across types, newest first, queryable with filters.
+- **Callback registration** — `register_callback` / `unregister_callback` subscribe async callbacks to event types, with an optional filter and every-n throttle.
 - **Callback cascade tracking** — `_CURRENT_ROOT_SEQ` (a context variable) tracks which callback triggered which, so `join_callbacks()` can await an entire cascade deterministically.
-- **Optional persistence** — the bus can persist events to `Events/*` contexts in the store and prefill itself from them on the next start.
 
-Managers and tool loops publish structured events (tool calls, steering actions, method boundaries) via `to_event_bus()`. This feeds runtime coordination (MemoryManager reacts to message events) and observability.
+Managers and tool loops publish structured events (tool calls, steering actions, method boundaries) via `to_event_bus()`. This feeds observability and the tests' deterministic ordering assertions.
 
 ### Lineage and hierarchy
 

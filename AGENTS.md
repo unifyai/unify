@@ -541,7 +541,7 @@ Use this to decide which component owns what and where its jurisdiction ends. Ke
 
 ### EventBus
 - **Role**: Cross‑cutting, in‑process publish/subscribe backbone and searchable event log used by every component for telemetry and coordination.
-- **Scope**: Components publish structured events (notably `ManagerMethod` for incoming/outgoing method calls) via a thin logging wrapper; the bus supports `publish`, `search`, `join_published`/`join_callbacks` for deterministic flushing, per‑type window sizing, and callback registration. Persisting events to `Events/*` contexts is off by default.
+- **Scope**: Components publish structured events (notably `ManagerMethod` for incoming/outgoing method calls) via a thin logging wrapper; the bus supports `publish`, `search` over a bounded in-memory ring, `register_callback`/`unregister_callback`, and `join_callbacks` for deterministic joins.
 - **Connections**:
   - **Steered by**: all public manager methods (through the logging decorator).
   - **Steers**: —

@@ -387,7 +387,7 @@ async def capture_events(
     async def _cb(evts):
         captured.extend(evts)
 
-    sub_id = await EVENT_BUS.register_callback(
+    sub_id = EVENT_BUS.register_callback(
         event_type=event_type,
         callback=_cb,
         filter=filter,
@@ -396,16 +396,10 @@ async def capture_events(
     try:
         yield captured
     finally:
-        # Ensure all callback tasks (including the one for the final event)
-        # have finished execution before returning control to the test.
-        # This avoids race conditions where the test asserts on 'captured'
-        # while the EventBus is still processing the last publication.
-        #
-        # Use ajoin_callbacks (async version) to avoid deadlocks with nest_asyncio.
-        try:
-            await EVENT_BUS.ajoin_callbacks()
-        except Exception:
-            pass
+        # The callback for the final event may still be running; wait for it
+        # so the test asserts on a complete capture.
+        await EVENT_BUS.ajoin_callbacks()
+        EVENT_BUS.unregister_callback(sub_id)
 
 
 # ---------- Idempotent Seeding Helpers for Parallel Tests ----------

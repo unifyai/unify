@@ -1,9 +1,8 @@
 import pytest
 import asyncio
 import datetime as dt
-from collections import deque
 
-from unify.events.event_bus import EventBus, Event
+from unify.events.event_bus import EventBus, Event, RING_SIZE
 from unify.events.types.comms import CommsPayload
 from tests.helpers import _handle_project
 
@@ -11,72 +10,72 @@ from tests.helpers import _handle_project
 @pytest.mark.asyncio
 @_handle_project
 async def test_basic_publish():
-    """Publishing a valid event should complete without exceptions
-    and the event should be stored in the in-memory deque.
-    """
-    bus = EventBus()  # use defaults (50-event windows)
+    """A published event is visible to search."""
+    bus = EventBus()
+    event = Event(type="Comms", payload=CommsPayload(content="hello"))
 
-    # a minimal Comms payload: every field is optional
-    payload = CommsPayload()
-
-    event = Event(
-        type="Comms",
-        timestamp=dt.datetime.now(dt.UTC).isoformat(),
-        payload=payload,
-    )
-
-    # This should run cleanly …
     await bus.publish(event)
 
-    # … and the event should now be in the per-type deque
-    assert event in bus._deques["Comms"]
+    assert bus.search() == [event]
 
 
 @pytest.mark.asyncio
 @_handle_project
 async def test_concurrent_integrity():
-    """
-    Do a burst of concurrent publishes across two event types; all should succeed
-    and be visible afterwards, demonstrating that the internal asyncio.Lock
-    protects the critical section.
-    """
-    window = 200
+    """A burst of concurrent publishes all land, each exactly once."""
     bus = EventBus()
-    bus.set_default_window(200)
-
-    # Clear any pre-existing state for determinism
-    for typ in ("Comms",):
-        bus._deques.setdefault(typ, deque(maxlen=window)).clear()
-
     base_ts = dt.datetime.now(dt.UTC)
     n_events = 100
-    events: list[Event] = []
-    publish_tasks = []
-    etype, payload_cls = "Comms", CommsPayload
-
-    for i in range(n_events):
-        evt = Event(
-            type=etype,
-            timestamp=base_ts
-            + dt.timedelta(microseconds=i),  # unique, strictly increasing
-            payload=payload_cls(),
+    events = [
+        Event(
+            type="Comms",
+            timestamp=base_ts + dt.timedelta(microseconds=i),
+            payload=CommsPayload(seq=i),
         )
-        events.append(evt)
-        publish_tasks.append(asyncio.create_task(bus.publish(evt)))
+        for i in range(n_events)
+    ]
 
-    # Run all publishes concurrently; will raise if any individual publish fails
-    await asyncio.gather(*publish_tasks)
-
-    # Join published
+    await asyncio.gather(*(bus.publish(evt) for evt in events))
     bus.join_published()
 
-    # Fetch back everything; limit well above what we sent
-    latest = await bus.search(limit=window, grouped_by_type=True)
-    latest = latest["Comms"]
+    latest = bus.search(filter="type == 'Comms'", limit=n_events * 2)
+    assert sorted(e.event_id for e in latest) == sorted(e.event_id for e in events)
 
-    # Keep only the events we just published (ignore any older prefilled logs)
-    our_ts = {e.timestamp for e in events}
-    latest_ours = [e for e in latest if e.timestamp in our_ts]
 
-    # Every event we published must be present
-    assert len(latest_ours) == n_events
+@pytest.mark.asyncio
+@_handle_project
+async def test_ring_keeps_only_the_most_recent_events():
+    """The ring is bounded: the oldest events fall off once it is full."""
+    bus = EventBus()
+    overflow = 5
+
+    for seq in range(RING_SIZE + overflow):
+        await bus.publish(Event(type="Comms", payload=CommsPayload(seq=seq)))
+
+    kept = bus.search(limit=RING_SIZE * 2)
+    assert len(kept) == RING_SIZE
+    assert kept[0].payload["seq"] == RING_SIZE + overflow - 1
+    assert kept[-1].payload["seq"] == overflow
+
+
+def test_unknown_event_type_rejected():
+    with pytest.raises(ValueError, match="Unknown event type"):
+        Event(type="Nope", payload={})
+
+
+def test_payload_validated_and_stored_as_dict():
+    """A model payload is dumped to a dict; a dict payload is validated first."""
+    from unify.events.types.manager_method import ManagerMethodPayload
+
+    from_model = Event(
+        type="ManagerMethod",
+        payload=ManagerMethodPayload(manager="M", method="m"),
+    )
+    assert from_model.payload["manager"] == "M"
+    assert from_model.payload_cls.endswith("ManagerMethodPayload")
+
+    from_dict = Event(type="ManagerMethod", payload={"manager": "M", "method": "m"})
+    assert from_dict.payload == from_model.payload
+
+    with pytest.raises(ValueError):
+        Event(type="ManagerMethod", payload={"method": "missing manager"})

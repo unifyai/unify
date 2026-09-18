@@ -88,13 +88,9 @@ async def test_publish_comms_with_timestamp():
         ),
     )
 
-    # This should not raise - previously failed with:
-    # "Type mismatch for field 'timestamp': field has strict type 'str',
-    #  but value has inferred type 'datetime'"
     await bus.publish(event)
 
-    # Verify event is in the deque
-    assert event in bus._deques["Comms"]
+    assert bus.search(filter='type == "Comms"') == [event]
 
 
 @pytest.mark.asyncio
@@ -115,11 +111,7 @@ async def test_publish_and_search_comms_timestamp():
 
     await bus.publish(event)
 
-    # Search for the event
-    results = await bus.search(
-        filter='type == "Comms"',
-        limit=10,
-    )
+    results = bus.search(filter='type == "Comms"', limit=10)
 
     # Find our event (there may be others from previous tests)
     our_events = [

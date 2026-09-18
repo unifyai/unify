@@ -28,10 +28,6 @@ from unify.conversation_manager.events import (
     UnifyMessageSent,
 )
 
-# All tests in this file require EventBus publishing to verify event behavior
-pytestmark = pytest.mark.enable_eventbus
-
-
 # =============================================================================
 # Helper Functions
 # =============================================================================

@@ -32,8 +32,6 @@ from unify.events.event_bus import EVENT_BUS
 from unify.events.manager_event_logging import log_manager_call
 from unify.function_manager.function_manager import _LineageTrackedFunction
 
-pytestmark = pytest.mark.enable_eventbus
-
 
 def _get(out: Any, key: str, default: Any = None) -> Any:
     """Get a field from either a dict or Pydantic model."""

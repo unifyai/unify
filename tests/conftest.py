@@ -95,7 +95,7 @@ def _reset_singleton_registries() -> None:
 
         ManagerRegistry.clear()
         ContextRegistry.clear()
-        EVENT_BUS.clear(delete_contexts=False)
+        EVENT_BUS.clear()
     except Exception:
         pass
 
@@ -263,23 +263,6 @@ def _exact_cache_keying_for_evals(request):
         UNILLM_SETTINGS.UNILLM_CACHE_KEYING = previous
 
 
-@pytest.fixture(autouse=True)
-def _enable_eventbus_for_marked_tests(request):
-    """Enable EventBus publishing for tests marked with @pytest.mark.enable_eventbus.
-
-    By default, EventBus publishing is disabled during tests (via SETTINGS).
-    Tests that need to verify event publishing behavior opt-in via the marker.
-    """
-    from unify.events.event_bus import EventBus
-
-    if request.node.get_closest_marker("enable_eventbus"):
-        EventBus._publishing_enabled = True
-        yield
-        EventBus._publishing_enabled = SETTINGS.EVENTBUS_PUBLISHING_ENABLED
-    else:
-        yield
-
-
 # --------------------------------------------------------------------------- #
 # 4. Command-line options                                                     #
 # --------------------------------------------------------------------------- #
@@ -423,13 +406,6 @@ def pytest_sessionstart(session):
 
     seed_builtin_primitives()
     seed_builtin_guidance()
-
-    # ------------------------------------------------------------------
-    #  Configure EventBus publishing (disabled by default in tests)
-    # ------------------------------------------------------------------
-    from unify.events.event_bus import EventBus
-
-    EventBus._publishing_enabled = SETTINGS.EVENTBUS_PUBLISHING_ENABLED
 
     # ------------------------------------------------------------------
     #  Parse and store session-level test tags for duration logging
@@ -613,10 +589,6 @@ def pytest_configure(config):
         "says only that a model is reached: eval asks whether the answer was "
         "good, llm_call whether the call happens at all. The two are applied "
         "independently and neither implies the other.",
-    )
-    config.addinivalue_line(
-        "markers",
-        "enable_eventbus: enable EventBus publishing for this test",
     )
 
     # Required to disable explicit log level if set from pytest.ini or command line options

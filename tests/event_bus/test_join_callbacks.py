@@ -1,11 +1,11 @@
 import asyncio
-import time
 
 import pytest
 
 from tests.helpers import _handle_project
 from unify.events.event_bus import EventBus, Event
 from unify.events.types.comms import CommsPayload
+from unify.events.types.manager_method import ManagerMethodPayload
 
 
 @pytest.mark.asyncio
@@ -17,31 +17,19 @@ async def test_waits_for_pending() -> None:
     done_evt = asyncio.Event()
 
     async def cb(_):  # noqa: ANN001
-        # Artificial delay to keep the task in "running" state
         await asyncio.sleep(0.05)
         done_evt.set()
 
-    # Trigger on every event of type Comms
-    await bus.register_callback(
-        event_type="Comms",
-        callback=cb,
-        every_n=1,
-    )
-
-    # Publish one event → schedules the callback above
+    bus.register_callback(event_type="Comms", callback=cb)
     await bus.publish(Event(type="Comms", payload=CommsPayload()))
-    bus.join_published()
 
-    # `join_callbacks` is now a synchronous, blocking method – run it in a
-    # background thread so we can await it without blocking the event-loop.
+    # join_callbacks blocks its thread, so run it off the loop.
     join_task = asyncio.create_task(asyncio.to_thread(bus.join_callbacks))
 
-    # Shortly after starting, the callback should still be running
     await asyncio.sleep(0.01)
     assert not done_evt.is_set(), "Callback already finished unexpectedly fast"
     assert not join_task.done(), "join_callbacks returned before callback finished"
 
-    # Now wait for join to return – it should only do so *after* cb finished
     await join_task
     assert done_evt.is_set(), "Callback did not finish before join_callbacks returned"
 
@@ -64,120 +52,113 @@ async def test_ignores_future() -> None:
             await asyncio.sleep(0.2)  # long – should *not* block join
             done_second.set()
 
-    await bus.register_callback(
-        event_type="Comms",
-        callback=cb,
-        every_n=1,
-    )
+    bus.register_callback(event_type="Comms", callback=cb)
 
-    # -- first event (seq=1) -------------------------------------------------
     await bus.publish(Event(type="Comms", payload=CommsPayload(seq=1)))
-    bus.join_published()
 
-    # Invoke join_callbacks while first callback is still running
-    t0 = time.perf_counter()
-    # `join_callbacks` blocks synchronously; execute in a background thread
     join_task = asyncio.create_task(asyncio.to_thread(bus.join_callbacks))
-
     # Give join_callbacks a chance to capture current tasks
     await asyncio.sleep(0.01)
 
-    # -- second event (seq=2) ------------------------------------------------
     await bus.publish(Event(type="Comms", payload=CommsPayload(seq=2)))
-    bus.join_published()
 
-    # Wait for join – should not wait for the second long callback
     await join_task
 
-    # Verify callbacks state
     assert (
         done_first.is_set()
     ), "First callback did not finish before join_callbacks returned"
-    # Second callback should still be pending at this moment
     assert (
         not done_second.is_set()
     ), "join_callbacks incorrectly waited for a callback started after its invocation"
 
-    # Allow the second callback to finish to keep the loop clean
     await done_second.wait()
-
-
-# --------------------------------------------------------------------------- #
-# 3. waits for descendant callbacks (due to cascade=True)                     #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
 @_handle_project
 async def test_waits_for_cascade() -> None:
     """join_callbacks() must wait for callbacks spawned *within* other
-    callbacks (same root-sequence) but still ignore unrelated fresh activity.
-
-    Note: This test uses ManagerMethod for the derived event to have a
-    different type for the second-level callback.
-    """
-    from unify.events.types.manager_method import ManagerMethodPayload
-
+    callbacks (same root-sequence) but still ignore unrelated fresh activity."""
     bus = EventBus()
 
     done_low = asyncio.Event()  # first-level callback completion
     done_high = asyncio.Event()  # second-level callback completion
 
-    # ----------------- second-level callback --------------------------------
-    async def high_cb(_):  # noqa: ANN001 – payload unused
-        # Simulate some work so it's still pending when join is invoked
+    async def high_cb(_):  # noqa: ANN001
         await asyncio.sleep(0.05)
         done_high.set()
 
-    await bus.register_callback(
-        event_type="ManagerMethod",
-        callback=high_cb,
-        every_n=1,
-    )
+    bus.register_callback(event_type="ManagerMethod", callback=high_cb)
 
-    # ----------------- first-level callback ---------------------------------
-    async def low_cb(_):  # noqa: ANN001 – payload unused
-        # Fire an event that should trigger *high_cb*
+    async def low_cb(_):  # noqa: ANN001
         await bus.publish(
             Event(
                 type="ManagerMethod",
                 payload=ManagerMethodPayload(manager="Test", method="cascade"),
             ),
         )
-        bus.join_published()
-
-        # Short delay to allow high_cb to start running
         await asyncio.sleep(0.01)
         done_low.set()
 
-    await bus.register_callback(
-        event_type="Comms",
-        callback=low_cb,
-        every_n=1,
-    )
-
-    # ----------------------------------------------------------------------
-    #  Publish the triggering event and ensure callbacks are scheduled
-    # ----------------------------------------------------------------------
+    bus.register_callback(event_type="Comms", callback=low_cb)
 
     await bus.publish(Event(type="Comms", payload=CommsPayload()))
-    bus.join_published()
 
-    # ----------------------------------------------------------------------
-    #  Invoke join_callbacks() in a background thread
-    # ----------------------------------------------------------------------
+    join_task = asyncio.create_task(asyncio.to_thread(bus.join_callbacks))
 
-    join_task = asyncio.create_task(
-        asyncio.to_thread(bus.join_callbacks),
-    )
-
-    # Allow some time for the callbacks to start; join should *not* have
-    # returned yet because high_cb is still sleeping.
     await asyncio.sleep(0.02)
     assert not join_task.done(), "join_callbacks returned before cascade finished"
 
-    # Wait for join to complete – it should now wait for both levels
     await join_task
 
     assert done_low.is_set(), "First-level callback not finished"
     assert done_high.is_set(), "Second-level (descendant) callback not finished"
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_ajoin_without_cascade_waits_once() -> None:
+    """cascade=False awaits only the callbacks pending at the call, not their descendants."""
+    bus = EventBus()
+    done_high = asyncio.Event()
+
+    async def high_cb(_):  # noqa: ANN001
+        await asyncio.sleep(0.1)
+        done_high.set()
+
+    bus.register_callback(event_type="ManagerMethod", callback=high_cb)
+
+    async def low_cb(_):  # noqa: ANN001
+        await bus.publish(
+            Event(
+                type="ManagerMethod",
+                payload=ManagerMethodPayload(manager="Test", method="cascade"),
+            ),
+        )
+
+    bus.register_callback(event_type="Comms", callback=low_cb)
+
+    await bus.publish(Event(type="Comms", payload=CommsPayload()))
+    await bus.ajoin_callbacks(cascade=False)
+
+    assert not done_high.is_set()
+    await bus.ajoin_callbacks()
+    assert done_high.is_set()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_callbacks_parked_on_a_dead_loop_are_dropped() -> None:
+    """A successor loop must not wait on callbacks a dead loop can never run."""
+    bus = EventBus()
+    dead = asyncio.new_event_loop()
+    parked = dead.create_future()
+    dead.close()
+    setattr(parked, "_eb_seq", 1)
+    setattr(parked, "_eb_root_seq", 1)
+    bus._callback_seq = 1
+    bus._callback_futures.add(parked)
+
+    await asyncio.wait_for(bus.ajoin_callbacks(), timeout=1.0)
+
+    assert parked not in bus._callback_futures

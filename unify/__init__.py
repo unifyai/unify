@@ -7,7 +7,7 @@ Package initialization for the unify assistant runtime.
 The runtime must be explicitly initialized via init() before using managers:
 
     import unify
-    unify.init()  # Activates the project, binds the context root, starts the EventBus
+    unify.init()  # Activates the project, binds the context root, installs hooks
 
 For code that may run before or after init(), use ensure_initialised() which
 is a no-op if already initialized.
@@ -42,8 +42,7 @@ def init(
 
     Reads SESSION_DETAILS.assistant.agent_id for the context path. All
     assistant identity and profile data lives on SESSION_DETAILS — this
-    function only handles project activation, context setup, EventBus, and
-    hooks.
+    function only handles project activation, context setup and hooks.
     """
 
     global _INITIALISED
@@ -74,11 +73,6 @@ def init(
     with startup_timing(LOGGER, "unify.init.context_registry_setup"):
         ContextRegistry.setup()
 
-    from .events import event_bus as _event_bus_mod
-
-    with startup_timing(LOGGER, "unify.init.event_bus_init"):
-        _event_bus_mod._initialize_event_bus()
-
     from .events.llm_event_hook import install_llm_event_hook
 
     with startup_timing(LOGGER, "unify.init.install_llm_event_hook"):
@@ -94,7 +88,7 @@ def ensure_initialised(
     """Ensure the runtime is initialised if no active read/write contexts exist.
 
     If both read and write contexts are already configured, this is a no-op.
-    Otherwise, it calls :pyfunc:`init` to set up project, context, and EventBus.
+    Otherwise, it calls :pyfunc:`init` to set up project, context and hooks.
     """
     ctxs = db.get_active_context()
     if ctxs.get("read") and ctxs.get("write"):

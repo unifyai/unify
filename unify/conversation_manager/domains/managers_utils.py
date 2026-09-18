@@ -286,7 +286,7 @@ def _adopt_running_loop() -> None:
     ConversationManager on a new loop over the same durable world — must not
     inherit them: a bound queue makes the successor's operations listener die
     on its first ``get`` (RuntimeError: bound to a different event loop),
-    after which every queued operation — EventBus persistence among them —
+    after which every queued operation — bus publishes among them —
     silently accumulates unprocessed; a lock held by a task frozen on the
     dead loop blocks the successor's init outright. The predecessor's queued
     operations die with it, exactly as they would with its process. A live
@@ -322,7 +322,7 @@ async def queue_operation(async_func: callable, *args, **kwargs) -> None:
     _adopt_running_loop()
     await _operations_queue.put((async_func, args, kwargs))
     # An unbounded queue with no consumer fails silently: every enqueued
-    # operation — EventBus persistence among them — simply never happens,
+    # operation — bus publishes among them — simply never happens,
     # and nothing anywhere says so. Embedders that boot the CM without
     # spawning listen_to_operations have lost whole conversation streams
     # this way. One warning per backlog episode turns that black hole into
@@ -334,8 +334,8 @@ async def queue_operation(async_func: callable, *args, **kwargs) -> None:
             LOGGER.warning(
                 f"{ICONS['managers_worker']} [ManagersWorker] Operations "
                 f"queue backlog reached {depth} with nothing draining it — "
-                "is listen_to_operations running? Queued work (EventBus "
-                "persistence among it) is not being executed.",
+                "is listen_to_operations running? Queued work (bus "
+                "publishes among it) is not being executed.",
             )
     elif depth < _OPERATIONS_QUEUE_BACKLOG_WARN_AT // 2:
         _operations_backlog_warned = False

@@ -153,63 +153,38 @@ class TestExplicitStopIsARetirement:
 class TestEventBusSurvivesAnInProcessReboot:
     """The process-global bus must not chain a successor to a dead loop."""
 
-    def _bare_bus(self):
+    @pytest.mark.asyncio
+    async def test_callbacks_parked_on_a_dead_loop_are_not_awaited(self):
+        """A successor's join must not wait on a predecessor's frozen callbacks.
+
+        A callback task on a loop that died mid-run never completes, and its
+        done-callback never removes it from the bus. A successor that awaited
+        it would block until some outer timeout fired (600s step ceilings —
+        the "idle-waits in ten-minute quanta").
+        """
         from unify.events.event_bus import EventBus
 
-        bus = EventBus.__new__(EventBus)
-        bus._lock = asyncio.Lock()
-        bus._prefill_done = asyncio.Event()
-        bus._prefill_done.set()
-        bus._prefill_task = None
-        bus._prefill_exc = None
-        bus._callback_futures = set()
-        bus._periodic_flush_task = None
-        bus._pending_writes = []
-        bus._FLUSH_INTERVAL_S = 5.0
-        bus._loop = None
-        return bus
+        bus = EventBus()
+        dead = asyncio.new_event_loop()
+        parked = dead.create_future()
+        dead.close()
+        setattr(parked, "_eb_seq", 1)
+        setattr(parked, "_eb_root_seq", 1)
+        bus._callback_seq = 1
+        bus._callback_futures.add(parked)
+
+        await asyncio.wait_for(bus.ajoin_callbacks(), timeout=1.0)
+
+        assert parked not in bus._callback_futures
 
     @pytest.mark.asyncio
-    async def test_a_lock_held_on_a_dead_loop_is_replaced(self):
-        """A successor's publish must not wait on a predecessor's frozen lock.
-
-        This is the measured benchmark stall: a session's loop dies mid-
-        publish, the next session's first inbound event blocks on the held
-        lock, and the only thing that ends the wait is an outer timeout
-        (600s step ceilings — the "idle-waits in ten-minute quanta").
-        """
-        bus = self._bare_bus()
-
-        def park_lock_on_dead_loop():
-            scratch = asyncio.new_event_loop()
-            try:
-                scratch.run_until_complete(bus._lock.acquire())
-            finally:
-                scratch.close()
-            bus._loop = scratch
-
-        await asyncio.to_thread(park_lock_on_dead_loop)
-        assert bus._lock.locked()
-
-        bus._adopt_running_loop()
-
-        try:
-            await asyncio.wait_for(bus._lock.acquire(), timeout=1.0)
-            bus._lock.release()
-            assert bus._prefill_done.is_set(), "completed hydration must carry over"
-            assert bus._loop is asyncio.get_running_loop()
-        finally:
-            if bus._periodic_flush_task is not None:
-                bus._periodic_flush_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await bus._periodic_flush_task
-
-    @pytest.mark.asyncio
-    async def test_a_live_owning_loop_is_never_preempted(self):
-        """Adoption is for dead owners only; a running loop keeps its bus."""
+    async def test_callbacks_on_a_live_loop_are_kept(self):
+        """Pruning is for dead loops only; a running loop keeps its callbacks."""
         import threading
 
-        bus = self._bare_bus()
+        from unify.events.event_bus import EventBus
+
+        bus = EventBus()
         owner = asyncio.new_event_loop()
         thread = threading.Thread(target=owner.run_forever, daemon=True)
         thread.start()
@@ -217,13 +192,18 @@ class TestEventBusSurvivesAnInProcessReboot:
         owner.call_soon_threadsafe(running.set)
         assert running.wait(timeout=5), "owner loop failed to start"
         try:
-            bus._loop = owner
-            original_lock = bus._lock
+            live = owner.create_future()
+            setattr(live, "_eb_seq", 1)
+            setattr(live, "_eb_root_seq", 1)
+            bus._callback_seq = 1
+            bus._callback_futures.add(live)
 
-            bus._adopt_running_loop()
+            # This loop is not the owner, so the join has nothing of its own
+            # to wait for and must return at once — without dropping the
+            # owner's live callback.
+            await asyncio.wait_for(bus.ajoin_callbacks(), timeout=1.0)
 
-            assert bus._loop is owner
-            assert bus._lock is original_lock
+            assert live in bus._callback_futures
         finally:
             owner.call_soon_threadsafe(owner.stop)
             thread.join(timeout=5)
@@ -271,22 +251,6 @@ class TestEventBusSurvivesAnInProcessReboot:
             managers_utils._operations_queue = original_queue
             managers_utils._init_lock = original_lock
             managers_utils._module_loop = original_loop
-
-    @pytest.mark.asyncio
-    async def test_hydration_frozen_on_a_dead_loop_restarts_lazily(self):
-        """A predecessor frozen mid-hydration must not wedge join_initialization."""
-        bus = self._bare_bus()
-        bus._prefill_done = asyncio.Event()  # never set: hydration incomplete
-        bus._prefill_task = object()  # stands in for the frozen task
-        dead = asyncio.new_event_loop()
-        dead.close()
-        bus._loop = dead
-
-        bus._adopt_running_loop()
-
-        assert bus._prefill_task is None, "the next caller must be able to rehydrate"
-        assert not bus._prefill_done.is_set()
-        assert bus._loop is asyncio.get_running_loop()
 
 
 class TestRebootOverTheSameWorld:

@@ -35,7 +35,7 @@ from unify.actor.base import BaseActor
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 # Upper bound a slow-brain turn holds for boot hydration before rendering
-# anyway. Hydration is one EventBus search (seconds); a hold that outlives
+# anyway. Hydration is one chat-table read (seconds); a hold that outlives
 # this bound means hydration is stuck, and an eager reply from the
 # pre-hydration view beats indefinite silence.
 BOOT_HYDRATION_MAX_WAIT_SECONDS = 30.0

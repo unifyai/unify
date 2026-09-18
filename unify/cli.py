@@ -124,8 +124,6 @@ class Chat:
         seed_builtin_guidance()
 
     async def close(self) -> None:
-        from unify.events.event_bus import EVENT_BUS
-
         self._closing.set()
         if self._cm is not None:
             self._cm.stop.set()
@@ -134,8 +132,6 @@ class Chat:
             except asyncio.TimeoutError:
                 pass
         self._listener.cancel()
-        if EVENT_BUS:
-            EVENT_BUS.flush()
 
     # ── outbound ─────────────────────────────────────────────────────────
 

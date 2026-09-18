@@ -1,10 +1,8 @@
 """Typed payload models for known EventBus event types.
 
 Each event type has a corresponding Pydantic model that defines its schema.
-The EventBus uses these models to:
-1. Validate payloads at publish time
-2. Eagerly create backend contexts with pre-defined field schemas
-3. Provide type safety and documentation
+The EventBus validates every payload against its model at publish time and
+hands consumers the validated fields as a plain dict.
 """
 
 from __future__ import annotations
