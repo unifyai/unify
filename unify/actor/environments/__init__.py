@@ -82,9 +82,6 @@ def create_env(namespace: str, instance: Any) -> BaseEnvironment:
                         lines.append(f"  {doc_line}")
             return "\n".join(lines)
 
-        async def capture_state(self) -> Dict[str, Any]:
-            return {"type": "service", "namespace": namespace}
-
     return _ServiceEnv(instance=instance, namespace=namespace)
 
 

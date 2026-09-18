@@ -348,23 +348,3 @@ def test_exclusion_integration_filter_functions(fm_factory):
     assert "alpha" not in names
     assert "beta" not in names
     assert "gamma" in names
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 7. capture_state
-# ────────────────────────────────────────────────────────────────────────────
-
-
-@_handle_project
-@pytest.mark.asyncio
-async def test_capture_state(fm_factory):
-    """capture_state() returns structured environment info."""
-    fm = fm_factory()
-    fm.add_functions(implementations=[_PY_ALPHA])
-
-    env = FunctionStoreEnvironment(fm, function_names=["alpha"])
-    state = await env.capture_state()
-
-    assert state["type"] == "function_store"
-    assert state["namespace"] == "functions"
-    assert "alpha" in state["function_names"]

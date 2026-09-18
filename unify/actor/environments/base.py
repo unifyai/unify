@@ -442,18 +442,6 @@ class BaseEnvironment(ABC):
     def get_prompt_context(self) -> str:
         """Return Markdown-formatted rules/examples for using this environment."""
 
-    @abstractmethod
-    async def capture_state(self) -> Dict[str, Any]:
-        """Capture environment-specific evidence for verification.
-
-        This is used by the Actor's verification system to gather a structured
-        snapshot of the environment's observable state before/after executing a
-        plan function.
-
-        Implementations should be best-effort and never raise; if state capture
-        fails, return a structured error payload (e.g. `{"type": "...", "error": "..."}`).
-        """
-
 
 class _CompositeEnvironment(BaseEnvironment):
     """Merges multiple environments sharing the same namespace.
@@ -535,14 +523,3 @@ class _CompositeEnvironment(BaseEnvironment):
     def get_prompt_context(self) -> str:
         parts = [env.get_prompt_context() for env in self._envs]
         return "\n\n".join(p for p in parts if p and p.strip())
-
-    async def capture_state(self) -> Dict[str, Any]:
-        states: List[Dict[str, Any]] = []
-        for env in self._envs:
-            try:
-                states.append(await env.capture_state())
-            except Exception:
-                pass
-        if len(states) == 1:
-            return states[0]
-        return {"type": "composite", "states": states}

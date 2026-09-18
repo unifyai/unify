@@ -194,18 +194,6 @@ async def summarize_csv(path: str, question: str) -> str:
 
 ---
 
-## Verification and Trust
-
-Every compositional function carries a **verification ledger** (`unify/function_manager/verification/`):
-
-- **Effect class** — detected from the AST as a lower bound (`classify.py`): the maximum over the primitives it calls (`PRIMITIVE_EFFECT_CLASSES` covers every primitive; unknown names are `unsafe_effectful` and logged), the classes of its compositional dependencies, and its third-party imports. `safe_noop` (pure) < `read_only` < `idempotent_effectful` < `unsafe_effectful`. A librarian may confirm a class within that bound via `confirm_side_effect_class` (raise freely, lower only to the detected bound).
-- **Trust hash** (`ledger.function_trust_hash`) — over the normalised source, every compositional dependency's own trust hash, the venv and its pyproject, and the language. Any component changing changes the hash and invalidates trust, dependents included.
-- **Contract** (`contracts.py`) — JSON schemas for inputs and output derived from type hints, plus postconditions authored via `add_functions(contracts={name: {"postconditions": [...]}})` (boolean expressions over `result` and `kwargs`, restricted to an allowlist). Tier-0 checks run on every call while untrusted and stay on for trusted read/effectful functions.
-- **Fixtures** (`fixtures.py`) — recorded `(args, result)` pairs for `safe_noop` functions, captured on passing calls or authored via `add_functions(fixtures=...)`, replayed whenever the function's content changes; a mismatch rejects the change with `FixtureRegressionError`.
-- **Ledger** — one append-only row per verdict in `Functions/Verifications` (`record_verification`); the per-function summary is refolded from the rows for the current hash on every write, and `verify` is derived from it by `policy.derive_verify` — the only writer of that flag. `set_verification_policy` lets a librarian raise the bar for a function; nothing lowers it.
-
-Rows stored before the ledger existed are classified once on first read.
-
 ## Steerable Functions
 
 Compositional functions can optionally return a **steerable handle** instead of a final result. This allows the calling layer (e.g., `CodeActActor`) to forward steering operations (interject, pause, stop) into the running function.

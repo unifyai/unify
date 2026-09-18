@@ -1,7 +1,5 @@
 """Tests for subagent environment support (create_env, AgentContext, env forwarding, guidance)."""
 
-import pytest
-
 from unify.actor.code_act_actor import (
     AgentContext,
     get_current_agent_context,
@@ -95,19 +93,6 @@ class TestCreateEnv:
         tools = env.get_tools()
         assert "dummy.method" in tools
         assert tools["dummy.method"].name == "dummy.method"
-
-    @pytest.mark.asyncio
-    async def test_create_env_capture_state(self):
-        """capture_state() should return service metadata."""
-
-        class DummyService:
-            pass
-
-        env = create_env("myns", DummyService())
-        state = await env.capture_state()
-
-        assert state["type"] == "service"
-        assert state["namespace"] == "myns"
 
 
 class TestAgentContext:

@@ -88,7 +88,7 @@ def resolve_slow_brain_model() -> tuple[str, str | None]:
     return SETTINGS.UNIFY_MODEL, None
 
 
-LLMPurpose = Literal["planning", "verification", "repair"]
+LLMPurpose = Literal["planning"]
 _PURPOSE_MARK = "#purpose="
 
 
@@ -113,7 +113,7 @@ def purpose_from_origin(origin: str | None) -> LLMPurpose | None:
     if not origin or _PURPOSE_MARK not in origin:
         return None
     value = origin.rsplit(_PURPOSE_MARK, 1)[1].strip()
-    if value in ("planning", "verification", "repair"):
+    if value == "planning":
         return value  # type: ignore[return-value]
     return None
 
@@ -174,9 +174,8 @@ def new_llm_client(
     different setting (e.g. fast-path helpers at "low", or max-effort actor
     profiles) pass ``reasoning_effort`` explicitly.
     ``purpose`` tags what the tokens buy — ``planning`` (an actor deciding
-    what to do), ``verification`` (a verifier pass) or ``repair`` (a repair
-    loop) — so per-purpose accounting can read it back from ``LLMEvent.origin``
-    via :func:`purpose_from_origin`.
+    what to do) — so per-purpose accounting can read it back from
+    ``LLMEvent.origin`` via :func:`purpose_from_origin`.
     Caching is controlled by the UNILLM_CACHE env var (owned by unillm).
     Returns an AsyncUnify client by default, or a synchronous Unify client when
     async_client=False.

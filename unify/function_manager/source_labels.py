@@ -21,9 +21,9 @@ def function_source_filename(name: str) -> str:
 def compile_function_source(name: str, source: str) -> CodeType:
     """Compile ``source`` under the function's label and register it with ``linecache``.
 
-    Registering the text lets ``traceback`` and the verification runtime read
-    the exact executed lines back from a frame, including sources that were
-    rewritten (decorators stripped, steering probes inserted) before compiling.
+    Registering the text lets ``traceback`` read the exact executed lines back
+    from a frame, including sources that were rewritten (decorators stripped,
+    steering probes inserted) before compiling.
     """
     filename = function_source_filename(name)
     lines = source.splitlines(keepends=True)

@@ -159,7 +159,7 @@ unify/
 │   ├── conversation_manager/ # The persistent interaction loop (slow brain)
 │   ├── db/                  # The local SQLite store and its expression language
 │   ├── guidance_manager/    # Procedures, SOPs
-│   ├── function_manager/    # Stored Python functions, venvs, verification
+│   ├── function_manager/    # Stored Python functions, venvs
 │   ├── workspace.py         # The assistant's working directory
 │   ├── events/              # Typed event bus
 │   └── common/              # Async tool loop, shared infra
@@ -525,7 +525,7 @@ Use this to decide which component owns what and where its jurisdiction ends. Ke
 - **After a run** the storage review decides what to keep: a callable that worked becomes a function, a non-obvious composition becomes guidance.
 
 ### FunctionManager
-- **Role**: Catalogue of stored Python functions (the **what**), their venvs and their verification ledger (effect class, contract, tier‑0 checks, trust).
+- **Role**: Catalogue of stored Python functions (the **what**) and their venvs.
 - **Scope**: add/list/filter/search/delete over functions, execution in-process or in a per-function venv, and the read-only builtins catalogue of every primitive the Actor can call.
 - **Connections**:
   - **Steered by**: `Actor` (discovers and executes functions during plans; the storage review stores new ones).

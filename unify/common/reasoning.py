@@ -271,14 +271,13 @@ async def query_llm(
     model shopping inside the hot path of a recurring job.
 
     When two or three candidate endpoints look plausible, do not guess —
-    trial them. The live trajectory (or the function's fixtures) already
-    contains concrete inputs with known-good outputs: replay those cases
-    through each candidate with the same prompt and `response_format`,
-    compare against the known-good results, and bake in the cheapest model
-    that passes cleanly. Keep the trial cases as fixtures
-    (`FunctionManager_add_functions(fixtures=...)`) where the function is
-    pure, so later model or prompt changes replay them automatically. Run
-    trials at authoring/storage time only — never in the hot path.
+    trial them. The live trajectory already contains concrete inputs with
+    known-good outputs: replay those cases through each candidate with the
+    same prompt and `response_format`, compare against the known-good
+    results, and bake in the cheapest model that passes cleanly. Record the
+    trial cases in the function's docstring so a later model or prompt
+    change can replay them. Run trials at authoring/storage time only —
+    never in the hot path.
 
     Use `list_llms()` to inspect the supported endpoint strings registered
     in the current runtime. Use `list_llms("openrouter")` or another

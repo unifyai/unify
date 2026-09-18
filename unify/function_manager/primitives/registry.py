@@ -645,7 +645,6 @@ class ToolSurfaceRegistry:
             "is_primitive": True,
             "depends_on": [],
             "precondition": None,
-            "verify": False,
             "guidance_ids": [],
             "primitive_class": cls.__module__ + "." + cls.__name__,
             "primitive_method": method_name,

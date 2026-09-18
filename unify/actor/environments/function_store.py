@@ -232,15 +232,5 @@ class FunctionStoreEnvironment(BaseEnvironment):
             venv = row.get("venv_id")
             if venv is not None:
                 lines.append(f"  Virtual environment: venv_id={venv}")
-            if row.get("verify") is False:
-                lines.append("  Verify: false")
 
         return "\n".join(lines)
-
-    async def capture_state(self) -> Dict[str, Any]:
-        """Capture environment state for verification."""
-        return {
-            "type": "function_store",
-            "namespace": self.namespace,
-            "function_names": [r.get("name") for r in self._func_metadata],
-        }

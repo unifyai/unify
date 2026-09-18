@@ -24,7 +24,7 @@ CodeActActor ── one Python program per turn in a persistent sandbox ──�
 ┌───────────────────────────────────────────────────────┐
 │  Skill libraries                                      │
 │                                                       │
-│  FunctionManager ─── stored functions, venvs, ledger  │
+│  FunctionManager ─── stored functions, venvs          │
 │  GuidanceManager ─── procedures, builtins catalogue   │
 │                                                       │
 │  EventBus ─── typed pub/sub backbone                  │
@@ -217,13 +217,11 @@ The Actor implements a **gating policy**: until the LLM has queried both `Functi
 
 `ToolSurfaceRegistry` is the single source of truth for what the sandbox exposes under `primitives`: the method surface of each namespace (today `primitives.actor`, the nested-actor entry point), its tool schemas, the prompt context that describes it, and the sandbox's global state — all from one declaration.
 
-### Storage review and the verification ledger
+### Storage review
 
-**Files:** `unify/actor/code_act_actor.py` (`_start_storage_check_loop`), `unify/function_manager/verification/`
+**Files:** `unify/actor/code_act_actor.py` (`_start_storage_check_loop`)
 
-After a run completes — and after each completed turn of a persistent session — a **storage review** loop reads the trajectory and decides whether anything is worth persisting: a stored function (code that worked), a procedure (how to compose things), or a claim (something learned). Often nothing is.
-
-Every stored `Function` row carries a verification ledger: an **effect class** detected deterministically from its AST (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`; every primitive is classified in `classify.py`, unknown ones are `unsafe_effectful`), a **trust hash** over its source, dependency closure, venv and language, a **contract** derived from type hints plus librarian-authored postconditions, **fixtures** for pure functions, and a summary folded from the append-only `Functions/Verifications` table. Tier-0 checks validate arguments against the contract before a call and the result after it, and any change to source, dependencies, venv or linked guidance invalidates trust.
+After a run completes — and after each completed turn of a persistent session — a **storage review** loop reads the trajectory and decides whether anything is worth persisting: a stored function (code that worked) or a procedure (how to compose things). Often nothing is.
 
 ---
 
@@ -237,7 +235,7 @@ Each library follows the same pattern:
 
 3. A **simulated implementation** with the same signatures, used by tests that exercise the actor's routing without paying for the real library.
 
-**FunctionManager** — Stored Python functions with metadata, per-function venvs, the verification ledger, and execution in-process or out-of-process. Also the read-only builtins catalogue of every primitive the Actor can call.
+**FunctionManager** — Stored Python functions with metadata, per-function venvs, and execution in-process or out-of-process. Also the read-only builtins catalogue of every primitive the Actor can call.
 
 **GuidanceManager** — Procedures: step-by-step instructions, walkthroughs, and strategies for composing functions. Linked to functions by id, so a rule change finds every implementation that embeds it. Reads federate over a global builtins catalogue of imported Agent Skills.
 
@@ -410,7 +408,6 @@ unify/
 │   │       └── event_handlers.py       # One handler per event type
 │   ├── guidance_manager/
 │   ├── function_manager/
-│   │   ├── verification/               # Effect classes, contracts, ledger
 │   │   └── primitives/
 │   │       ├── registry.py             # ToolSurfaceRegistry (single source of truth)
 │   │       └── scope.py                # PrimitiveScope

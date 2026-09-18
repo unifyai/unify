@@ -146,7 +146,7 @@ unify/
 │   ├── conversation_manager/ # The persistent interaction loop (slow brain)
 │   ├── db/                  # The local SQLite store and its expression language
 │   ├── guidance_manager/    # Procedures, SOPs
-│   ├── function_manager/    # Stored Python functions, venvs, verification
+│   ├── function_manager/    # Stored Python functions, venvs
 │   ├── workspace.py         # The assistant's working directory
 │   ├── events/              # Typed event bus
 │   └── common/              # Async tool loop, shared infra

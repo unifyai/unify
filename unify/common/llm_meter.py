@@ -1,12 +1,11 @@
 """Per-run LLM token accounting split by purpose.
 
 Every actor LLM client is created with a ``purpose`` — ``planning`` (the
-CodeAct loop and its librarian), ``verification`` (verifier passes) or
-``repair`` (repair loops) — carried in the client's ``origin`` tag. A single
-unillm event listener reads that tag back from each ``LLMEvent`` and adds
-the call's usage to the :class:`RunMeter` bound to the current context, so a
-task run can report how many tokens went to planning, to verifying, and to
-repairing. The listener never raises and never changes a request.
+CodeAct loop and its librarian) — carried in the client's ``origin`` tag. A
+single unillm event listener reads that tag back from each ``LLMEvent`` and
+adds the call's usage to the :class:`RunMeter` bound to the current context,
+so a task run can report how many tokens went where. The listener never
+raises and never changes a request.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ import unillm
 
 from unify.common.llm_client import LLMPurpose, purpose_from_origin
 
-PURPOSES: tuple[LLMPurpose, ...] = ("planning", "verification", "repair")
+PURPOSES: tuple[LLMPurpose, ...] = ("planning",)
 
 
 @dataclass
@@ -117,7 +116,7 @@ def new_run_meter() -> RunMeter:
 
 
 def handle_run_stats(handle: Any) -> Dict[str, Any]:
-    """Verification and token accounting a run handle exposes for its execution row.
+    """Token accounting a run handle exposes for its execution row.
 
     Handles that carry ``run_stats`` report it verbatim; a bare loop handle
     that only carries ``run_meter`` reports the meter's token split.

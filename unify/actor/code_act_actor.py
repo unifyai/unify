@@ -53,7 +53,6 @@ from unify.common.act_llm_profiles import (
 from unify.common.llm_helpers import methods_to_tool_dict
 from unify.common.tool_spec import ToolSpec, llm_soft_required
 from unify.function_manager.base import BaseFunctionManager
-from unify.function_manager.function_manager import strip_ledger_internals
 from unify.actor.prompt_builders import build_code_act_prompt
 from unify.events.manager_event_logging import log_manager_call
 from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
@@ -396,60 +395,6 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Verification tools shared by the storage and repair loops
-# ---------------------------------------------------------------------------
-
-
-def _verification_librarian_tools(fm: Any) -> Dict[str, Callable]:
-    """``confirm_side_effect_class`` and ``set_verification_policy`` bound to ``fm``.
-
-    Both shape how much verification a stored function needs; neither can
-    grant trust, and the ledger is written only by the runtime.
-    """
-    if fm is None:
-        return {}
-
-    async def confirm_side_effect_class(
-        function_id: int,
-        side_effect_class: str,
-        rationale: str,
-    ) -> str:
-        return str(
-            fm.confirm_side_effect_class(
-                function_id=int(function_id),
-                side_effect_class=str(side_effect_class),
-                rationale=str(rationale),
-            ),
-        )
-
-    async def set_verification_policy(
-        function_id: int,
-        always_verify: bool | None = None,
-        required_passes: int | None = None,
-        min_distinct_inputs: int | None = None,
-        fixture_only: bool | None = None,
-        spot_check_rate: float | None = None,
-    ) -> str:
-        return str(
-            fm.set_verification_policy(
-                function_id=int(function_id),
-                always_verify=always_verify,
-                required_passes=required_passes,
-                min_distinct_inputs=min_distinct_inputs,
-                fixture_only=fixture_only,
-                spot_check_rate=spot_check_rate,
-            ),
-        )
-
-    confirm_side_effect_class.__doc__ = fm.confirm_side_effect_class.__doc__
-    set_verification_policy.__doc__ = fm.set_verification_policy.__doc__
-    return {
-        "confirm_side_effect_class": confirm_side_effect_class,
-        "set_verification_policy": set_verification_policy,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Shared storage-review prompt sections
 # ---------------------------------------------------------------------------
 
@@ -516,8 +461,8 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "and keep every genuine judgment fluid at the cheapest notch that "
     "preserves it.\n\n"
     "Know what each direction costs. Distilling too little is loud "
-    "and cheap to fix: the ledger shows planning cost paid again on "
-    "every run, forever. Distilling too much is quiet and expensive: "
+    "and cheap to fix: planning cost is paid again on every run, "
+    "forever. Distilling too much is quiet and expensive: "
     "everything stays cheap and correct until the first input the "
     "frozen structure was never validated on — and a frozen function "
     "processes an anomaly as if it were normal, because the fluid "
@@ -543,11 +488,10 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "judgment) handles the anomaly instead of the frozen path "
     "swallowing it.\n\n"
     "Distillation is reversible. Stored functions are inspectable and "
-    "revisable, and any change re-enters verification; re-opening one "
-    "joint later is routine maintenance, not a failure. Do not "
-    "under-distill out of caution — freeze the skeleton the evidence "
-    "supports, guard it, and let the ledger and future corrections "
-    "move the dial.\n\n"
+    "revisable; re-opening one joint later is routine maintenance, not "
+    "a failure. Do not under-distill out of caution — freeze the "
+    "skeleton the evidence supports, guard it, and let future "
+    "corrections move the dial.\n\n"
     "### Model choice is part of distillation\n\n"
     "Every `query_llm(...)` call you bake into a stored function is a "
     "standing model choice. Choose `model=` deliberately per the "
@@ -558,9 +502,8 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "inputs and known-good outputs for each semantic substep, so "
     "replay those cases through each candidate with the same prompt "
     "and `response_format`, keep the cheapest model that passes, and "
-    "record the rationale in the function's docstring. Store the "
-    "trial cases as fixtures where the function is pure, so later "
-    "model or prompt changes replay them automatically.\n\n"
+    "record the rationale and the trial cases in the function's "
+    "docstring, so a later model or prompt change can replay them.\n\n"
     "### Preserving user-facing communication points\n\n"
     "When wrapping a procedure into a stored function, pay attention to "
     "points where the original code depended on the user being "
@@ -589,10 +532,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "distilling a live trajectory into a stored function. You may remove "
     "dead exploratory `print`s, duplicated setup, or formatting noise, "
     "but never remove validation gates, recovery branches, or diagnostic "
-    "logging that explains why a path returned early or returned empty. "
-    "Store non-executor helpers and guidance freely; a stored executor earns "
-    "trust from independent verification of its runs, and offline promotion "
-    "follows from that trust.\n\n"
+    "logging that explains why a path returned early or returned empty.\n\n"
     "### Async / event-loop safety in stored functions\n\n"
     "The runtime already owns an event loop via "
     "`asyncio.run`. Nested `asyncio.run(...)` inside a sync helper then "
@@ -602,55 +542,30 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "required, call the injected `run_coro_sync(factory)` helper (also "
     "`from unify.common.asyncio_compat import run_coro_sync`) instead of "
     "nesting `asyncio.run`.\n\n"
-    "### Verifiable functions\n\n"
-    "A stored function is not trusted when it is stored. Every call of it "
-    "runs under independent verification — a static review of its source, "
-    "an argument review, a precondition probe before any effect, and a "
-    "post-execution review — until enough independent verdicts have "
-    "accumulated for its effect class; only then does it run bare. You "
-    "cannot grant that trust and you never write the verification ledger. "
-    "What you can do is store functions that are cheap to verify and hard "
-    "to get wrong:\n\n"
+    "### Functions that are easy to get right\n\n"
+    "A stored function is a tool the actor will call without re-reading "
+    "its body, so store functions that are cheap to check and hard to "
+    "get wrong:\n\n"
     "- **Thin effects.** A function that performs an irreversible effect "
     "(send, post, delete, pay) must do only that. Compute "
     "in one function, perform the effect in another, and let the root "
-    "compose them. This is what makes a failed verdict cheap to repair and "
+    "compose them. This is what makes a failure cheap to fix and "
     "blame precise: the computation can be re-run and corrected without "
     "the effect ever having happened. Example — instead of one "
     "`send_weekly_summary(week)` that fetches, totals and posts, store "
-    "`compute_weekly_summary(week) -> dict` (read-only, verifiable "
+    "`compute_weekly_summary(week) -> dict` (read-only, checkable "
     "against its inputs) and `post_summary(channel: str, text: str) -> "
     "dict` (the one effect), with a root that calls the first, then the "
     "second.\n"
-    "- **Type hints on every parameter and the return.** The input and "
-    "output contracts a call is checked against are derived from them; an "
-    "unhinted function has no deterministic contract.\n"
+    "- **Type hints on every parameter and the return.** The signature is "
+    "what a caller reads before calling; an unhinted function tells it "
+    "nothing about what goes in or what comes out.\n"
     "- **A docstring whose first sentence is a checkable postcondition** "
     '("Return the sum of `amount` over the rows, in minor units, as an '
-    'int"), not a paraphrase of the name. Where the postcondition is '
-    "expressible as an expression over `result` and `kwargs`, author it "
-    "via `FunctionManager_add_functions(contracts={name: "
-    "{'postconditions': [...]}})` so it is checked on every call.\n"
-    "- **Fixtures for pure functions.** When the trajectory contains "
-    "concrete inputs and the exact output a pure (`safe_noop`) function "
-    "reproduces, store them via `FunctionManager_add_functions(fixtures="
-    "{name: [{'args': {...}, 'result': ...}]})`; they are replayed "
-    "whenever the function changes and reject silent regressions. "
-    "Fixtures are rejected for any other effective class — including a "
-    "function whose class was inferred from a third-party import, which "
-    "stays `unsafe_effectful` until confirmed and can be confirmed no "
-    "lower than its detected bound. Store such a function without "
-    "fixtures and record the known input/output pairs in its docstring "
-    "instead.\n"
-    "- **Confirm the effect class.** Detection from the source is a lower "
-    "bound (safe_noop < read_only < idempotent_effectful < "
-    "unsafe_effectful). When you know a function's real class — an effect "
-    "the source does not reveal, or a third-party import that only reads "
-    "— call `confirm_side_effect_class(function_id, side_effect_class, "
-    "rationale)`; raising is always allowed, lowering stops at the "
-    "detected bound. Use `set_verification_policy(function_id, ...)` to "
-    "demand more verification for unusually consequential functions; it "
-    "can only raise the bar.\n\n"
+    'int"), not a paraphrase of the name. Where the trajectory contains '
+    "concrete inputs and the exact output a pure function reproduces, "
+    "record those pairs in the docstring as well, so a later change can "
+    "be checked against them.\n\n"
     "### Third-party package dependencies\n\n"
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
@@ -702,11 +617,9 @@ _STORAGE_TWO_STORES = (
     "`delete_venv` / `set_function_venv`). Revise an existing function in "
     "place with `overwrite=True`. When a new function subsumes narrower "
     "variants, delete the superseded entries "
-    "(`FunctionManager_delete_function`). Shape verification with "
-    "`confirm_side_effect_class` and `set_verification_policy` — neither "
-    "grants trust; verdicts from independent verification do. Do NOT "
-    "store trivial one-liners, test scaffolding, or functions too "
-    "task-specific to be reusable.\n\n"
+    "(`FunctionManager_delete_function`). Do NOT store trivial "
+    "one-liners, test scaffolding, or functions too task-specific to be "
+    "reusable.\n\n"
     "### Guidance Store — the *how*\n\n"
     "The GuidanceManager stores procedural recipes: multi-step "
     "compositions, SOPs, and decision points — prose that references "
@@ -775,10 +688,9 @@ _STORAGE_SUB_AGENT_PATTERNS = (
     "When the sub-agent's work was actually bounded judgment inside "
     "stable control flow, distill it down the dial — a function with "
     "`query_llm(...)` at the joints — instead of preserving the agent "
-    "wrapper. Note also that `primitives.actor.act` is classified at the "
-    "most consequential effect class (`unsafe_effectful`), so a stored "
-    "function that spawns an agent carries the heaviest verification "
-    "burden; thin, bounded functions earn trust far faster.\n\n"
+    "wrapper. Note also that a stored function which spawns an agent is "
+    "the hardest kind to inspect or reason about; thin, bounded "
+    "functions are far easier to check and reuse.\n\n"
     "Calls that survive this test are especially "
     "high-value storage candidates because they represent **pre-configured "
     "specialist agents**. Each `primitives.actor.act` invocation encodes a curated "
@@ -1091,7 +1003,6 @@ def _build_storage_tools(
             *storage_methods,
             include_class_name=True,
         ),
-        **_verification_librarian_tools(fm),
     }
 
     # ── Wire ask_about_completed_tool from snapshot ───────────────────
@@ -3257,7 +3168,7 @@ class CodeActActor(BaseCodeActActor):
                     self._session_executor.register_fm_globals(
                         {k: sb.global_state[k] for k in new_keys},
                     )
-                return strip_ledger_internals(result["metadata"])
+                return result["metadata"]
 
             FunctionManager_filter_functions.__doc__ = (
                 BaseFunctionManager.filter_functions.__doc__
@@ -4463,10 +4374,6 @@ class CodeActActor(BaseCodeActActor):
         )
 
         return tools
-
-    def _verification_librarian_tools(self) -> Dict[str, Callable]:
-        """Tools that let a librarian or repair loop shape verification policy (never trust)."""
-        return _verification_librarian_tools(self.function_manager)
 
     @functools.wraps(BaseCodeActActor.act, updated=())
     @log_manager_call(

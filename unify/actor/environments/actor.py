@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from unify.actor.environments.base import (
     BaseEnvironment,
@@ -675,6 +675,3 @@ class ActorEnvironment(BaseEnvironment):
             for doc_line in filtered_doc.splitlines():
                 lines.append(f"  {doc_line}")
         return "\n".join(lines)
-
-    async def capture_state(self) -> Dict[str, Any]:
-        return {"type": "actor"}

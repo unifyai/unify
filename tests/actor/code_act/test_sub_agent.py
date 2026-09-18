@@ -200,15 +200,6 @@ def test_actor_env_get_prompt_context():
     assert "SteerableToolHandle" in ctx
 
 
-@pytest.mark.asyncio
-@pytest.mark.timeout(30)
-async def test_actor_env_capture_state():
-    """capture_state() should return the expected type marker."""
-    env = ActorEnvironment()
-    state = await env.capture_state()
-    assert state == {"type": "actor"}
-
-
 @pytest.mark.timeout(30)
 def test_actor_in_collect_primitives():
     """collect_primitives() should include primitives.actor.act with correct metadata."""

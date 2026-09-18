@@ -17,7 +17,7 @@ The shape is deliberately human-in-the-loop: an assistant that keeps moving whil
 
 The actor does everything in code: it writes one Python program per turn in a persistent sandbox, reads files where they are, delegates to nested actors, and calls stored functions it discovered first. What it keeps between sessions is not a transcript dump but **skills**: executable functions and the procedures for composing them.
 
-After a successful run it **promotes what worked into a personal skill library** (executable Python *plus* the procedural how-to prose to use it) that every future session consults before reaching for raw tools. A stored function is not *trusted* on day one: its side-effect class is read off its code, its contract is checked around every call, and any change to the code, its dependencies, its environment or its linked guidance puts it back at the start of that ramp.
+After a successful run it **promotes what worked into a personal skill library** (executable Python *plus* the procedural how-to prose to use it) that every future session consults before reaching for raw tools.
 
 **At a glance, vs the closest open-source alternatives:**
 
@@ -25,7 +25,6 @@ After a successful run it **promotes what worked into a personal skill library**
 |---|---|---|---|
 | Persistent reasoning loop *above* the tool-caller | ✓ | no | no |
 | Mid-flight steering (pause / redirect / interject) | ✓ | abort + redeliver | text injection |
-| Stored functions carry a verification ledger | ✓ | no | no |
 | Auto-grown skill library (executable code + prose) | ✓ | skills | skills |
 | Runs in one process on your machine | ✓ | gateway + agent runs | single loop |
 
@@ -126,7 +125,7 @@ Assistant    ▸  Three tasks running at once.
 <table>
 <tr><td><b>Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running, including operations <i>nested inside other operations</i>, all the way down.</td></tr>
 <tr><td><b>Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow, not a chain of one-tool-at-a-time JSON decisions.</td></tr>
-<tr><td><b>Learns reusable skills, and earns trust in them</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving. Stored functions carry a verification ledger: their side-effect class is read off the code, their contract is checked around every call, and any change to the code, its dependencies, its environment or its linked guidance puts them back on the ramp.</td></tr>
+<tr><td><b>Learns reusable skills</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving.</td></tr>
 <tr><td><b>Concurrent work, independently steerable</b></td><td>Multiple actions run at once: pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
 <tr><td><b>Local-first, fully open</b></td><td>Runtime, persistence and LLM client are MIT-licensed and run in one process on your laptop. The store is a SQLite file you can open with any tool.</td></tr>
 </table>
@@ -200,10 +199,6 @@ Two persistent libraries the Actor consults before reaching for raw tools:
 
 After a successful trajectory, a reviewer loop (`store_skills`) can extract *both*: code worth keeping plus the narrative for using it.
 
-### Stored functions carry a verification ledger
-
-A stored function is not trusted because it was stored. Its **effect class** is read deterministically off its code (`safe_noop` < `read_only` < `idempotent_effectful` < `unsafe_effectful`), a **contract** is derived from its type hints plus whatever the reviewer wrote down, and tier-0 checks validate the arguments before every call and the result after it. Any change to the source, its dependencies, its environment or its linked guidance invalidates that trust.
-
 ### Concurrent steerable actions
 
 ```text
@@ -236,7 +231,7 @@ CodeActActor (generates Python plans, calls primitives.* APIs)
     ▼
 Skill libraries (discovered before the Actor writes code)
     │
-    ├── FunctionManager      : stored functions, venvs, verification ledger
+    ├── FunctionManager      : stored functions, venvs
     └── GuidanceManager      : procedures, how-to knowledge
     │
     └── EventBus             : typed pub/sub backbone (Pydantic events)

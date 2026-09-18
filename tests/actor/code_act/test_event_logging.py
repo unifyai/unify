@@ -195,7 +195,6 @@ class _StubFunctionManager:
         implementations,
         language: str = "python",
         preconditions=None,
-        verify=None,
         overwrite: bool = False,
         raise_on_error: bool = True,
         venv_id=None,

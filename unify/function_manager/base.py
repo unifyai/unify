@@ -49,8 +49,6 @@ class BaseFunctionManager(BaseStateManager):
         implementations: Union[str, List[str]],
         language: FunctionLanguage = "python",
         preconditions: Optional[Dict[str, Dict]] = None,
-        contracts: Optional[Dict[str, Dict[str, Any]]] = None,
-        fixtures: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
         venv_id: Optional[int] = None,
@@ -71,22 +69,6 @@ class BaseFunctionManager(BaseStateManager):
         preconditions : dict[str, dict] | None
             Mapping of function name → precondition payload, stored as the
             record's ``precondition`` field.
-        contracts : dict[str, dict] | None
-            Mapping of function name → ``{"postconditions": [...]}``: boolean
-            Python expressions over ``result`` (the return value) and
-            ``kwargs`` (the call's keyword arguments) checked after every
-            call, e.g. ``["isinstance(result, list)"]``. Only comparison /
-            boolean operators and basic builtins (``len``, ``all``, ``any``,
-            ``isinstance``, ``min``, ``max``, ``sum``, …) are allowed. Input
-            and output JSON schemas are derived from type hints, so hint
-            every parameter and the return type. Postconditions survive
-            ``overwrite=True`` unless a new ``contracts`` entry replaces them.
-        fixtures : dict[str, list[dict]] | None
-            Mapping of function name → recorded ``{"args": {...}, "result":
-            ...}`` pairs the function must reproduce. Pure functions only (no
-            I/O; effect class ``safe_noop``); replayed whenever the
-            implementation changes, and a mismatch rejects the change with
-            ``FixtureRegressionError`` naming the failing pair.
         overwrite : bool, default ``False``
             When ``True``, an existing name is updated in place with a stable
             ``function_id`` so existing references (task entrypoints,
