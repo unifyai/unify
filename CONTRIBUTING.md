@@ -52,7 +52,7 @@ pre-commit run --all-files
 
 ## Pull requests
 
-- Open PRs against the `staging` branch
+- Open PRs against `main`; there is one branch
 - Keep PRs focused — one concern per PR
 - Tests should pass locally before opening a PR
 - We don't require backward compatibility (see the project's aggressive refactoring philosophy)

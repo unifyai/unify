@@ -2,7 +2,7 @@
 Thanks for contributing to Unify! Please fill out the sections below.
 For trivial changes (typo fixes, comment-only edits) you can shorten this template — just keep the Summary.
 
-PRs land on `staging`, not `main`. See CONTRIBUTING.md.
+PRs land on `main`. See CONTRIBUTING.md.
 -->
 
 ## Summary
@@ -68,7 +68,6 @@ None.
 
 ## Checklist
 
-- [ ] PR is targeted at `staging` (not `main`)
 - [ ] Followed conventional commit style (`feat(scope):`, `fix(scope):`, `refactor(scope):`, `chore(scope):`, etc.)
 - [ ] No `try/except` added defensively — only around specific, recoverable errors
 - [ ] No "new" / "updated" / "TODO from chat" temporal comments (see `.agents/rules/no-temporal-comments.md`)
