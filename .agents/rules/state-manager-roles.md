@@ -17,14 +17,14 @@ Use this to decide which component owns what and where its jurisdiction ends. Ke
 ### Actor routing playbook
 - **Before writing code**: `FunctionManager_search_functions` / `FunctionManager_filter_functions` for a stored function that already does it; `GuidanceManager_search` / `GuidanceManager_filter` for a procedure that says how. The discovery-first policy gates the other tools until both were consulted.
 - **A single stored function or primitive call** → `execute_function` (a bare steerable handle; never `execute_code` for one call).
-- **Anything else** → `execute_code`: plain Python, loops, control flow, files, packages installed into a per-function venv.
+- **Anything else** → `execute_code`: plain Python, loops, control flow, files, packages installed into the workspace environment.
 - **Parallel or delegated work** → `primitives.actor.act`.
 - **Asking the user** → `request_clarification` (bubbles up through every layer to the chat).
 - **After a run** the storage review decides what to keep: a callable that worked becomes a function, a non-obvious composition becomes guidance.
 
 ### FunctionManager
-- **Role**: Catalogue of stored Python functions (the **what**) and their venvs.
-- **Scope**: add/list/filter/search/delete over functions, execution in-process or in a per-function venv, and the read-only builtins catalogue of every primitive the Actor can call.
+- **Role**: Catalogue of stored Python functions (the **what**) and their pip dependencies.
+- **Scope**: add/list/filter/search/delete over functions, execution in-process with dependencies ensured in the workspace environment, and the read-only builtins catalogue of every primitive the Actor can call.
 - **Connections**:
   - **Steered by**: `Actor` (discovers and executes functions during plans; the storage review stores new ones).
   - **Steers**: —

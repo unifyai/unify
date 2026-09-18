@@ -226,8 +226,8 @@ class FunctionStoreEnvironment(BaseEnvironment):
             precond = row.get("precondition")
             if precond:
                 lines.append(f"  Precondition: {precond}")
-            venv = row.get("venv_id")
-            if venv is not None:
-                lines.append(f"  Virtual environment: venv_id={venv}")
+            dependencies = row.get("dependencies")
+            if dependencies:
+                lines.append(f"  Dependencies: {', '.join(dependencies)}")
 
         return "\n".join(lines)

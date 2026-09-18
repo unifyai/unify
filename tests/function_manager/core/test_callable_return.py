@@ -1,21 +1,10 @@
 from __future__ import annotations
 
-import shutil
-
 import pytest
 
 from tests.helpers import _handle_project
 from unify.function_manager.execution_env import create_base_globals
 from unify.function_manager.function_manager import FunctionManager
-
-# Keep this minimal to make venv prep fast (no third-party deps).
-MINIMAL_VENV_CONTENT = """
-[project]
-name = "test-venv"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = []
-""".strip()
 
 
 @_handle_project
@@ -179,36 +168,38 @@ def test_circular_dependency_injection_does_not_loop():
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_search_return_callable_venv_proxy_executes():
+async def test_filter_return_callable_with_dependencies_executes():
+    """A function stored with dependencies runs in-process like any other.
+
+    ``packaging`` is one of the runtime's own dependencies, so the callable
+    resolves it without an install and the proxy round-trips a result.
+    """
     fm = FunctionManager()
 
-    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
-    venv_dir = fm._get_venv_dir(venv_id)
+    fm.add_functions(
+        implementations=(
+            "def parse_version(text: str) -> str:\n"
+            "    from packaging.version import Version\n"
+            "    return str(Version(text))\n"
+        ),
+        dependencies=["packaging"],
+    )
+    assert fm.list_functions()["parse_version"]["dependencies"] == ["packaging"]
 
-    try:
-        fm.add_functions(
-            implementations="def add_numbers(a: int, b: int) -> int:\n    return a + b\n",
-        )
-        function_id = fm.list_functions()["add_numbers"]["function_id"]
-        assert fm.set_function_venv(function_id=function_id, venv_id=venv_id) is True
+    ns = create_base_globals()
+    callables = fm.filter_functions(
+        filter="name == 'parse_version'",
+        limit=1,
+        _return_callable=True,
+        _namespace=ns,
+    )
 
-        ns = create_base_globals()
-        callables = fm.filter_functions(
-            filter="name == 'add_numbers'",
-            limit=1,
-            _return_callable=True,
-            _namespace=ns,
-        )
+    assert len(callables) == 1
+    proxy = callables[0]
+    assert getattr(proxy, "__name__", None) == "parse_version"
 
-        assert len(callables) == 1
-        proxy = callables[0]
-        assert getattr(proxy, "__name__", None) == "add_numbers"
-
-        result = await proxy(a=3, b=5)
-        assert result == 8
-    finally:
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir, ignore_errors=True)
+    result = await proxy(text="1.2.0")
+    assert result == "1.2.0"
 
 
 @_handle_project
@@ -222,7 +213,6 @@ async def test_similarity_search_return_callable_monkeypatched(monkeypatch):
         "docstring": "Add one.",
         "implementation": "async def foo(x: int) -> int:\n    return x + 1\n",
         "calls": [],
-        "venv_id": None,
         "is_primitive": False,
     }
 
@@ -355,7 +345,6 @@ async def test_similarity_search_return_callable_forward_ref_annotations_just_wo
         ),
         # No dependency graph info available from search in this test.
         "calls": [],
-        "venv_id": None,
         "is_primitive": False,
     }
 

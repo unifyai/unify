@@ -38,7 +38,7 @@ ls logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/
 
 **Step 2: Read with Read tool**
 ```
-Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/function_manager-storage-test_venvs.txt
+Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/function_manager-storage-test_primitives.txt
 ```
 
 ## Worktree Symlinks
@@ -62,7 +62,7 @@ ls logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/
 
 Then use the Read tool:
 ```
-Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/function_manager-storage-test_venvs.txt
+Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/function_manager-storage-test_primitives.txt
 ```
 
 Each session's store file sits next to its log, so a failing test's rows can be inspected with `sqlite3` after the run.

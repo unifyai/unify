@@ -652,10 +652,8 @@ class SimulatedFunctionManager(BaseFunctionManager):
         *,
         function_name: str,
         call_kwargs: Optional[Dict[str, Any]] = None,
-        target_venv_id: Optional[int] = ...,
         state_mode: str = "stateless",
         session_id: int = 0,
-        venv_pool: Optional[Any] = None,
         extra_namespaces: Optional[Dict[str, Any]] = None,
         _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:

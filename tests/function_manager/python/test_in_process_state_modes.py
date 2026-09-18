@@ -1,13 +1,10 @@
 """
-Tests for state_mode parameter in execute_function for in-process (no venv) Python functions.
+Tests for the state_mode parameter of execute_function.
 
-This tests the full matrix of state modes for functions without a venv:
+This tests the full matrix of state modes for stored Python functions:
 - stateful: State persists across calls (Jupyter-notebook style)
 - read_only: Reads existing state but doesn't persist changes
 - stateless: Fresh environment each time (pure function behavior)
-
-Previously, in-process functions only supported stateless execution.
-These tests verify the newly added stateful and read_only modes.
 """
 
 from __future__ import annotations
@@ -101,7 +98,6 @@ def function_manager_factory():
     managers = []
 
     def _create():
-        ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
         fm = FunctionManager()
         managers.append(fm)
@@ -127,7 +123,6 @@ async def test_in_process_stateful_mode_persists_state(function_manager_factory)
     """Stateful mode should persist variables across function calls (in-process)."""
     fm = function_manager_factory()
 
-    # Add functions (no venv)
     fm.add_functions(implementations=SET_VAR_FUNC)
     fm.add_functions(implementations=GET_VAR_FUNC)
 

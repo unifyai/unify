@@ -30,15 +30,6 @@ call begins and discarded when it returns. Nothing survives into the next call,
 which is what keeps the positional cache key sound: the surrounding code cannot
 have changed underneath it, because the block is still the one that is running.
 
-Code that runs in another process is steered at two grains. Every primitive
-dispatch already blocks the child on the parent's JSON-RPC reply, so the reply
-is a checkpoint (:func:`dispatch_with_steering`) — a venv child gets this
-without instrumentation. Between dispatches, venv children additionally
-run parent-instrumented source whose probes read a pushed control directive
-(:meth:`SteeringSession.relay_corrections`), so a loop that makes no primitive
-call is still interruptible; on retry the parent re-sends patched source
-either way.
-
 What this deliberately does not do
 ----------------------------------
 Replay records that a side effect happened; it cannot undo one. A patch
@@ -408,53 +399,6 @@ class SteeringSession:
     def note_applied(self, patch: Patch) -> None:
         self._applied.append(patch)
 
-    async def relay_corrections(
-        self,
-        source: str,
-        deliver: typing.Callable[["InterruptionRequest"], typing.Awaitable[None]],
-        *,
-        poll_interval: float = 0.05,
-    ) -> None:
-        """Deliver corrections to code running where no checkpoint can look.
-
-        Out-of-process, the parent's checkpoints fire only when the child
-        dispatches; a child inside a loop that makes no primitive call never
-        gives the parent a chance to collect interjections, let alone act on
-        them. This watches the intake while an attempt runs and, once a
-        correction applies to the running block, hands it to *deliver* — a
-        venv attempt pushes an interrupt directive down its control channel.
-        Runs until then, or until the attempt ends and cancels it.
-        """
-        while True:
-            await self._collect()
-            request = self.interruption
-            if request is not None and _targets_running_block(request, source):
-                await deliver(request)
-                return
-            await asyncio.sleep(poll_interval)
-
-    async def relay_pause(
-        self,
-        deliver: typing.Callable[[bool], typing.Awaitable[None]],
-        *,
-        poll_interval: float = 0.01,
-    ) -> None:
-        """Mirror pause-state changes into a running subprocess.
-
-        The outer tool handle owns the event behind ``runtime.paused``. A
-        subprocess cannot await that in-process event, so each execution
-        boundary translates state changes into process-level pause/resume
-        operations. Starting from running avoids an unnecessary resume signal;
-        an attempt created while already paused is stopped immediately.
-        """
-        delivered = False
-        while True:
-            paused = self.runtime.paused
-            if paused != delivered:
-                await deliver(paused)
-                delivered = paused
-            await asyncio.sleep(poll_interval)
-
     def notify(self, payload: Dict[str, Any]) -> None:
         if self._notification_q is None:
             return
@@ -586,10 +530,8 @@ class _Instrumenter(ast.NodeTransformer):
         """The interrupt probe a synchronous function can afford.
 
         Raising needs no await — only pause does — so sync code checks a
-        pending correction with a plain call. In-process it fires when a
-        correction was already pending as the sync frame was entered;
-        out-of-process the child's reader thread keeps the flag fresh, so a
-        sync loop is interruptible mid-run.
+        pending correction with a plain call. It fires when a correction was
+        already pending as the sync frame was entered.
         """
         return ast.Expr(
             value=self._call(INT_SYNC_FN, [ast.Constant(value=func_name)]),
@@ -938,90 +880,6 @@ class MemoisedDispatch:
             self._session,
             name,
         )
-
-
-# ---------------------------------------------------------------------------
-# Out-of-process dispatch
-# ---------------------------------------------------------------------------
-def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
-    """Whether a correction is aimed at the block running out-of-process.
-
-    A stop applies to whatever is running — that is its purpose, since it
-    exists for exactly the source a patch cannot name.
-
-    For patches: in-process, ``_int(name)`` fires only inside the function a
-    patch names. The parent cannot see which function a child process is
-    inside, so the nearest sound reading is "the patch names a function this
-    block defines": firing early costs one replay-backed retry, whereas not
-    firing would let the remaining dispatches run under a correction that
-    asked them not to. Source that defines no function is nothing a patch
-    can name, so patches never fire on it.
-    """
-    if request.stop:
-        return True
-    if not request.patches:
-        return False
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return False
-    defined = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    return any(patch.function_name in defined for patch in request.patches)
-
-
-def interrupt_directive(request: InterruptionRequest) -> Dict[str, Any]:
-    """The control-channel message telling a child to unwind for *request*."""
-    return {
-        "type": "control",
-        "action": "interrupt",
-        "reason": request.reason or "steered",
-        "stop": request.stop,
-        "functions": sorted({patch.function_name for patch in request.patches}),
-    }
-
-
-async def dispatch_with_steering(
-    session: Optional[SteeringSession],
-    tool: str,
-    kwargs: dict,
-    dispatch: typing.Callable[[], typing.Awaitable[Any]],
-) -> Any:
-    """One out-of-process dispatch, steered from the parent side.
-
-    A child process making a ``primitives.*`` call is blocked until the
-    parent replies, which makes the reply the checkpoint: pause holds here,
-    a pending correction interrupts here, and a dispatch the previous attempt
-    already made replays from the cache instead of running again. The child
-    needs no instrumentation for any of this — the suspension is a property
-    of the RPC protocol itself.
-
-    ``tool`` is the RPC path (``actor.act``), which is the same string the
-    in-process :class:`MemoisedDispatch` records, so cache entries mean the
-    same thing whichever side of the process boundary made them.
-
-    Raises :class:`ControlledInterruption` when a pending correction targets
-    the running block. The caller owns translating that into an
-    ``rpc_interrupt`` reply so the child unwinds, and re-raising it into the
-    retry loop; the request itself stays pending, because consuming it is
-    :func:`run_with_steering`'s job.
-    """
-    if session is None:
-        return await dispatch()
-    await session.cp(f"RPC: {tool}")
-    request = session.interruption
-    if request is not None and _targets_running_block(request, session.source):
-        raise ControlledInterruption(request.reason or "steered")
-    key = make_cache_key(session, tool, (), kwargs)
-    hit = session.cache.get(key)
-    if hit is not None:
-        return hit["result"]
-    result = await dispatch()
-    session.cache.put(key, result, tool=tool)
-    return result
 
 
 # ---------------------------------------------------------------------------

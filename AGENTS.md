@@ -60,7 +60,7 @@ Tests run in tmux sessions, each test in its own session against its own SQLite 
 tests/parallel_run.sh tests/function_manager/
 
 # Specific test
-tests/parallel_run.sh tests/function_manager/storage/test_venvs.py::test_name
+tests/parallel_run.sh tests/function_manager/storage/test_primitives.py::test_name
 
 # Serial mode (one session per file) for large suites
 tests/parallel_run.sh -s tests/
@@ -159,7 +159,7 @@ unify/
 │   ├── conversation_manager/ # The persistent interaction loop (slow brain)
 │   ├── db/                  # The local SQLite store and its expression language
 │   ├── guidance_manager/    # Procedures, SOPs
-│   ├── function_manager/    # Stored Python functions, venvs
+│   ├── function_manager/    # Stored Python functions and their dependencies
 │   ├── workspace.py         # The assistant's working directory
 │   ├── events/              # Typed event bus
 │   └── common/              # Async tool loop, shared infra
@@ -226,7 +226,7 @@ The script **always blocks** until all tests complete (or timeout), streaming pa
 **Examples:**
 ```bash
 # Single test file with multiple tests (default: runs all tests concurrently)
-tests/parallel_run.sh tests/function_manager/storage/test_venvs.py
+tests/parallel_run.sh tests/function_manager/storage/test_primitives.py
 
 # Specific test functions
 tests/parallel_run.sh tests/test_foo.py::test_one tests/test_bar.py::test_two
@@ -330,7 +330,7 @@ ls logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/
 
 **Step 2: Read with Read tool**
 ```
-Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/function_manager-storage-test_venvs.txt
+Read: logs/pytest/2025-12-05T14-30-45_unify_dev_ttys042/function_manager-storage-test_primitives.txt
 ```
 
 ## Worktree Symlinks
@@ -354,7 +354,7 @@ ls logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/
 
 Then use the Read tool:
 ```
-Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/function_manager-storage-test_venvs.txt
+Read: logs/pytest/2025-12-21T16-00-00_unify_dev_ttys042/function_manager-storage-test_primitives.txt
 ```
 
 Each session's store file sits next to its log, so a failing test's rows can be inspected with `sqlite3` after the run.
@@ -519,14 +519,14 @@ Use this to decide which component owns what and where its jurisdiction ends. Ke
 ### Actor routing playbook
 - **Before writing code**: `FunctionManager_search_functions` / `FunctionManager_filter_functions` for a stored function that already does it; `GuidanceManager_search` / `GuidanceManager_filter` for a procedure that says how. The discovery-first policy gates the other tools until both were consulted.
 - **A single stored function or primitive call** → `execute_function` (a bare steerable handle; never `execute_code` for one call).
-- **Anything else** → `execute_code`: plain Python, loops, control flow, files, packages installed into a per-function venv.
+- **Anything else** → `execute_code`: plain Python, loops, control flow, files, packages installed into the workspace environment.
 - **Parallel or delegated work** → `primitives.actor.act`.
 - **Asking the user** → `request_clarification` (bubbles up through every layer to the chat).
 - **After a run** the storage review decides what to keep: a callable that worked becomes a function, a non-obvious composition becomes guidance.
 
 ### FunctionManager
-- **Role**: Catalogue of stored Python functions (the **what**) and their venvs.
-- **Scope**: add/list/filter/search/delete over functions, execution in-process or in a per-function venv, and the read-only builtins catalogue of every primitive the Actor can call.
+- **Role**: Catalogue of stored Python functions (the **what**) and their pip dependencies.
+- **Scope**: add/list/filter/search/delete over functions, execution in-process with dependencies ensured in the workspace environment, and the read-only builtins catalogue of every primitive the Actor can call.
 - **Connections**:
   - **Steered by**: `Actor` (discovers and executes functions during plans; the storage review stores new ones).
   - **Steers**: —

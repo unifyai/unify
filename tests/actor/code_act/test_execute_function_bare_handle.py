@@ -70,32 +70,16 @@ async def execute_function_tool() -> AsyncIterator[Any]:
 
 
 class _FakeFunctionManager:
-    def __init__(self):
-        self.execute_in_venv = AsyncMock(
-            return_value={
-                "stdout": [],
-                "stderr": [],
-                "result": "venv ok",
-                "error": None,
-            },
-        )
-
     def _get_function_data_by_name(self, *, name: str):
         if name != "stored_report":
             return None
         return {
             "function_id": 12,
             "name": "stored_report",
-            "implementation": "def stored_report():\n    return 'default env'",
-            "venv_id": 31,
+            "implementation": "def stored_report():\n    return 'report'",
+            "dependencies": ["tabulate>=0.9"],
             "is_primitive": False,
         }
-
-    def get_venv(self, *, venv_id: int):
-        """Only venv 31 exists here — the one ``stored_report`` is stored against."""
-        if venv_id != 31:
-            return None
-        return {"venv_id": 31, "requirements": []}
 
     def search_functions(self, **kwargs):
         return {"metadata": []}
@@ -117,7 +101,7 @@ class _FakeFunctionManager:
 
 
 @pytest.mark.asyncio
-async def test_execute_function_does_not_expose_venv_id():
+async def test_execute_function_does_not_expose_dependencies():
     fm = _FakeFunctionManager()
     actor = CodeActActor(
         function_manager=fm,  # type: ignore[arg-type]
@@ -138,9 +122,8 @@ async def test_execute_function_does_not_expose_venv_id():
     finally:
         await actor.close()
 
-    assert "venv_id" not in signature.parameters
-    assert "venv_id" not in schema["function"]["parameters"]["properties"]
-    assert "venv_id" not in schema["function"]["description"]
+    assert "dependencies" not in signature.parameters
+    assert "dependencies" not in schema["function"]["parameters"]["properties"]
 
 
 @pytest.mark.asyncio
@@ -178,28 +161,38 @@ async def test_execute_function_docstring_carries_call_kwargs_typing_contract():
 
 
 @pytest.mark.asyncio
-async def test_execute_function_uses_stored_venv_when_caller_omits_it():
+async def test_execute_function_ensures_stored_dependencies_before_running(
+    monkeypatch,
+):
+    """The function's recorded dependencies are ensured before the cell runs."""
+    from unify import environment
+
     fm = _FakeFunctionManager()
     actor = CodeActActor(
         function_manager=fm,  # type: ignore[arg-type]
         can_store=False,
     )
-    captured: dict[str, object] = {}
+    order: list[str] = []
+    ensured: list[list[str]] = []
+
+    def _fake_ensure(specifiers):
+        ensured.append(list(specifiers))
+        order.append("ensure")
 
     async def _fake_execute(**kwargs):
-        captured.update(kwargs)
+        order.append("execute")
         return {
             "stdout": [],
             "stderr": [],
-            "result": "venv ok",
+            "result": "report",
             "error": None,
             "state_mode": kwargs["state_mode"],
             "session_id": kwargs["session_id"],
-            "venv_id": kwargs["venv_id"],
             "session_created": False,
             "duration_ms": 0,
         }
 
+    monkeypatch.setattr(environment, "ensure", _fake_ensure)
     actor._session_executor.execute = AsyncMock(side_effect=_fake_execute)  # type: ignore[method-assign]
 
     try:
@@ -208,15 +201,16 @@ async def test_execute_function_uses_stored_venv_when_caller_omits_it():
             execute_function = execute_function.fn
 
         result = await execute_function(
-            thought="Running the stored report to check its venv wiring.",
+            thought="Running the stored report to check its dependency wiring.",
             function_name="stored_report",
             call_kwargs={},
         )
     finally:
         await actor.close()
 
-    assert result.result == "venv ok"
-    assert captured["venv_id"] == 31
+    assert result.result == "report"
+    assert ensured == [["tabulate>=0.9"]]
+    assert order == ["ensure", "execute"]
 
 
 @pytest.mark.asyncio
@@ -248,7 +242,6 @@ async def test_execute_function_returns_composite_when_side_output_present():
     # output is meaningful intermediate content the LLM should observe.
     from unify.common.context_registry import ContextRegistry
 
-    ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
     ContextRegistry.forget(FunctionManager, "Functions/Compositional")
 
     fm = FunctionManager()

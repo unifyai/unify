@@ -44,7 +44,7 @@ The script **always blocks** until all tests complete (or timeout), streaming pa
 **Examples:**
 ```bash
 # Single test file with multiple tests (default: runs all tests concurrently)
-tests/parallel_run.sh tests/function_manager/storage/test_venvs.py
+tests/parallel_run.sh tests/function_manager/storage/test_primitives.py
 
 # Specific test functions
 tests/parallel_run.sh tests/test_foo.py::test_one tests/test_bar.py::test_two

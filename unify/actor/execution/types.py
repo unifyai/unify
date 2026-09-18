@@ -164,7 +164,6 @@ class ExecutionResult(BaseModel):
     state_mode: Optional[str] = None
     session_id: Optional[int] = None
     session_name: Optional[str] = None
-    venv_id: Optional[int] = None
     session_created: Optional[bool] = None
     duration_ms: Optional[int] = None
     #: Where the block got to when something steered it mid-flight. Set only
@@ -194,8 +193,6 @@ class ExecutionResult(BaseModel):
             meta["session_id"] = self.session_id
         if self.session_name is not None:
             meta["session_name"] = self.session_name
-        if self.venv_id is not None:
-            meta["venv_id"] = self.venv_id
         if self.session_created is not None:
             meta["session_created"] = self.session_created
         if self.duration_ms is not None:

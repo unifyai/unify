@@ -47,7 +47,7 @@ Tests run in tmux sessions, each test in its own session against its own SQLite 
 tests/parallel_run.sh tests/function_manager/
 
 # Specific test
-tests/parallel_run.sh tests/function_manager/storage/test_venvs.py::test_name
+tests/parallel_run.sh tests/function_manager/storage/test_primitives.py::test_name
 
 # Serial mode (one session per file) for large suites
 tests/parallel_run.sh -s tests/
@@ -146,7 +146,7 @@ unify/
 │   ├── conversation_manager/ # The persistent interaction loop (slow brain)
 │   ├── db/                  # The local SQLite store and its expression language
 │   ├── guidance_manager/    # Procedures, SOPs
-│   ├── function_manager/    # Stored Python functions, venvs
+│   ├── function_manager/    # Stored Python functions and their dependencies
 │   ├── workspace.py         # The assistant's working directory
 │   ├── events/              # Typed event bus
 │   └── common/              # Async tool loop, shared infra

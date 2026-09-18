@@ -423,3 +423,21 @@ result = f"hasattr={has_secret}, dir_works={len(attrs) > 0}"
     exec(code, globals_dict)
     assert "hasattr=True" in globals_dict["result"]
     assert "dir_works=True" in globals_dict["result"]
+
+
+def test_execution_globals_expose_llm_helpers_and_unillm():
+    """The sandbox's LLM helpers are the runtime's own, and unillm is a
+    runtime-provided module rather than a dependency a function must record."""
+    import unillm
+
+    from unify.common.reasoning import list_llms, query_llm
+    from unify.function_manager.execution_env import ENVIRONMENT_MODULES
+
+    globals_dict = create_execution_globals()
+
+    assert globals_dict["query_llm"] is query_llm
+    assert globals_dict["list_llms"] is list_llms
+    assert "reason" not in globals_dict
+    assert globals_dict["unillm"] is unillm
+    assert "new_llm_client" not in globals_dict
+    assert "unillm" in ENVIRONMENT_MODULES

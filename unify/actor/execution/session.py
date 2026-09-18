@@ -1,8 +1,8 @@
 """Execution sessions and the unified SessionExecutor.
 
 Provides PythonExecutionSession (in-process stateful sandbox),
-SessionExecutor (multi-session orchestrator over in-process and venv
-sessions), and the validation of execution parameters.
+SessionExecutor (the orchestrator over the in-process sessions), and the
+validation of execution parameters.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from typing import (
     Literal,
     NoReturn,
     Optional,
-    Tuple,
     TYPE_CHECKING,
 )
 
@@ -46,7 +45,6 @@ from .types import TextPart
 
 if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
-    from unify.function_manager.function_manager import FunctionManager
 
 # Handles spawned by manager primitives during an in-process sandbox
 # ``execute`` call.  When the LLM fire-and-forgets a steerable handle
@@ -133,7 +131,7 @@ logger = logging.getLogger(__name__)
 # Type aliases
 # ---------------------------------------------------------------------------
 StateMode = Literal["stateful", "read_only", "stateless"]
-SessionKey = Tuple[Optional[int], int]  # (venv_id, session_id)
+SessionKey = int  # session_id
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +164,6 @@ def _refuse(
     state_mode: str,
     session_id: int | None,
     session_name: str | None,
-    venv_id: int | None = None,
 ) -> NoReturn:
     """Refuse the call, naming the change that would make it work.
 
@@ -181,7 +178,6 @@ def _refuse(
             "state_mode": state_mode,
             "session_id": session_id,
             "session_name": session_name,
-            "venv_id": venv_id,
         },
     )
 
@@ -191,14 +187,10 @@ def _validate_execution_params(
     state_mode: str,
     session_id: int | None,
     session_name: str | None,
-    venv_id: int | None = None,
     # Name resolution/lookup is actor-owned, so validation accepts callables.
     resolve_session_name: Optional[Callable[[str], Optional[SessionKey]]] = None,
-    get_session_name_for_id: Optional[
-        Callable[[Optional[int], int], Optional[str]]
-    ] = None,
-    session_exists: Optional[Callable[[Optional[int], int], bool]] = None,
-    venv_exists: Optional[Callable[[int], bool]] = None,
+    get_session_name_for_id: Optional[Callable[[int], Optional[str]]] = None,
+    session_exists: Optional[Callable[[int], bool]] = None,
     max_sessions_total: Optional[int] = None,
     active_session_count: Optional[int] = None,
 ) -> None:
@@ -223,28 +215,6 @@ def _validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            venv_id=venv_id,
-        )
-
-    # A venv is a named resource, so a request for one that does not exist is
-    # answered here rather than deep in venv preparation, where it would arrive
-    # as a bare traceback carrying no way to recover.
-    if (
-        venv_id is not None
-        and venv_exists is not None
-        and not venv_exists(int(venv_id))
-    ):
-        _refuse(
-            message=f"VirtualEnv {venv_id} does not exist.",
-            suggestion=(
-                "Omit venv_id to run in the default environment, list the "
-                "existing venvs with FunctionManager_list_venvs, or create one "
-                "with FunctionManager_add_venv."
-            ),
-            state_mode=state_mode,
-            session_id=session_id,
-            session_name=session_name,
-            venv_id=venv_id,
         )
 
     # Stateless must not reference sessions.
@@ -257,7 +227,6 @@ def _validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            venv_id=venv_id,
         )
 
     # Read-only requires an existing session.
@@ -268,7 +237,6 @@ def _validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            venv_id=venv_id,
         )
 
     # If both are present, ensure they match.
@@ -280,7 +248,6 @@ def _validate_execution_params(
                 state_mode=state_mode,
                 session_id=session_id,
                 session_name=session_name,
-                venv_id=venv_id,
             )
         key = resolve_session_name(session_name)
         if key is None:
@@ -292,22 +259,19 @@ def _validate_execution_params(
                     state_mode=state_mode,
                     session_id=session_id,
                     session_name=session_name,
-                    venv_id=venv_id,
                 )
         else:
-            resolved_venv_id, resolved_session_id = key
-            if resolved_venv_id != venv_id or resolved_session_id != session_id:
+            if key != session_id:
                 _refuse(
                     message=(
                         f"session_id and session_name refer to different sessions. "
-                        f"{session_name!r} resolves to {(resolved_venv_id, resolved_session_id)} "
-                        f"but received {(venv_id, session_id)}."
+                        f"{session_name!r} resolves to {key} "
+                        f"but received {session_id}."
                     ),
                     suggestion="Specify only one of session_id or session_name, or make them consistent.",
                     state_mode=state_mode,
                     session_id=session_id,
                     session_name=session_name,
-                    venv_id=venv_id,
                 )
 
     # If session_name is provided alone:
@@ -319,7 +283,6 @@ def _validate_execution_params(
                 state_mode=state_mode,
                 session_id=session_id,
                 session_name=session_name,
-                venv_id=venv_id,
             )
         key = resolve_session_name(session_name)
         if key is None and state_mode == "read_only":
@@ -329,7 +292,6 @@ def _validate_execution_params(
                 state_mode=state_mode,
                 session_id=session_id,
                 session_name=session_name,
-                venv_id=venv_id,
             )
 
     # Optional: enforce a global session cap (actor-owned pools, so this is per-actor).
@@ -354,7 +316,6 @@ def _validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            venv_id=venv_id,
         )
 
     # If an explicit session_id is provided for stateful execution, enforce limits when it would
@@ -368,7 +329,7 @@ def _validate_execution_params(
         and active_session_count >= max_sessions_total
     ):
         try:
-            exists = bool(session_exists(venv_id, session_id))
+            exists = bool(session_exists(session_id))
         except Exception:
             exists = False
         if not exists:
@@ -378,7 +339,6 @@ def _validate_execution_params(
                 state_mode=state_mode,
                 session_id=session_id,
                 session_name=session_name,
-                venv_id=venv_id,
             )
 
     # If session_id is provided and we can validate existence for read_only, do so.
@@ -387,18 +347,17 @@ def _validate_execution_params(
         and session_id is not None
         and session_exists is not None
     ):
-        if not session_exists(venv_id, session_id):
+        if not session_exists(session_id):
             name_hint = None
             if get_session_name_for_id is not None:
-                name_hint = get_session_name_for_id(venv_id, session_id)
+                name_hint = get_session_name_for_id(session_id)
             hint = f" (known name: {name_hint!r})" if name_hint else ""
             _refuse(
-                message=f"Session {(venv_id, session_id)} does not exist for read_only execution{hint}.",
+                message=f"Session {session_id} does not exist for read_only execution{hint}.",
                 suggestion="Use list_sessions to find an existing session, or switch to state_mode='stateful' to create a new session.",
                 state_mode=state_mode,
                 session_id=session_id,
                 session_name=session_name,
-                venv_id=venv_id,
             )
 
     return None
@@ -413,15 +372,11 @@ class PythonExecutionSession:
 
     This class maintains a persistent global state across multiple executions,
     capturing stdout, stderr, return values, and exceptions in a structured format.
-
-    It can optionally use a VenvPool for persistent venv subprocess
-    connections, enabling state to be preserved across multiple function calls.
     """
 
     def __init__(
         self,
         environments: Optional[Dict[str, "BaseEnvironment"]] = None,
-        venv_pool: Optional[Any] = None,
     ):
         """
         Initializes the execution environment.
@@ -429,9 +384,6 @@ class PythonExecutionSession:
         Args:
             environments: Optional mapping of environment namespaces to environments. If
                 provided, each environment instance is injected into globals.
-            venv_pool: Optional VenvPool for persistent venv connections.
-                If provided, venv-backed functions will use persistent connections
-                that maintain state across calls.
         """
         from unify.function_manager.execution_env import create_execution_globals
 
@@ -454,10 +406,6 @@ class PythonExecutionSession:
         # Expose sandbox metadata to user code (best-effort; callers may ignore).
         self.global_state["__sandbox_id__"] = self.id
 
-        # Inject the pool into the namespace (for function proxies to use)
-        if venv_pool is not None:
-            self.global_state["__venv_pool__"] = venv_pool
-
         if environments:
             for namespace, env in environments.items():
                 try:
@@ -478,7 +426,6 @@ class PythonExecutionSession:
 
         Notes
         -----
-        - The venv pool is owned by the actor and is not closed here.
         - This method is safe to call multiple times.
         """
         try:
@@ -810,29 +757,21 @@ class SessionExecutor:
 
     Notes
     -----
-    - In-process sessions are backed by persistent PythonExecutionSession instances.
-    - Venv-backed sessions are supported when venv_id is provided.
+    - Sessions are backed by persistent PythonExecutionSession instances,
+      keyed by session id.
     """
 
     def __init__(
         self,
         *,
-        venv_pool: Any,
         environments: Optional[Dict[str, "BaseEnvironment"]] = None,
-        function_manager: Optional["FunctionManager"] = None,
         timeout: Optional[float] = None,
     ) -> None:
-        self._venv_pool = venv_pool
         self._environments = environments or {}
-        self._function_manager = function_manager
         self._timeout = timeout
 
-        # In-process Python sessions keyed by (venv_id=None, session_id).
-        self._python_sessions: Dict[
-            Tuple[Optional[int], int],
-            PythonExecutionSession,
-        ] = {}
-        self._python_session_meta: Dict[Tuple[Optional[int], int], dict[str, str]] = {}
+        self._python_sessions: Dict[int, PythonExecutionSession] = {}
+        self._python_session_meta: Dict[int, dict[str, str]] = {}
 
         self._fm_globals: Dict[str, Any] = {}
 
@@ -844,26 +783,17 @@ class SessionExecutor:
             sb.global_state.update(self._fm_globals)
 
     def _new_session(self) -> PythonExecutionSession:
-        return PythonExecutionSession(
-            environments=self._environments,
-            venv_pool=self._venv_pool,
-        )
+        return PythonExecutionSession(environments=self._environments)
 
-    def has_python_session(
-        self,
-        *,
-        session_id: int,
-        venv_id: int | None = None,
-    ) -> bool:
-        return (venv_id, session_id) in self._python_sessions
+    def has_python_session(self, *, session_id: int) -> bool:
+        return session_id in self._python_sessions
 
     def list_in_process_python_sessions(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for (venv_id, session_id), sb in list(self._python_sessions.items()):
-            meta = self._python_session_meta.get((venv_id, session_id)) or {}
+        for session_id, sb in list(self._python_sessions.items()):
+            meta = self._python_session_meta.get(session_id) or {}
             out.append(
                 {
-                    "venv_id": venv_id,
                     "session_id": int(session_id),
                     "created_at": meta.get("created_at"),
                     "last_used": meta.get("last_used"),
@@ -872,13 +802,8 @@ class SessionExecutor:
             )
         return out
 
-    async def close_in_process_python_session(
-        self,
-        *,
-        session_id: int,
-        venv_id: int | None = None,
-    ) -> bool:
-        key = (venv_id, int(session_id))
+    async def close_in_process_python_session(self, *, session_id: int) -> bool:
+        key = int(session_id)
         sb = self._python_sessions.pop(key, None)
         self._python_session_meta.pop(key, None)
         if sb is None:
@@ -890,7 +815,6 @@ class SessionExecutor:
         return True
 
     async def close(self) -> None:
-        # Close in-process python sandboxes; the venv pool is owned by the actor.
         for sb in list(self._python_sessions.values()):
             try:
                 await sb.close()
@@ -905,8 +829,6 @@ class SessionExecutor:
         code: str,
         state_mode: StateMode,
         session_id: int | None,
-        venv_id: int | None,
-        primitives: Any = None,
     ) -> Dict[str, Any]:
         import time as _se_time
         import logging as _se_logging
@@ -934,7 +856,7 @@ class SessionExecutor:
             return await sb.execute(code, timeout=self._timeout)
 
         # Special-case: session 0 is the *current bound sandbox* when present.
-        if state_mode == "stateful" and venv_id is None and session_id == 0:
+        if state_mode == "stateful" and session_id == 0:
             # Only a missing binding falls through to the executor-managed
             # session 0; a failure while executing in the bound sandbox
             # must stay loud rather than silently re-running the cell in
@@ -956,12 +878,11 @@ class SessionExecutor:
                     **res,
                     "state_mode": state_mode,
                     "session_id": 0,
-                    "venv_id": None,
                     "session_created": False,
                     "duration_ms": _duration_ms(),
                 }
         # Stateless: fresh in-process sandbox per call.
-        if state_mode == "stateless" and venv_id is None:
+        if state_mode == "stateless":
             _se_log.debug(
                 f"⏱️ [SessionExecutor.execute +{_se_ms()}] creating stateless sandbox",
             )
@@ -987,113 +908,17 @@ class SessionExecutor:
                 **res,
                 "state_mode": state_mode,
                 "session_id": None,
-                "venv_id": venv_id,
                 "session_created": False,
                 "duration_ms": _duration_ms(),
             }
 
-        # If a venv_id is provided, use persistent subprocess sessions.
-        if venv_id is not None:
-            implementation = _wrap_code_as_async_function(code)
-            if state_mode == "stateless":
-                if self._function_manager is None:
-                    raise RuntimeError(
-                        "function_manager is required for venv execution",
-                    )
-                out = await self._function_manager.execute_in_venv(
-                    venv_id=int(venv_id),
-                    implementation=implementation,
-                    call_kwargs={},
-                    is_async=True,
-                    primitives=primitives,
-                    env_overlay={},
-                )
-                return {
-                    **out,
-                    "state_mode": state_mode,
-                    "session_id": None,
-                    "venv_id": venv_id,
-                    "session_created": False,
-                    "duration_ms": _duration_ms(),
-                }
-
-            if session_id is None:
-                raise ValueError(
-                    "session_id is required for venv-backed execution",
-                )
-            # Determine whether this is a new persistent session.
-            existed_before = (int(venv_id), int(session_id)) in set(
-                self._venv_pool.list_active_sessions(),
-            )
-            if state_mode == "stateful":
-                # Persistent venv workers keep their process environment
-                # across calls.  Pass the OAuth overlay so SDK/default-env
-                # credential paths see fresh access tokens without the actor
-                # manually exporting anything.
-                out = await self._venv_pool.execute_in_venv(
-                    venv_id=int(venv_id),
-                    implementation=implementation,
-                    call_kwargs={},
-                    is_async=True,
-                    session_id=int(session_id),
-                    primitives=primitives,
-                    function_manager=self._function_manager,
-                    timeout=self._timeout,
-                    env_overlay={},
-                )
-                return {
-                    **out,
-                    "state_mode": state_mode,
-                    "session_id": session_id,
-                    "venv_id": venv_id,
-                    "session_created": not existed_before,
-                    "duration_ms": _duration_ms(),
-                }
-
-            if state_mode == "read_only":
-                # Snapshot state from persistent session, then run in one-shot subprocess.
-                if self._function_manager is None:
-                    raise RuntimeError(
-                        "function_manager is required for venv read_only execution",
-                    )
-                initial_state = await self._venv_pool.get_connection_state(
-                    venv_id=int(venv_id),
-                    function_manager=self._function_manager,
-                    session_id=int(session_id),
-                    timeout=10.0,
-                )
-                # Read-only venv execution runs in a one-shot subprocess
-                # seeded from persistent state, but still receives the same
-                # runtime OAuth overlay before code executes.
-                out = await self._function_manager.execute_in_venv(
-                    venv_id=int(venv_id),
-                    implementation=implementation,
-                    call_kwargs={},
-                    is_async=True,
-                    initial_state=initial_state,
-                    primitives=primitives,
-                    env_overlay={},
-                )
-                return {
-                    **out,
-                    "state_mode": state_mode,
-                    "session_id": session_id,
-                    "venv_id": venv_id,
-                    "session_created": False,
-                    "duration_ms": _duration_ms(),
-                }
-
-            raise ValueError(
-                f"Unsupported state_mode for venv: {state_mode}",
-            )
-
-        # In-process persistent sessions (venv_id is None).
+        # Persistent sessions.
         if session_id is None:
             raise ValueError(
                 "session_id is required for in-process stateful/read_only execution",
             )
 
-        key = (venv_id, int(session_id))
+        key = int(session_id)
         if state_mode == "stateful":
             created = False
             if key not in self._python_sessions:
@@ -1114,7 +939,6 @@ class SessionExecutor:
                 **res,
                 "state_mode": state_mode,
                 "session_id": session_id,
-                "venv_id": venv_id,
                 "session_created": created,
                 "duration_ms": _duration_ms(),
             }
@@ -1141,7 +965,6 @@ class SessionExecutor:
                 **res,
                 "state_mode": state_mode,
                 "session_id": session_id,
-                "venv_id": venv_id,
                 "session_created": False,
                 "duration_ms": _duration_ms(),
             }
@@ -1149,21 +972,3 @@ class SessionExecutor:
         raise ValueError(
             f"Unsupported state_mode for in-process execution: {state_mode}",
         )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def _wrap_code_as_async_function(code: str) -> str:
-    """
-    Wrap an arbitrary code snippet into a single async function definition.
-
-    This is required for the venv runner protocol, which expects exactly one function
-    definition in the provided source.
-    """
-    # Ensure non-empty body.
-    body = code if code.strip() else "pass"
-    indented = "\n".join(
-        ("    " + line) if line.strip() else "    " for line in body.splitlines()
-    )
-    return "async def __unify_code_act__():\n" + indented + "\n"

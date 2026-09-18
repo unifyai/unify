@@ -74,10 +74,9 @@ def get_llm_model_selection_context() -> str:
     """Return model-selection guidance for sandbox LLM calls.
 
     Docstring-derived: the guidance lives in ``query_llm.__doc__`` (its
-    "Choosing A Model" section) so ``help(query_llm)`` inside any sandbox —
-    including venv RPC proxies mirroring that docstring — teaches the same
-    contract the prompt does. This helper slices that section back out for
-    callers that want it standalone.
+    "Choosing A Model" section) so ``help(query_llm)`` inside any sandbox
+    teaches the same contract the prompt does. This helper slices that
+    section back out for callers that want it standalone.
     """
     doc = inspect.getdoc(query_llm) or ""
     idx = doc.find(_MODEL_SELECTION_HEADING)

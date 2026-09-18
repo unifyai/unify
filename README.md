@@ -124,7 +124,7 @@ Assistant    ▸  Three tasks running at once.
 <table>
 <tr><td><b>Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running, including operations <i>nested inside other operations</i>, all the way down.</td></tr>
 <tr><td><b>Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow, not a chain of one-tool-at-a-time JSON decisions.</td></tr>
-<tr><td><b>Learns reusable skills</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving.</td></tr>
+<tr><td><b>Learns reusable skills</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + dependencies) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving.</td></tr>
 <tr><td><b>Concurrent work, independently steerable</b></td><td>Multiple actions run at once: pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
 <tr><td><b>Local-first, fully open</b></td><td>Runtime, persistence and LLM client are MIT-licensed and run in one process on your laptop. The store is a SQLite file you can open with any tool.</td></tr>
 </table>
@@ -193,7 +193,7 @@ Everything the assistant keeps — chat history, functions, procedures — goes 
 
 Two persistent libraries the Actor consults before reaching for raw tools:
 
-- **`FunctionManager`**: executable Python (with metadata and a venv) the Actor composes into plans.
+- **`FunctionManager`**: executable Python (with metadata and dependencies) the Actor composes into plans.
 - **`GuidanceManager`**: procedural how-to prose (SOPs, software walkthroughs, multi-step strategies).
 
 After a successful trajectory, a reviewer loop (`store_skills`) can extract *both*: code worth keeping plus the narrative for using it.
@@ -230,7 +230,7 @@ CodeActActor (generates Python plans, calls primitives.* APIs)
     ▼
 Skill libraries (discovered before the Actor writes code)
     │
-    ├── FunctionManager      : stored functions, venvs
+    ├── FunctionManager      : stored functions, dependencies
     └── GuidanceManager      : procedures, how-to knowledge
     │
     └── EventBus             : typed pub/sub backbone (Pydantic events)

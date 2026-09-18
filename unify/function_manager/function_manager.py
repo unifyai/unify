@@ -2,17 +2,12 @@ import ast
 import asyncio
 import builtins
 import concurrent.futures
-from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
 import functools
 import json
-import os
-import signal
-import sys
 import logging
 import threading
-from pathlib import Path
 
 from secrets import token_hex
 from typing import (
@@ -49,23 +44,21 @@ from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .steering import (
     DEFAULT_TOOL_NAMESPACES,
-    ControlledInterruption,
     ExecutionStopped,
     MemoisedDispatch,
     active_session,
     bind_session,
-    dispatch_with_steering,
     instrument,
-    interrupt_directive,
     restore_session,
     run_with_steering,
 )
+from unify import environment
+from packaging.requirements import InvalidRequirement
 from .dependency_analysis import (
     collect_dependencies_from_function_node,
     detect_third_party_imports,
 )
 from .types.function import Function
-from .types.venv import VirtualEnv
 from .source_labels import compile_function_source
 from .base import BaseFunctionManager
 from ..common.model_to_fields import model_to_fields
@@ -84,10 +77,6 @@ from unify.function_manager.primitives.registry import get_registry
 
 logger = logging.getLogger(__name__)
 
-# One lock per venv directory so concurrent ``prepare_venv`` calls serialise.
-_VENV_PREPARE_LOCKS: dict[str, asyncio.Lock] = {}
-
-FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
 
 # The fields a search query's words are looked for in, per function row.
@@ -122,8 +111,7 @@ class _LineageTrackedFunction:
         self._function_name = function_name
         # Usage-trace hook: this class is the one layer every boundary call
         # already passes through, and its __getattr__ delegation keeps proxy
-        # identity intact — an OUTER wrapper broke remote-routing and venv
-        # cleanup introspection, which is why the trace records here.
+        # identity intact, which is why the trace records here.
         self._on_call = on_call
 
         # Preserve introspection attributes.
@@ -132,7 +120,7 @@ class _LineageTrackedFunction:
         self.__wrapped__ = wrapped_callable
 
     def __getattr__(self, name: str) -> Any:
-        # Preserve wrapped callable API (e.g. venv proxy state helpers).
+        # Preserve wrapped callable API (e.g. proxy state-mode helpers).
         return getattr(self._wrapped, name)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -186,811 +174,12 @@ class _LineageTrackedFunction:
         return result
 
 
-def _instrument_for_child(source: str) -> str:
-    """Ship steering probes with source bound for a venv subprocess.
-
-    The child runs the probes against shims ``venv_runner`` installs, which
-    read the control channel — so a loop that makes no primitive call is
-    still interruptible between dispatches. Source that does not parse ships
-    unchanged, so the child reports the SyntaxError exactly as an unsteered
-    run would.
-    """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return source
-    return ast.unparse(instrument(tree, tool_namespaces=set(DEFAULT_TOOL_NAMESPACES)))
-
-
-class _VenvConnection:
-    """
-    Manages a persistent connection to a venv subprocess in server mode.
-
-    The subprocess maintains state across calls, enabling variables to persist
-    between function executions within the same venv.
-    """
-
-    def __init__(
-        self,
-        process: asyncio.subprocess.Process,
-        venv_id: int,
-        function_manager: "FunctionManager",
-    ):
-        self._process = process
-        self._venv_id = venv_id
-        self._function_manager = function_manager
-        self._lock = asyncio.Lock()  # Serialize calls to same venv
-        self._closed = False
-        self._tainted = False  # Set to True after timeout or other corruption
-
-    @classmethod
-    async def create(
-        cls,
-        venv_id: int,
-        function_manager: "FunctionManager",
-        timeout: float = 30.0,
-    ) -> "_VenvConnection":
-        """
-        Create a new persistent venv connection.
-
-        Args:
-            venv_id: The virtual environment to connect to.
-            function_manager: The FunctionManager instance for venv preparation.
-            timeout: Timeout for subprocess startup.
-
-        Returns:
-            A new _VenvConnection instance.
-
-        Raises:
-            RuntimeError: If the subprocess fails to start or send ready signal.
-        """
-        python_path = await function_manager.prepare_venv(venv_id=venv_id)
-        runner_path = function_manager._get_venv_runner_path(venv_id)
-
-        from unify.function_manager.execution_env import (
-            sandbox_env as build_sandbox_env,
-        )
-
-        use_process_group = sys.platform != "win32"
-        process = await asyncio.create_subprocess_exec(
-            str(python_path),
-            str(runner_path),
-            "--server",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=use_process_group,
-            env=build_sandbox_env(),
-        )
-
-        conn = cls(process, venv_id, function_manager)
-
-        # Wait for ready signal from subprocess
-        try:
-            ready_msg = await asyncio.wait_for(
-                conn._read_message(),
-                timeout=timeout,
-            )
-            if ready_msg.get("type") != "ready":
-                raise RuntimeError(
-                    f"Venv {venv_id} subprocess sent unexpected message: {ready_msg}",
-                )
-        except asyncio.TimeoutError:
-            await conn.shutdown()
-            raise RuntimeError(
-                f"Venv {venv_id} subprocess did not send ready signal within {timeout}s",
-            )
-        except Exception as e:
-            await conn.shutdown()
-            raise RuntimeError(
-                f"Venv {venv_id} subprocess failed to start: {e}",
-            ) from e
-
-        return conn
-
-    async def _read_message(self) -> dict:
-        """Read a JSON message from the subprocess stdout."""
-        if self._process.stdout is None:
-            raise RuntimeError("Subprocess stdout is None")
-        line = await self._process.stdout.readline()
-        if not line:
-            raise EOFError("Subprocess stdout closed")
-        return json.loads(line.decode().strip())
-
-    async def _write_message(self, msg: dict) -> None:
-        """Write a JSON message to the subprocess stdin."""
-        if self._process.stdin is None:
-            raise RuntimeError("Subprocess stdin is None")
-        data = json.dumps(msg) + "\n"
-        self._process.stdin.write(data.encode())
-        await self._process.stdin.drain()
-
-    def is_alive(self) -> bool:
-        """Check if the subprocess is still running and usable."""
-        return (
-            not self._closed and not self._tainted and self._process.returncode is None
-        )
-
-    async def execute(
-        self,
-        implementation: str,
-        call_kwargs: dict,
-        is_async: bool,
-        primitives: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        env_overlay: Optional[Dict[str, str]] = None,
-    ) -> dict:
-        """
-        Execute a function in the persistent venv subprocess.
-
-        While a steering session is in flight, each RPC reply doubles as a
-        checkpoint and a correction re-sends the (patched) source over the
-        same connection, replaying already-completed dispatches from the
-        parent's cache. The session arrives by contextvar so it follows the
-        call rather than this long-lived connection.
-
-        Args:
-            implementation: The function source code.
-            call_kwargs: Keyword arguments to pass to the function.
-            is_async: Whether the function is async.
-            primitives: The Primitives instance for RPC access.
-            timeout: Execution timeout in seconds (None for no timeout).
-
-        Returns:
-            Dict with keys: result, error, stdout, stderr
-
-        Raises:
-            RuntimeError: If the subprocess has died or execution fails.
-            asyncio.TimeoutError: If execution exceeds timeout.
-        """
-        async with self._lock:
-            if not self.is_alive():
-                raise RuntimeError(
-                    f"Venv {self._venv_id} subprocess has died (returncode={self._process.returncode})",
-                )
-
-            steering = active_session()
-
-            async def _attempt(source: str) -> dict:
-                """Send one execute request for *source* and relay its RPC."""
-                await self._write_message(
-                    {
-                        "type": "execute",
-                        "implementation": (
-                            _instrument_for_child(source)
-                            if steering is not None
-                            else source
-                        ),
-                        "call_kwargs": call_kwargs,
-                        "is_async": is_async,
-                        "env_overlay": env_overlay or {},
-                    },
-                )
-
-                # Set when a correction interrupted this attempt; the child's
-                # completion is then an unwind to discard, not a result.
-                interrupted: Optional[ControlledInterruption] = None
-                # Corrections that land between dispatches reach the child
-                # through the control channel, not through an RPC reply.
-                watcher = (
-                    asyncio.create_task(
-                        steering.relay_corrections(
-                            source,
-                            lambda request: self._write_message(
-                                interrupt_directive(request),
-                            ),
-                        ),
-                    )
-                    if steering is not None
-                    else None
-                )
-                pause_watcher = (
-                    asyncio.create_task(
-                        steering.relay_pause(
-                            lambda paused: self._function_manager._set_process_paused(
-                                self._process,
-                                use_process_group=sys.platform != "win32",
-                                paused=paused,
-                            ),
-                        ),
-                    )
-                    if steering is not None
-                    else None
-                )
-
-                try:
-                    while True:
-                        msg = await self._read_message()
-                        msg_type = msg.get("type")
-
-                        if msg_type == "complete":
-                            if interrupted is not None:
-                                raise interrupted
-                            child_interrupted = msg.get("interrupted")
-                            if child_interrupted:
-                                # The child unwound at an instrumented
-                                # checkpoint; discard the attempt and retry.
-                                raise ControlledInterruption(child_interrupted)
-                            return msg
-
-                        if msg_type == "rpc_call":
-                            # Handle RPC call from subprocess
-                            try:
-                                reply = await self._handle_rpc_call(
-                                    msg,
-                                    primitives=primitives,
-                                )
-                            except ControlledInterruption as interruption:
-                                # The child is blocked on this reply, so
-                                # telling it to unwind here is the interrupt
-                                # probe realised without instrumentation.
-                                interrupted = interruption
-                                reply = {
-                                    "type": "rpc_interrupt",
-                                    "id": msg.get("id"),
-                                    "reason": str(interruption),
-                                }
-                            await self._write_message(reply)
-                        else:
-                            logger.warning(
-                                f"Venv {self._venv_id}: unexpected message type '{msg_type}'",
-                            )
-                finally:
-                    for task in (watcher, pause_watcher):
-                        if task is None:
-                            continue
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception:
-                            # A watcher can lose the race with the run ending;
-                            # the attempt's own outcome stands.
-                            logger.debug(
-                                "steering: subprocess watcher failed",
-                                exc_info=True,
-                            )
-                    if pause_watcher is not None:
-                        await self._function_manager._set_process_paused(
-                            self._process,
-                            use_process_group=sys.platform != "win32",
-                            paused=False,
-                        )
-
-            async def _run(source: str) -> dict:
-                if timeout is None:
-                    return await _attempt(source)
-                try:
-                    return await asyncio.wait_for(_attempt(source), timeout=timeout)
-                except asyncio.TimeoutError:
-                    # After a timeout, the subprocess is in an unknown state.
-                    # Mark it as tainted so the pool recreates it on next use.
-                    self._tainted = True
-                    raise
-
-            if steering is None:
-                return await _run(implementation)
-            try:
-                return await run_with_steering(
-                    implementation,
-                    _run,
-                    session=steering,
-                )
-            except ExecutionStopped as stopped:
-                return {
-                    "result": stopped.outcome,
-                    "error": None,
-                    "stdout": "",
-                    "stderr": "",
-                }
-
-    async def _handle_rpc_call(
-        self,
-        msg: dict,
-        primitives: Optional[Any],
-    ) -> dict:
-        """Answer one RPC message from the subprocess.
-
-        Dispatch, memoisation and interrupts are shared with the one-shot
-        path via :meth:`FunctionManager._handle_rpc_call`, so a pooled session
-        cannot drift into being silently unsteerable. A
-        :class:`ControlledInterruption` propagates to the execute loop, which
-        owns telling the child to unwind.
-        """
-        request_id = msg.get("id")
-        try:
-            result = await self._function_manager._handle_rpc_call(
-                path=msg.get("path", ""),
-                kwargs=msg.get("kwargs", {}),
-                primitives=primitives,
-            )
-        except ControlledInterruption:
-            raise
-        except Exception as e:
-            return {"type": "rpc_error", "id": request_id, "error": str(e)}
-        return {
-            "type": "rpc_result",
-            "id": request_id,
-            "result": self._function_manager._make_json_serializable(result),
-        }
-
-    async def get_state(self, timeout: float = 30.0) -> Dict[str, Any]:
-        """
-        Get serialized user-defined state from the persistent subprocess.
-
-        This is used for read_only mode to capture the current state before
-        executing in an ephemeral subprocess.
-
-        Args:
-            timeout: Timeout for state retrieval.
-
-        Returns:
-            Dict of serialized state variables.
-
-        Raises:
-            RuntimeError: If the subprocess has died or retrieval fails.
-            asyncio.TimeoutError: If retrieval exceeds timeout.
-        """
-        async with self._lock:
-            if not self.is_alive():
-                raise RuntimeError(
-                    f"Venv {self._venv_id} subprocess has died (returncode={self._process.returncode})",
-                )
-
-            await self._write_message({"type": "get_state"})
-
-            async def wait_for_state() -> Dict[str, Any]:
-                while True:
-                    msg = await self._read_message()
-                    if msg.get("type") == "state":
-                        return msg.get("state", {})
-                    # Ignore other message types while waiting
-
-            if timeout is not None:
-                return await asyncio.wait_for(wait_for_state(), timeout=timeout)
-            return await wait_for_state()
-
-    async def shutdown(self, timeout: float = 5.0) -> None:
-        """
-        Gracefully shut down the subprocess.
-
-        Args:
-            timeout: Timeout for graceful shutdown before force-killing.
-        """
-        if self._closed:
-            return
-        self._closed = True
-
-        if self._process.returncode is not None:
-            return
-
-        try:
-            # Try graceful shutdown
-            await self._write_message({"type": "shutdown"})
-            await asyncio.wait_for(self._process.wait(), timeout=timeout)
-        except (asyncio.TimeoutError, Exception):
-            # Force kill if graceful shutdown fails
-            try:
-                if sys.platform != "win32":
-                    # Kill entire process group
-                    os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
-                else:
-                    self._process.terminate()
-                await asyncio.wait_for(self._process.wait(), timeout=2.0)
-            except Exception:
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
-
-
-@dataclass
-class SessionMetadata:
-    venv_id: int
-    session_id: int
-    created_at: datetime
-    last_used: datetime
-
-
-class SessionLimitError(RuntimeError):
-    def __init__(self, *, message: str):
-        super().__init__(message)
-        self.message = message
-
-
-class VenvPool:
-    """
-    Manages a pool of persistent venv subprocess connections.
-
-    Each sandbox gets its own VenvPool, ensuring state isolation between
-    different actors/sandboxes while preserving state across function calls
-    within the same sandbox.
-
-    Connections are keyed by (venv_id, session_id), allowing multiple independent
-    stateful sessions per venv. Each session has its own subprocess and globals.
-    """
-
-    def __init__(self, *, max_total_sessions: int = 20) -> None:
-        # Key: (venv_id, session_id) -> _VenvConnection
-        self._connections: Dict[Tuple[int, int], _VenvConnection] = {}
-        self._metadata: Dict[Tuple[int, int], SessionMetadata] = {}
-        self._lock = asyncio.Lock()
-        self._closed = False
-        self._max_total_sessions = int(max_total_sessions)
-        self._invalidation_generation = 0
-
-    def invalidate_sessions(self) -> int:
-        """Retire pooled sessions while keeping the pool reusable."""
-        self._invalidation_generation += 1
-        connections = list(self._connections.values())
-        self._connections.clear()
-        self._metadata.clear()
-        if not connections:
-            return 0
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(self._shutdown_retired_connections(connections))
-        else:
-            loop.create_task(self._shutdown_retired_connections(connections))
-        return len(connections)
-
-    async def _shutdown_retired_connections(
-        self,
-        connections: List["_VenvConnection"],
-    ) -> None:
-        """Close retired connections through the normal subprocess lifecycle."""
-        for conn in connections:
-            try:
-                await conn.shutdown()
-            except Exception:
-                pass
-
-    async def get_or_create_connection(
-        self,
-        venv_id: int,
-        function_manager: "FunctionManager",
-        session_id: int = 0,
-        timeout: float = 30.0,
-    ) -> _VenvConnection:
-        """
-        Get an existing connection or create a new one for the given venv/session.
-
-        Args:
-            venv_id: The virtual environment ID.
-            function_manager: The FunctionManager for venv preparation.
-            session_id: The session ID within the venv (default 0).
-            timeout: Timeout for creating a new connection.
-
-        Returns:
-            A _VenvConnection instance.
-        """
-        key = (venv_id, session_id)
-        while True:
-            async with self._lock:
-                if self._closed:
-                    raise RuntimeError("VenvPool has been closed")
-
-                if key in self._connections:
-                    conn = self._connections[key]
-                    if conn.is_alive():
-                        md = self._metadata.get(key)
-                        if md is not None:
-                            md.last_used = datetime.now(timezone.utc)
-                        return conn
-                    # Connection died, remove it and create a new one
-                    logger.warning(
-                        f"VenvPool: connection for venv {venv_id} session {session_id} died, creating new one",
-                    )
-                    del self._connections[key]
-                    self._metadata.pop(key, None)
-
-                # Enforce global session cap (across all venv_id/session_id combinations).
-                active = sum(1 for c in self._connections.values() if c.is_alive())
-                if active >= self._max_total_sessions:
-                    raise SessionLimitError(
-                        message=f"Maximum sessions reached for python ({active}/{self._max_total_sessions})",
-                    )
-
-                generation = self._invalidation_generation
-                # Create new connection
-                conn = await _VenvConnection.create(
-                    venv_id=venv_id,
-                    function_manager=function_manager,
-                    timeout=timeout,
-                )
-                if generation != self._invalidation_generation:
-                    try:
-                        await conn.shutdown()
-                    except Exception:
-                        pass
-                    continue
-                self._connections[key] = conn
-                now = datetime.now(timezone.utc)
-                self._metadata[key] = SessionMetadata(
-                    venv_id=int(venv_id),
-                    session_id=int(session_id),
-                    created_at=now,
-                    last_used=now,
-                )
-                return conn
-
-    async def execute_in_venv(
-        self,
-        *,
-        venv_id: int,
-        implementation: str,
-        call_kwargs: dict,
-        is_async: bool,
-        session_id: int = 0,
-        primitives: Optional[Any] = None,
-        function_manager: "FunctionManager",
-        timeout: Optional[float] = None,
-        env_overlay: Optional[Dict[str, str]] = None,
-    ) -> dict:
-        """
-        Execute a function in a persistent venv subprocess.
-
-        Args:
-            venv_id: The virtual environment to use.
-            implementation: The function source code.
-            call_kwargs: Keyword arguments to pass to the function.
-            is_async: Whether the function is async.
-            session_id: The session ID within the venv (default 0).
-            primitives: The Primitives instance for RPC access.
-            function_manager: The FunctionManager for venv preparation.
-            timeout: Execution timeout in seconds.
-
-        Returns:
-            Dict with keys: result, error, stdout, stderr
-        """
-        key = (venv_id, session_id)
-        try:
-            conn = await self.get_or_create_connection(
-                venv_id=venv_id,
-                function_manager=function_manager,
-                session_id=session_id,
-            )
-        except SessionLimitError as e:
-            return {
-                "result": None,
-                "stdout": "",
-                "stderr": "",
-                "error": e.message,
-                "error_type": "resource_limit",
-            }
-
-        try:
-            out = await conn.execute(
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                primitives=primitives,
-                timeout=timeout,
-                env_overlay=env_overlay,
-            )
-            # Update last_used best-effort
-            md = self._metadata.get(key)
-            if md is not None:
-                md.last_used = datetime.now(timezone.utc)
-            return out
-        except RuntimeError as e:
-            if "subprocess has died" in str(e):
-                # Try to recreate and retry once
-                logger.warning(
-                    f"VenvPool: retrying after subprocess death for venv {venv_id} session {session_id}",
-                )
-                async with self._lock:
-                    if key in self._connections:
-                        del self._connections[key]
-
-                conn = await self.get_or_create_connection(
-                    venv_id=venv_id,
-                    function_manager=function_manager,
-                    session_id=session_id,
-                )
-                return await conn.execute(
-                    implementation=implementation,
-                    call_kwargs=call_kwargs,
-                    is_async=is_async,
-                    primitives=primitives,
-                    timeout=timeout,
-                    env_overlay=env_overlay,
-                )
-            raise
-
-    def get_all_sessions(self) -> List[Dict[str, Any]]:
-        """Return list of all active python venv sessions with metadata."""
-        out: List[Dict[str, Any]] = []
-        for (venv_id, session_id), conn in list(self._connections.items()):
-            if not conn.is_alive():
-                continue
-            md = self._metadata.get((venv_id, session_id))
-            if md is None:
-                now = datetime.now(timezone.utc)
-                md = SessionMetadata(
-                    venv_id=int(venv_id),
-                    session_id=int(session_id),
-                    created_at=now,
-                    last_used=now,
-                )
-                self._metadata[(venv_id, session_id)] = md
-            out.append(
-                {
-                    "session_id": int(session_id),
-                    "venv_id": int(venv_id),
-                    "created_at": md.created_at.isoformat(),
-                    "last_used": md.last_used.isoformat(),
-                    "state_summary": "active",
-                },
-            )
-        return out
-
-    async def get_session_state(
-        self,
-        *,
-        venv_id: int,
-        session_id: int,
-        function_manager: "FunctionManager",
-        detail: str = "summary",
-        timeout: float = 10.0,
-    ) -> Dict[str, Any]:
-        """
-        Inspect state of a python venv-backed session.
-        """
-        key = (int(venv_id), int(session_id))
-        if key not in self._connections or not self._connections[key].is_alive():
-            return {
-                "error": f"Python venv session {(int(venv_id), int(session_id))} not found",
-                "error_type": "validation",
-            }
-        state = await self.get_connection_state(
-            venv_id=int(venv_id),
-            function_manager=function_manager,
-            session_id=int(session_id),
-            timeout=timeout,
-        )
-
-        def _is_secret_name(n: str) -> bool:
-            nn = n.lower()
-            return any(
-                tok in nn
-                for tok in ("token", "secret", "apikey", "api_key", "password", "key")
-            )
-
-        def _safe_repr(name: str, value: Any) -> str:
-            if _is_secret_name(name):
-                return "<redacted>"
-            try:
-                s = repr(value)
-            except Exception:
-                s = f"<{type(value).__name__}>"
-            if len(s) > 500:
-                s = s[:500] + "..."
-            return s
-
-        names = sorted(
-            [k for k in state.keys() if isinstance(k, str) and not k.startswith("_")],
-        )
-        if detail in ("summary", "names"):
-            return {
-                "names": names,
-                "count": len(names),
-            }
-        if detail == "full":
-            return {name: _safe_repr(name, state.get(name)) for name in names}
-        return {
-            "error": f"Unsupported detail level: {detail!r}",
-            "error_type": "validation",
-        }
-
-    async def close_session(self, *, venv_id: int, session_id: int) -> bool:
-        """Close a specific venv session and free resources."""
-        key = (int(venv_id), int(session_id))
-        async with self._lock:
-            conn = self._connections.get(key)
-            if conn is None:
-                return False
-            try:
-                await conn.shutdown()
-            except Exception:
-                pass
-            self._connections.pop(key, None)
-            self._metadata.pop(key, None)
-            return True
-
-    async def get_connection_state(
-        self,
-        venv_id: int,
-        function_manager: "FunctionManager",
-        session_id: int = 0,
-        timeout: float = 30.0,
-    ) -> Dict[str, Any]:
-        """
-        Get serialized state from a venv connection.
-
-        Used for read_only mode to snapshot current state before ephemeral execution.
-
-        Args:
-            venv_id: The virtual environment ID.
-            function_manager: The FunctionManager for venv preparation.
-            session_id: The session ID within the venv (default 0).
-            timeout: Timeout for state retrieval.
-
-        Returns:
-            Dict of serialized state variables.
-        """
-        conn = await self.get_or_create_connection(
-            venv_id=venv_id,
-            function_manager=function_manager,
-            session_id=session_id,
-        )
-        return await conn.get_state(timeout=timeout)
-
-    def list_active_sessions(self) -> List[Tuple[int, int]]:
-        """
-        List all active venv sessions in the pool.
-
-        Returns:
-            List of (venv_id, session_id) tuples for sessions with live connections.
-        """
-        return [key for key, conn in self._connections.items() if conn.is_alive()]
-
-    async def get_all_states(
-        self,
-        function_manager: "FunctionManager",
-        timeout: float = 30.0,
-    ) -> Dict[Tuple[int, int], Dict[str, Any]]:
-        """
-        Get serialized state from all active venv connections.
-
-        Args:
-            function_manager: The FunctionManager for venv preparation.
-            timeout: Timeout for state retrieval per connection.
-
-        Returns:
-            Dict mapping (venv_id, session_id) -> state dict for each active session.
-        """
-        results: Dict[Tuple[int, int], Dict[str, Any]] = {}
-        for key, conn in list(self._connections.items()):
-            if conn.is_alive():
-                try:
-                    state = await conn.get_state(timeout=timeout)
-                    results[key] = state
-                except Exception as e:
-                    # Connection may have died during iteration
-                    results[key] = {"__error__": str(e)}
-        return results
-
-    async def close(self) -> None:
-        """Close all connections in the pool."""
-        async with self._lock:
-            self._closed = True
-            for conn in self._connections.values():
-                await conn.shutdown()
-            self._connections.clear()
-            self._metadata.clear()
-
-    def __del__(self) -> None:
-        """Ensure cleanup on garbage collection."""
-        if self._connections and not self._closed:
-            # Can't run async cleanup in __del__, but we can try to kill processes
-            for conn in self._connections.values():
-                try:
-                    if conn._process.returncode is None:
-                        conn._process.kill()
-                except Exception:
-                    pass
-
-
 class _InProcessFunctionProxy:
     """Proxy that wraps an in-process function with state mode support.
 
-    This proxy enables in-process functions (no venv) to be called with the same
-    state mode API as venv-backed functions. It supports three execution modes
-    for fine-grained control over state management:
+    This proxy lets a stored function be called with an explicit state mode.
+    It supports three execution modes for fine-grained control over state
+    management:
 
     Execution Modes
     ---------------
@@ -1090,7 +279,6 @@ class _InProcessFunctionProxy:
         result = await self._function_manager.execute_function(
             function_name=self.__name__,
             call_kwargs=kwargs,
-            target_venv_id=None,  # Force in-process execution
             state_mode=state_mode,
             session_id=0,  # Default session for read_only state source
             extra_namespaces=proxy_ns if proxy_ns else None,
@@ -1174,363 +362,6 @@ class _InProcessFunctionProxy:
         return self._execute_with_mode("read_only", *args, **kwargs)
 
 
-class _VenvFunctionProxy:
-    """Proxy that wraps a venv-backed function as an awaitable callable.
-
-    This proxy enables venv-isolated functions to be called transparently from
-    the CodeActActor sandbox. It supports three execution modes for fine-grained
-    control over state management:
-
-    Execution Modes
-    ---------------
-    **stateful** (default via ``__call__``, or explicit via ``.stateful()``):
-        Executes in a persistent subprocess connection via VenvPool. Variables
-        defined in previous calls persist across executions. Use this for
-        iterative sessions where you want to build up state incrementally
-        (e.g., loading data once, then running multiple analyses).
-
-    **stateless** (via ``.stateless()``):
-        Executes in a fresh subprocess with no inherited state. Each call starts
-        with a clean globals dict. Use this for pure functions that should not
-        depend on or affect any global state - guarantees reproducible results
-        regardless of prior execution history.
-
-    **read_only** (via ``.read_only()``):
-        Reads the current global state from the persistent connection but executes
-        in an ephemeral subprocess. Changes made during execution are NOT persisted
-        back to the session. Use this for "what-if" exploration - you can inspect
-        or transform session state without side effects.
-
-    Usage Examples
-    --------------
-    ```python
-    # Stateful (default) - state persists between calls
-    # First call: loads data into session globals
-    await load_dataset(path="data.csv")
-    # Second call: can access the loaded data
-    await analyze_dataset()
-
-    # Explicit stateful (equivalent to default __call__)
-    result = await my_func.stateful(x=1, y=2)
-
-    # Stateless - fresh environment each time, no side effects
-    # Useful for pure computations that shouldn't depend on session state
-    result = await my_func.stateless(x=1, y=2)
-
-    # Read-only - see current state but don't modify it
-    # Useful for exploratory queries without affecting the main session
-    preview = await transform_data.read_only(sample_size=100)
-    ```
-
-    When to Use Each Mode
-    ---------------------
-    - **stateful**: Default for most use cases. Enables Jupyter-notebook-style
-      sessions where you iteratively build up state.
-    - **stateless**: When you need guaranteed isolation - the function's behavior
-      depends only on its explicit arguments, never on hidden global state.
-    - **read_only**: When you want to "peek" at what a transformation would do
-      without committing the changes, or run exploratory analysis without
-      polluting the session namespace.
-    """
-
-    def __init__(
-        self,
-        *,
-        function_manager: "FunctionManager",
-        func_data: Dict[str, Any],
-        namespace: Dict[str, Any],
-    ):
-        self._function_manager = function_manager
-        self._func_data = func_data
-        self._namespace = namespace
-
-        self.__name__ = str(func_data.get("name") or "unknown")
-        self.__doc__ = str(func_data.get("docstring") or "")
-        # Note: venv functions don't have a raw_callable since they run in subprocess
-
-    @staticmethod
-    def _map_positional_args(
-        *,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        implementation: str,
-        func_name: str,
-    ) -> dict[str, Any]:
-        """
-        Map positional args to kwargs using AST-extracted parameter names.
-
-        Note: the venv runner currently executes with ``fn(**call_kwargs)``, so we can
-        only support positional args by mapping them onto non-positional-only params.
-        """
-        if not args:
-            return kwargs
-
-        try:
-            tree = ast.parse(implementation)
-        except Exception as e:
-            raise TypeError(
-                f"Cannot map positional args for venv function '{func_name}': failed to parse implementation",
-            ) from e
-
-        if not tree.body or not isinstance(
-            tree.body[0],
-            (ast.FunctionDef, ast.AsyncFunctionDef),
-        ):
-            raise TypeError(
-                f"Cannot map positional args for venv function '{func_name}': implementation must contain exactly one top-level function",
-            )
-
-        node: ast.FunctionDef | ast.AsyncFunctionDef = tree.body[0]
-        if node.args.posonlyargs:
-            raise TypeError(
-                f"Cannot call venv function '{func_name}' with positional-only args; use keyword arguments",
-            )
-        if node.args.vararg is not None:
-            raise TypeError(
-                f"Cannot call venv function '{func_name}' with *args; use keyword arguments",
-            )
-
-        param_names = [a.arg for a in node.args.args]
-        if len(args) > len(param_names):
-            raise TypeError(
-                f"Too many positional arguments for venv function '{func_name}'",
-            )
-
-        mapped: dict[str, Any] = dict(kwargs)
-        for k, v in zip(param_names[: len(args)], args):
-            if k in mapped:
-                raise TypeError(
-                    f"Multiple values for argument '{k}' in venv function '{func_name}'",
-                )
-            mapped[k] = v
-        return mapped
-
-    async def _execute_with_mode(
-        self,
-        state_mode: Literal["stateful", "read_only", "stateless"],
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """
-        Execute the function with the specified state mode.
-
-        Args:
-            state_mode: How to handle global state during execution.
-            *args: Positional arguments passed to the function.
-            **kwargs: Keyword arguments passed to the function.
-
-        Returns:
-            The function's return value.
-
-        Raises:
-            ValueError: If venv_id is missing or implementation is invalid.
-            RuntimeError: If execution fails (error from subprocess).
-        """
-        venv_id = self._func_data.get("venv_id")
-        if venv_id is None:
-            raise ValueError(f"Venv proxy '{self.__name__}' missing venv_id")
-
-        implementation = self._func_data.get("implementation")
-        if not isinstance(implementation, str) or not implementation.strip():
-            raise ValueError(f"Venv function '{self.__name__}' has no implementation")
-
-        # Strip @custom_function decorators (not available in subprocess runner).
-
-        # Determine async-ness based on source.
-        is_async = "async def" in implementation
-
-        # Resolve RPC targets from the injected namespace (caller-controlled).
-        primitives = self._namespace.get("primitives")
-
-        call_kwargs = self._map_positional_args(
-            args=args,
-            kwargs=kwargs,
-            implementation=implementation,
-            func_name=self.__name__,
-        )
-
-        # Check if a persistent venv pool is available (injected by PythonExecutionSession)
-        venv_pool = self._namespace.get("__venv_pool__")
-        venv_id_int = int(venv_id)
-
-        if state_mode == "stateful":
-            # Use persistent connection via VenvPool - state persists across calls
-            if venv_pool is not None:
-                result = await venv_pool.execute_in_venv(
-                    venv_id=venv_id_int,
-                    implementation=implementation,
-                    call_kwargs=call_kwargs,
-                    is_async=is_async,
-                    primitives=primitives,
-                    function_manager=self._function_manager,
-                )
-            else:
-                # No pool available - fall back to stateless (one-shot) execution
-                # This maintains backward compatibility when VenvPool isn't injected
-                result = await self._function_manager.execute_in_venv(
-                    venv_id=venv_id_int,
-                    implementation=implementation,
-                    call_kwargs=call_kwargs,
-                    is_async=is_async,
-                    primitives=primitives,
-                )
-
-        elif state_mode == "read_only":
-            # Read current state from persistent connection, execute in ephemeral subprocess
-            # Changes are NOT persisted back to the session
-            if venv_pool is None:
-                raise ValueError(
-                    f"read_only mode for '{self.__name__}' requires a VenvPool to read "
-                    f"existing state. Use stateless mode if you don't need to read session state.",
-                )
-            # Get current state from the persistent connection
-            initial_state = await venv_pool.get_connection_state(
-                venv_id=venv_id_int,
-                function_manager=self._function_manager,
-            )
-            # Execute in fresh subprocess with that state (not modifying persistent state)
-            result = await self._function_manager.execute_in_venv(
-                venv_id=venv_id_int,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                initial_state=initial_state,
-                primitives=primitives,
-            )
-
-        else:  # state_mode == "stateless"
-            # Fresh subprocess with no inherited state - pure function behavior
-            result = await self._function_manager.execute_in_venv(
-                venv_id=venv_id_int,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                primitives=primitives,
-            )
-
-        if result.get("error"):
-            raise RuntimeError(str(result.get("error")))
-        return result.get("result")
-
-    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """
-        Execute the function in stateful mode (default).
-
-        State persists across calls within the same VenvPool session. Variables
-        defined in previous executions remain accessible. This is the default
-        behavior, suitable for iterative/interactive sessions.
-
-        Equivalent to calling ``.stateful()`` explicitly.
-
-        Args:
-            *args: Positional arguments passed to the function.
-            **kwargs: Keyword arguments passed to the function.
-
-        Returns:
-            The function's return value.
-
-        Example:
-            ```python
-            # First call - defines 'data' in session globals
-            await load_data(path="input.csv")
-            # Second call - can access 'data' from previous call
-            await process_data()
-            ```
-        """
-        return await self._execute_with_mode("stateful", *args, **kwargs)
-
-    def stateful(self, *args: Any, **kwargs: Any):
-        """
-        Execute the function in stateful mode (explicit form of default ``__call__``).
-
-        State persists across calls within the same VenvPool session. Variables
-        defined in previous executions remain accessible. Use this when you want
-        to be explicit about the execution mode in your code.
-
-        Equivalent to ``await fn()`` but more self-documenting.
-
-        Args:
-            *args: Positional arguments passed to the function.
-            **kwargs: Keyword arguments passed to the function.
-
-        Returns:
-            Awaitable that resolves to the function's return value.
-        """
-        return self._execute_with_mode("stateful", *args, **kwargs)
-
-    def stateless(self, *args: Any, **kwargs: Any):
-        """
-        Execute the function in stateless mode (fresh environment).
-
-        Each call executes in a fresh subprocess with no inherited global state.
-        The function cannot see or modify any variables from previous executions.
-        Use this for pure functions that should produce identical results
-        regardless of execution history.
-
-        Args:
-            *args: Positional arguments passed to the function.
-            **kwargs: Keyword arguments passed to the function.
-
-        Returns:
-            Awaitable that resolves to the function's return value.
-
-        Example:
-            ```python
-            # Each call is completely independent - no shared state
-            result1 = await compute_score.stateless(data=[1, 2, 3])
-            result2 = await compute_score.stateless(data=[4, 5, 6])
-            # result1 and result2 computed in isolated environments
-            ```
-
-        When to use:
-            - Pure computations that shouldn't depend on hidden state
-            - Functions where reproducibility is critical
-            - Avoiding accidental state pollution from prior calls
-        """
-        return self._execute_with_mode("stateless", *args, **kwargs)
-
-    def read_only(self, *args: Any, **kwargs: Any):
-        """
-        Execute the function in read-only mode (sees state, no persistence).
-
-        Reads the current global state from the persistent VenvPool session but
-        executes in an ephemeral subprocess. Any modifications to globals during
-        execution are discarded - the persistent session state remains unchanged.
-
-        This is useful for "what-if" exploration: you can inspect or transform
-        the current session state without committing changes.
-
-        Args:
-            *args: Positional arguments passed to the function.
-            **kwargs: Keyword arguments passed to the function.
-
-        Returns:
-            Awaitable that resolves to the function's return value.
-
-        Raises:
-            ValueError: If no VenvPool is available (read_only requires existing state).
-
-        Example:
-            ```python
-            # Session has 'df' DataFrame from prior stateful calls
-            await load_data(path="sales.csv")  # stateful: df now in session
-
-            # Preview a transformation without modifying the session
-            preview = await filter_data.read_only(min_value=100)
-            # 'df' in session is unchanged - filter was applied to a copy
-
-            # If the preview looks good, run it statefully to persist
-            await filter_data(min_value=100)  # now session 'df' is filtered
-            ```
-
-        When to use:
-            - Exploratory analysis without side effects
-            - Previewing transformations before committing
-            - Running queries against session state without modification
-        """
-        return self._execute_with_mode("read_only", *args, **kwargs)
-
-
 class FunctionManager(BaseFunctionManager):
     """
     Keeps a catalogue of user-supplied Python functions and system primitives.
@@ -1548,13 +379,6 @@ class FunctionManager(BaseFunctionManager):
     class Config:
         required_contexts = [
             TableContext(
-                name=FUNCTIONS_VENVS_TABLE,
-                description="Virtual environment configurations (pyproject.toml content).",
-                fields=model_to_fields(VirtualEnv),
-                unique_keys={"venv_id": "int"},
-                auto_counting={"venv_id": None},
-            ),
-            TableContext(
                 name=FUNCTIONS_COMPOSITIONAL_TABLE,
                 description="User-defined functions with auto-incrementing IDs.",
                 fields=model_to_fields(Function),
@@ -1565,12 +389,6 @@ class FunctionManager(BaseFunctionManager):
                         "name": "guidance_ids[*]",
                         "references": "Guidance.guidance_id",
                         "on_delete": "CASCADE",
-                        "on_update": "CASCADE",
-                    },
-                    {
-                        "name": "venv_id",
-                        "references": f"{FUNCTIONS_VENVS_TABLE}.venv_id",
-                        "on_delete": "SET NULL",
                         "on_update": "CASCADE",
                     },
                 ],
@@ -1610,7 +428,6 @@ class FunctionManager(BaseFunctionManager):
         # time we create a function.  Initialised lazily on first use.
         self._next_id: Optional[int] = None
 
-        self._venvs_ctx = ContextRegistry.get_context(self, FUNCTIONS_VENVS_TABLE)
         self._compositional_ctx = ContextRegistry.get_context(
             self,
             FUNCTIONS_COMPOSITIONAL_TABLE,
@@ -2167,7 +984,6 @@ class FunctionManager(BaseFunctionManager):
     @functools.wraps(BaseFunctionManager.clear, updated=())
     def clear(self) -> None:
         db.delete_context(self._compositional_ctx)
-        db.delete_context(self._venvs_ctx)
 
         # Reset any manager-local counters or caches
         try:
@@ -2178,7 +994,6 @@ class FunctionManager(BaseFunctionManager):
             pass
 
         # Force re-provisioning
-        ContextRegistry.refresh(self, "Functions/VirtualEnvs")
         ContextRegistry.refresh(self, "Functions/Compositional")
 
         # Verify visibility before proceeding
@@ -2271,7 +1086,7 @@ class FunctionManager(BaseFunctionManager):
         preconditions: Optional[Dict[str, Dict]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
-        venv_id: Optional[int] = None,
+        dependencies: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """
         Add or update functions in batch.
@@ -2282,19 +1097,32 @@ class FunctionManager(BaseFunctionManager):
             overwrite: If True, update existing functions; if False, skip duplicates.
             raise_on_error: If True (default), raise ValueError when any function
                 fails to add. If False, errors are returned in the result dict.
-            venv_id: Virtual environment to associate with the functions. Required
-                when any function imports third-party packages.
+            dependencies: PEP 508 requirement strings for the third-party
+                packages the functions import. Required when any function
+                imports a package beyond the standard library and the
+                execution environment; recorded on every function in the batch.
 
         Returns:
             Dictionary mapping function names to status ("added", "updated", "skipped", or "error").
 
         Raises:
             ValueError: If raise_on_error=True and any function fails to add,
-                or if third-party imports are detected without a venv_id.
+                if third-party imports are detected without ``dependencies``,
+                or if a dependency is not a valid requirement string.
         """
 
         if preconditions is None:
             preconditions = {}
+        requirements = list(dependencies or [])
+        for specifier in requirements:
+            try:
+                environment.parse_requirement(specifier)
+            except InvalidRequirement as e:
+                raise ValueError(
+                    f"Dependency {specifier!r} is not a valid requirement "
+                    f"string ({e}). Use PEP 508 form, e.g. 'pandas>=2.0' or "
+                    f"'pkg @ git+https://github.com/user/repo.git'.",
+                )
         if isinstance(implementations, str):
             implementations = [implementations]
 
@@ -2378,18 +1206,16 @@ class FunctionManager(BaseFunctionManager):
                     node,
                     environment_modules=ENVIRONMENT_MODULES,
                 )
-                if tp_imports and venv_id is None:
+                if tp_imports and not requirements:
                     raise ValueError(
                         f"Function '{name}' imports third-party packages "
-                        f"{sorted(tp_imports)} but no venv_id was provided. "
-                        f"Create a virtual environment with "
-                        f"FunctionManager_add_venv first, then pass the "
-                        f"returned venv_id to FunctionManager_add_functions "
-                        f"(or link it afterwards with "
-                        f"FunctionManager_set_function_venv). Every import "
-                        f"form counts, including importlib.import_module "
-                        f"and __import__ with a literal name: the package "
-                        f"must be installed wherever the function runs.",
+                        f"{sorted(tp_imports)} but no dependencies were "
+                        f"provided. Pass the pip specifiers that supply "
+                        f"them as `dependencies` (e.g. ['pandas>=2.0']); "
+                        f"they are installed into the workspace environment "
+                        f"before the function runs. Every import form "
+                        f"counts, including importlib.import_module and "
+                        f"__import__ with a literal name.",
                     )
 
                 all_calls = self._collect_function_calls(node)
@@ -2414,6 +1240,7 @@ class FunctionManager(BaseFunctionManager):
                     "implementation": source,
                     "depends_on": dependencies_list,
                     "third_party_imports": sorted(tp_imports),
+                    "dependencies": requirements,
                     "precondition": precondition,
                     "stale_reasons": [
                         reason.model_dump(mode="json")
@@ -2423,9 +1250,6 @@ class FunctionManager(BaseFunctionManager):
                         )
                     ],
                 }
-
-                if venv_id is not None:
-                    entry_data["venv_id"] = venv_id
 
                 if prior_log is not None:
                     # Update existing function
@@ -2597,6 +1421,7 @@ class FunctionManager(BaseFunctionManager):
             namespace=namespace,
         )
 
+        environment.ensure(func_data.get("dependencies") or [])
         exec(compile_function_source(func_name, implementation), namespace)
         raw_fn = namespace.get(func_name)
         if not callable(raw_fn):
@@ -2742,19 +1567,6 @@ class FunctionManager(BaseFunctionManager):
                 # If something extremely unusual happens, just skip.
                 continue
 
-    def _create_venv_callable(
-        self,
-        func_data: Dict[str, Any],
-        *,
-        namespace: Dict[str, Any],
-    ) -> Callable[..., Any]:
-        """Create a proxy callable for a function that must run in an isolated venv."""
-        return _VenvFunctionProxy(
-            function_manager=self,
-            func_data=func_data,
-            namespace=namespace,
-        )
-
     def _inject_dependencies(
         self,
         func_data: Dict[str, Any],
@@ -2825,20 +1637,9 @@ class FunctionManager(BaseFunctionManager):
                 )
                 continue
 
-            # Handle venv dependencies: proxy goes in namespace (only way to call them)
-            if dep_data.get("venv_id") is not None:
-                _venv_cb = self._create_venv_callable(
-                    dep_data,
-                    namespace=namespace,
-                )
-                # Wrap boundary so inter-function calls create lineage frames.
-                namespace[dep_name] = self._boundary(_venv_cb, dep_data)
-                # Treat venv functions as atomic; do not recurse into their deps.
-                continue
-
-            # Handle in-process dependencies: exec puts raw function in namespace.
-            # We call _create_in_process_callable to exec the function, but we
-            # DON'T overwrite namespace with the proxy - the raw function stays
+            # exec puts the raw function in the namespace. We call
+            # _create_in_process_callable to exec the function, but we DON'T
+            # overwrite the namespace with the proxy - the raw function stays
             # for inter-function calls, decorators, and introspection.
             self._create_in_process_callable(
                 dep_data,
@@ -2864,11 +1665,9 @@ class FunctionManager(BaseFunctionManager):
     ) -> List[Callable[..., Any]]:
         """Convert function records into callables and return proxies to caller.
 
-        For in-process functions, the raw function (from exec) remains in the
-        namespace for inter-function calls, decorators, and introspection.
-        The returned proxies provide state mode control (.stateful/.stateless/.read_only).
-
-        For venv functions, the proxy is placed in namespace (no raw function exists).
+        The raw function (from exec) remains in the namespace for
+        inter-function calls, decorators, and introspection. The returned
+        proxies provide state mode control (.stateful/.stateless/.read_only).
 
         For primitives, the callable is resolved from the live runtime registry
         via ``get_primitive_callable``. Primitives are NOT injected into the
@@ -2903,52 +1702,43 @@ class FunctionManager(BaseFunctionManager):
             # Check if we've already processed this function (e.g., duplicate in results)
             if name in visited:
                 # Already exec'd - just create a new proxy wrapping existing raw fn
-                if func_data.get("venv_id") is not None:
-                    fn = self._create_venv_callable(func_data, namespace=namespace)
+                raw_fn = namespace.get(name)
+                if callable(raw_fn):
+                    # If the namespace contains our wrapper, unwrap for the proxy.
+                    try:
+                        if hasattr(raw_fn, "__wrapped__"):
+                            raw_fn_for_proxy = getattr(raw_fn, "__wrapped__")
+                            if callable(raw_fn_for_proxy):
+                                raw_fn = raw_fn_for_proxy
+                    except Exception:
+                        pass
+                    fn = _InProcessFunctionProxy(
+                        function_manager=self,
+                        func_data=func_data,
+                        namespace=namespace,
+                        raw_callable=raw_fn,
+                    )
                 else:
-                    raw_fn = namespace.get(name)
-                    if callable(raw_fn):
-                        # If the namespace contains our wrapper, unwrap for the proxy.
-                        try:
-                            if hasattr(raw_fn, "__wrapped__"):
-                                raw_fn_for_proxy = getattr(raw_fn, "__wrapped__")
-                                if callable(raw_fn_for_proxy):
-                                    raw_fn = raw_fn_for_proxy
-                        except Exception:
-                            pass
-                        fn = _InProcessFunctionProxy(
-                            function_manager=self,
-                            func_data=func_data,
-                            namespace=namespace,
-                            raw_callable=raw_fn,
-                        )
-                    else:
-                        # Shouldn't happen, but fallback to full creation
-                        fn = self._create_in_process_callable(
-                            func_data,
-                            namespace=namespace,
-                        )
+                    # Shouldn't happen, but fallback to full creation
+                    fn = self._create_in_process_callable(
+                        func_data,
+                        namespace=namespace,
+                    )
                 callables.append(fn)
                 continue
 
             visited.add(name)  # Prevent cycles from re-injecting the root function.
             self._inject_dependencies(func_data, namespace=namespace, visited=visited)
 
-            # Create callable for the root function.
-            if func_data.get("venv_id") is not None:
-                # Venv: proxy goes in namespace (only way to call them)
-                fn = self._create_venv_callable(func_data, namespace=namespace)
-                # Wrap boundary for lineage/events; keep proxy for return value.
-                namespace[name] = self._boundary(fn, func_data)
-            else:
-                # In-process: exec puts raw function in namespace, return proxy to caller
-                # DON'T overwrite namespace - raw function stays for internal use
-                fn = self._create_in_process_callable(func_data, namespace=namespace)
-                # replace namespace[name] with wrapper so inter-function calls
-                # also flow through lineage/event boundaries.
-                raw_root = namespace.get(name)
-                if callable(raw_root):
-                    namespace[name] = self._boundary(raw_root, func_data)
+            # Create callable for the root function: exec puts the raw function
+            # in the namespace, the proxy goes back to the caller. DON'T
+            # overwrite the namespace - the raw function stays for internal use.
+            fn = self._create_in_process_callable(func_data, namespace=namespace)
+            # replace namespace[name] with wrapper so inter-function calls
+            # also flow through lineage/event boundaries.
+            raw_root = namespace.get(name)
+            if callable(raw_root):
+                namespace[name] = self._boundary(raw_root, func_data)
 
             callables.append(fn)
 
@@ -3046,7 +1836,7 @@ class FunctionManager(BaseFunctionManager):
                 "depends_on": ent.get("depends_on", []),
                 "stale_reasons": ent.get("stale_reasons", []),
                 "guidance_ids": ent.get("guidance_ids", []),
-                "venv_id": ent.get("venv_id"),
+                "dependencies": ent.get("dependencies", []),
                 "third_party_imports": ent.get("third_party_imports", []),
                 "is_primitive": ent.get("is_primitive", False),
             }
@@ -3546,7 +2336,7 @@ class FunctionManager(BaseFunctionManager):
                 "primitive_class",
                 "primitive_method",
                 "metadata",
-                "venv_id",
+                "dependencies",
                 # The usage trace rides along so ranking can compute
                 # standing without a second read per row.
                 "created_at",
@@ -3695,977 +2485,13 @@ class FunctionManager(BaseFunctionManager):
             )
         return out
 
-    # ------------------------------------------------------------------ #
-    #  Virtual Environment Management                                    #
-    # ------------------------------------------------------------------ #
-
-    def _safe_get_venv_logs(
-        self,
-        *,
-        filter: Optional[str] = None,
-        limit: Optional[int] = None,
-        from_fields: Optional[List[str]] = None,
-    ) -> List[db.Log]:
-        """Best-effort venv reads; treat missing contexts as empty."""
-        import time as _time
-
-        last_exc: Exception | None = None
-        for delay in (0.0, 0.05, 0.15):
-            if delay:
-                _time.sleep(delay)
-            try:
-                logs = db.get_logs(
-                    context=self._venvs_ctx,
-                    filter=filter,
-                    limit=limit,
-                    from_fields=from_fields,
-                )
-                if logs or filter is None:
-                    return logs
-            except _UnifyRequestError as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                if status == 404:
-                    last_exc = e
-                    continue
-                raise
-            except Exception as e:
-                last_exc = e
-                break
-
-        if isinstance(last_exc, _UnifyRequestError):
-            status = getattr(getattr(last_exc, "response", None), "status_code", None)
-            if status == 404:
-                return []
-        if last_exc is not None:
-            raise last_exc
-        return []
-
-    def add_venv(self, *, venv: str) -> int:
-        """
-        Add a new virtual environment configuration.
-
-        Args:
-            venv: The pyproject.toml content as a string.
-
-        Returns:
-            The auto-assigned venv_id.
-        """
-        result = create_logs(
-            context=self._venvs_ctx,
-            entries=[{"venv": venv}],
-        )
-        # create_logs can return either a dict or a list of Log objects
-        if isinstance(result, list) and len(result) > 0:
-            # List of Log objects - can extract venv_id directly from entries
-            log = result[0]
-            if hasattr(log, "entries"):
-                venv_id = log.entries.get("venv_id")
-                if venv_id is not None:
-                    return venv_id
-        elif isinstance(result, dict):
-            log_ids = result.get("log_event_ids", [])
-            if log_ids:
-                logs = self._safe_get_venv_logs(
-                    filter=f"id == {log_ids[0]}",
-                    limit=1,
-                )
-                if logs and hasattr(logs[0], "entries"):
-                    venv_id = logs[0].entries.get("venv_id")
-                    if venv_id is not None:
-                        return venv_id
-        raise RuntimeError("Failed to retrieve venv_id after creation")
-
-    def get_venv(self, *, venv_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get a virtual environment by its ID.
-
-        Args:
-            venv_id: The unique identifier of the virtual environment.
-
-        Returns:
-            Dict with venv_id and venv content, or None if not found.
-        """
-        logs = self._safe_get_venv_logs(
-            filter=f"venv_id == {venv_id}",
-            limit=1,
-        )
-        if logs:
-            return logs[0].entries
-        return None
-
-    def list_venvs(self) -> List[Dict[str, Any]]:
-        """
-        List all virtual environments.
-
-        Returns:
-            List of dicts, each with venv_id and venv content.
-        """
-        logs = self._safe_get_venv_logs(from_fields=None)
-        return [lg.entries for lg in logs]
-
-    def delete_venv(self, *, venv_id: int) -> bool:
-        """
-        Delete a virtual environment by its ID.
-
-        Functions referencing this venv will have their venv_id set to None
-        (falling back to the default environment) via the foreign key cascade.
-
-        Args:
-            venv_id: The unique identifier of the virtual environment.
-
-        Returns:
-            True if deleted, False if not found.
-        """
-        logs = self._safe_get_venv_logs(
-            filter=f"venv_id == {venv_id}",
-            limit=1,
-        )
-        if not logs:
-            return False
-        db.delete_logs(
-            context=self._venvs_ctx,
-            logs=[logs[0].id],
-        )
-        return True
-
-    def update_venv(self, *, venv_id: int, venv: str) -> bool:
-        """
-        Update the content of an existing virtual environment.
-
-        Args:
-            venv_id: The unique identifier of the virtual environment.
-            venv: The new pyproject.toml content.
-
-        Returns:
-            True if updated, False if not found.
-        """
-        logs = self._safe_get_venv_logs(
-            filter=f"venv_id == {venv_id}",
-            limit=1,
-        )
-        if not logs:
-            return False
-        db.update_logs(
-            context=self._venvs_ctx,
-            logs=[logs[0].id],
-            entries={"venv": venv},
-            overwrite=True,
-        )
-        return True
-
-    def set_function_venv(
-        self,
-        *,
-        function_id: int,
-        venv_id: Optional[int],
-    ) -> bool:
-        """
-        Set the virtual environment for a function.
-
-        Args:
-            function_id: The function to update.
-            venv_id: The venv_id to associate, or None for default environment.
-
-        Returns:
-            True if updated, False if function not found.
-        """
-        log = self._get_log_by_function_id(
-            function_id=function_id,
-            raise_if_missing=False,
-        )
-        if log is None:
-            return False
-        db.update_logs(
-            context=self._compositional_ctx,
-            logs=[log.id],
-            entries={"venv_id": venv_id},
-            overwrite=True,
-        )
-        return True
-
-    def get_function_venv(self, *, function_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get the virtual environment associated with a function.
-
-        Args:
-            function_id: The function to query.
-
-        Returns:
-            The venv dict if the function has one, None if using default,
-            or raises ValueError if function not found.
-        """
-        log = self._get_log_by_function_id(
-            function_id=function_id,
-            raise_if_missing=True,
-        )
-        venv_id = log.entries.get("venv_id")
-        if venv_id is None:
-            return None
-        return self.get_venv(venv_id=venv_id)
-
-    # ------------------------------------------------------------------ #
-    #  Virtual Environment Execution Support                             #
-    # ------------------------------------------------------------------ #
-
-    def _get_venv_base_dir(self) -> Path:
-        """Get the base directory for all custom venvs.
-
-        The path includes the Unify context name to ensure isolation between
-        different assistants/users and during parallel test runs.
-        """
-        from unify.workspace import get_local_root
-
-        # Get current context for isolation
-        ctx = db.get_active_context()
-        ctx_name = ctx.get("read") or ctx.get("write") or "default"
-        # Sanitize context name for filesystem use
-        safe_ctx = ctx_name.replace("/", "_").replace("\\", "_")
-        return Path(get_local_root()) / ".venvs" / safe_ctx
-
-    def _get_venv_dir(self, venv_id: int) -> Path:
-        """Get the directory for a specific venv."""
-        return self._get_venv_base_dir() / str(venv_id)
-
-    def _get_venv_python(self, venv_id: int) -> Path:
-        """Get the path to the Python interpreter for a venv."""
-        return self._get_venv_dir(venv_id) / ".venv" / "bin" / "python"
-
-    def _get_venv_runner_path(self, venv_id: int) -> Path:
-        """Get the path to the runner script for a venv."""
-        return self._get_venv_dir(venv_id) / "venv_runner.py"
-
-    def _get_runner_script_content(self) -> str:
-        """Get the content of the standalone runner script."""
-        runner_path = Path(__file__).parent / "venv_runner.py"
-        return runner_path.read_text()
-
-    def is_venv_ready(self, *, venv_id: int) -> bool:
-        """
-        Check if a virtual environment is ready for execution.
-
-        Args:
-            venv_id: The venv to check.
-
-        Returns:
-            True if the venv exists and is synced, False otherwise.
-        """
-        venv_data = self.get_venv(venv_id=venv_id)
-        if venv_data is None:
-            return False
-
-        venv_dir = self._get_venv_dir(venv_id)
-        pyproject_path = venv_dir / "pyproject.toml"
-        python_path = self._get_venv_python(venv_id)
-        runner_path = self._get_venv_runner_path(venv_id)
-
-        # Check if all required files exist
-        if not pyproject_path.exists() or not python_path.exists():
-            return False
-
-        # Check if pyproject.toml content matches (normalize line endings)
-        stored_content = venv_data["venv"].strip()
-        disk_content = pyproject_path.read_text().strip()
-        if disk_content != stored_content:
-            return False
-
-        # Check if runner script exists
-        if not runner_path.exists():
-            return False
-
-        return True
-
-    async def prepare_venv(self, *, venv_id: int) -> Path:
-        """
-        Ensure a virtual environment is created and synced.
-
-        This method is idempotent - if the venv already exists and is up-to-date,
-        it returns immediately. Otherwise, it creates/updates the venv.
-
-        Args:
-            venv_id: The venv to prepare.
-
-        Returns:
-            Path to the Python interpreter in the venv.
-
-        Raises:
-            ValueError: If the venv_id does not exist.
-            RuntimeError: If venv creation fails.
-        """
-        venv_data = self.get_venv(venv_id=venv_id)
-        if venv_data is None:
-            raise ValueError(f"VirtualEnv with ID {venv_id} not found")
-
-        venv_content = venv_data["venv"]
-        venv_dir = self._get_venv_dir(venv_id)
-        # Concurrent first executions in one venv must not all run
-        # ``uv venv``: the second one fails on the directory the first created.
-        lock = _VENV_PREPARE_LOCKS.setdefault(str(venv_dir), asyncio.Lock())
-        async with lock:
-            return await self._prepare_venv_locked(
-                venv_id=venv_id,
-                venv_content=venv_content,
-                venv_dir=venv_dir,
-            )
-
-    async def _prepare_venv_locked(
-        self,
-        *,
-        venv_id: int,
-        venv_content: str,
-        venv_dir: Path,
-    ) -> Path:
-        pyproject_path = venv_dir / "pyproject.toml"
-        python_path = self._get_venv_python(venv_id)
-        runner_path = self._get_venv_runner_path(venv_id)
-
-        # Check if already ready
-        needs_sync = False
-        if pyproject_path.exists():
-            if pyproject_path.read_text().strip() != venv_content.strip():
-                needs_sync = True
-                logger.info(f"Venv {venv_id}: pyproject.toml changed, re-syncing")
-        else:
-            needs_sync = True
-            logger.info(f"Venv {venv_id}: creating new venv")
-
-        if needs_sync or not python_path.exists():
-            # Create directory and write pyproject.toml
-            venv_dir.mkdir(parents=True, exist_ok=True)
-            pyproject_path.write_text(venv_content)
-
-            import shutil as _shutil
-            import sys as _sys
-
-            uv_bin = _shutil.which("uv")
-            if uv_bin is None:
-                try:
-                    # NOTE: don't call `.resolve()` here. In venvs, `sys.executable` is
-                    # often a symlink to the system Python, and resolving it would lose
-                    # the venv bin directory (where `uv` is installed).
-                    candidate = Path(_sys.executable).parent / "uv"
-                    if candidate.exists():
-                        uv_bin = str(candidate)
-                except Exception:
-                    uv_bin = None
-
-            if uv_bin is None:
-                raise RuntimeError(
-                    "Failed to sync venv because the 'uv' executable was not found. "
-                    "Install uv (recommended) or ensure it is available on PATH.",
-                )
-
-            # Two-step venv setup:
-            #
-            #   1. `uv venv <venv_dir>/.venv` — creates the .venv at the
-            #      EXACT path Python will later import from. Passing the
-            #      explicit target path (rather than relying on
-            #      `--directory` + uv's "current project" discovery) is
-            #      defensive: an earlier `--directory <venv_dir>` form
-            #      returned exit code 0 on Linux CI but produced no
-            #      `.venv/bin/python`, causing a downstream
-            #      FileNotFoundError in subprocess.create_subprocess_exec.
-            #      Naming the target path leaves no ambiguity.
-            #
-            #   2. `uv sync --directory <venv_dir>` installs project +
-            #      deps into the freshly-created `.venv`. uv discovers
-            #      the .venv automatically when run from the project
-            #      directory.
-            #
-            # The original `cwd=str(venv_dir)` race ("Current directory
-            # does not exist" when a sibling tmux session rmtree'd a
-            # shared parent's cwd inode) is avoided here too: cwd is set
-            # to the just-mkdir'd venv_dir, AND uv's --directory flag is
-            # passed to make uv chdir before any cwd-dependent work.
-            venv_target = venv_dir / ".venv"
-            uv_steps: list[tuple[str, list[str]]] = [
-                (
-                    "venv",
-                    [
-                        uv_bin,
-                        "venv",
-                        str(venv_target),
-                        "--directory",
-                        str(venv_dir),
-                    ],
-                ),
-                (
-                    "sync",
-                    [
-                        uv_bin,
-                        "sync",
-                        "--directory",
-                        str(venv_dir),
-                        # The synthetic pyproject.toml we generate is
-                        # NOT a real installable package — it only
-                        # declares `dependencies = [...]`. Without
-                        # this flag uv tries to install the project
-                        # itself in editable mode, fails to find a
-                        # build backend / sdist, and raises
-                        # "Distribution not found at: file:///.../<venv_dir>".
-                        # We only want the *dependencies* installed
-                        # into the venv; the project itself is just
-                        # a manifest.
-                        "--no-install-project",
-                    ],
-                ),
-            ]
-            for label, cmd in uv_steps:
-                logger.info(f"Venv {venv_id}: running 'uv {label}'...")
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    cwd=str(venv_dir),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await process.communicate()
-                logger.info(
-                    f"Venv {venv_id}: 'uv {label}' rc={process.returncode}; "
-                    f"stdout={stdout.decode().strip()!r}; "
-                    f"stderr={stderr.decode().strip()!r}",
-                )
-
-                if process.returncode != 0:
-                    error_msg = stderr.decode() if stderr else stdout.decode()
-                    raise RuntimeError(
-                        f"Failed to 'uv {label}' venv {venv_id}: {error_msg}",
-                    )
-
-            # Verify the venv layout we expect actually exists.
-            # uv has been observed to return 0 from `uv venv` without
-            # materializing the .venv (CI race / disk pressure / etc.) —
-            # fail loud HERE with a focused error rather than later when
-            # subprocess.create_subprocess_exec tries to invoke
-            # `.venv/bin/python` and bubbles a generic FileNotFoundError.
-            if not python_path.exists():
-                raise RuntimeError(
-                    f"Failed to materialize venv {venv_id}: "
-                    f"expected python at {python_path} but it does not "
-                    f"exist after `uv venv` + `uv sync` both returned 0. "
-                    f"venv_dir={venv_dir} venv_target={venv_target}",
-                )
-
-            logger.info(f"Venv {venv_id}: sync complete")
-
-        # Ensure runner script is present and up-to-date
-        runner_content = self._get_runner_script_content()
-        if not runner_path.exists() or runner_path.read_text() != runner_content:
-            runner_path.write_text(runner_content)
-            logger.info(f"Venv {venv_id}: runner script installed")
-
-        return python_path
-
-    async def _handle_rpc_call(
-        self,
-        path: str,
-        kwargs: Dict[str, Any],
-        primitives: Optional[Any] = None,
-    ) -> Any:
-        """
-        Handle an RPC call from a subprocess.
-
-        Every out-of-process execution path — one-shot venv and pooled venv —
-        converges here, so this is where a steering session sees a
-        subprocess's dispatches: while a call is in flight they are memoised
-        for replay, pause holds the reply, and a pending correction raises
-        :class:`ControlledInterruption` for the caller to translate into an
-        ``rpc_interrupt`` message.
-
-        Args:
-            path: The RPC path (e.g., "actor.act")
-            kwargs: The keyword arguments for the call
-            primitives: The Primitives instance the path resolves against
-
-        Returns:
-            The result of the RPC call
-        """
-
-        async def _dispatch() -> Any:
-            return await self._dispatch_rpc_path(
-                path=path,
-                kwargs=kwargs,
-                primitives=primitives,
-            )
-
-        return await dispatch_with_steering(
-            active_session(),
-            path,
-            kwargs,
-            _dispatch,
-        )
-
-    async def _dispatch_rpc_path(
-        self,
-        *,
-        path: str,
-        kwargs: Dict[str, Any],
-        primitives: Optional[Any],
-    ) -> Any:
-        """Resolve one RPC path against the runtime and primitives and call it."""
-        parts = path.split(".", 1)
-        if len(parts) != 2:
-            raise ValueError(f"Invalid RPC path: {path}")
-
-        manager_name, method_name = parts
-
-        if manager_name == "runtime" and method_name == "query_llm":
-            from unify.common.reasoning import query_llm
-
-            return self._make_json_serializable(await query_llm(**kwargs))
-
-        if manager_name == "runtime" and method_name == "list_llms":
-            from unify.common.reasoning import list_llms
-
-            return list_llms(provider=kwargs.get("provider"))
-
-        # Handle primitive namespace methods
-        if primitives is None:
-            raise RuntimeError("primitives not available")
-
-        manager = getattr(primitives, manager_name, None)
-        if manager is None:
-            raise AttributeError(f"primitives has no manager '{manager_name}'")
-
-        method = getattr(manager, method_name, None)
-        if method is None:
-            raise AttributeError(
-                f"primitives.{manager_name} has no method '{method_name}'",
-            )
-
-        if asyncio.iscoroutinefunction(method):
-            return await method(**kwargs)
-        return method(**kwargs)
-
-    async def execute_in_venv(
-        self,
-        *,
-        venv_id: int,
-        implementation: str,
-        call_kwargs: Optional[Dict[str, Any]] = None,
-        is_async: bool = True,
-        initial_state: Optional[Dict[str, Any]] = None,
-        primitives: Optional[Any] = None,
-        env_overlay: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute a function implementation in a custom virtual environment.
-
-        This method:
-        1. Ensures the venv is prepared (lazy creation on first use)
-        2. Spawns a subprocess with the venv's Python interpreter
-        3. Handles bidirectional RPC for primitives
-        4. Returns the result from the subprocess
-
-        While a steering session is in flight, each RPC reply doubles as a
-        checkpoint and a correction re-runs the (patched) source in a fresh
-        subprocess, replaying already-completed dispatches from the parent's
-        cache.
-
-        Args:
-            venv_id: The virtual environment to use.
-            implementation: The function source code.
-            call_kwargs: Keyword arguments to pass to the function.
-            is_async: Whether the function is async (default True).
-            initial_state: Optional serialized state to inject before execution.
-                Used for read_only mode to inherit state from a persistent session.
-            primitives: The Primitives instance the RPC paths resolve against.
-
-        Returns:
-            Dict with keys: result, error, stdout, stderr
-
-        Raises:
-            ValueError: If venv_id does not exist.
-            RuntimeError: If execution fails.
-        """
-        call_kwargs = call_kwargs or {}
-
-        # Ensure venv is ready
-        python_path = await self.prepare_venv(venv_id=venv_id)
-        runner_path = self._get_venv_runner_path(venv_id)
-
-        env_overlay = env_overlay or {}
-
-        # Execute in subprocess with bidirectional communication
-        # Use start_new_session=True to create a new process group, allowing
-        # us to kill all child processes (including multiprocessing workers)
-        # with a single os.killpg() call.
-        # Note: start_new_session is not supported on Windows
-        use_process_group = sys.platform != "win32"
-
-        # Diagnostic: prepare_venv just returned this python_path and
-        # verified .exists() before returning. If the file is GONE by
-        # the time we get here (CI race / external rmtree), bail with
-        # a structured error rather than letting subprocess raise
-        # FileNotFoundError with no surrounding state.
-        if not python_path.exists():
-            # Walk up the path tree and note which components exist.
-            # If a high-level ancestor (the workspace `.venvs/` tree) is
-            # missing, the culprit is something rmtree-ing the workspace
-            # as a whole. If only the venv-id leaf is missing, suspect
-            # per-test cleanup.
-            ancestor_status: list[str] = []
-            cursor: Path | None = python_path
-            while cursor is not None and str(cursor) not in ("/", ""):
-                ancestor_status.append(
-                    f"{cursor.exists()}={cursor}",
-                )
-                next_cursor = cursor.parent
-                if next_cursor == cursor:
-                    break
-                cursor = next_cursor
-
-            venv_dir = python_path.parent.parent.parent
-            parent_listing = "<not present>"
-            if venv_dir.exists():
-                try:
-                    parent_listing = ", ".join(
-                        sorted(p.name for p in venv_dir.iterdir()),
-                    )
-                except OSError as e:
-                    parent_listing = f"<iterdir failed: {e}>"
-
-            # The grandparent (the safe_ctx-keyed dir containing venv
-            # ids) is the most informative — if THAT is gone too, the
-            # whole venvs/<ctx>/ subtree was wiped. If it exists with
-            # OTHER venv-id subdirs, only THIS venv-id was wiped.
-            gp_listing = "<not present>"
-            gp = venv_dir.parent
-            if gp.exists():
-                try:
-                    gp_listing = ", ".join(sorted(p.name for p in gp.iterdir()))
-                except OSError as e:
-                    gp_listing = f"<iterdir failed: {e}>"
-
-            try:
-                import os as _os_diag
-
-                cwd_str = _os_diag.getcwd()
-            except Exception as e:
-                cwd_str = f"<getcwd failed: {e}>"
-
-            import os as _os_diag2
-
-            home_str = _os_diag2.environ.get("HOME", "<unset>")
-            pid_str = _os_diag2.getpid()
-
-            raise RuntimeError(
-                f"execute_in_venv: venv python disappeared between "
-                f"prepare_venv() (which verified existence) and "
-                f"create_subprocess_exec(). "
-                f"venv_id={venv_id} pid={pid_str} cwd={cwd_str} "
-                f"HOME={home_str}\n"
-                f"  python_path={python_path}\n"
-                f"  venv_dir={venv_dir} exists={venv_dir.exists()}\n"
-                f"  venv_dir contents=[{parent_listing}]\n"
-                f"  grandparent={gp} exists={gp.exists()}\n"
-                f"  grandparent contents=[{gp_listing}]\n"
-                f"  ancestor existence (deepest first): {ancestor_status}",
-            )
-
-        from unify.function_manager.execution_env import (
-            sandbox_env as build_sandbox_env,
-        )
-
-        steering = active_session()
-
-        async def _attempt(source: str) -> Dict[str, Any]:
-            """Run one subprocess attempt at *source*, relaying its RPC."""
-            execute_payload: Dict[str, Any] = {
-                "type": "execute",
-                "implementation": (
-                    _instrument_for_child(source) if steering is not None else source
-                ),
-                "call_kwargs": call_kwargs,
-                "is_async": is_async,
-                "env_overlay": env_overlay,
-            }
-            if initial_state is not None:
-                execute_payload["initial_state"] = initial_state
-
-            process = await asyncio.create_subprocess_exec(
-                str(python_path),
-                str(runner_path),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=use_process_group,
-                env=build_sandbox_env(),
-            )
-
-            async def _send(message: Dict[str, Any]) -> None:
-                process.stdin.write((json.dumps(message) + "\n").encode())
-                await process.stdin.drain()
-
-            # Send initial execution request
-            await _send(execute_payload)
-
-            # Handle bidirectional communication
-            stderr_output = []
-
-            async def read_stderr():
-                """Read stderr in background."""
-                while True:
-                    line = await process.stderr.readline()
-                    if not line:
-                        break
-                    stderr_output.append(line.decode())
-
-            stderr_task = asyncio.create_task(read_stderr())
-            # Set when a correction interrupted this attempt; the child's
-            # completion is then an unwind to discard, not a result.
-            interrupted: Optional[ControlledInterruption] = None
-            # Corrections that land between dispatches reach the child
-            # through the control channel, not through an RPC reply.
-            watcher = (
-                asyncio.create_task(
-                    steering.relay_corrections(
-                        source,
-                        lambda request: _send(interrupt_directive(request)),
-                    ),
-                )
-                if steering is not None
-                else None
-            )
-            pause_watcher = (
-                asyncio.create_task(
-                    steering.relay_pause(
-                        lambda paused: self._set_process_paused(
-                            process,
-                            use_process_group=use_process_group,
-                            paused=paused,
-                        ),
-                    ),
-                )
-                if steering is not None
-                else None
-            )
-
-            try:
-                while True:
-                    # Read next message from subprocess
-                    line = await process.stdout.readline()
-                    if not line:
-                        # Process ended without sending complete message
-                        await stderr_task
-                        if interrupted is not None:
-                            raise interrupted
-                        return {
-                            "result": None,
-                            "error": "Subprocess ended unexpectedly",
-                            "stdout": "",
-                            "stderr": "".join(stderr_output),
-                        }
-
-                    try:
-                        msg = json.loads(line.decode().strip())
-                    except json.JSONDecodeError:
-                        continue  # Skip malformed lines
-
-                    msg_type = msg.get("type")
-
-                    if msg_type == "rpc_call":
-                        # Handle RPC call from subprocess
-                        request_id = msg.get("id")
-
-                        try:
-                            result = await self._handle_rpc_call(
-                                path=msg.get("path", ""),
-                                kwargs=msg.get("kwargs", {}),
-                                primitives=primitives,
-                            )
-                            response = {
-                                "type": "rpc_result",
-                                "id": request_id,
-                                "result": self._make_json_serializable(result),
-                            }
-                        except ControlledInterruption as interruption:
-                            # The child is blocked on this reply, so telling
-                            # it to unwind here is the interrupt probe
-                            # realised without instrumentation.
-                            interrupted = interruption
-                            response = {
-                                "type": "rpc_interrupt",
-                                "id": request_id,
-                                "reason": str(interruption),
-                            }
-                        except Exception as e:
-                            response = {
-                                "type": "rpc_error",
-                                "id": request_id,
-                                "error": str(e),
-                            }
-
-                        await _send(response)
-
-                    elif msg_type == "complete":
-                        # Subprocess finished
-                        await stderr_task
-                        if interrupted is not None:
-                            raise interrupted
-                        child_interrupted = msg.get("interrupted")
-                        if child_interrupted:
-                            # The child unwound at an instrumented checkpoint;
-                            # discard the attempt and retry.
-                            raise ControlledInterruption(child_interrupted)
-                        return {
-                            "result": msg.get("result"),
-                            "error": msg.get("error"),
-                            "stdout": msg.get("stdout", ""),
-                            "stderr": msg.get("stderr", "") + "".join(stderr_output),
-                        }
-
-            except (asyncio.CancelledError, ControlledInterruption):
-                # Cancellation unwinds to the caller and an interruption to
-                # the retry loop, both after cleanup in the finally block.
-                raise
-            except Exception as e:
-                return {
-                    "result": None,
-                    "error": f"RPC error: {e}",
-                    "stdout": "",
-                    "stderr": "".join(stderr_output),
-                }
-            finally:
-                for task in (watcher, pause_watcher):
-                    if task is None:
-                        continue
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception:
-                        # A watcher can lose the race with the run ending;
-                        # the attempt's own outcome stands.
-                        logger.debug(
-                            "steering: subprocess watcher failed",
-                            exc_info=True,
-                        )
-
-                # Cancel stderr reader task
-                stderr_task.cancel()
-                try:
-                    await stderr_task
-                except asyncio.CancelledError:
-                    pass
-
-                # Ensure process and all its children are terminated
-                if process.returncode is None:
-                    await self._terminate_process_group(process, use_process_group)
-
-        # One-shot subprocesses give a retry a clean slate: each attempt is a
-        # fresh child, and the parent-side cache is what carries the completed
-        # prefix across attempts.
-        if steering is None:
-            return await _attempt(implementation)
-        try:
-            return await run_with_steering(
-                implementation,
-                _attempt,
-                session=steering,
-            )
-        except ExecutionStopped as stopped:
-            return {
-                "result": stopped.outcome,
-                "error": None,
-                "stdout": "",
-                "stderr": "",
-            }
-
-    @staticmethod
-    async def _set_process_paused(
-        process: asyncio.subprocess.Process,
-        *,
-        use_process_group: bool,
-        paused: bool,
-    ) -> None:
-        """Freeze or thaw a subprocess with SIGSTOP/SIGCONT.
-
-        OS-level pause is what makes pause mean pause out-of-process: it holds
-        the child wherever it is — mid-loop, mid-sleep, even inside blocking
-        sync code no checkpoint can reach — where in-process pause can only
-        hold at the next checkpoint. Resuming a process that never stopped is
-        harmless, so callers thaw unconditionally on the way out; a frozen
-        child would otherwise sit on SIGTERM forever. No-op on Windows, which
-        has no stop signal.
-        """
-        if sys.platform == "win32" or process.returncode is not None:
-            return
-        sig = signal.SIGSTOP if paused else signal.SIGCONT
-        try:
-            if use_process_group and process.pid is not None:
-                os.killpg(os.getpgid(process.pid), sig)
-            else:
-                process.send_signal(sig)
-        except (ProcessLookupError, OSError):
-            # The process ended while the pause state was changing.
-            pass
-
-    @staticmethod
-    async def _terminate_process_group(
-        process: asyncio.subprocess.Process,
-        use_process_group: bool,
-    ) -> None:
-        """
-        Terminate a subprocess and all its children (process group).
-
-        Sends SIGTERM first for graceful shutdown, then SIGKILL if the process
-        doesn't terminate within the timeout. A stopped (SIGSTOP) process is
-        continued first so the termination signal can be delivered.
-
-        Args:
-            process: The subprocess to terminate.
-            use_process_group: Whether the process was started with start_new_session=True.
-        """
-        await FunctionManager._set_process_paused(
-            process,
-            use_process_group=use_process_group,
-            paused=False,
-        )
-        try:
-            if use_process_group and process.pid is not None:
-                # Kill the entire process group (subprocess + all its children)
-                try:
-                    pgid = os.getpgid(process.pid)
-                    # Send SIGTERM for graceful shutdown
-                    os.killpg(pgid, signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    # Process already dead or no permission
-                    pass
-            else:
-                # Fall back to terminating just the main process
-                process.terminate()
-
-            # Wait for process to terminate
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                # Process didn't terminate gracefully, force kill
-                if use_process_group and process.pid is not None:
-                    try:
-                        pgid = os.getpgid(process.pid)
-                        os.killpg(pgid, signal.SIGKILL)
-                    except (ProcessLookupError, OSError):
-                        pass
-                else:
-                    process.kill()
-                # Wait for kill to complete
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    pass
-        except Exception:
-            # Best effort cleanup - don't let cleanup errors propagate
-            pass
-
     async def execute_function(
         self,
         *,
         function_name: str,
         call_kwargs: Optional[Dict[str, Any]] = None,
-        target_venv_id: Optional[int] = ...,
         state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
         session_id: int = 0,
-        venv_pool: Optional["VenvPool"] = None,
         extra_namespaces: Optional[Dict[str, Any]] = None,
         _parent_chat_context: Optional[list] = None,
     ) -> Any:
@@ -4680,33 +2506,28 @@ class FunctionManager(BaseFunctionManager):
           callable via ``get_primitive_callable`` and invoked directly. The
           raw return value is passed through unmodified, which is critical
           for primitives that return ``SteerableToolHandle`` instances.
-        - **Composed functions**: Executed via subprocess or in-process exec
-          and wrapped in a ``{"result", "error", "stdout", "stderr"}`` dict.
+        - **Composed functions**: Their ``dependencies`` are ensured present
+          in the workspace environment, then the implementation is exec'd
+          in-process and wrapped in a ``{"result", "error", "stdout",
+          "stderr"}`` dict.
 
         State modes (composed functions only):
-        - "stateless" (default): Fresh subprocess with no inherited state. Pure
+        - "stateless" (default): Fresh globals with no inherited state. Pure
           function behavior.
-        - "stateful": Uses persistent pool connection. Variables from previous
-          executions persist. Requires venv_pool for venv functions.
-        - "read_only": Reads current state from pool but executes in ephemeral
-          subprocess. Changes are NOT persisted. Useful for "what-if" exploration.
+        - "stateful": Persistent globals per session. Variables from previous
+          executions persist.
+        - "read_only": Reads current session state but executes in fresh
+          globals. Changes are NOT persisted. Useful for "what-if" exploration.
 
         Args:
             function_name: Name of the function to execute.
             call_kwargs: Keyword arguments to pass to the function.
-            target_venv_id: Override the execution environment:
-                - ... (Ellipsis): Use the function's stored venv_id (default)
-                - None: Execute in the default Python environment
-                - int: Execute in this specific venv_id
             state_mode: How to handle global state ("stateful", "read_only", "stateless").
-            session_id: The session ID within the pool (default 0). Multiple sessions
-                allow independent stateful execution contexts.
+            session_id: The session ID (default 0). Multiple sessions allow
+                independent stateful execution contexts.
                 Only applies to stateful/read_only modes.
-            venv_pool: VenvPool for stateful/read_only modes with venv functions.
-            extra_namespaces: Named objects to inject into the function's execution
-                namespace. For in-process execution, all entries are injected into
-                globals. For venv/subprocess execution, the "primitives" entry
-                (``primitives.actor``) is bridged via RPC.
+            extra_namespaces: Named objects to inject into the function's
+                execution globals.
 
         Returns:
             For composed functions: dict with keys result, error, stdout, stderr.
@@ -4715,7 +2536,7 @@ class FunctionManager(BaseFunctionManager):
 
         Raises:
             ValueError: If the function doesn't exist or has no implementation.
-            ValueError: If state_mode requires a pool but none is provided.
+            RuntimeError: If a dependency cannot be installed.
 
         Anti-patterns:
             - Nesting ``asyncio.run(...)`` inside sync helpers called from
@@ -4752,14 +2573,12 @@ class FunctionManager(BaseFunctionManager):
         if not isinstance(implementation, str) or not implementation.strip():
             raise ValueError(f"Function '{function_name}' has no implementation")
 
+        environment.ensure(func_data.get("dependencies") or [])
         return await self._execute_python_function(
-            func_data=func_data,
             implementation=implementation,
-            call_kwargs=call_kwargs,
-            target_venv_id=target_venv_id,
+            call_kwargs=call_kwargs or {},
             state_mode=state_mode,
             session_id=session_id,
-            venv_pool=venv_pool,
             extra_namespaces=ns,
             _parent_chat_context=_parent_chat_context,
         )
@@ -4831,116 +2650,15 @@ class FunctionManager(BaseFunctionManager):
     async def _execute_python_function(
         self,
         *,
-        func_data: Dict[str, Any],
-        implementation: str,
-        call_kwargs: Optional[Dict[str, Any]],
-        target_venv_id: Optional[int],
-        state_mode: Literal["stateful", "read_only", "stateless"],
-        session_id: int,
-        venv_pool: Optional["VenvPool"],
-        extra_namespaces: Dict[str, Any],
-        _parent_chat_context: Optional[list] = None,
-    ) -> Dict[str, Any]:
-        """Execute a Python function with venv and state mode support."""
-        # Strip @custom_function decorators (not available in subprocess runner)
-
-        # Determine execution target venv
-        if target_venv_id is ...:
-            # Use function's default venv_id
-            exec_venv_id = func_data.get("venv_id")
-        else:
-            # User override
-            exec_venv_id = target_venv_id
-
-        # Determine if function is async
-        is_async = "async def" in implementation
-
-        call_kwargs = call_kwargs or {}
-
-        # Extract RPC-bridgeable namespaces for subprocess execution paths.
-        primitives = extra_namespaces.get("primitives")
-
-        # Handle execution based on venv and state_mode
-        if exec_venv_id is None:
-            # No venv - execute in default environment with state_mode support
-            return await self._execute_in_default_env(
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                state_mode=state_mode,
-                session_id=session_id,
-                extra_namespaces=extra_namespaces,
-                _parent_chat_context=_parent_chat_context,
-            )
-
-        # Venv execution - state_mode matters
-        venv_id = int(exec_venv_id)
-
-        if state_mode == "stateful":
-            # Use persistent connection via VenvPool
-            if venv_pool is None:
-                raise ValueError(
-                    "state_mode='stateful' requires venv_pool for venv functions. "
-                    "Either provide venv_pool or use state_mode='stateless'.",
-                )
-            return await venv_pool.execute_in_venv(
-                venv_id=venv_id,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                session_id=session_id,
-                primitives=primitives,
-                function_manager=self,
-            )
-
-        elif state_mode == "read_only":
-            # Get state from persistent connection, execute in ephemeral subprocess
-            if venv_pool is None:
-                raise ValueError(
-                    "state_mode='read_only' requires venv_pool to read existing state. "
-                    "Either provide venv_pool or use state_mode='stateless'.",
-                )
-            # Get current state from the persistent connection
-            initial_state = await venv_pool.get_connection_state(
-                venv_id=venv_id,
-                function_manager=self,
-                session_id=session_id,
-            )
-            # Execute in fresh subprocess with that state (not modifying persistent state)
-            return await self.execute_in_venv(
-                venv_id=venv_id,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                initial_state=initial_state,
-                primitives=primitives,
-            )
-
-        else:  # state_mode == "stateless"
-            # Fresh subprocess with no inherited state
-            return await self.execute_in_venv(
-                venv_id=venv_id,
-                implementation=implementation,
-                call_kwargs=call_kwargs,
-                is_async=is_async,
-                primitives=primitives,
-            )
-
-    async def _execute_in_default_env(
-        self,
-        *,
         implementation: str,
         call_kwargs: Dict[str, Any],
-        is_async: bool,
         state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
         session_id: int = 0,
         extra_namespaces: Optional[Dict[str, Any]] = None,
         _parent_chat_context: Optional[list] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a function in the default Python environment (no custom venv).
-
-        This runs the function in-process using the project's Python environment.
+        Execute a stored function's implementation in-process.
 
         State modes:
         - stateless: Fresh globals each time (pure function behavior)
@@ -5048,7 +2766,7 @@ class FunctionManager(BaseFunctionManager):
                 raise ValueError(
                     f"Function '{definition.name}' not found after exec",
                 )
-            if isinstance(definition, ast.AsyncFunctionDef) or is_async:
+            if isinstance(definition, ast.AsyncFunctionDef):
                 return await fn(**call_kwargs)
             return fn(**call_kwargs)
 

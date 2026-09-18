@@ -427,7 +427,7 @@ class _ActorRunner:
             A boolean filter expression that restricts which functions
             the actor can discover via FunctionManager
             search/list/filter (e.g., ``"'data' in docstring"`` or
-            ``"venv_id == 3"``).
+            ``"name.startswith('report_')"``).
 
             When provided, only functions matching this expression are
             visible to the actor's discovery tools.  When omitted, all

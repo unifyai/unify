@@ -1,5 +1,3 @@
-from unittest.mock import AsyncMock
-
 import pytest
 
 from unify.actor.execution import (
@@ -8,19 +6,6 @@ from unify.actor.execution import (
     parts_to_text,
 )
 from unify.common.tool_errors import ToolInputError
-from unify.function_manager.function_manager import VenvPool
-
-
-class _FakeFunctionManager:
-    def __init__(self):
-        self.execute_in_venv = AsyncMock(
-            return_value={
-                "stdout": [],
-                "stderr": [],
-                "result": "venv ok",
-                "error": None,
-            },
-        )
 
 
 @pytest.mark.parametrize(
@@ -47,7 +32,7 @@ class _FakeFunctionManager:
                 state_mode="stateful",
                 session_id=1,
                 session_name="repo_nav",
-                resolve_session_name=lambda n: ((None, 0) if n == "repo_nav" else None),
+                resolve_session_name=lambda n: (0 if n == "repo_nav" else None),
             ),
             "refer to different sessions",
         ),
@@ -78,19 +63,18 @@ class _FakeFunctionManager:
                 session_name=None,
                 max_sessions_total=2,
                 active_session_count=2,
-                session_exists=lambda _v, _s: False,
+                session_exists=lambda _s: False,
             ),
             "Session limit exceeded",
         ),
         (
             dict(
-                state_mode="stateful",
-                session_id=0,
+                state_mode="read_only",
+                session_id=4,
                 session_name=None,
-                venv_id=0,
-                venv_exists=lambda _v: False,
+                session_exists=lambda _s: False,
             ),
-            "VirtualEnv 0 does not exist",
+            "Session 4 does not exist for read_only execution",
         ),
     ],
 )
@@ -119,48 +103,13 @@ def test_a_refusal_reads_as_itself_not_as_a_traceback():
     assert "session_name='contact_lookup'" in rendered
 
 
-def test_missing_venv_suggestion_offers_a_way_out():
-    """The error has to say what to do, or the model can only guess another id."""
-    with pytest.raises(ToolInputError) as excinfo:
-        _validate_execution_params(
-            state_mode="stateful",
-            session_id=0,
-            session_name=None,
-            venv_id=7,
-            venv_exists=lambda _v: False,
-        )
-    suggestion = excinfo.value.suggestion
-    assert "Omit venv_id" in suggestion
-    assert "FunctionManager_list_venvs" in suggestion
-    assert "FunctionManager_add_venv" in suggestion
-
-
-def test_existing_venv_passes_validation():
+def test_matching_name_and_id_pass_validation():
     assert (
         _validate_execution_params(
             state_mode="stateful",
-            session_id=0,
-            session_name=None,
-            venv_id=3,
-            venv_exists=lambda _v: True,
-        )
-        is None
-    )
-
-
-def test_venv_is_not_checked_when_none_is_requested():
-    """No venv request means no lookup — the default path must stay untouched."""
-
-    def _boom(_venv_id):  # pragma: no cover - must never be called
-        raise AssertionError("venv existence was checked without a venv_id")
-
-    assert (
-        _validate_execution_params(
-            state_mode="stateless",
-            session_id=None,
-            session_name=None,
-            venv_id=None,
-            venv_exists=_boom,
+            session_id=3,
+            session_name="audit",
+            resolve_session_name=lambda n: (3 if n == "audit" else None),
         )
         is None
     )
@@ -169,9 +118,7 @@ def test_venv_is_not_checked_when_none_is_requested():
 @pytest.mark.asyncio
 async def test_session_executor_python_stateful_reuses_session():
     ex = SessionExecutor(
-        venv_pool=VenvPool(),
         environments={},  # no primitives injection needed for this unit test
-        function_manager=None,
         timeout=5.0,
     )
     try:
@@ -179,7 +126,6 @@ async def test_session_executor_python_stateful_reuses_session():
             code="x = 1\nx",
             state_mode="stateful",
             session_id=0,
-            venv_id=None,
         )
         assert r1["error"] is None
         assert r1["session_created"] is True
@@ -188,7 +134,6 @@ async def test_session_executor_python_stateful_reuses_session():
             code="x = x + 1\nx",
             state_mode="stateful",
             session_id=0,
-            venv_id=None,
         )
         assert r2["error"] is None
         assert r2["session_created"] is False
@@ -199,33 +144,34 @@ async def test_session_executor_python_stateful_reuses_session():
 
 
 @pytest.mark.asyncio
-async def test_session_executor_stateless_python_uses_venv_subprocess():
-    fm = _FakeFunctionManager()
-    executor = SessionExecutor(
-        venv_pool=None,
-        function_manager=fm,  # type: ignore[arg-type]
-    )
+async def test_session_executor_sessions_are_keyed_by_id_alone():
+    """A session's identity is its integer id; listing and closing use it."""
+    ex = SessionExecutor(environments={}, timeout=5.0)
+    try:
+        await ex.execute(code="x = 1", state_mode="stateful", session_id=2)
+        assert ex.has_python_session(session_id=2)
+        assert not ex.has_python_session(session_id=3)
 
-    result = await executor.execute(
-        code="1 + 1",
-        state_mode="stateless",
-        session_id=None,
-        venv_id=31,
-    )
+        listed = ex.list_in_process_python_sessions()
+        assert [s["session_id"] for s in listed] == [2]
+        assert set(listed[0]) == {
+            "session_id",
+            "created_at",
+            "last_used",
+            "state_summary",
+        }
 
-    assert result["result"] == "venv ok"
-    fm.execute_in_venv.assert_awaited_once()
-    call_kwargs = fm.execute_in_venv.await_args.kwargs
-    assert call_kwargs["venv_id"] == 31
-    assert call_kwargs["is_async"] is True
+        assert await ex.close_in_process_python_session(session_id=2) is True
+        assert await ex.close_in_process_python_session(session_id=2) is False
+        assert ex.list_in_process_python_sessions() == []
+    finally:
+        await ex.close()
 
 
 @pytest.mark.asyncio
 async def test_session_executor_python_read_only_does_not_mutate_state():
     ex = SessionExecutor(
-        venv_pool=VenvPool(),
         environments={},
-        function_manager=None,
         timeout=5.0,
     )
     try:
@@ -233,7 +179,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
             code="x = 1",
             state_mode="stateful",
             session_id=0,
-            venv_id=None,
         )
         assert r1["error"] is None
 
@@ -241,7 +186,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
             code="x = 999",
             state_mode="read_only",
             session_id=0,
-            venv_id=None,
         )
         assert ro["error"] is None
 
@@ -249,7 +193,6 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
             code="print(x)",
             state_mode="stateful",
             session_id=0,
-            venv_id=None,
         )
         assert r2["error"] is None
         assert "1" in parts_to_text(r2["stdout"])
@@ -260,9 +203,7 @@ async def test_session_executor_python_read_only_does_not_mutate_state():
 @pytest.mark.asyncio
 async def test_session_executor_isolation_between_python_sessions():
     ex = SessionExecutor(
-        venv_pool=VenvPool(),
         environments={},
-        function_manager=None,
         timeout=5.0,
     )
     try:
@@ -270,13 +211,11 @@ async def test_session_executor_isolation_between_python_sessions():
             code="x = 1",
             state_mode="stateful",
             session_id=0,
-            venv_id=None,
         )
         b1 = await ex.execute(
             code="x = 2",
             state_mode="stateful",
             session_id=1,
-            venv_id=None,
         )
         assert a1["error"] is None
         assert b1["error"] is None
@@ -285,13 +224,11 @@ async def test_session_executor_isolation_between_python_sessions():
             code="print(x)",
             state_mode="stateful",
             session_id=0,
-            venv_id=None,
         )
         b2 = await ex.execute(
             code="print(x)",
             state_mode="stateful",
             session_id=1,
-            venv_id=None,
         )
         assert "1" in parts_to_text(a2["stdout"])
         assert "2" in parts_to_text(b2["stdout"])

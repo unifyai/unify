@@ -466,27 +466,12 @@ def pytest_sessionfinish(session, exitstatus):
 def pytest_unconfigure(config):
     """Restore HOME (and HF_HOME if we set it).
 
-    We deliberately do NOT rmtree `/tmp/unity_test_home` here. The path
-    is shared across every parallel pytest session that
-    ``parallel_run.sh`` spawns (deterministic so LLM cache keys
-    embedding the workspace root stay stable). Wiping it on this
-    session's exit also wipes the in-flight venvs (FunctionManager
-    creates them under ``<workspace>/.venvs/<ctx>/<id>/``)
-    that other still-running pytest sessions are about to invoke —
-    producing the "venv python disappeared between prepare_venv() and
-    create_subprocess_exec()" RuntimeError that the function_manager/
-    python cluster was hitting reliably on every CI matrix run.
-
-    Diagnostic confirming the race: the failure dump showed
-    ancestor existence "False" all the way up to ``/tmp/`` —
-    i.e. the whole ``unity_test_home/`` tree was gone between
-    prepare_venv's verification and the subsequent subprocess
-    invocation, ruling out a leaf-only cleanup.
-
-    The directory accumulates on the CI runner across this session
-    only — the runner is ephemeral, so it's reclaimed when the runner
-    shuts down. On local dev machines users can ``rm -rf
-    /tmp/unity_test_home`` manually when they want a clean slate.
+    `/tmp/unity_test_home` is deliberately left in place: the path is
+    shared by every parallel pytest session ``parallel_run.sh`` spawns
+    (deterministic so LLM cache keys embedding the workspace root stay
+    stable), so wiping it here would pull files out from under sessions
+    still running. It accumulates only for the life of the CI runner;
+    locally, ``rm -rf /tmp/unity_test_home`` gives a clean slate.
     """
     if _original_home is None:
         os.environ.pop("HOME", None)

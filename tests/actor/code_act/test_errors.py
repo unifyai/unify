@@ -20,7 +20,6 @@ async def test_execute_code_can_run_without_bound_sandbox():
         "print('x')",
         state_mode="stateful",
         session_id=0,
-        venv_id=None,
     )
     # execute_code returns a dict for non-rich outputs, and an ExecutionResult
     # (FormattedToolResult) for in-process Python rich outputs.

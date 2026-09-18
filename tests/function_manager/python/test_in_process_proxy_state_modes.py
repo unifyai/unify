@@ -2,7 +2,7 @@
 Tests for _InProcessFunctionProxy state mode API (.stateless(), .read_only()).
 
 These tests verify that the proxy-based API for controlling execution state
-works correctly when calling in-process functions (no venv) from CodeActActor.
+works correctly when calling stored functions from CodeActActor.
 
 Covers:
 1. Default stateful behavior (state persists in shared namespace)
@@ -74,7 +74,6 @@ def function_manager_factory():
     managers = []
 
     def _create():
-        ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
         fm = FunctionManager()
         managers.append(fm)
@@ -115,7 +114,7 @@ def _get_callable_via_return_callable(
 @_handle_project
 @pytest.mark.asyncio
 async def test_in_process_proxy_has_correct_type(function_manager_factory):
-    """return_callable=True should return _InProcessFunctionProxy for no-venv functions."""
+    """return_callable=True should return an _InProcessFunctionProxy."""
     fm = function_manager_factory()
     fm.add_functions(implementations=SET_VAR_FUNC)
 

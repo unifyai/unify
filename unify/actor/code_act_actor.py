@@ -16,7 +16,6 @@ from typing import (
     Callable,
     Awaitable,
     Dict,
-    NamedTuple,
     Optional,
     Type,
     Union,
@@ -26,14 +25,13 @@ from pydantic import BaseModel
 
 from unify.actor.base import BaseCodeActActor
 from unify.common.context_dump import make_messages_safe_for_context_dump
+from unify import environment
 from unify.actor.execution import (
     ExecutionResult,
-    PackageOverlay,
     PythonExecutionSession,
     SessionExecutor,
     SessionKey,
     _CURRENT_ENVIRONMENTS,
-    _CURRENT_PACKAGE_OVERLAY,
     _CURRENT_SANDBOX,
     _PARENT_CHAT_CONTEXT,
     _validate_execution_params,
@@ -333,16 +331,6 @@ def _default_tool_policy(
 
 
 # ---------------------------------------------------------------------------
-# Resolved session tuple returned by _resolve_session
-# ---------------------------------------------------------------------------
-
-
-class _ResolvedSession(NamedTuple):
-    venv_id: Optional[int]
-    session_id: Optional[int]
-
-
-# ---------------------------------------------------------------------------
 # Agent context for tracking execution depth and providing handle access
 # ---------------------------------------------------------------------------
 from dataclasses import dataclass, field as dataclass_field
@@ -569,41 +557,24 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
     "the Python standard library and the environment-provided "
-    "namespaces `primitives` and `pydantic`), the function **requires "
-    "a virtual environment**. `FunctionManager_add_functions` will "
-    "reject the function if third-party imports are detected without "
-    "a `venv_id`. Detection covers every import form — `import`, "
-    "`from … import` and dynamic imports with a literal name such as "
-    '`importlib.import_module("pkg")` — because the dependency is a '
-    "property of the package, not of the syntax. Never rewrite an "
-    "import to slip past the check: a function stored without its venv "
-    "fails on the first call after the task's installs are removed. If "
-    "a function already stored this way appears in the trajectory, "
-    "repair it — overwrite it with a plain `import` and the right "
-    "`venv_id` — rather than leaving it.\n\n"
-    "Steps:\n"
-    "1. Check existing venvs with `FunctionManager_list_venvs` — if "
-    "one already declares the needed packages, reuse it.\n"
-    "2. If no suitable venv exists, create one with "
-    "`FunctionManager_add_venv`. Pass a minimal `pyproject.toml` "
-    "string declaring only the packages the function actually "
-    "imports. Example:\n\n"
-    "```\n"
-    "[project]\n"
-    'name = "google-cloud-tools"\n'
-    'version = "0.1.0"\n'
-    'requires-python = ">=3.11"\n'
-    "dependencies = [\n"
-    '    "google-cloud-storage>=2.0.0",\n'
-    "]\n"
-    "```\n\n"
-    "3. Pass the returned `venv_id` to "
-    "`FunctionManager_add_functions(venv_id=<id>)`.\n\n"
-    "Multiple functions that share the same dependency set should "
-    "share a single venv. Do not create a separate venv per function "
-    "when the dependency overlap is high — update an existing venv "
-    "with `FunctionManager_update_venv` to add extra packages "
-    "instead.\n\n"
+    "namespaces `primitives` and `pydantic`), **record the "
+    "dependencies**: pass the pip specifiers that installed them — the "
+    "same strings the `install_python_packages` call used, e.g. "
+    '`dependencies=["google-cloud-storage>=2.0.0"]` — to '
+    "`FunctionManager_add_functions`. They are installed into the "
+    "workspace environment before the function runs, wherever it runs. "
+    "`FunctionManager_add_functions` rejects a function whose "
+    "third-party imports come without `dependencies`. Detection covers "
+    "every import form — `import`, `from … import` and dynamic imports "
+    'with a literal name such as `importlib.import_module("pkg")` — '
+    "because the dependency is a property of the package, not of the "
+    "syntax. Never rewrite an import to slip past the check: a function "
+    "stored without its dependencies fails on the first call from a "
+    "machine that lacks the package. If a function already stored this "
+    "way appears in the trajectory, repair it — overwrite it with a "
+    "plain `import` and the right `dependencies` — rather than leaving "
+    "it. Declare only the packages the function actually imports, "
+    "pinned as loosely as the trajectory justifies.\n\n"
 )
 
 _STORAGE_TWO_STORES = (
@@ -611,9 +582,8 @@ _STORAGE_TWO_STORES = (
     "### Function Store — the *what*\n\n"
     "The FunctionManager stores concrete reusable callables. Add a "
     "genuinely new function with `FunctionManager_add_functions` "
-    "(`venv_id` required for third-party imports; venvs are managed via "
-    "`FunctionManager_add_venv` / `list_venvs` / `update_venv` / "
-    "`delete_venv` / `set_function_venv`). Revise an existing function in "
+    "(`dependencies` required for third-party imports). Revise an "
+    "existing function in "
     "place with `overwrite=True`. When a new function subsumes narrower "
     "variants, delete the superseded entries "
     "(`FunctionManager_delete_function`). Do NOT store trivial "
@@ -776,18 +746,22 @@ _STORAGE_BASE_INSTRUCTIONS = (
 # ---------------------------------------------------------------------------
 
 # One contract for the package-install tool.
-_INSTALL_PYTHON_PACKAGES_DOC = """Install Python packages into the current execution environment.
+_INSTALL_PYTHON_PACKAGES_DOC = """Install Python packages into the workspace environment.
 
 **You MUST use this tool whenever you need a Python package that is not
 already available.** Never install via ``execute_code`` (``!pip install``,
 ``subprocess.run(["pip", ...])``, ``uv pip install``, or any other
-shell-based method) — direct installs bypass the managed overlay and leave
-the environment in an inconsistent state.
+shell-based method) — direct installs bypass the managed environment and
+leave it in an inconsistent state.
 
 Installed packages are immediately importable in subsequent ``execute_code``
-Python calls, and are removed automatically when the current task completes —
-they never persist to later trajectories. If a requested package conflicts
-with a system dependency, the pre-installed version takes precedence.
+Python calls and stay installed: the workspace environment is one persistent
+venv shared by every task and session, so a package installed once is
+available from then on. Try the import first — it may already be there.
+If a requested package conflicts with one of the runtime's own
+dependencies, the runtime's version takes precedence. When a stored
+function needs a package, record the specifier used here as one of its
+``dependencies`` so the install repeats wherever the function runs.
 
 Parameters
 ----------
@@ -981,13 +955,6 @@ def _build_storage_tools(
         fm.add_functions,
         fm.delete_function,
         fm.reconcile_dependencies,
-        fm.add_venv,
-        fm.list_venvs,
-        fm.get_venv,
-        fm.update_venv,
-        fm.delete_venv,
-        fm.set_function_venv,
-        fm.get_function_venv,
         gm.search,
         gm.filter,
         gm.get_guidance,
@@ -1790,7 +1757,7 @@ class _StorageCheckHandle(SteerableToolHandle):
         """End the storage phase now, without waiting for the review to finish.
 
         Called when the actor the review depends on is closing. A review needs
-        that actor's venv pool and sandboxes to do anything useful,
+        that actor's sandboxes to do anything useful,
         so once they are torn down the review cannot succeed -- it can only
         keep retrying against them. A review left running that way stays
         busy indefinitely, still issuing inference for a run already recorded
@@ -2394,24 +2361,18 @@ class CodeActActor(BaseCodeActActor):
                     _excl_compositional,
                 )
 
-        # Create a persistent venv pool that survives across act() calls
-        from unify.function_manager.function_manager import VenvPool
-
-        self._venv_pool = VenvPool()
         self._session_executor = SessionExecutor(
-            venv_pool=self._venv_pool,
             environments=self.environments,
-            function_manager=self.function_manager,
             timeout=timeout,
         )
 
-        # Session name registry: name -> (venv_id, session_id)
+        # Session name registry: name -> session_id
         self._session_names: Dict[str, SessionKey] = {}
-        # Reverse map: (venv_id, session_id) -> set(names)
+        # Reverse map: session_id -> set(names)
         self._session_names_rev: Dict[SessionKey, set[str]] = {}
-        # Actor-level session cap (global across venvs for this actor instance).
+        # Actor-level session cap for this actor instance.
         self._max_sessions_total: int = 20
-        self._next_session_id: dict[Optional[int], int] = {}
+        self._next_session_id: int = 1
         # Storage reviews started by this actor and not yet finished, so
         # ``close()`` can end them rather than leave them running against
         # pools it is about to tear down.
@@ -2443,14 +2404,8 @@ class CodeActActor(BaseCodeActActor):
 
     # ───────────────────────── Session name registry ─────────────────────── #
 
-    def _register_session_name(
-        self,
-        *,
-        name: str,
-        venv_id: int | None,
-        session_id: int,
-    ) -> None:
-        key: SessionKey = (venv_id, int(session_id))
+    def _register_session_name(self, *, name: str, session_id: int) -> None:
+        key: SessionKey = int(session_id)
         existing = self._session_names.get(name)
         if existing is not None and existing != key:
             raise ValueError(
@@ -2462,13 +2417,8 @@ class CodeActActor(BaseCodeActActor):
     def _resolve_session_name(self, name: str) -> SessionKey | None:
         return self._session_names.get(name)
 
-    def _get_session_name(
-        self,
-        *,
-        venv_id: int | None,
-        session_id: int,
-    ) -> str | None:
-        key: SessionKey = (venv_id, int(session_id))
+    def _get_session_name(self, *, session_id: int) -> str | None:
+        key: SessionKey = int(session_id)
         names = self._session_names_rev.get(key)
         if not names:
             return None
@@ -2483,38 +2433,12 @@ class CodeActActor(BaseCodeActActor):
             self._session_names.pop(n, None)
 
     def _count_active_sessions_total(self) -> int:
-        # Count unique in-process python sessions + persistent pool sessions.
-        n = 0
-        try:
-            n += len(
-                self._session_executor._python_sessions,
-            )  # pylint: disable=protected-access
-        except Exception:
-            pass
-        try:
-            n += len(self._venv_pool.list_active_sessions())
-        except Exception:
-            pass
-        return n
+        return len(
+            self._session_executor._python_sessions,
+        )  # pylint: disable=protected-access
 
-    def _session_exists(
-        self,
-        *,
-        venv_id: int | None,
-        session_id: int,
-    ) -> bool:
-        if venv_id is None:
-            return self._session_executor.has_python_session(
-                session_id=int(session_id),
-                venv_id=None,
-            )
-        # A venv-backed session exists if the pool has it active.
-        try:
-            return (int(venv_id), int(session_id)) in set(
-                self._venv_pool.list_active_sessions(),
-            )
-        except Exception:
-            return False
+    def _session_exists(self, *, session_id: int) -> bool:
+        return self._session_executor.has_python_session(session_id=int(session_id))
 
     def _validate_execution_params(
         self,
@@ -2522,36 +2446,17 @@ class CodeActActor(BaseCodeActActor):
         state_mode: str,
         session_id: int | None,
         session_name: str | None,
-        venv_id: int | None = None,
     ) -> dict | None:
         return _validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            venv_id=venv_id,
             resolve_session_name=self._resolve_session_name,
-            get_session_name_for_id=lambda v, s: self._get_session_name(
-                venv_id=v,
-                session_id=s,
-            ),
-            session_exists=lambda v, s: self._session_exists(
-                venv_id=v,
-                session_id=s,
-            ),
-            venv_exists=self._venv_exists,
+            get_session_name_for_id=lambda s: self._get_session_name(session_id=s),
+            session_exists=lambda s: self._session_exists(session_id=s),
             max_sessions_total=self._max_sessions_total,
             active_session_count=self._count_active_sessions_total(),
         )
-
-    def _venv_exists(self, venv_id: int) -> bool:
-        """Whether *venv_id* names a venv this actor can execute in.
-
-        Venvs are owned by the FunctionManager, so without one there is nothing
-        to check against — the venv-backed path rejects the call on its own.
-        """
-        if self.function_manager is None:
-            return True
-        return self.function_manager.get_venv(venv_id=venv_id) is not None
 
     def _resolve_session(
         self,
@@ -2559,8 +2464,7 @@ class CodeActActor(BaseCodeActActor):
         state_mode: str,
         session_id: int | None,
         session_name: str | None,
-        venv_id: int | None,
-    ) -> _ResolvedSession:
+    ) -> int | None:
         """Resolve/allocate a session and validate execution params.
 
         Handles the full session resolution flow used by both ``execute_code``
@@ -2571,23 +2475,19 @@ class CodeActActor(BaseCodeActActor):
         2. Register session name aliases when both name and id are provided.
         3. Validate the resulting execution parameters.
 
-        Returns a ``_ResolvedSession`` named tuple.  If ``error`` is not
-        ``None``, the caller should return it as the tool result immediately.
+        Returns the resolved session id, or ``None`` for a stateless call.
         """
         # Resolve / allocate sessions for stateful.
         if state_mode == "stateful":
             if session_name:
                 resolved = self._resolve_session_name(session_name)
                 if resolved is not None:
-                    venv_id, session_id = resolved
+                    session_id = resolved
                 elif session_id is None:
-                    key = int(venv_id) if venv_id is not None else None
-                    next_id = self._next_session_id.get(key, 1)
-                    session_id = next_id
-                    self._next_session_id[key] = next_id + 1
+                    session_id = self._next_session_id
+                    self._next_session_id += 1
                     self._register_session_name(
                         name=session_name,
-                        venv_id=venv_id,
                         session_id=int(session_id),
                     )
             elif session_id is None:
@@ -2598,7 +2498,6 @@ class CodeActActor(BaseCodeActActor):
             if self._resolve_session_name(session_name) is None:
                 self._register_session_name(
                     name=session_name,
-                    venv_id=venv_id,
                     session_id=int(session_id),
                 )
 
@@ -2607,13 +2506,9 @@ class CodeActActor(BaseCodeActActor):
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
-            venv_id=venv_id,
         )
 
-        return _ResolvedSession(
-            venv_id=venv_id,
-            session_id=session_id,
-        )
+        return session_id
 
     async def _run_active_work_heartbeat(
         self,
@@ -2730,7 +2625,6 @@ class CodeActActor(BaseCodeActActor):
             state_mode: str | None = None,
             session_id: int | None = None,
             session_name: str | None = None,
-            venv_id: int | None = None,
             _notification_up_q: asyncio.Queue[dict] | None = None,
             _clarification_up_q: asyncio.Queue[str] | None = None,
             _clarification_down_q: asyncio.Queue[str] | None = None,
@@ -2750,14 +2644,13 @@ class CodeActActor(BaseCodeActActor):
 
             Key concepts
             -----------
-            - **state_mode**: omit it and a venv-less cell runs **stateful
-              in session 0** — the current per-call sandbox, so variables
-              persist across cells — while venv cells run stateless. Pass
-              "stateless" for an isolated fresh run (environment globals
-              and FunctionManager-discovered functions still available),
-              "read_only" to read an existing session without
-              persisting, or "stateful" with a session selector to
-              target a named or venv session.
+            - **state_mode**: omit it and the cell runs **stateful in
+              session 0** — the current per-call sandbox, so variables
+              persist across cells. Pass "stateless" for an isolated
+              fresh run (environment globals and FunctionManager-discovered
+              functions still available), "read_only" to read an existing
+              session without persisting, or "stateful" with a session
+              selector to target a named session.
             - **session_id/session_name**: stateful/read_only only.
               Stateful defaults to **session_id=0** — inside a running
               act() loop, the current per-call sandbox. Create an
@@ -2769,13 +2662,12 @@ class CodeActActor(BaseCodeActActor):
 
             Output
             ------
-            A dict or ExecutionResult with: ``stdout`` / ``stderr`` (rich
-            List[TextPart | ImagePart] in-process; plain string for a
-            venv), ``result`` (last expression's value — a steerable
-            handle as the last expression is automatically adopted by the
-            outer loop for mid-flight steering), ``error``, ``state_mode``,
-            ``session_id``, ``session_name``, ``venv_id``,
-            ``session_created``, ``duration_ms``.
+            An ExecutionResult with: ``stdout`` / ``stderr`` (rich
+            List[TextPart | ImagePart]), ``result`` (last expression's
+            value — a steerable handle as the last expression is
+            automatically adopted by the outer loop for mid-flight
+            steering), ``error``, ``state_mode``, ``session_id``,
+            ``session_name``, ``session_created``, ``duration_ms``.
 
             Steering while the block runs
             -----------------------------
@@ -2793,9 +2685,7 @@ class CodeActActor(BaseCodeActActor):
             """
             _ = thought  # Thought is logged by the LLM; not used programmatically.
             if state_mode is None:
-                # An omitted state_mode resolves per cell type: only venv-less
-                # cells get the persistent per-call sandbox.
-                state_mode = "stateful" if venv_id is None else "stateless"
+                state_mode = "stateful"
             if code is None or code.strip() == "":
                 return {
                     "stdout": "",
@@ -2805,7 +2695,6 @@ class CodeActActor(BaseCodeActActor):
                     "state_mode": state_mode,
                     "session_id": session_id,
                     "session_name": session_name,
-                    "venv_id": venv_id,
                     "session_created": False,
                     "duration_ms": 0,
                 }
@@ -2857,7 +2746,6 @@ class CodeActActor(BaseCodeActActor):
                     "state_mode": state_mode,
                     "session_id": session_id,
                     "session_name": session_name,
-                    "venv_id": venv_id,
                     "thought": thought[:500],
                 },
             )
@@ -2871,20 +2759,11 @@ class CodeActActor(BaseCodeActActor):
                     if _notification_up_q is not None
                     else None
                 )
-                _rs = self._resolve_session(
+                session_id = self._resolve_session(
                     state_mode=state_mode,
                     session_id=session_id,
                     session_name=session_name,
-                    venv_id=venv_id,
                 )
-                venv_id, session_id = _rs.venv_id, _rs.session_id
-                # Execute via SessionExecutor. Route primitives if available in current sandbox.
-                primitives = None
-                try:
-                    sb = _CURRENT_SANDBOX.get()
-                    primitives = sb.global_state.get("primitives")
-                except Exception:
-                    pass
 
                 _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
                 _steering = None
@@ -2901,8 +2780,6 @@ class CodeActActor(BaseCodeActActor):
                                 code=code,
                                 state_mode=state_mode,  # type: ignore[arg-type]
                                 session_id=session_id,
-                                venv_id=venv_id,
-                                primitives=primitives,
                             )
                         except Exception as e:
                             exec_exc = e
@@ -2916,7 +2793,6 @@ class CodeActActor(BaseCodeActActor):
                                 "state_mode": state_mode,
                                 "session_id": session_id,
                                 "session_name": session_name,
-                                "venv_id": venv_id,
                                 "session_created": False,
                                 "duration_ms": 0,
                             }
@@ -2938,15 +2814,12 @@ class CodeActActor(BaseCodeActActor):
                 # Enrich with session name.
                 if out.get("session_id") is not None:
                     out["session_name"] = self._get_session_name(
-                        venv_id=out.get("venv_id"),
                         session_id=int(out["session_id"]),
                     )
                 else:
                     out["session_name"] = None
 
-                # Wrap in-process results in ExecutionResult for proper LLM
-                # image formatting. In-process stdout is a List[OutputPart];
-                # a venv's is a string.
+                # Wrap in ExecutionResult for proper LLM image formatting.
                 if isinstance(out.get("stdout"), list):
                     out = ExecutionResult(**out)
 
@@ -2995,26 +2868,7 @@ class CodeActActor(BaseCodeActActor):
         async def install_python_packages(
             packages: list[str],
         ) -> dict:
-            try:
-                sb = _CURRENT_SANDBOX.get()
-                overlay: PackageOverlay | None = sb.global_state.get(
-                    "__package_overlay__",
-                )
-            except Exception:
-                overlay = None
-
-            if overlay is None:
-                return {
-                    "success": False,
-                    "stdout": "",
-                    "stderr": (
-                        "Package installation is not available outside of an "
-                        "active act() session."
-                    ),
-                    "packages": list(packages),
-                }
-
-            return overlay.install(packages)
+            return await asyncio.to_thread(environment.install, list(packages))
 
         install_python_packages.__doc__ = _INSTALL_PYTHON_PACKAGES_DOC
 
@@ -3384,7 +3238,6 @@ class CodeActActor(BaseCodeActActor):
                 """
                 _ = thought  # Thought is logged by the LLM; not used programmatically.
                 call_kwargs = call_kwargs or {}
-                resolved_venv_id: int | None = None
                 function_data: dict[str, Any] | None = None
                 get_function_data = getattr(
                     self.function_manager,
@@ -3401,14 +3254,16 @@ class CodeActActor(BaseCodeActActor):
                     )
                     if callable(get_stored_primitive):
                         function_data = get_stored_primitive(name=function_name)
-                stored_venv_id = (
-                    function_data.get("venv_id")
-                    if isinstance(function_data, dict)
-                    and not function_data.get("is_primitive")
-                    else None
-                )
-                if stored_venv_id is not None:
-                    resolved_venv_id = int(stored_venv_id)
+                if isinstance(function_data, dict) and function_data.get(
+                    "dependencies",
+                ):
+                    # The synthesized call runs the stored implementation
+                    # in the sandbox, so its packages must be importable
+                    # before the cell starts.
+                    await asyncio.to_thread(
+                        environment.ensure,
+                        list(function_data["dependencies"]),
+                    )
 
                 # The synthesized-call path prepends the raw implementation
                 # and runs it in the sandbox, shadowing any boundary-wrapped
@@ -3525,7 +3380,6 @@ class CodeActActor(BaseCodeActActor):
                         "state_mode": state_mode,
                         "session_id": session_id,
                         "session_name": session_name,
-                        "venv_id": resolved_venv_id,
                     },
                 )
                 heartbeat_task: asyncio.Task[None] | None = None
@@ -3541,20 +3395,11 @@ class CodeActActor(BaseCodeActActor):
                         if _notification_up_q is not None
                         else None
                     )
-                    _rs = self._resolve_session(
+                    session_id = self._resolve_session(
                         state_mode=state_mode,
                         session_id=session_id,
                         session_name=session_name,
-                        venv_id=resolved_venv_id,
                     )
-                    resolved_venv_id, session_id = _rs.venv_id, _rs.session_id
-                    # Resolve primitives from current sandbox.
-                    primitives = None
-                    try:
-                        sb = _CURRENT_SANDBOX.get()
-                        primitives = sb.global_state.get("primitives")
-                    except Exception:
-                        pass
 
                     _ef_steering = None
                     with self._sandbox_call_binding(
@@ -3574,8 +3419,6 @@ class CodeActActor(BaseCodeActActor):
                                     code=code,
                                     state_mode=state_mode,  # type: ignore[arg-type]
                                     session_id=session_id,
-                                    venv_id=resolved_venv_id,
-                                    primitives=primitives,
                                 )
                                 _ef_log.debug(
                                     f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
@@ -3592,7 +3435,6 @@ class CodeActActor(BaseCodeActActor):
                                     "state_mode": state_mode,
                                     "session_id": session_id,
                                     "session_name": session_name,
-                                    "venv_id": resolved_venv_id,
                                     "session_created": False,
                                     "duration_ms": 0,
                                 }
@@ -3602,13 +3444,12 @@ class CodeActActor(BaseCodeActActor):
                     # Enrich with session name.
                     if out.get("session_id") is not None:
                         out["session_name"] = self._get_session_name(
-                            venv_id=out.get("venv_id"),
                             session_id=int(out["session_id"]),
                         )
                     else:
                         out["session_name"] = None
 
-                    # Wrap in-process results in ExecutionResult.
+                    # Wrap in ExecutionResult.
                     if isinstance(out.get("stdout"), list):
                         out = ExecutionResult(**out)
 
@@ -3781,7 +3622,7 @@ class CodeActActor(BaseCodeActActor):
 
         async def list_sessions(detail: str = "summary") -> Dict[str, Any]:
             """
-            List all active sessions (in-process and venv-backed).
+            List all active sessions.
 
             Use this to choose which session a subsequent
             `execute_code(..., state_mode="stateful"/"read_only")` call
@@ -3797,26 +3638,21 @@ class CodeActActor(BaseCodeActActor):
             -------
             dict:
                 {"sessions": [...]}; each entry carries session_id,
-                venv_id, session_name, created_at / last_used, and
-                state_summary. Session IDs are **scoped per venv_id**; the
-                default per-call sandbox appears as session_id=0
-                (venv_id=None) when bound.
+                session_name, created_at / last_used, and state_summary.
+                The default per-call sandbox appears as session_id=0 when
+                bound.
             """
             detail = (detail or "summary").strip()
 
             sessions: list[dict[str, Any]] = []
 
-            # Default sandbox (current act sandbox) as session 0 (venv_id=None).
+            # Default sandbox (current act sandbox) as session 0.
             try:
                 sb = _CURRENT_SANDBOX.get()
                 sessions.append(
                     {
                         "session_id": 0,
-                        "venv_id": None,
-                        "session_name": self._get_session_name(
-                            venv_id=None,
-                            session_id=0,
-                        ),
+                        "session_name": self._get_session_name(session_id=0),
                         "created_at": None,
                         "last_used": None,
                         "state_summary": f"{len(sb.global_state)} globals",
@@ -3829,46 +3665,15 @@ class CodeActActor(BaseCodeActActor):
             for s in self._session_executor.list_in_process_python_sessions():
                 s = dict(s)
                 s["session_name"] = self._get_session_name(
-                    venv_id=s.get("venv_id"),
                     session_id=int(s["session_id"]),
                 )
                 sessions.append(s)
-
-            # Venv sessions.
-            try:
-                for s in self._venv_pool.get_all_sessions():
-                    s = dict(s)
-                    s["session_name"] = self._get_session_name(
-                        venv_id=s.get("venv_id"),
-                        session_id=int(s["session_id"]),
-                    )
-                    sessions.append(s)
-            except Exception:
-                pass
-
-            if detail == "full":
-                # Best-effort enrich state_summary with inspection where cheap.
-                for s in sessions:
-                    if s.get("venv_id") is None:
-                        continue
-                    try:
-                        st = await self._venv_pool.get_session_state(
-                            venv_id=int(s["venv_id"]),
-                            session_id=int(s["session_id"]),
-                            function_manager=self.function_manager,
-                            detail="summary",
-                        )
-                        if isinstance(st, dict) and "count" in st:
-                            s["state_summary"] = f'{st["count"]} names'
-                    except Exception:
-                        continue
 
             return {"sessions": sessions}
 
         async def inspect_state(
             session_name: str | None = None,
             session_id: int | None = None,
-            venv_id: int | None = None,
             detail: str = "summary",
         ) -> Dict[str, Any]:
             """
@@ -3881,18 +3686,18 @@ class CodeActActor(BaseCodeActActor):
             ----------
             session_name:
                 Human-friendly alias (preferred when available).
-            session_id (+ optional venv_id):
-                Direct identity; `session_id` is scoped per venv_id.
+            session_id:
+                Direct identity.
             detail:
                 "summary" (quick context) | "names" (variable names only) |
                 "full" (sparingly; values truncated/redacted best-effort).
 
             With no selector, inspects the **current per-call sandbox**
-            (session_id=0, venv_id=None) when bound.
+            (session_id=0) when bound.
 
             Returns
             -------
-            dict with `session` ({session_id, session_name, venv_id}) and
+            dict with `session` ({session_id, session_name}) and
             `state` (the session's variables).
             """
             detail = (detail or "summary").strip()
@@ -3907,7 +3712,7 @@ class CodeActActor(BaseCodeActActor):
                         "error_type": "validation",
                     }
             elif session_id is not None:
-                resolved = (venv_id, int(session_id))
+                resolved = int(session_id)
 
             # Default: current sandbox.
             if resolved is None:
@@ -3946,41 +3751,14 @@ class CodeActActor(BaseCodeActActor):
                 return {
                     "session": {
                         "session_id": 0,
-                        "session_name": self._get_session_name(
-                            venv_id=None,
-                            session_id=0,
-                        ),
-                        "venv_id": None,
+                        "session_name": self._get_session_name(session_id=0),
                     },
                     "state": state_obj,
                 }
 
-            resolved_venv_id, sid = resolved
-
-            # Venv-backed
-            if resolved_venv_id is not None:
-                st = await self._venv_pool.get_session_state(
-                    venv_id=int(resolved_venv_id),
-                    session_id=int(sid),
-                    function_manager=self.function_manager,
-                    detail=detail,
-                )
-                return {
-                    "session": {
-                        "session_id": int(sid),
-                        "session_name": self._get_session_name(
-                            venv_id=int(resolved_venv_id),
-                            session_id=int(sid),
-                        ),
-                        "venv_id": int(resolved_venv_id),
-                    },
-                    "state": st,
-                }
-
-            # In-process session (SessionExecutor)
-            key = (None, int(sid))
+            sid = resolved
             sb = self._session_executor._python_sessions.get(
-                key,
+                int(sid),
             )  # pylint: disable=protected-access
             if sb is None:
                 return {
@@ -4011,11 +3789,7 @@ class CodeActActor(BaseCodeActActor):
             return {
                 "session": {
                     "session_id": int(sid),
-                    "session_name": self._get_session_name(
-                        venv_id=None,
-                        session_id=int(sid),
-                    ),
-                    "venv_id": None,
+                    "session_name": self._get_session_name(session_id=int(sid)),
                 },
                 "state": state_obj,
             }
@@ -4023,7 +3797,6 @@ class CodeActActor(BaseCodeActActor):
         async def close_session(
             session_name: str | None = None,
             session_id: int | None = None,
-            venv_id: int | None = None,
         ) -> Dict[str, Any]:
             """
             Close a specific session and free resources.
@@ -4035,14 +3808,14 @@ class CodeActActor(BaseCodeActActor):
             ----------
             session_name:
                 Preferred: close by human-friendly alias.
-            session_id (+ optional venv_id):
+            session_id:
                 Close by canonical identity.
 
             Returns
             -------
             dict:
                 closed (bool), reason ("success" | "not_found" | "error"),
-                session ({session_id, session_name, venv_id}).
+                session ({session_id, session_name}).
             """
             resolved: SessionKey | None = None
             if session_name:
@@ -4054,11 +3827,10 @@ class CodeActActor(BaseCodeActActor):
                         "session": {
                             "session_id": session_id,
                             "session_name": session_name,
-                            "venv_id": venv_id,
                         },
                     }
             elif session_id is not None:
-                resolved = (venv_id, int(session_id))
+                resolved = int(session_id)
             else:
                 return {
                     "closed": False,
@@ -4066,41 +3838,27 @@ class CodeActActor(BaseCodeActActor):
                     "error": "Must provide session_name or session_id.",
                 }
 
-            resolved_venv_id, sid = resolved
-
-            if resolved_venv_id is not None:
-                closed = await self._venv_pool.close_session(
-                    venv_id=int(resolved_venv_id),
-                    session_id=int(sid),
-                )
-            else:
-                closed = await self._session_executor.close_in_process_python_session(
-                    session_id=int(sid),
-                    venv_id=None,
-                )
+            sid = int(resolved)
+            closed = await self._session_executor.close_in_process_python_session(
+                session_id=sid,
+            )
 
             # Unregister all aliases for this session.
-            self._unregister_all_names_for_session(
-                key=(resolved_venv_id, int(sid)),
-            )
+            self._unregister_all_names_for_session(key=sid)
 
             return {
                 "closed": bool(closed),
                 "reason": "success" if closed else "not_found",
                 "session": {
-                    "session_id": int(sid),
+                    "session_id": sid,
                     "session_name": session_name
-                    or self._get_session_name(
-                        venv_id=resolved_venv_id,
-                        session_id=int(sid),
-                    ),
-                    "venv_id": resolved_venv_id,
+                    or self._get_session_name(session_id=sid),
                 },
             }
 
         async def close_all_sessions() -> Dict[str, Any]:
             """
-            Close all active sessions, in-process and venv-backed.
+            Close all active sessions.
 
             Blunt cleanup — prefer `close_session(...)` to discard one
             specific polluted/unused session.
@@ -4108,39 +3866,23 @@ class CodeActActor(BaseCodeActActor):
             Returns
             -------
             dict:
-                closed_count (int), details ({"in_process": n, "venv": n}).
+                closed_count (int).
             """
-            closed_counts: dict[str, int] = {"in_process": 0, "venv": 0}
+            closed_count = 0
 
-            # Close in-process sessions.
             for s in list(self._session_executor.list_in_process_python_sessions()):
                 sid = int(s.get("session_id", 0))
                 if await self._session_executor.close_in_process_python_session(
                     session_id=sid,
-                    venv_id=None,
                 ):
-                    closed_counts["in_process"] += 1
-                    self._unregister_all_names_for_session(key=(None, sid))
-
-            # Close venv sessions.
-            for vid, sid in list(self._venv_pool.list_active_sessions()):
-                if await self._venv_pool.close_session(
-                    venv_id=int(vid),
-                    session_id=int(sid),
-                ):
-                    closed_counts["venv"] += 1
-                    self._unregister_all_names_for_session(
-                        key=(int(vid), int(sid)),
-                    )
+                    closed_count += 1
+                    self._unregister_all_names_for_session(key=sid)
 
             # Clear any remaining aliases.
             self._session_names.clear()
             self._session_names_rev.clear()
 
-            return {
-                "closed_count": sum(closed_counts.values()),
-                "details": closed_counts,
-            }
+            return {"closed_count": closed_count}
 
         tools["list_sessions"] = ToolSpec(
             fn=list_sessions,
@@ -4157,28 +3899,6 @@ class CodeActActor(BaseCodeActActor):
         tools["close_all_sessions"] = ToolSpec(
             fn=close_all_sessions,
             display_label="Closing all sessions",
-        )
-
-        # ───────────────────── Package installation tool ───────────────── #
-
-        async def install_python_packages(
-            packages: list[str],
-        ) -> Dict[str, Any]:
-            overlay = _CURRENT_PACKAGE_OVERLAY.get()
-            if overlay is None:
-                return {
-                    "success": False,
-                    "stdout": "",
-                    "stderr": "No package overlay is bound for this trajectory.",
-                    "packages": packages,
-                }
-            return overlay.install(packages)
-
-        install_python_packages.__doc__ = _INSTALL_PYTHON_PACKAGES_DOC
-
-        tools["install_python_packages"] = ToolSpec(
-            fn=install_python_packages,
-            display_label="Installing Python packages",
         )
 
         return tools
@@ -4324,10 +4044,10 @@ class CodeActActor(BaseCodeActActor):
         logger.debug(
             f"⏱️ [CodeActActor.act +{_act_ms()}] actor slot ready, creating sandbox",
         )
-        sandbox = PythonExecutionSession(
-            environments=sandbox_envs,
-            venv_pool=self._venv_pool,
-        )
+        # Packages installed by earlier tasks and sessions are importable
+        # before the first cell runs.
+        environment.activate()
+        sandbox = PythonExecutionSession(environments=sandbox_envs)
         token = _CURRENT_SANDBOX.set(sandbox)
         env_token = _CURRENT_ENVIRONMENTS.set(sandbox_envs)
         llm_profile_token = CURRENT_ACT_LLM_PROFILE.set(act_llm_profile)
@@ -4341,23 +4061,7 @@ class CodeActActor(BaseCodeActActor):
         )
         ctx_token = _CURRENT_AGENT_CONTEXT.set(new_ctx)
 
-        # Per-trajectory package overlay: lazily installs packages into a
-        # temporary directory on sys.path and cleans them up when act() ends.
-        # Created after AgentContext so it can use agent_id for directory naming,
-        # and after _CURRENT_PACKAGE_OVERLAY is readable so child overlays
-        # discover their parent's directory for hierarchical nesting.
-        pkg_overlay = PackageOverlay(agent_id=new_ctx.agent_id)
-        pkg_overlay_token = _CURRENT_PACKAGE_OVERLAY.set(pkg_overlay)
-
         async def _cleanup() -> None:
-            try:
-                pkg_overlay.cleanup()
-            except Exception:
-                pass
-            try:
-                _CURRENT_PACKAGE_OVERLAY.reset(pkg_overlay_token)
-            except Exception:
-                pass
             try:
                 # Best-effort cleanup
                 if hasattr(sandbox, "close") and callable(getattr(sandbox, "close")):
@@ -4464,14 +4168,12 @@ class CodeActActor(BaseCodeActActor):
                 "    Session ID for stateful/read_only modes.\n"
                 "session_name : str | None\n"
                 "    Human-friendly session alias.\n"
-                "venv_id : int | None\n"
-                "    Virtual environment ID.\n"
                 "\n"
                 "Returns\n"
                 "-------\n"
                 "dict | ExecutionResult\n"
                 "    Same shape as code execution output (stdout, stderr, result,\n"
-                "    error, state_mode, session_id, session_name, venv_id,\n"
+                "    error, state_mode, session_id, session_name,\n"
                 "    session_created, duration_ms).\n"
             )
 
@@ -4688,9 +4390,8 @@ class CodeActActor(BaseCodeActActor):
         """Shuts down the actor and its associated resources gracefully."""
         # End any storage review still running before the resources it needs
         # are torn down below. Left alone, a review outlives the actor: it
-        # keeps issuing inference against a closed venv pool and dead
-        # sandboxes, issuing inference for a run already recorded as
-        # finished.
+        # keeps issuing inference against dead sandboxes for a run already
+        # recorded as finished.
         for storage_handle in list(self._live_storage_handles):
             await storage_handle.abandon_storage_review(
                 reason="The actor running this review is shutting down.",
@@ -4709,6 +4410,3 @@ class CodeActActor(BaseCodeActActor):
             self._session_names_rev.clear()
         except Exception:
             pass
-
-        # Close the pool (terminates persistent subprocess connections)
-        await self._venv_pool.close()

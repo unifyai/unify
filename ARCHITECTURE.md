@@ -24,7 +24,7 @@ CodeActActor ── one Python program per turn in a persistent sandbox ──�
 ┌───────────────────────────────────────────────────────┐
 │  Skill libraries                                      │
 │                                                       │
-│  FunctionManager ─── stored functions, venvs          │
+│  FunctionManager ─── stored functions, dependencies   │
 │  GuidanceManager ─── procedures, builtins catalogue   │
 │                                                       │
 │  EventBus ─── typed pub/sub backbone                  │
@@ -235,7 +235,7 @@ Each library follows the same pattern:
 
 3. A **simulated implementation** with the same signatures, used by tests that exercise the actor's routing without paying for the real library.
 
-**FunctionManager** — Stored Python functions with metadata, per-function venvs, and execution in-process or out-of-process. Also the read-only builtins catalogue of every primitive the Actor can call.
+**FunctionManager** — Stored Python functions with metadata and pip dependencies, run in-process. Dependencies live in one workspace environment under `UNIFY_HOME`, installed once and kept. Also the read-only builtins catalogue of every primitive the Actor can call.
 
 **GuidanceManager** — Procedures: step-by-step instructions, walkthroughs, and strategies for composing functions. Linked to functions by id, so a rule change finds every implementation that embeds it. Reads federate over a global builtins catalogue of imported Agent Skills.
 

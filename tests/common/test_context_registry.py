@@ -21,8 +21,8 @@ class RegistryExampleManager:
                 description="Primitive functions.",
             ),
             TableContext(
-                name="Functions/VirtualEnvs",
-                description="Function virtual environments.",
+                name="Functions/Usage",
+                description="Function usage traces.",
             ),
             TableContext(name="Chat/Messages", description="Chat history."),
         ]

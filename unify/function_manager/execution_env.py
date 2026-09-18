@@ -45,7 +45,7 @@ ENVIRONMENT_MODULES: frozenset[str] = frozenset(
 """Non-stdlib module names that the function execution environment provides.
 
 Used by ``detect_third_party_imports`` to distinguish between packages that
-need a venv and packages that the runtime already supplies.
+must be recorded as dependencies and packages that the runtime already supplies.
 """
 
 

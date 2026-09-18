@@ -76,7 +76,6 @@ async def test_execute_code_boundary_publishes_events_and_cleans_lineage(monkeyp
             "error": None,
             "state_mode": "stateless",
             "session_id": 0,
-            "venv_id": None,
             "session_created": False,
             "duration_ms": 1,
         }
@@ -93,7 +92,6 @@ async def test_execute_code_boundary_publishes_events_and_cleans_lineage(monkeyp
                 state_mode="stateless",
                 session_id=None,
                 session_name=None,
-                venv_id=None,
                 _notification_up_q=None,
             )
         EVENT_BUS.join_published()
@@ -141,7 +139,6 @@ async def test_execute_code_boundary_marks_error_when_executor_raises(monkeypatc
             state_mode="stateless",
             session_id=None,
             session_name=None,
-            venv_id=None,
             _notification_up_q=None,
         )
     EVENT_BUS.join_published()
@@ -190,7 +187,7 @@ class _StubFunctionManager:
         preconditions=None,
         overwrite: bool = False,
         raise_on_error: bool = True,
-        venv_id=None,
+        dependencies=None,
     ):
         """Add or update functions in batch."""
         return {}
@@ -412,7 +409,6 @@ async def test_execute_code_function_boundary_to_manager_includes_full_hierarchy
                 state_mode="stateful",
                 session_id=0,
                 session_name=None,
-                venv_id=None,
                 _notification_up_q=None,
             )
         EVENT_BUS.join_published()
@@ -478,7 +474,6 @@ async def test_concurrent_function_boundaries_do_not_cross_talk_lineage_or_calli
                 state_mode="stateful",
                 session_id=0,
                 session_name=None,
-                venv_id=None,
                 _notification_up_q=None,
             )
         EVENT_BUS.join_published()
@@ -551,7 +546,6 @@ async def test_function_boundary_error_restores_lineage_and_surfaces_error():
             state_mode="stateful",
             session_id=0,
             session_name=None,
-            venv_id=None,
             _notification_up_q=None,
         )
 

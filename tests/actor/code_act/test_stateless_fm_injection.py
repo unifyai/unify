@@ -121,7 +121,6 @@ async def test_stateless_execute_code_can_call_fm_discovered_function():
             state_mode="stateless",
             session_id=None,
             session_name=None,
-            venv_id=None,
             _notification_up_q=None,
         )
 
@@ -159,7 +158,6 @@ async def test_stateless_does_not_inherit_intermediate_variables():
             state_mode="stateful",
             session_id=0,
             session_name=None,
-            venv_id=None,
             _notification_up_q=None,
         )
         assert _result_error(res) is None
@@ -182,7 +180,6 @@ async def test_stateless_does_not_inherit_intermediate_variables():
             state_mode="stateless",
             session_id=None,
             session_name=None,
-            venv_id=None,
             _notification_up_q=None,
         )
 
@@ -224,7 +221,6 @@ async def test_fm_functions_available_in_stateful_session_gt_zero():
             state_mode="stateful",
             session_id=1,
             session_name=None,
-            venv_id=None,
             _notification_up_q=None,
         )
 

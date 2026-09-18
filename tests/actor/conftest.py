@@ -69,7 +69,7 @@ def _isolate_local_root(request, monkeypatch):
 
     ``get_local_root()`` resolves under ``UNIFY_HOME``, so changing HOME
     is sufficient to isolate all filesystem paths that flow through it
-    (prompts, LocalFileSystemAdapter, venv dirs, etc.).
+    (prompts, LocalFileSystemAdapter, the workspace environment, etc.).
 
     The path is derived from the test's node ID via a stable hash, so
     the same test always gets the same directory.  This keeps LLM cache

@@ -11,13 +11,6 @@ _FM_METHOD_NAMES = (
     "add_functions",
     "delete_function",
     "reconcile_dependencies",
-    "add_venv",
-    "list_venvs",
-    "get_venv",
-    "update_venv",
-    "delete_venv",
-    "set_function_venv",
-    "get_function_venv",
 )
 
 

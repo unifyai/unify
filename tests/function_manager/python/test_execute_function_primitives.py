@@ -33,7 +33,6 @@ def function_manager_factory():
     managers = []
 
     def _create():
-        ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
         fm = FunctionManager()
         managers.append(fm)

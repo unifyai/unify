@@ -28,8 +28,6 @@ from .capture import (
 
 from .callable import execute_callable
 
-from .package_overlay import PackageOverlay, _CURRENT_PACKAGE_OVERLAY
-
 from .session import (
     PythonExecutionSession,
     SessionExecutor,
@@ -39,7 +37,6 @@ from .session import (
     _CURRENT_SANDBOX,
     _PARENT_CHAT_CONTEXT,
     _validate_execution_params,
-    _wrap_code_as_async_function,
 )
 
 __all__ = [
@@ -60,9 +57,6 @@ __all__ = [
     "capture_sandbox_output",
     # callable
     "execute_callable",
-    # package_overlay
-    "PackageOverlay",
-    "_CURRENT_PACKAGE_OVERLAY",
     # session
     "StateMode",
     "SessionKey",
@@ -72,5 +66,4 @@ __all__ = [
     "_validate_execution_params",
     "PythonExecutionSession",
     "SessionExecutor",
-    "_wrap_code_as_async_function",
 ]

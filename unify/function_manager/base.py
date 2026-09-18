@@ -47,7 +47,7 @@ class BaseFunctionManager(BaseStateManager):
         preconditions: Optional[Dict[str, Dict]] = None,
         overwrite: bool = False,
         raise_on_error: bool = True,
-        venv_id: Optional[int] = None,
+        dependencies: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """
         Validate, compile and persist one or more function implementations.
@@ -71,15 +71,18 @@ class BaseFunctionManager(BaseStateManager):
             Raise ``ValueError`` naming the failed functions and errors,
             instead of reporting them in the result. Failures for one
             function never block the rest of the batch.
-        venv_id : int | None
-            **Required** when a function imports third-party packages (beyond
-            the standard library and the execution environment); otherwise
-            ``ValueError`` is raised. Detection covers every import form —
-            ``import``, ``from … import`` and dynamic imports with a literal
-            name (``importlib.import_module("pkg")``, ``__import__("pkg")``)
-            — so the venv, not the import syntax, is what makes the package
-            available. Create a venv via ``add_venv`` first and pass the
-            returned ID.
+        dependencies : list[str] | None
+            PEP 508 requirement strings for the third-party packages the
+            functions import, e.g. ``["pandas>=2.0", "tabulate"]`` — the
+            same specifiers that installed them. **Required** when a
+            function imports anything beyond the standard library and the
+            execution environment; otherwise ``ValueError`` is raised.
+            Detection covers every import form — ``import``,
+            ``from … import`` and dynamic imports with a literal name
+            (``importlib.import_module("pkg")``, ``__import__("pkg")``) — so
+            the recorded dependency, not the import syntax, is what makes
+            the package available: it is installed wherever the function
+            runs, before it runs. Recorded on every function in the batch.
 
         Returns
         -------
@@ -141,8 +144,6 @@ class BaseFunctionManager(BaseStateManager):
               When ``include_implementations=False``, the ``implementation`` field
               may be omitted.
             - When ``_return_callable=True``: mapping of function name → callable.
-              Callables MAY be in-process functions or proxy callables for functions
-              that must execute in an isolated virtual environment (implementation‑defined).
             - When ``_also_return_metadata=True``: a dict with keys ``callables`` and
               ``metadata`` containing the two corresponding mappings.
 
@@ -408,14 +409,15 @@ class BaseFunctionManager(BaseStateManager):
         *,
         function_name: str,
         call_kwargs: Optional[Dict[str, Any]] = None,
-        target_venv_id: Optional[int] = ...,
         state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
         session_id: int = 0,
-        venv_pool: Optional[Any] = None,
         extra_namespaces: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a stored function by name with optional venv and state mode overrides.
+        Execute a stored function by name with optional state mode overrides.
+
+        The function's recorded ``dependencies`` are installed if any are
+        missing, then the implementation runs in-process.
 
         Signature
         ---------
@@ -423,10 +425,8 @@ class BaseFunctionManager(BaseStateManager):
             *,
             function_name: str,
             call_kwargs: dict[str, Any] | None = None,
-            target_venv_id: int | None = USE_FUNCTION_DEFAULT,
             state_mode: Literal["stateful", "read_only", "stateless"] = "stateless",
             session_id: int = 0,
-            venv_pool: VenvPool | None = None,
             extra_namespaces: dict[str, Any] | None = None,
         ) -> dict[str, Any]
 
@@ -436,50 +436,24 @@ class BaseFunctionManager(BaseStateManager):
             Name of the function to execute (must exist in the function table).
         call_kwargs : dict[str, Any] | None, default ``None``
             Keyword arguments to pass to the function.
-        target_venv_id : int | None, default ``USE_FUNCTION_DEFAULT``
-            Override the execution environment:
-            - ``USE_FUNCTION_DEFAULT`` (``...``): Use the function's stored ``venv_id``
-              from the function table. This is the default behavior.
-            - ``None``: Execute in the default Python environment (no custom venv).
-            - ``int``: Execute in this specific venv_id, regardless of what's
-              stored in the function table.
-
-            This allows running simple/compatible functions in a different venv
-            than they were originally associated with. The caller is responsible
-            for ensuring the target venv has the required packages.
         state_mode : Literal["stateful", "read_only", "stateless"], default ``"stateless"``
             Controls how global state is handled during execution:
             - ``"stateless"``: Executes with fresh globals/no inherited state.
               Every execution starts with a clean environment; the default, and
               the right choice for pure functions that should not depend on or
               affect session state.
-            - ``"stateful"``: Uses a persistent globals dict (in-process) or subprocess
-              connection (venv). Variables and state from previous executions persist.
-              Enables Jupyter-notebook-style incremental development. Requires
-              ``venv_pool`` for venv functions. For in-process functions (no
-              venv), state is stored internally.
+            - ``"stateful"``: Uses a persistent globals dict per session.
+              Variables and state from previous executions persist, enabling
+              Jupyter-notebook-style incremental development.
             - ``"read_only"``: Reads the current state from the persistent session
               but executes in a fresh environment. Changes are not persisted.
-              Useful for "what-if" exploration. Requires ``venv_pool`` for venv
-              functions.
-
-            All three modes are supported for both in-process (no venv) and
-            subprocess (venv) execution.
+              Useful for "what-if" exploration.
         session_id : int, default ``0``
-            The session ID within the execution environment. Multiple sessions allow
-            independent stateful execution contexts. Each session has its own process
-            and state, enabling concurrent "notebook panes" with isolated state.
-            Only applies to ``state_mode="stateful"`` or ``state_mode="read_only"``.
-        venv_pool : VenvPool | None, default ``None``
-            The VenvPool instance for stateful venv execution. Required when
-            ``state_mode="stateful"`` or ``state_mode="read_only"`` and the function
-            has a venv. If not provided for these modes, an error is raised.
+            The session whose state ``"stateful"`` and ``"read_only"`` use.
+            Multiple sessions allow independent stateful execution contexts,
+            like concurrent "notebook panes" with isolated state.
         extra_namespaces : dict[str, Any] | None, default ``None``
-            Named objects to inject into the function's execution namespace.
-            For in-process execution, all entries are injected into the
-            globals dict. For venv/subprocess execution, ``"primitives"`` and
-            ``"primitives"`` entries are bridged via RPC; other entries
-            are only available in-process.
+            Named objects to inject into the function's execution globals.
 
         Returns
         -------
@@ -494,8 +468,8 @@ class BaseFunctionManager(BaseStateManager):
         ------
         ValueError
             If the function does not exist or has no implementation.
-        ValueError
-            If state_mode requires a pool but none is provided.
+        RuntimeError
+            If one of the function's dependencies cannot be installed.
 
         Examples
         --------
@@ -504,7 +478,6 @@ class BaseFunctionManager(BaseStateManager):
         ...     function_name="my_func",
         ...     call_kwargs={"x": 1},
         ...     state_mode="stateful",
-        ...     venv_pool=venv_pool,
         ... )
 
         >>> # Execute with extra namespaces (e.g. sub-agent environment)
@@ -518,9 +491,6 @@ class BaseFunctionManager(BaseStateManager):
     def clear(self) -> None:
         raise NotImplementedError
 
-
-# Sentinel for "use the function's default venv_id"
-USE_FUNCTION_DEFAULT = ...
 
 # Attach centralised docstring
 BaseFunctionManager.clear.__doc__ = CLEAR_METHOD_DOCSTRING

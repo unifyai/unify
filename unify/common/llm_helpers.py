@@ -610,7 +610,7 @@ def _annotation_to_schema(ann: Any) -> Dict[str, Any]:
         # An optional parameter has to stay *expressible as absent*. Collapsing
         # `int | None` to a bare integer leaves a model with no way to say "no
         # value", so it supplies a sentinel instead — and a sentinel that means
-        # nothing to the receiver (venv 0, session 0) reads as a real request.
+        # nothing to the receiver (session 0) reads as a real request.
         if len(sub_schemas) == 2 and null_schema in sub_schemas:
             inner = next(s for s in sub_schemas if s != null_schema)
             inner_type = inner.get("type")

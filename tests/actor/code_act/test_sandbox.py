@@ -19,7 +19,6 @@ from unify.common._async_tool.formatting import (
     serialize_tool_content,
     FormattedToolResult,
 )
-from unify.common.tool_errors import ToolInputError
 
 
 @pytest.mark.asyncio
@@ -592,37 +591,6 @@ async def test_execute_code_python_cell_defaults_to_persistent_session_zero():
         assert isolated.error is None
         assert "NOT_FOUND" in parts_to_text(isolated.stdout)
         assert "leak" not in sandbox.global_state
-    finally:
-        _CURRENT_SANDBOX.reset(token)
-        try:
-            await actor.close()
-        except Exception:
-            pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(30)
-async def test_execute_code_venv_cells_default_to_one_shot():
-    """Omitting state_mode keeps venv cells stateless one-shots.
-
-    Only venv-less cells run in the persistent bound sandbox; a venv cell
-    resolves stateless rather than targeting the bound sandbox.
-    """
-    actor = CodeActActor(environments=[])
-    sandbox = PythonExecutionSession()
-    token = _CURRENT_SANDBOX.set(sandbox)
-    try:
-        execute_code = actor._build_tools()["execute_code"]
-
-        # The venv need not exist: the structured refusal reports which
-        # state_mode the omitted argument resolved to for a venv cell.
-        with pytest.raises(ToolInputError) as refusal:
-            await execute_code(
-                thought="run a cell in a venv",
-                venv_id=123,
-                code="print('hi')",
-            )
-        assert refusal.value.received["state_mode"] == "stateless"
     finally:
         _CURRENT_SANDBOX.reset(token)
         try:

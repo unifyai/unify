@@ -142,10 +142,11 @@ _PYTHON_FIRST = textwrap.dedent("""
     ### Python First
 
     Every cell is Python. Prefer Python packages over shell CLI tools:
-    packages install via the `install_python_packages` JSON tool with
-    isolated venvs and dependency resolution. When a task genuinely needs
-    a CLI, run it from Python with `subprocess` (or
-    `asyncio.create_subprocess_exec`) and work with its output as data.
+    packages install via the `install_python_packages` JSON tool into
+    the one persistent workspace environment, where they stay for every
+    later task. When a task genuinely needs a CLI, run it from Python
+    with `subprocess` (or `asyncio.create_subprocess_exec`) and work
+    with its output as data.
 """).strip()
 
 _EXECUTION_RULES = textwrap.dedent("""
@@ -162,7 +163,7 @@ _EXECUTION_RULES = textwrap.dedent("""
        inside one cell, not across cells. `del` bulky intermediates. An
        unexpected `NameError` on a known name usually means the sandbox
        restarted — re-derive or re-fetch, never assume the value came
-       back. Venv cells stay one-shots unless given a session.
+       back.
 
     2. **Async parallelism**: never wrap work in bare `asyncio.run(...)`
        — the runtime already owns a loop; a sync façade uses the injected

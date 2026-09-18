@@ -99,12 +99,12 @@ class Function(BaseModel):
         ),
     )
 
-    venv_id: Optional[int] = Field(
-        None,
+    dependencies: List[str] = Field(
+        default_factory=list,
         description=(
-            "VirtualEnv.venv_id for the Python virtual environment to use when "
-            "executing this function. If None, uses the project's default "
-            "environment."
+            "PEP 508 requirement strings for the third-party packages the "
+            "implementation imports, e.g. ['pandas>=2.0', 'tabulate']. "
+            "Installed into the workspace environment before the function runs."
         ),
         json_schema_extra={"ui_editable": True},
     )

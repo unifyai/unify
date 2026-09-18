@@ -1055,7 +1055,7 @@ def test_wrapped_methods_resolve_type_hints() -> None:
 #  OPTIONAL PARAMETERS STAY EXPRESSIBLE AS ABSENT                             #
 # --------------------------------------------------------------------------- #
 def _tool_with_optional_scalars(
-    venv_id: int | None = None,
+    session_id: int | None = None,
     session_name: str | None = None,
     ratio: float | None = None,
     flag: bool | None = None,
@@ -1066,14 +1066,14 @@ def _tool_with_optional_scalars(
 def test_optional_scalars_are_nullable() -> None:
     """An optional scalar must advertise null.
 
-    Collapsed to a bare integer, `venv_id` gave the model no way to say "no
-    venv", so it sent sentinels (0, -1, 999, 2147483647) that the receiver read
-    as real requests for environments that never existed.
+    Collapsed to a bare integer, an optional id gives the model no way to say
+    "none", so it sends sentinels (0, -1, 999, 2147483647) that the receiver
+    reads as real requests for resources that never existed.
     """
     schema = llmh.method_to_schema(_tool_with_optional_scalars)
     params = schema["function"]["parameters"]["properties"]
 
-    assert params["venv_id"]["type"] == ["integer", "null"]
+    assert params["session_id"]["type"] == ["integer", "null"]
     assert params["session_name"]["type"] == ["string", "null"]
     assert params["ratio"]["type"] == ["number", "null"]
     assert params["flag"]["type"] == ["boolean", "null"]
