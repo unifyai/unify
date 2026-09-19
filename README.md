@@ -11,22 +11,23 @@
 
 # unify
 
-**unify is a self-improving agent harness that runs entirely on your machine: a persistent conversation loop above a code-writing actor, a skill library that grows from work that went well, a local SQLite store, and a steering protocol that reaches into any running operation. No backend, no accounts, no infra. One LLM key and `python -m unify`.**
+**unify is a self-improving agent harness for research on how an assistant learns tasks and skills. It runs entirely on your machine: a persistent conversation loop above a code-writing actor, two skill libraries the actor consults before it writes code and distils into after work that went well, and a steering protocol that reaches into any running operation. One LLM key and `python -m unify`.**
 
-The shape is deliberately human-in-the-loop: an assistant that keeps moving while you steer it, not one that replaces the person steering.
+The repo is deliberately small. Everything that is not the harness itself has been cut, so that what is left can be studied, changed and measured: how skills are discovered, how a run is distilled into a function or a procedure, how a correction reaches work that is already running, and how all of that composes when actors nest.
 
-The actor does everything in code: it writes one Python program per turn in a persistent sandbox, reads files where they are, delegates to nested actors, and calls stored functions it discovered first. What it keeps between sessions is not a transcript dump but **skills**: executable functions and the procedures for composing them.
+## The design
 
-After a successful run it **promotes what worked into a personal skill library** (executable Python *plus* the procedural how-to prose to use it) that every future session consults before reaching for raw tools.
+Seven decisions, each of which the rest of the code serves:
 
-**At a glance, vs the closest open-source alternatives:**
+- **Everything is code.** The actor writes one Python program per turn in a persistent sandbox. Files are read where they are, shell commands run through `subprocess`, packages install into one workspace environment, and nested actors are spawned from code with `primitives.actor.act(...)`. There is no tool per capability.
+- **Two skill libraries, discovered first.** Functions are the *what*: executable Python with a docstring and pip dependencies. Guidance is the *how*: procedures for composing them. The actor searches both before it writes new code.
+- **A run is distilled, not remembered.** After a run completes, a storage review reads the trajectory and decides whether anything is worth keeping: a callable that worked becomes a function, a non-obvious composition becomes guidance. Often nothing is. That review is the only way the libraries grow.
+- **A conversation loop above the actor.** A slow brain stays present across the conversation and keeps deciding whether to speak or wait while work is in flight. Dispatching work and replying to you are different decisions, made by different loops. This is the interaction-model split [described by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/), arrived at in the harness rather than in the model.
+- **Steering is a protocol.** Every operation returns the same steerable handle: `ask`, `interject`, `pause`, `resume`, `stop`. Handles nest, so a correction made in chat propagates down the live call stack into whatever loop is running, and a clarification from the innermost loop bubbles up to you. Corrections reach code that is already executing, not just the next tool boundary.
+- **One process, one file.** Runtime, chat history and both libraries run in one process against one SQLite file under `~/.unify`. No services, no accounts, no infrastructure.
+- **Reactive.** Every piece of work starts from a message you sent or from work that message started. There is no scheduler and no inbound channel other than the chat.
 
-|  | unify | OpenClaw | Hermes Agent |
-|---|---|---|---|
-| Persistent reasoning loop *above* the tool-caller | ✓ | no | no |
-| Mid-flight steering (pause / redirect / interject) | ✓ | abort + redeliver | text injection |
-| Auto-grown skill library (executable code + prose) | ✓ | skills | skills |
-| Runs in one process on your machine | ✓ | gateway + agent runs | single loop |
+unify shares the stance of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)'s recursive language model: a persistent Python control environment, subagents as function calls, skills as importable code, and harness state that improves with use. It differs in the conversation layer above the actor, in steering as a first-class protocol, and in keeping everything in one process over one store.
 
 ---
 
@@ -56,7 +57,7 @@ Then start chatting:
 > Run it against ~/exports/run-42.csv and plot the deltas.
 ```
 
-Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the `workspace/` directory the actor reads and writes files in, and the runtime logs. Delete the directory and you have a fresh assistant. `/help` inside the chat lists the few slash commands (attach a file, quit); `unify --debug` streams the runtime logs to the terminal.
+Everything the assistant keeps lives under `~/.unify/` (`UNIFY_HOME`): the SQLite store, the workspace environment, the `workspace/` directory the actor reads and writes files in, and the runtime logs. Delete the directory and you have a fresh assistant. `/help` inside the chat lists the few slash commands (attach a file, quit); `unify --debug` streams the runtime logs to the terminal.
 
 <details>
 <summary>Configuration</summary>
@@ -67,7 +68,7 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 |---|---|
 | `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` | At least one provider key |
 | `UNIFY_MODEL`, `UNIFY_REASONING_EFFORT` | The default model (a unillm `model@provider` endpoint) and effort |
-| `UNIFY_HOME` | Where the store and workspace live (default `~/.unify`) |
+| `UNIFY_HOME` | Where the store, environment and workspace live (default `~/.unify`) |
 | `UNIFY_STORE_PATH` | An explicit path for the SQLite store |
 | `UNILLM_CACHE` | Cache LLM responses locally; later runs replay identical calls |
 | `ASSISTANT_FIRST_NAME`, `USER_FIRST_NAME`, … | Optional identity for the assistant and its user |
@@ -76,18 +77,9 @@ Everything the assistant remembers lives under `~/.unify/` (`UNIFY_HOME`): the S
 
 ---
 
-## What works
+## Steering while work is in flight
 
-- **Chat** with one assistant in the terminal. Every message you send is a normal inbound event; every reply is a normal outbound one, so the same loop drives any front end you put on it.
-- **Work in the background.** "Look into X" dispatches a code-writing actor; the conversation keeps going while it runs, and you can ask it how it is doing, redirect it, pause it, or stop it.
-- **Skills.** Functions and guidance the assistant stored after a job that went well, discovered before it writes new code.
-- **Files.** Name a file path in the chat and the actor reads it where it is; anything it produces lands in the workspace.
-
----
-
-## Steering while work is in-flight
-
-When the assistant is mid-task, steer it the way you would steer a colleague: **send another message**.
+When the assistant is mid-task, steer it the way you would steer a colleague: send another message.
 
 ```text
 > Actually, narrow it to ones with Rust bindings.
@@ -95,7 +87,7 @@ When the assistant is mid-task, steer it the way you would steer a colleague: **
 > Pause that, something urgent.
 ```
 
-Each message wakes the slow brain, which can answer you directly or redirect in-flight work through its action-steering tools (`interject_*`, `ask_*`, `pause_*`, `resume_*`, `stop_*`). Nothing restarts; the correction propagates down the live call stack into whatever manager loop is currently running.
+Each message wakes the slow brain, which can answer you directly or redirect in-flight work through its steering tools (`interject_action`, `ask_action`, `pause_action`, `resume_action`, `stop_action`, `answer_clarification_action`), each addressed by the action's id. Nothing restarts; the correction propagates down the live call stack into whatever loop is currently running.
 
 ```text
 You          ▸  "Find me high-throughput vector DBs under Apache 2."
@@ -109,33 +101,19 @@ You          ▸  "OK, resume. How's it going?"
 Assistant    ▸  (pick up where they left off, give you a status update)
 ```
 
+Several actions can run at once, each independently inspectable, steerable and pausable:
+
 ```text
-Assistant    ▸  Three tasks running at once.
-                  [0] watch_pr_reviews    ██████████░░░  in progress
-                  [1] digest_releases     ████████████░  in progress
-                  [2] retry_failed_build  ██░░░░░░░░░░  starting
-                Each one independently inspectable, steerable, and pausable.
+┌─ In-Flight Actions ────────────────────────────────┐
+│  [0] watch_pr_reviews    ██████████░░░  In progress │
+│  [1] digest_releases     ████████████░  In progress │
+│  [2] retry_failed_build  ██░░░░░░░░░░  Starting     │
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Highlights
-
-<table>
-<tr><td><b>Interruptible mid-task</b></td><td>Every operation can be paused, resumed, redirected, or queried while it's running, including operations <i>nested inside other operations</i>, all the way down.</td></tr>
-<tr><td><b>Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow, not a chain of one-tool-at-a-time JSON decisions.</td></tr>
-<tr><td><b>Learns reusable skills</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + dependencies) and the procedural prose for using it. The next session composes them into a plan instead of re-deriving.</td></tr>
-<tr><td><b>Concurrent work, independently steerable</b></td><td>Multiple actions run at once: pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
-<tr><td><b>Local-first, fully open</b></td><td>Runtime, persistence and LLM client are MIT-licensed and run in one process on your laptop. The store is a SQLite file you can open with any tool.</td></tr>
-</table>
-
----
-
 ## How it works
-
-A persistent **interaction loop** (`ConversationManager`) stays present across the conversation and keeps thinking while work is in flight. When something needs deeper reasoning, it dispatches a **background reasoner** (`Actor`) that writes Python plans over two skill libraries. Every operation returns a live, steerable handle, and those handles nest: a correction you make in chat propagates *down* through the dispatched action into whatever manager call is currently running.
-
-This is the same **interaction loop / background reasoner** split [articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/): they put it *inside the model* (one model trained to interact natively); unify arrives at the same shape at the harness level.
 
 ```text
 You ──► ConversationManager (slow brain: event-driven, single-shot tool decisions)
@@ -151,27 +129,22 @@ You ──► ConversationManager (slow brain: event-driven, single-shot tool de
         unify.db (in-process SQLite store: contexts, rows, derived columns)
 ```
 
-**Dispatch flows down; steering flows back up the same path.** Every level returns the same `SteerableToolHandle`, so a mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary. It propagates through the live nested call stack as a typed signal any inner manager loop can act on.
+**Dispatch flows down; steering flows back up the same path.** Every level returns the same `SteerableToolHandle`, so a mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary. It propagates through the live nested call stack as a typed signal any inner loop can act on.
 
----
-
-## Under the hood
-
-### Steerable handles: the universal protocol
-
-Every public manager method returns one: the same `ask`, `interject`, `pause`, `resume`, `stop` surface at every level of the call stack.
+### Steerable handles
 
 ```python
 handle = await actor.act("Survey high-throughput vector DBs and draft a comparison")
 await handle.interject("Only ones with Rust bindings")   # mid-flight redirect
 await handle.pause(); ...; await handle.resume()         # freeze and resume
+answer = await handle.ask("what step are you on and why?")  # a read-only inspection loop over the live transcript
 ```
 
-When the Actor calls `primitives.actor.act(...)`, the nested actor returns its own handle, nested inside the Actor's, which is nested inside the `ConversationManager`'s. Steering at any level propagates down through the live call stack as a typed signal any inner loop can act on, not as an abort or a queued prompt.
+When the actor calls `primitives.actor.act(...)`, the nested actor returns its own handle, nested inside the actor's, which is nested inside the `ConversationManager`'s. Steering at any level propagates down through the live call stack. When an inner loop hits genuine ambiguity, its clarification bubbles up through every intervening layer to you, and your answer flows back down to the loop that asked, without unwinding the stack. `stop()` on one nested branch leaves its siblings running.
 
-### CodeAct: the Actor writes Python programs
+### CodeAct: the actor writes programs
 
-Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. unify's Actor writes a single Python program per turn in a persistent sandbox, calling stored functions and nested actors from code:
+Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. unify's actor writes a single Python program per turn in a persistent sandbox, calling stored functions and nested actors from code:
 
 ```python
 rows = load_orders("~/exports/orders.csv")          # a stored function, discovered first
@@ -181,153 +154,48 @@ for row in rows:
 note = await primitives.actor.act(f"Write a short note explaining {by_status}")
 ```
 
-A load → reshape → delegate sequence becomes one coherent plan with real variables, loops, and control flow, rather than separate tool-selection turns round-tripping through tool messages.
+A load, reshape, delegate sequence becomes one plan with real variables, loops and control flow, rather than separate tool-selection turns round-tripping through tool messages. Corrections reach a running program too: an AST pass adds probes at function entry and loop iteration, dispatches are memoised, and a patched function is spliced into the source and re-run from where the change first matters.
+
+### Functions and guidance
+
+Two libraries the actor consults before reaching for raw code:
+
+- **Functions**: executable Python with a docstring and pip dependencies, run in-process with dependencies ensured in the workspace environment.
+- **Guidance**: procedural how-to prose (walkthroughs, multi-step strategies), linked to the functions it composes.
+
+Search is a plain word match over names, docstrings, titles and content: the libraries are small enough that nothing heavier earns its place. Skills in the [Agent Skills](https://agentskills.io) format import as guidance through `scripts/skill_migration`.
 
 ### The local store
 
-`unify.db` is an in-process SQLite engine with the shape of a document store: **projects** hold **contexts** (tables), contexts hold **rows** of JSON with typed **fields**, and a context can declare unique keys, auto-counted ids and **derived columns** whose equations are evaluated on write. Filters and sort keys are ordinary Python expressions evaluated per row (`age > 30 and 'berlin' in city.lower()`).
+`unify.db` is an in-process SQLite engine with the shape of a document store: **projects** hold **contexts** (tables), contexts hold **rows** of JSON with typed **fields**, and a context can declare unique keys, auto-counted ids, foreign keys and **derived columns** whose equations are evaluated on write. Filters and sort keys are ordinary Python expressions evaluated per row (`age > 30 and 'berlin' in city.lower()`).
 
-Everything the assistant keeps — chat history, functions, procedures — goes through this one API, so the whole assistant is one file you can back up, inspect, or delete.
+Chat history, functions and procedures all go through this one API, so the whole assistant is one file you can back up, inspect or delete.
 
-### Functions and Guidance: a dual library
-
-Two persistent libraries the Actor consults before reaching for raw tools:
-
-- **`FunctionManager`**: executable Python (with metadata and dependencies) the Actor composes into plans.
-- **`GuidanceManager`**: procedural how-to prose (SOPs, software walkthroughs, multi-step strategies).
-
-After a successful trajectory, a reviewer loop (`store_skills`) can extract *both*: code worth keeping plus the narrative for using it.
-
-### Concurrent steerable actions
-
-```text
-┌─ In-Flight Actions ────────────────────────────────┐
-│                                                     │
-│  [0] watch_pr_reviews    ██████████░░░  In progress │
-│      → ask, interject, stop, pause                  │
-│                                                     │
-│  [1] digest_releases     ████████████░  In progress │
-│      → ask, interject, stop, pause                  │
-│                                                     │
-│  [2] retry_failed_build  ██░░░░░░░░░░  Starting     │
-│      → ask, interject, stop, pause                  │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
-
-Each action gets its own dynamically-generated steering tools on the slow brain's tool surface: inspect, interject, pause, resume, or stop any one without touching the rest.
-
-### Putting it together
-
-For the full breakdown (async tool loop internals, event bus, primitive registry, the store) see [`ARCHITECTURE.md`](ARCHITECTURE.md). The manager map at a glance:
-
-```text
-ConversationManager (interaction loop, event-driven scheduling)
-    │
-    ▼
-CodeActActor (generates Python plans, calls primitives.* APIs)
-    │
-    ▼
-Skill libraries (discovered before the Actor writes code)
-    │
-    ├── FunctionManager      : stored functions, dependencies
-    └── GuidanceManager      : procedures, how-to knowledge
-    │
-    └── EventBus             : typed pub/sub backbone (Pydantic events)
-```
-
----
-
-## Bring your skills with you
-
-OpenClaw and Hermes Agent both represent skills as `SKILL.md` files (the [agentskills.io](https://agentskills.io) standard: YAML frontmatter + a markdown body, with optional bundled `scripts/`). That maps almost one-to-one onto a `GuidanceManager` entry, so either skill library can be imported off-the-shelf as guidance:
-
-```bash
-# Dry run (the default): print what would be imported, write nothing
-.venv/bin/python -m scripts.skill_migration.openclaw_to_guidance
-.venv/bin/python -m scripts.skill_migration.hermes_to_guidance
-
-# Import for real (titles are namespaced "[openclaw] …" / "[hermes] …")
-.venv/bin/python -m scripts.skill_migration.openclaw_to_guidance --execute
-.venv/bin/python -m scripts.skill_migration.hermes_to_guidance  --execute
-```
-
-Each script looks for a sibling checkout (`../openclaw`, `../hermes-agent`) by default; pass `--repo-root` to point elsewhere. A skill's `description` and markdown body become the guidance `content`, and any bundled `scripts/` are inlined verbatim as a textual reference. Promoting that inlined code into a runnable `FunctionManager` function (and linking it back via `function_ids`) is a separate, deliberate step. Re-runs skip titles that already exist; pass `--conflict overwrite` to update them in place instead.
-
----
-
-## Steering in practice: six things a single agent loop can't do
-
-Because *every* operation, at every level of the call stack, returns the same live `SteerableToolHandle`, a handful of interactions become natural that a single blocking agent loop (which can ultimately only *abort* or *wait*) can't express.
-
-<details>
-<summary><b>1. Course-correct a task that's running three loops deep, live</b></summary>
-
-Kick off work that nests `ConversationManager → Actor → nested Actor`. Halfway through, say *"use the March export, not February."* The correction travels **down the live call stack** into the innermost loop and changes its behaviour, no restart, no second prompt appended, no waiting for the next tool boundary. A monolithic loop can only hard-interrupt the child and start it over from scratch.
-
-</details>
-
-<details>
-<summary><b>2. Ask a busy task what it's doing, without disturbing it</b></summary>
-
-`handle.ask("what step are you on and why?")` spins up a **read-only inspection loop** over the task's in-flight transcript and returns an answer while the task keeps running, recursing into deeper nested handles if you want detail. You're interrogating live reasoning mid-flight, not polling a status string the agent remembered to update.
-
-</details>
-
-<details>
-<summary><b>3. Freeze a nested operation, look inside, resume exactly where it left off</b></summary>
-
-`pause()` halts new reasoning at the current point, propagating across the whole nested stack, while you inspect intermediate state or interject a constraint. `resume()` picks up from exactly where it stopped. An interrupt-only model can *stop*, but it can't freeze-and-continue.
-
-</details>
-
-<details>
-<summary><b>4. Run three tasks at once and steer each one differently</b></summary>
-
-Hold a live handle to each of several concurrent actions. **Pause** one, **interject** a new constraint into another, **stop** a third, all while the orchestrator keeps reasoning and the rest run untouched. Each gets its own dynamically-generated steering tools on the orchestrator's surface. Delegation that blocks the parent until a child returns offers no per-task live control.
-
-</details>
-
-<details>
-<summary><b>5. Surface a clarification from the innermost loop, and route the answer back down</b></summary>
-
-When an inner manager hits genuine ambiguity, its clarification **bubbles up through every intervening layer** to you; your answer flows back **down** to the loop that asked, and the original deep operation completes, without unwinding the stack. A single-level clarification primitive can't surface a question from three orchestration layers down.
-
-</details>
-
-<details>
-<summary><b>6. Stop one branch of a fan-out without touching its siblings</b></summary>
-
-`stop()` a single nested branch, with a reason that's recorded as a synthetic tool call in the transcript, while its sibling branches carry on. A thread-scoped abort flag is all-or-nothing across a subtree; here the cut is surgical.
-
-</details>
+For the full breakdown (async tool loop internals, event bus, primitive registry, context propagation) see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
 ## The runtime stack
 
-Two MIT-licensed repos make up the local runtime.
-
 | Repo | Role |
 |------|------|
-| **unify** (this) | Agent runtime: managers, tool loops, CodeAct, the local store, the chat loop |
+| **unify** (this) | The harness: conversation loop, actor, skill libraries, the store |
 | **[unillm](https://github.com/unifyai/unillm)** | LLM access layer: OpenRouter, Anthropic, DeepSeek, or any compatible endpoint, with response caching |
 
 ---
 
 ## Running the tests
 
-Tests exercise the real system (steerable handles, CodeAct, manager composition, nested tool loops) against a per-process SQLite store with cached LLM responses:
+Tests exercise the real system (steerable handles, CodeAct, nested tool loops, the storage review) against a per-session SQLite store with cached LLM responses. The LLM is never mocked: responses are cached per exact input, so a first run is slow and later runs replay in milliseconds.
 
 ```bash
 uv sync --all-groups
 
-tests/parallel_run.sh tests/                    # everything
-tests/parallel_run.sh tests/actor/              # one module
-tests/parallel_run.sh tests/function_manager/   # another
+tests/parallel_run.sh -s -j 36 tests/           # everything, one session per file
+tests/parallel_run.sh tests/actor/              # one area, one session per test
 ```
 
-See [tests/README.md](tests/README.md) for the full philosophy: responses are cached, not mocked. Delete the cache and you're re-evaluating against live models.
+See [tests/README.md](tests/README.md) for the philosophy and the runner.
 
 ---
 
@@ -337,30 +205,23 @@ See [tests/README.md](tests/README.md) for the full philosophy: responses are ca
 |------|-------------|
 | `unify/common/async_tool_loop.py` | `SteerableToolHandle`: the protocol everything returns |
 | `unify/common/_async_tool/loop.py` | The async tool loop engine: nesting, steering, context propagation |
-| `unify/actor/code_act_actor.py` | CodeAct: plan generation, sandbox, primitives |
+| `unify/actor/code_act_actor.py` | CodeAct: plan generation, sandbox, the storage review |
+| `unify/function_manager/steering.py` | Steering code that is already running |
 | `unify/conversation_manager/conversation_manager.py` | The slow brain: debouncing, in-flight actions, event loop |
-| `unify/conversation_manager/domains/brain_action_tools.py` | How the brain starts, steers, and tracks concurrent work |
+| `unify/conversation_manager/domains/brain_action_tools.py` | How the brain starts, steers and tracks concurrent work |
 | `unify/db/engine.py` | The local store: contexts, rows, derived columns, commits |
-| `unify/db/expressions.py` | The row expression language behind every filter and sort |
-| `unify/function_manager/primitives/registry.py` | How primitives are assembled into the typed API surface |
-| `unify/events/event_bus.py` | Typed event backbone |
-
----
+| `unify/environment.py` | The workspace environment: one venv, packages installed once |
 
 ## Project structure
 
 ```text
 unify/
-├── unify/             # Main package: cli, actor, conversation_manager, function_manager, guidance_manager, db, common
-├── tests/             # Pytest suite (cached LLM responses, per-process SQLite store)
-├── scripts/           # Skill import, builtins seeding, dev tooling
+├── unify/             # The harness: cli, actor, conversation_manager, function_manager, guidance_manager, db, common
+├── tests/             # Pytest suite (cached LLM responses, per-session SQLite store)
+├── scripts/           # Skill import, builtins seeding, git hooks
 └── docs/              # Design writeups
 ```
-
----
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-Built by the team at [unify](https://unify.ai).

@@ -1,10 +1,10 @@
 # Architecture
 
-This document describes Unify's internal architecture for developers who want to understand how the system works, contribute, or evaluate the design decisions.
+This document describes how the harness works, for anyone who wants to study it, change it or measure it. The README states the design decisions; this is how the code serves them.
 
 ## Mental model
 
-Unify implements an AI assistant's brain as a persistent **ConversationManager** that talks to the user, above a central **Actor** that writes Python programs to do the work, backed by two **skill libraries** the Actor consults before it writes code: `FunctionManager` (stored functions) and `GuidanceManager` (procedures). What the assistant learns from a job that went well flows back into those libraries through a storage review.
+Unify is a persistent **ConversationManager** that talks to the user, above a central **Actor** that writes Python programs to do the work, backed by two **skill libraries** the Actor consults before it writes code: `FunctionManager` (stored functions) and `GuidanceManager` (procedures). What the assistant learns from a job that went well flows back into those libraries through a storage review.
 
 Most public operations in the system, from a brain turn to a multi-step plan, run inside an **async LLM tool loop** and return a **steerable handle**. These handles are the universal interface for steerable work: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running. The skill libraries are the exception: they expose direct CRUD methods as Actor JSON tools, not NL tool loops.
 
@@ -44,7 +44,7 @@ The assistant is **reactive**: every piece of work starts from a message the use
 
 **Files:** `unify/common/async_tool_loop.py`, `unify/common/_async_tool/loop.py`
 
-The async tool loop is the primary runtime for steerable manager methods. Those methods typically: create an LLM client, register domain-specific tools, start a loop, and return a handle. Typed catalogues instead expose direct CRUD/lifecycle methods consumed as Actor JSON tools.
+The async tool loop is the runtime for every steerable operation: a brain turn, an act, a nested act, an inspection. Such an operation typically: create an LLM client, register domain-specific tools, start a loop, and return a handle. Typed catalogues instead expose direct CRUD/lifecycle methods consumed as Actor JSON tools.
 
 ### How it works
 
@@ -129,7 +129,7 @@ window the correction cannot even arrive.
 
 **File:** `unify/common/async_tool_loop.py`
 
-`SteerableToolHandle` is the abstract protocol. `AsyncToolLoopHandle` is the concrete implementation backed by an asyncio task. Every public manager method returns one.
+`SteerableToolHandle` is the abstract protocol. `AsyncToolLoopHandle` is the concrete implementation backed by an asyncio task. Every steerable operation returns one.
 
 ```python
 class SteerableToolHandle(ABC):
@@ -245,7 +245,7 @@ Each library follows the same pattern:
 
 **File:** `unify/conversation_manager/conversation_manager.py`
 
-The ConversationManager is the top-level orchestrator for the live conversation. It has a fundamentally different design from the other managers because it handles real-time interaction: it sees the full picture — the chat thread, notifications, in-flight actions, system state — and makes deliberate decisions about what to do. It uses a single-shot tool decision pattern (one LLM call → one action) rather than a multi-turn loop, because the user might send another message at any moment.
+The ConversationManager is the top-level orchestrator for the live conversation. It has a different design from the actor and the libraries because it handles real-time interaction: it sees the full picture — the chat thread, notifications, in-flight actions, system state — and makes deliberate decisions about what to do. It uses a single-shot tool decision pattern (one LLM call → one action) rather than a multi-turn loop, because the user might send another message at any moment.
 
 ### Events in, events out
 
@@ -272,7 +272,7 @@ The ConversationManager uses a `Debouncer` that coalesces rapid-fire events (new
 - **Filters and sort keys** are Python expressions evaluated per row by an AST walker (never `eval`), with SQL-style `None` propagation and builtins such as `exists` and `now`.
 - **Commits** snapshot a context or a whole project and can be rolled back, which is what the test fixtures use to reset scenarios.
 
-The public API (`db.get_logs`, `db.create_logs`, `db.update_logs`, `db.create_context`, …) is what every manager reads and writes through, and the whole assistant is one file under `UNIFY_HOME`.
+The public API (`db.get_logs`, `db.create_logs`, `db.update_logs`, `db.create_context`, …) is what every component reads and writes through, and the whole assistant is one file under `UNIFY_HOME`.
 
 ---
 
@@ -367,7 +367,7 @@ Unify ──► unify.db ──► <UNIFY_HOME>/store.sqlite
   └─────► UniLLM ──► OpenRouter / Anthropic / DeepSeek
 ```
 
-The core architecture (handles, loops, CodeAct, manager composition) is independent of the specific persistence layer.
+The core architecture (handles, loops, CodeAct, the libraries) is independent of the specific persistence layer.
 
 ---
 
@@ -411,7 +411,7 @@ unify/
 │   ├── events/
 │   │   ├── event_bus.py                # EventBus
 │   │   └── types/                      # Pydantic event payloads
-│   └── manager_registry.py             # Singleton factory for manager instances
+│   └── manager_registry.py             # Real or simulated implementation of each component
 ├── tests/
 │   ├── parallel_run.sh                 # Isolated parallel test runner
 │   ├── async_helpers.py                # Trigger-based synchronization
