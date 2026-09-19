@@ -287,7 +287,7 @@ The EventBus is an in-process, asyncio-friendly pub/sub system with:
 - **Callback registration** — `register_callback` / `unregister_callback` subscribe async callbacks to event types, with an optional filter and every-n throttle.
 - **Callback cascade tracking** — `_CURRENT_ROOT_SEQ` (a context variable) tracks which callback triggered which, so `join_callbacks()` can await an entire cascade deterministically.
 
-Managers and tool loops publish structured events (tool calls, steering actions, method boundaries) via `to_event_bus()`. This feeds observability and the tests' deterministic ordering assertions.
+Components and tool loops publish structured events (tool calls, steering actions, method boundaries) via `to_event_bus()`. This feeds observability and the tests' deterministic ordering assertions.
 
 ### Lineage and hierarchy
 
