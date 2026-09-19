@@ -13,13 +13,11 @@ from ...common.hierarchical_logger import DEFAULT_ICON
 from contextlib import suppress, contextmanager
 from .tools_utils import create_tool_call_message
 
-# ── sent-watermark invariant ────────────────────────────────────────────
-#
-# A message is immutable once it has been included in any dispatched LLM
-# request; everything from the watermark index onward is still free to
-# mutate. Provider prefix caching matches serialized requests byte-for-byte
-# from position 0, so any edit below the watermark invalidates the cached
-# prefix for every subsequent request.
+# Sent-watermark invariant: a message is immutable once it has been included
+# in any dispatched LLM request; everything from the watermark index onward
+# is still free to mutate. Provider prefix caching matches serialized
+# requests byte-for-byte from position 0, so any edit below the watermark
+# invalidates the cached prefix for every subsequent request.
 
 
 def _message_index(client, msg: dict) -> Optional[int]:
@@ -57,19 +55,17 @@ def loop_user_notice(content: Any, **extra: Any) -> dict:
     user turn.
 
     This is the only place that stamps ``_loop_authored``, the marker
-    ``is_loop_authored_message`` checks. Every loop-authored user-role
-    message must be built here rather than as an inline dict literal, so
-    the marker can never be forgotten at a new call site the way it was
-    at three of them before this existed. ``extra`` still accepts the
-    older, purpose-specific markers (``_progress_msg``, ``_clarify_msg``,
-    ``_lifecycle_msg``, ``_ctx_header``) for callers that also need those
-    for their own coalescing/filtering logic — ``_loop_authored`` is
-    stamped regardless, so the boundary check never depends on which of
-    those a given caller remembered to pass.
+    ``is_loop_authored_message`` checks; every loop-authored user-role
+    message must be built here rather than as an inline dict literal so
+    the marker cannot be forgotten at a call site. ``extra`` accepts the
+    purpose-specific markers (``_progress_msg``, ``_clarify_msg``,
+    ``_lifecycle_msg``, ``_ctx_header``) callers need for their own
+    coalescing/filtering — ``_loop_authored`` is stamped regardless, so
+    the boundary check never depends on which of those was passed.
 
-    A genuine user interjection (``_interjection``) is built directly at
-    its call site, never through here — that asymmetry is what makes it
-    a real turn boundary.
+    A genuine user interjection (``_interjection``) is built at its own
+    call site, never through here — that asymmetry is what makes it a
+    real turn boundary.
     """
     return {"role": "user", "content": content, "_loop_authored": True, **extra}
 
@@ -78,12 +74,10 @@ def is_loop_authored_message(msg: dict) -> bool:
     """True for a ``role="user"`` message the loop itself appended, never
     a genuine new user turn.
 
-    Every message built by ``loop_user_notice`` carries ``_loop_authored``,
-    so this checks a single flag rather than an inline list of marker
-    keys. Every consumer that needs to tell "the user said something"
-    apart from "the loop said something" (e.g. a boundary check that must
-    not treat loop-authored status as the start of a new request) should
-    use this predicate.
+    Every consumer that must tell "the user said something" apart from
+    "the loop said something" (e.g. a boundary check that must not treat
+    a loop-authored notice as the start of a new request) uses this
+    predicate.
     """
     return bool(msg.get("_loop_authored"))
 
@@ -92,16 +86,15 @@ def extract_substantive_text(content: Any) -> Optional[str]:
     """Normalize assistant content to the text a user would read, for
     deciding whether a turn carries a substantive answer.
 
-    Handles both a plain string and a multimodal content-block list (only
-    ``"text"`` blocks contribute); returns ``None`` when the result is
-    empty or whitespace-only in either shape, so callers can use a plain
-    ``is None`` check rather than relying on truthiness — which passes a
-    whitespace-only string and misreports a non-empty block list as
-    substantive even when every block's text is blank. When a block list
-    does carry substantive text, the extracted text is returned rather
-    than the raw list, since every consumer downstream treats the answer
-    as plain text. Shared by the final-answer walk-back and the parent
-    context snapshot filter so both apply one definition of "substantive".
+    Handles a plain string and a multimodal content-block list (only
+    ``"text"`` blocks contribute). Returns ``None`` when the result is
+    empty or whitespace-only in either shape, so callers use ``is None``
+    rather than truthiness — which would pass a whitespace-only string
+    and misreport a non-empty block list whose every block is blank. A
+    block list with substantive text yields the extracted text, not the
+    raw list, since every consumer treats the answer as plain text.
+    Shared by the final-answer walk-back and the parent context snapshot
+    filter so both apply one definition of "substantive".
     """
     if isinstance(content, str):
         return content if content.strip() else None
@@ -126,10 +119,9 @@ def _hash_msgs_slice(msgs: list) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-# Diagnostic switch, not a rollout flag: prod behavior of the loop itself is
-# identical either way. Off by default so the below-watermark hashing (real
-# per-dispatch CPU on long transcripts) never ships to prod; the test suite's
-# conftest turns it on so CI still catches an unsanctioned mutation.
+# Diagnostic switch: loop behaviour is identical either way. Off by default
+# because the below-watermark hashing costs real per-dispatch CPU on long
+# transcripts; the test suite turns it on so CI catches unsanctioned mutation.
 _INVARIANT_CHECKS_ENV = "UNIFY_TRANSCRIPT_INVARIANT_CHECKS"
 
 
@@ -153,9 +145,8 @@ def _rebaseline_watermark_hash(client) -> None:
     """Recompute the stored watermark hash after a sanctioned escape-hatch splice.
 
     A ``bypass_watermark`` splice deliberately shifts content at indices the
-    previous hash already covered — that's the escape hatch's whole point
-    (legality beats cache). Without re-baselining here, the next dispatch's
-    integrity check would read that sanctioned shift as an unsanctioned
+    previous hash covered (legality beats cache); without re-baselining, the
+    next dispatch's integrity check would read that shift as an unsanctioned
     mutation and raise.
     """
     if not _invariant_checks_enabled():
@@ -176,12 +167,11 @@ _REASONING_PAYLOAD_KEYS = ("provider_specific_fields", "reasoning_details", "rea
 def strip_reasoning_payloads(msg: dict) -> int:
     """Drop provider reasoning machinery from one message, in place.
 
-    Encrypted reasoning blobs and reasoning summaries exist so a provider
-    can continue an in-flight chain of thought; once the turn that
-    produced them is over they are pure re-billed bulk — often the
-    largest single component of a long-lived transcript. The visible
-    ``content`` is never touched. Returns the serialized characters
-    removed (approximate, for accounting).
+    Encrypted reasoning blobs and summaries let a provider continue an
+    in-flight chain of thought; once that turn is over they are re-billed
+    bulk, often the largest component of a long-lived transcript. The
+    visible ``content`` is never touched. Returns the serialized
+    characters removed (approximate, for accounting).
     """
     saved = 0
     for key in _REASONING_PAYLOAD_KEYS:
@@ -199,25 +189,22 @@ def compact_reviewed_messages(client, reviewed_message_count: int) -> int:
 
     Once a storage review has consolidated a stretch of the transcript into
     stored functions, guidance and claims, that stretch's raw machinery is
-    dead weight: every later dispatch of a long-lived session re-pays it,
-    and so does every later review. Within the first
-    ``reviewed_message_count`` messages this pass:
+    dead weight that every later dispatch and review re-pays. Within the
+    first ``reviewed_message_count`` messages this pass:
 
     * replaces bulky *tool* result contents with a head slice plus an
       omission marker, and
-    * strips provider reasoning payloads (encrypted blobs, reasoning
-      summaries) from assistant messages — a completed turn's chain of
-      thought is not needed to continue the session.
+    * strips provider reasoning payloads from assistant messages — a
+      completed turn's chain of thought is not needed to continue.
 
     Message identity, ordering and tool_call pairing are untouched, so
     nothing holding a reference to a message dict ever sees it disappear.
     User-facing words — requests, requirements, the assistant's visible
-    replies — stay verbatim. Placeholders/progress replies, small
-    contents, image-bearing parts, and already-compacted messages are
-    left alone.
+    replies — stay verbatim. Placeholder/progress replies, small contents,
+    image-bearing parts and already-compacted messages are left alone.
 
-    Mutating below the sent watermark is sanctioned here the same way an
-    escape-hatch splice is: the watermark hash is re-baselined afterwards,
+    Mutating below the sent watermark is sanctioned here like an
+    escape-hatch splice: the watermark hash is re-baselined afterwards,
     trading provider prefix cache for a permanently smaller transcript.
 
     Returns the number of characters removed.
@@ -270,9 +257,9 @@ async def emit_completion_pair(
 ) -> dict:
     """
     Append a synthetic assistant→tool pair carrying *result* for *call_id*
-    at the tail of the transcript, instead of splicing it into an
+    at the tail of the transcript instead of splicing it into an
     already-dispatched (below-watermark) position. This is the sole
-    below-watermark delivery path for both late tool results and, via
+    below-watermark delivery path for late tool results and, via
     ``insert_tool_message_after_assistant``'s gate, any other reply that
     would otherwise land below the mark.
     """
@@ -305,11 +292,11 @@ async def emit_completion_pair(
 
 @contextmanager
 def _preserve_canonical_messages(client, canonical_msgs):
-    """Context manager to ensure client.messages returns canonical_msgs during the block.
+    """Make ``client.messages`` return *canonical_msgs* for the duration of the block.
 
-    Properties defined at class level cannot be shadowed by instance attributes,
-    so we temporarily patch the class-level property to check for a special
-    `_canonical_messages` attribute first.
+    A class-level property cannot be shadowed by an instance attribute, so
+    the property itself is temporarily patched to consult
+    `_canonical_messages` first.
     """
     prop_class = None
     orig_prop = None
@@ -342,21 +329,15 @@ def _preserve_canonical_messages(client, canonical_msgs):
 # TODO: Some of these helpers should not be placed here, but in utils.py or their own files
 
 
-# Helper: scan transcript for assistant messages that have tool_calls with
-# missing tool replies (before the next assistant message).
-
-
 def is_non_final_tool_reply(msg: dict) -> bool:
-    """Return True when a tool message looks like a placeholder/progress, not a final result.
+    """Return True when a tool message is a placeholder/progress reply, not a final result.
 
-    Rules:
-    - Clarification wrappers (name startswith "clarification_request_") are
-      non-final. Nothing creates this shape anymore — ToolsData.record_clarification
-      delivers the question as a "[clarification <call_id>]" user-role tail
-      message instead — but a transcript persisted before that change can
-      still contain one, so this stays for backward compatibility.
-    - Any tool message whose content parses to a dict containing the top-level key
-      "_placeholder" is non-final (used for pending/progress/nested-start placeholders).
+    - Clarification wrappers (name starts with "clarification_request_") are
+      non-final. Live clarifications are delivered as "[clarification <call_id>]"
+      user-role tail messages by ToolsData.record_clarification; only persisted
+      transcripts still carry the wrapper shape.
+    - Any tool message whose content parses to a dict with the top-level key
+      "_placeholder" is non-final (pending/progress/nested-start placeholders).
     """
     try:
         if msg.get("role") != "tool":
@@ -379,6 +360,8 @@ def is_non_final_tool_reply(msg: dict) -> bool:
     return False
 
 
+# Assistant messages whose tool_calls lack a final reply before the next
+# assistant message.
 def find_unreplied_assistant_entries(client: unillm.AsyncUnify) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -400,7 +383,6 @@ def find_unreplied_assistant_entries(client: unillm.AsyncUnify) -> list[dict]:
                 mm = client.messages[j]
                 if mm.get("role") == "tool":
                     tcid = mm.get("tool_call_id")
-                    # Count as responded only when the tool reply looks **final**.
                     if tcid in ids and not is_non_final_tool_reply(mm):
                         responded.add(tcid)
                 j += 1
@@ -418,7 +400,6 @@ def find_unreplied_assistant_entries(client: unillm.AsyncUnify) -> list[dict]:
     return findings
 
 
-# Helper: call `client.generate` with optional preprocessing
 async def generate_with_preprocess(
     client: unillm.AsyncUnify,
     preprocess_msgs: Optional[Callable[[list[dict]], list[dict]]],
@@ -427,20 +408,16 @@ async def generate_with_preprocess(
     # Sent watermark: everything below this index has been (or is about to
     # be) included in a dispatched request and must never be mutated again.
     # Set here — the one place both llm_task dispatch sites funnel through —
-    # on the pre-copy length, since the deep copy taken below is what
-    # actually gets serialized. Monotonic, and set unconditionally *before*
-    # the request goes out (not after it returns) so a cancelled/interrupted
-    # dispatch still advances it: the provider may have cached the prefix of
-    # a stream that never finished.
+    # on the pre-copy length, since the deep copy taken below is what gets
+    # serialized. Monotonic, and advanced *before* the request goes out so a
+    # cancelled/interrupted dispatch still counts: the provider may have
+    # cached the prefix of a stream that never finished.
     prev_watermark = getattr(client, "_sent_watermark", 0)
     _checks_on = _invariant_checks_enabled()
     if _checks_on:
-        # Integrity check (diagnostic switch — see _invariant_checks_enabled):
-        # the below-watermark slice must be byte-identical to what was hashed
-        # at the last dispatch, UNLESS a sanctioned escape-hatch splice
-        # re-baselined it in between (see _rebaseline_watermark_hash). An
-        # unsanctioned mutation is the only thing left that can still trip
-        # this.
+        # The below-watermark slice must be byte-identical to what was hashed
+        # at the last dispatch, unless a sanctioned escape-hatch splice
+        # re-baselined it in between (_rebaseline_watermark_hash).
         prev_hash = getattr(client, "_sent_watermark_hash", None)
         if prev_hash is not None:
             assert _hash_msgs_slice(client.messages[:prev_watermark]) == prev_hash, (
@@ -454,11 +431,10 @@ async def generate_with_preprocess(
             client.messages[: client._sent_watermark],
         )
 
-    # Stamp the in-flight window on the client. ``handle.ask()`` snapshots
-    # ``client.messages``, which dead-ends silently while a request is out; the
-    # stamp lets the inspection transcript say "the loop is waiting on an LLM
-    # response since T" instead. finally-cleared so cancellation (interjection
-    # pre-emption) can never leave a stale stamp behind.
+    # Stamp the in-flight window so ``handle.ask()``, which snapshots
+    # ``client.messages``, can report "waiting on an LLM response since T"
+    # instead of dead-ending silently. Cleared in ``finally`` so cancellation
+    # (interjection pre-emption) never leaves a stale stamp behind.
     import time as _time
 
     client._llm_inflight_since = _time.time()
@@ -491,22 +467,14 @@ async def _generate_with_preprocess_inner(
         )
         patched = msgs_copy
 
-    # Capture the system message for potential patching
     sys_txt = getattr(client, "system_message", "") or ""
     sys_patched = sys_txt
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Fix: Ensure the original system message is always at the front of
-    # patched messages. The Unify client's generate() checks if ANY system
-    # message exists in messages[], and if so, doesn't prepend system_message.
-    # This means if preprocessing adds a system message (e.g., for provider
-    # compatibility), the original system prompt gets dropped.
-    #
-    # We explicitly prepend the original system_message to patched messages
-    # if it's not already there, ensuring it's always sent to the LLM.
-    # ──────────────────────────────────────────────────────────────────────
+    # The client's generate() skips prepending system_message when ANY system
+    # message already exists in messages[], so a preprocessor that adds one
+    # (e.g. for provider compatibility) would silently drop the original
+    # system prompt. Prepend it explicitly unless it is already first.
     if sys_txt:
-        # Check if the first message is already the original system message
         first_is_original_system = (
             patched
             and patched[0].get("role") == "system"
@@ -517,20 +485,12 @@ async def _generate_with_preprocess_inner(
 
     start_len = len(patched)
 
-    # ------------------------------------------------------------------
-    # Some ``AsyncUnify`` implementations (the real one) keep their chat
-    # transcript in a **private** attribute ``_messages`` which is what
-    # ``.generate`` reads from, while lightweight test doubles (e.g.
-    # ``SpyAsyncUnify`` in the test-suite) expose only a public
-    # ``messages`` list.  To remain compatible with *both* variants we
-    # detect the attribute that is actually consumed by the downstream
-    # ``generate`` call and patch **that** for the duration of the call.
-    #
-    # When we swap ``_messages``, the public ``messages`` property would
-    # also return the patched list, causing a race condition for external
-    # code polling ``client.messages``. We use _preserve_canonical_messages
-    # to ensure external observers see the canonical log during the swap.
-    # ------------------------------------------------------------------
+    # The real ``AsyncUnify`` keeps its transcript in the private ``_messages``
+    # attribute that ``.generate`` reads, while lightweight doubles expose only
+    # a public ``messages`` list; patch whichever one ``generate`` consumes.
+    # Swapping ``_messages`` would make the public ``messages`` property return
+    # the patched list too, racing external code polling ``client.messages``,
+    # so _preserve_canonical_messages keeps the canonical log visible meanwhile.
     target_attr = "_messages" if hasattr(client, "_messages") else "messages"
     original_system_message = getattr(client, "system_message", None)
     with suppress(Exception):
@@ -539,7 +499,6 @@ async def _generate_with_preprocess_inner(
 
     original_container = getattr(client, target_attr)
 
-    # Use context manager to preserve canonical messages visibility when swapping
     preserve_ctx = (
         _preserve_canonical_messages(client, original_container)
         if target_attr == "_messages"
@@ -551,7 +510,7 @@ async def _generate_with_preprocess_inner(
         try:
             result = await maybe_await(client.generate(**gen_kwargs))
 
-            # Append any new messages the LLM produced back to canonical log
+            # Copy whatever the LLM produced back into the canonical log.
             current_msgs = getattr(client, target_attr)
             if len(current_msgs) > start_len:
                 original_msgs.extend(copy.deepcopy(current_msgs[start_len:]))
@@ -564,7 +523,6 @@ async def _generate_with_preprocess_inner(
                     setattr(client, "system_message", original_system_message)
 
 
-# Helper Functions
 def _normalise_kwargs_for_bound_method(bound_method, incoming_kw: dict) -> dict:
     """Normalise kwargs for a bound method: expand nested kwargs, drop noise keys,
     map common aliases when there is a single public param, and filter unknown keys
@@ -612,11 +570,10 @@ def _normalise_kwargs_for_bound_method(bound_method, incoming_kw: dict) -> dict:
         if not has_varkw:
             kw = {k: v for k, v in kw.items() if k in params}
 
-        # 5) Coerce values to match type annotations (best-effort).
-        #    LLMs sometimes pass all args as strings even when the signature
-        #    expects int, float, bool, or dict.  Annotations may be actual
-        #    types OR strings (when `from __future__ import annotations` is
-        #    in effect), so we check both forms.
+        # 5) Coerce string values to annotated int/float/bool/dict types
+        #    (best-effort): LLMs often pass every argument as a string.
+        #    Annotations may be real types or strings (under
+        #    `from __future__ import annotations`), so both forms are checked.
         import json as _json
 
         for param_name, param in params.items():
@@ -653,7 +610,6 @@ def _normalise_kwargs_for_bound_method(bound_method, incoming_kw: dict) -> dict:
 
         return kw
     except Exception:
-        # Best-effort; return original
         return dict(incoming_kw or {})
 
 
@@ -691,12 +647,12 @@ async def forward_handle_call(
     call_args: list | tuple | None = None,
     fallback_positional_keys: list[str] | tuple[str, ...] = (),
 ):
-    """Invoke a steering method on a handle with robust kwargs handling.
+    """Invoke a steering method on a handle with tolerant kwargs handling.
 
-    - Filters/normalises kwargs against the bound method's signature.
-    - If the method rejects kwargs, tries positional fallback with the first
-      available key from fallback_positional_keys (e.g., reason/content).
-    - Finally falls back to calling without arguments.
+    Filters/normalises kwargs against the bound method's signature; if the
+    method rejects them, retries positionally with the first available key
+    from fallback_positional_keys (e.g. reason/content), and finally with no
+    arguments at all.
     """
     try:
         bound = getattr(handle, method_name)
@@ -708,8 +664,8 @@ async def forward_handle_call(
         normalised = _normalise_kwargs_for_bound_method(bound, kwargs or {})
         return await maybe_await(bound(*args, **normalised))
     except TypeError:
-        # Fallbacks: try positional-only, then kwargs-only, then legacy single-key
-        # positional extraction via fallback_positional_keys for maximum tolerance.
+        # Fallbacks: positional-only, then kwargs-only, then single-key
+        # positional extraction via fallback_positional_keys.
         try:
             args2 = list(call_args or [])
             return await maybe_await(bound(*args2))  # type: ignore[misc]
@@ -722,14 +678,13 @@ async def forward_handle_call(
         for k in fallback_positional_keys:
             if kwargs and k in kwargs:
                 try:
-                    # Preserve additional kwargs alongside the positional message
                     rest_kwargs = (
                         dict(normalised) if isinstance(normalised, dict) else {}
                     )
                 except Exception:
                     rest_kwargs = {}
                 try:
-                    # Avoid passing the alias key twice if it accidentally matched a parameter
+                    # Never pass the alias key twice if it also matched a parameter.
                     rest_kwargs.pop(k, None)
                 except Exception:
                     pass
@@ -742,19 +697,17 @@ async def forward_handle_call(
         except Exception:
             return None
     except Exception:
-        # Defensive: never let steering failures crash the loop
+        # Steering failures must never crash the loop.
         return None
 
 
-# Helper: detect helper-tool names — the static steering/inspection surface
-# (steer/wait/ask_about_completed_tool) that ack-during-backfill rather than
-# actually re-dispatching/re-executing (the underlying async work is gone on
-# restart regardless of which action was requested).
+# The static steering/inspection surface (steer/wait/ask_about_completed_tool)
+# is acknowledged rather than re-executed during backfill: the underlying
+# async work is gone on restart whichever action was requested.
 def _is_helper_tool(name: str) -> bool:
     return name in ("wait", "steer", "ask_about_completed_tool")
 
 
-# Helper: build human-readable acknowledgement content for helper tools
 def build_helper_ack_content(name: str, args_json: Any) -> str:
     ack_content = "Acknowledged."
     try:
@@ -803,24 +756,21 @@ def build_helper_ack_content(name: str, args_json: Any) -> str:
     elif name == "ask_about_completed_tool":
         ack_content = "Follow-up question acknowledged and forwarded for retrospective inspection."
     else:
-        # Default acknowledgement for custom write-only helpers
         ack_content = (
             f"Operation {name!r} acknowledged and forwarded to the running tool."
         )
     return ack_content
 
 
-# Helper: prune a `wait` tool call from an assistant message. If it was the
-# only tool call and there is no content, drop the assistant message from the
-# client's transcript where possible.
+# Prune a `wait` tool call from an assistant message; if it was the only tool
+# call and there is no content, drop the assistant message from the transcript.
 #
 # Below the sent watermark, *asst_msg* was already included in a dispatched
-# request — popping the wait's tool_calls entry, or editing the array in
-# place, would mutate already-cached bytes. Instead the stale wait is left
-# untouched and acknowledged via an appended tool reply (spliced directly
-# after asst_msg, bypassing the watermark gate): a one-time prefix break,
-# accepted because the alternative — a wait tool_calls entry with no reply
-# anywhere — is a permanently illegal transcript, not just an uncached one.
+# request, so popping or editing its tool_calls entry would mutate cached
+# bytes. The stale wait is instead left untouched and acknowledged via a tool
+# reply spliced directly after asst_msg, bypassing the watermark gate: a
+# one-time prefix break, accepted because a wait tool_calls entry with no
+# reply anywhere is a permanently illegal transcript, not just an uncached one.
 async def prune_wait_tool_call(
     asst_msg: dict,
     call_id: str,
@@ -831,12 +781,10 @@ async def prune_wait_tool_call(
 ) -> None:
     if client is not None and not is_mutable(client, asst_msg):
         if assistant_meta is None or msg_dispatcher is None:
-            # A missing param here must never silently fall through to the
-            # pop/in-place edit below — that's precisely the mutation this
-            # branch exists to prevent. Fail loudly instead of corrupting
-            # an already-dispatched message. Logged explicitly because every
-            # known caller wraps this in a broad suppress/except-pass, which
-            # would otherwise swallow the raise along with the failure.
+            # A missing param must never fall through to the pop/in-place
+            # edit below — that is exactly the mutation this branch prevents.
+            # Logged as well as raised because every caller wraps this in a
+            # broad suppress/except-pass that would swallow the raise.
             _msg = (
                 "prune_wait_tool_call: asst_msg is already below the sent "
                 "watermark, so popping or editing its tool_calls in place "
@@ -883,7 +831,6 @@ async def prune_wait_tool_call(
         pass
 
 
-# ── small helper: keep assistant→tool chronology DRY ────────────────────
 async def insert_tool_message_after_assistant(
     assistant_meta: dict,
     parent_msg: dict,
@@ -899,23 +846,22 @@ async def insert_tool_message_after_assistant(
     updating the per-assistant `results_count` bookkeeping.
 
     If *skip_event_bus* is True, the message is appended to the client
-    transcript but NOT published to the EventBus. This is used for
-    placeholder messages that will be updated in-place later.
+    transcript but not published to the EventBus — used for placeholder
+    messages that are updated in place later.
 
-    If the computed insertion position falls below the client's sent
-    watermark, splicing there would shift every already-dispatched message
-    that follows — breaking the provider's cached prefix from that point
-    on. The message is instead delivered as a check_status pair appended
-    at the tail, leaving everything below the watermark untouched —
-    *unless* the transcript would otherwise become illegal: when
-    ``tool_msg``'s call_id has no reply anywhere yet, this insertion IS the
-    first-ever reply, and redirecting it would permanently orphan the
-    original ``tool_calls`` entry (a check_status pair answers a different,
-    synthesized call_id). That case always splices, whether or not the
-    caller passed *bypass_watermark* — legality beats cache, enforced here
-    rather than trusted to every call site. A caller with its own reason to
-    force the splice (e.g. the backfill/restore escape hatch) may still
-    pass *bypass_watermark* explicitly.
+    If the insertion position falls below the client's sent watermark,
+    splicing there would shift every already-dispatched message that
+    follows and break the provider's cached prefix from that point on, so
+    the message is instead delivered as a check_status pair appended at
+    the tail — *unless* the transcript would otherwise become illegal:
+    when ``tool_msg``'s call_id has no reply anywhere yet, this insertion
+    is the first-ever reply, and redirecting it would permanently orphan
+    the original ``tool_calls`` entry (a check_status pair answers a
+    different, synthesized call_id). That case always splices, whether or
+    not the caller passed *bypass_watermark* — legality beats cache,
+    enforced here rather than trusted to every call site. A caller with
+    its own reason to force the splice (the backfill/restore escape hatch)
+    passes *bypass_watermark* explicitly.
 
     A sanctioned below-watermark splice re-baselines the stored watermark
     hash immediately, so the next dispatch's integrity check (when enabled)
@@ -962,9 +908,6 @@ async def insert_tool_message_after_assistant(
         _rebaseline_watermark_hash(client)
 
 
-# Helper: propagate a stop request to any nested SteerableToolHandle returned
-# by base tools. This ensures outer stop/cancel signals reach inner loops.
-# Helper: insert a tool-acknowledgement message for helper tools
 async def acknowledge_helper_call(
     asst_msg: dict,
     call_id: str,
@@ -991,10 +934,9 @@ async def acknowledge_helper_call(
     )
 
 
-# Ensure placeholder tool messages exist for pending tasks. If assistant_msg
-# is provided, only affects tasks spawned by that assistant turn; otherwise
-# applies to all pending tasks. Returns the list of call_ids for which a
-# placeholder was created.
+# Ensure placeholder tool messages exist for pending tasks — those spawned by
+# assistant_msg when given, otherwise all of them. Returns the call_ids for
+# which a placeholder was created.
 async def ensure_placeholders_for_pending(
     assistant_msg: Optional[dict] = None,
     *,
@@ -1005,9 +947,9 @@ async def ensure_placeholders_for_pending(
     time_ctx=None,
 ) -> list[str]:
     created: list[str] = []
-    # Sort by call_idx to ensure deterministic placeholder ordering matching
-    # the original tool_calls array order. This makes the "at tail" check in
-    # process_completed_task behave consistently regardless of set iteration.
+    # Sorted by call_idx so placeholders follow the tool_calls array order and
+    # the "at tail" check in process_completed_task is independent of set
+    # iteration order.
     for task in sorted(
         list(tools_data.pending),
         key=lambda t: getattr(tools_data.info.get(t), "call_idx", 0),
@@ -1041,9 +983,8 @@ async def ensure_placeholders_for_pending(
         # Self-describing so a permanently-frozen stub (below-watermark by
         # the time the result arrives) still reads truthfully: the result
         # never rewrites this message, it always arrives as a check_status
-        # pair appended below. "meta:"-prefixed keys are the established
-        # convention for annotations that don't change what this placeholder
-        # fundamentally *is* (still "pending").
+        # pair appended below. "meta:"-prefixed keys annotate without
+        # changing what the placeholder *is* (still "pending").
         ph_content: dict = {
             "_placeholder": "pending",
             "meta:status": "async — result arrives as a check_status message below",
@@ -1057,10 +998,9 @@ async def ensure_placeholders_for_pending(
             call_id=_inf.call_id,
             content=json.dumps(ph_content, indent=4),
         )
-        # The first-ever reply to a call_id must always sit immediately
-        # after its assistant message — that's the API's own legality
-        # requirement, not a caching nicety, so this always bypasses the
-        # watermark gate (see the escape hatch on insert_tool_message_after_assistant).
+        # The first-ever reply to a call_id must sit immediately after its
+        # assistant message — an API legality requirement, not a caching
+        # nicety — so this always bypasses the watermark gate.
         await insert_tool_message_after_assistant(
             assistant_meta,
             _inf.assistant_msg,
@@ -1076,8 +1016,8 @@ async def ensure_placeholders_for_pending(
     return created
 
 
-# Helper: schedule a subset of tool_calls on a past assistant message and
-# insert placeholders immediately. Skips already-scheduled/finished ids.
+# Schedule a subset of tool_calls on a past assistant message and insert
+# placeholders immediately. Skips already-scheduled/finished ids.
 async def schedule_missing_for_message(
     asst_msg: dict,
     only_ids: set[str],
@@ -1098,7 +1038,6 @@ async def schedule_missing_for_message(
             if cid not in only_ids:
                 continue
 
-            # Skip if already pending or completed
             if any(task_info.call_id == cid for task_info in tools_data.info.values()):
                 continue
             if cid in tools_data.completed_results:
@@ -1107,9 +1046,8 @@ async def schedule_missing_for_message(
             name = call["function"]["name"]
             args_json = call["function"].get("arguments", "{}")
 
-            # Handle dynamic helpers similarly to main path
             if _is_helper_tool(name):
-                # Special-case: `wait` should not clutter the transcript.
+                # `wait` must not clutter the transcript.
                 if name == "wait":
                     try:
                         await prune_wait_tool_call(
@@ -1124,9 +1062,9 @@ async def schedule_missing_for_message(
                     scheduled.append(cid)
                     continue
 
-                # Other helpers: acknowledge but do not execute during backfill.
-                # This is the backfill/restore escape hatch — the call_id has
-                # no reply anywhere yet, so the ack must splice adjacently
+                # Other helpers are acknowledged, not executed, during backfill.
+                # This is the backfill/restore escape hatch: the call_id has no
+                # reply anywhere yet, so the ack must splice adjacently
                 # regardless of watermark; legality beats cache.
                 try:
                     await acknowledge_helper_call(
@@ -1144,7 +1082,6 @@ async def schedule_missing_for_message(
                 scheduled.append(cid)
                 continue
 
-            # Base tool: locate function
             if name not in tools_data.normalized:
                 scheduled.append(cid)
                 continue
@@ -1164,7 +1101,6 @@ async def schedule_missing_for_message(
             scheduled.append(cid)
     except Exception:
         pass
-    # Ensure placeholders are present for backfilled items
     with suppress(Exception):
         await ensure_placeholders_for_pending(
             assistant_msg=asst_msg,

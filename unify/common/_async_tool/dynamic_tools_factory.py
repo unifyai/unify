@@ -96,35 +96,26 @@ question : str
 class DynamicToolFactory:
 
     def __init__(self, tools_data: ToolsData):
-        # Only ever holds the STATIC, byte-stable surface: wait, steer,
-        # ask_about_completed_tool. Nothing here varies with what is
-        # pending/completed/paused this turn.
+        # The static, byte-stable surface (wait, steer,
+        # ask_about_completed_tool); nothing here varies with what is
+        # pending, completed or paused this turn.
         self.dynamic_tools: Dict[str, Callable] = {}
         # ask_* closures for handles that are still running, keyed by a
-        # synthetic per-call name. These exist ONLY to seed recursive
-        # inspection-loop tool schemas (ToolsData.get_ask_tools() ->
-        # SteerableToolHandle.ask()'s nested loop) — they are never merged
-        # into self.dynamic_tools, so they never reach the outer loop's own
-        # visible schema (that would reintroduce the per-call-id churn this
-        # dispatcher exists to remove).
+        # synthetic per-call name. They only seed recursive inspection-loop
+        # tool schemas (ToolsData.get_ask_tools() -> SteerableToolHandle.ask())
+        # and are never merged into self.dynamic_tools: per-call-id names in
+        # the outer loop's own schema would churn its bytes every turn.
         self.live_ask_fns: Dict[str, Callable] = {}
         self.tools_data = tools_data
 
-    # Shared steering helpers – reduce duplication across dynamic helper tools
     @staticmethod
     def _adopt_signature_and_annotations(from_callable, to_wrapper) -> None:
-        """Copy signature, annotations, and docstring from from_callable to to_wrapper.
-
-        Notes
-        -----
-        - The 'self' parameter (if any) is stripped from both the signature and annotations.
-        - If the source has a docstring, it is copied verbatim (stripped) onto the wrapper.
-        - If the source method has no docstring, attempt to fall back to the first
-          ancestor in the MRO that defines a docstring for a method with the same name.
-        """
+        """Copy signature, annotations and docstring from from_callable to
+        to_wrapper, stripping any 'self' parameter. A source without a
+        docstring falls back to the first MRO ancestor that documents a
+        method of the same name."""
         try:
             src = getattr(from_callable, "__func__", from_callable)
-            # Build a new signature that removes any leading 'self' parameter
             _sig = inspect.signature(src)
             try:
                 _params = list(_sig.parameters.values())
@@ -140,7 +131,6 @@ class DynamicToolFactory:
                     return_annotation=_sig.return_annotation,
                 )
             except Exception:
-                # Fallback: if building a filtered signature fails, at least set the original one
                 to_wrapper.__signature__ = _sig
             try:
                 ann = dict(getattr(src, "__annotations__", {}) or {})
@@ -153,7 +143,6 @@ class DynamicToolFactory:
                 if isinstance(doc, str) and doc.strip():
                     to_wrapper.__doc__ = doc.strip()
                 else:
-                    # Fallback: walk MRO to find a base-class method docstring
                     try:
                         name = getattr(src, "__name__", None) or getattr(
                             from_callable,
@@ -216,24 +205,21 @@ class DynamicToolFactory:
         for name, attr in inspect.getmembers(handle):
             if name.startswith("_") or name in management_names or not callable(attr):
                 continue
-            # Bind the method to *handle* (important for late-added attributes).
+            # Bind through __getattribute__ so late-added attributes resolve.
             try:
                 bound = handle.__getattribute__(name)
             except Exception:
-                # Attribute access raised – treat as non-callable.
                 continue
 
             methods[name] = bound
         return methods
 
-    # helper: register a freshly-minted coroutine as a *temporary* tool
     def _register_tool(
         self,
         func_name: str,
         fallback_doc: str,
         fn: Callable,
     ) -> None:
-        # prefer the function's own docstring if it exists, else fall back
         existing = inspect.getdoc(fn)
         fn.__doc__ = existing.strip() if existing else fallback_doc
         fn.__name__ = func_name[:64]
@@ -241,20 +227,9 @@ class DynamicToolFactory:
         self.dynamic_tools[func_name.lstrip("_")] = fn
 
     def _create_wait_tool(self) -> None:
-        """
-        Expose a single, always-present global helper tool `wait` that performs a no-op.
-
-        Purpose
-        -------
-        Use this when you do not want to take any new action at this time.
-        Calling `wait` explicitly instructs the agent to keep waiting for
-        any currently running tool calls to finish (or for an interjection
-        to arrive) before deciding whether to act next. It does not start,
-        stop, pause, resume, or modify any in-flight work.
-
-        If a clarification is currently pending on any call, `wait` is refused —
-        answer it first via `steer(call_id=<id>, action="clarify", payload=<answer>)`.
-        """
+        """Expose the always-present no-op `wait` tool: the model calls it
+        to keep waiting on running calls (or the next interjection) without
+        starting, stopping, pausing or modifying any in-flight work."""
 
         async def _wait() -> Dict[str, str]:
             return {"status": "waiting"}
@@ -274,11 +249,11 @@ class DynamicToolFactory:
     def _create_steer_tool(self) -> None:
         """Expose the single static steering dispatcher (see STEER_DOC).
 
-        This function is never actually invoked — loop.py special-cases the
-        `steer` tool name for execution (same pattern as `wait` and
-        `compress_context`). It exists purely so ``method_to_schema`` can
-        derive a byte-stable JSON schema (including the action enum) from a
-        real, typed Python signature.
+        The function body is never invoked — loop.py special-cases the
+        `steer` tool name for execution, as for `wait` and
+        `compress_context`. It exists so ``method_to_schema`` can derive a
+        byte-stable JSON schema (including the action enum) from a real,
+        typed Python signature.
         """
 
         async def steer(
@@ -297,14 +272,14 @@ class DynamicToolFactory:
         )
 
     def _create_ask_about_completed_tool(self) -> None:
-        """Expose the single, frozen-docstring dispatcher for asking follow-up
-        questions about tools that have already completed.
+        """Expose the frozen-docstring dispatcher for follow-up questions
+        about completed tools.
 
-        The docstring no longer embeds a live listing of completed tools —
-        that listing now arrives as appended "[askable <call_id>]" tail
-        messages (see ToolsData.record_tool_completed_askable), which keeps
-        this tool's schema bytes constant regardless of how many tools have
-        completed. Execution is special-cased in loop.py, mirroring `steer`.
+        The listing of askable tools arrives as "[askable <call_id>]" tail
+        messages (see ToolsData.record_tool_completed_askable) rather than in
+        this docstring, which keeps the schema bytes constant regardless of
+        how many tools have completed. Execution is special-cased in loop.py,
+        as for `steer`.
         """
 
         async def ask_about_completed_tool(tool_id: str, question: str) -> Any:
@@ -317,26 +292,19 @@ class DynamicToolFactory:
         )
 
     def _refresh_task_capabilities(self, task: asyncio.Task) -> None:
-        """Refresh per-task bookkeeping that steer()'s execution-time
-        validation and the clarification/interjection plumbing depend on.
-
-        This is the bookkeeping half of what used to be `_process_task` —
-        the tool-minting half is gone (steer/wait/ask_about_completed_tool
-        are static now), but the live state this tracks (is_interjectable,
-        clarification queue wiring, an ask() closure for recursive
-        inspection) still needs to be refreshed whenever a handle is
-        adopted or changes mid-flight.
+        """Refresh the per-task bookkeeping that steer()'s execution-time
+        validation and the clarification/interjection plumbing depend on:
+        the interjectable flag, clarification queue wiring and the ask()
+        closure for recursive inspection. Runs whenever a handle is adopted
+        or changes mid-flight.
         """
         info = self.tools_data.info[task]
         handle = info.handle
         handle_available = handle is not None
 
-        # ── DYNAMIC capability refresh (handle may change) ─────
         if handle_available:
-            # 1. interjection
             info.is_interjectable = hasattr(handle, "interject")
 
-            # 2. clarification queues
             h_up_q = getattr(
                 handle,
                 "clarification_up_q",
@@ -354,10 +322,8 @@ class DynamicToolFactory:
                     "of clarification queues; both or neither required.",
                 )
 
-            # update bookkeeping & channel map
             prev_up_q = info.clar_up_queue
             if h_up_q is not prev_up_q:
-                # remove old mapping if any
                 self.tools_data.clarification_channels.pop(info.call_id, None)
                 if h_up_q is not None:
                     self.tools_data.clarification_channels[info.call_id] = (
@@ -368,16 +334,13 @@ class DynamicToolFactory:
             info.clar_down_queue = h_dn_q
 
         _call_id: str = info.call_id
-        # Compact, sanitized suffix of the call_id for use in the synthetic
-        # ask-closure key below (this key is internal — never surfaced to
-        # the outer loop's own schema — so the 64-char tool-name budget
-        # that used to constrain it no longer applies, but the shape is
-        # kept for continuity with the closures' historical naming).
+        # Compact suffix of the call_id for the ask-closure key; the key is
+        # internal and never reaches the outer loop's schema.
         _safe_call_id: str = _call_id.replace("-", "_").split("_")[-1][-8:]
         _fn_name: str = info.name
 
-        # Synthetic `ask` closure retained ONLY for recursive inspection-loop
-        # seeding (ToolsData.get_ask_tools()); never exposed as an outer tool.
+        # The `ask` closure only seeds recursive inspection loops
+        # (ToolsData.get_ask_tools()); it is never exposed as an outer tool.
         if handle_available and hasattr(handle, "ask"):
             try:
                 _arg_dict = None
@@ -412,18 +375,16 @@ class DynamicToolFactory:
             self.tools_data._task_ask_keys[task] = ask_key
 
     def generate(self):
-        # Refresh capability bookkeeping (interjectable flag, clarification
-        # channel wiring, live-ask closures) for every pending task. This no
-        # longer mints any outer-visible tools — sorting by call_idx is kept
-        # only so `live_ask_fns` population order stays deterministic.
+        # Sorting by call_idx keeps `live_ask_fns` population order
+        # deterministic.
         for task in sorted(
             list(self.tools_data.pending),
             key=lambda t: getattr(self.tools_data.info.get(t), "call_idx", 0),
         ):
             self._refresh_task_capabilities(task)
 
-        # The static, byte-stable surface: always present, every turn,
-        # regardless of what is pending/completed/paused right now.
+        # The static surface is present every turn regardless of what is
+        # pending, completed or paused.
         self._create_wait_tool()
         self._create_steer_tool()
         self._create_ask_about_completed_tool()

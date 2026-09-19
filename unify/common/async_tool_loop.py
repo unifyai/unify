@@ -2,7 +2,7 @@ import asyncio
 import unillm
 import functools
 import json
-import re
+import time
 from contextlib import suppress
 from typing import (
     Optional,
@@ -18,6 +18,7 @@ from typing import (
 from ..logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from .llm_helpers import short_id
+from .llm_client import new_llm_client
 from ._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
 from ._async_tool.event_bus_util import to_event_bus
 from ..events.types.tool_loop import ToolLoopKind
@@ -29,9 +30,12 @@ from ._async_tool.context_compression import (
     compress_and_rebuild,
 )
 from .context_dump import make_messages_safe_for_context_dump
-from ._async_tool.formatting import TOOL_RESULT_TEXT_CHAR_LIMIT, _truncate_tool_text
-
-
+from ._async_tool.transcript_ops import (
+    _replace_runtime_parent_context,
+    _transform_inner_roles,
+    build_digest,
+    make_read_child_message_tool,
+)
 from ._async_tool.multi_handle import (
     MultiHandleCoordinator,
     MultiRequestHandle,
@@ -48,52 +52,11 @@ _STEERING_ACTION_KIND: dict[str, str] = {
 }
 
 
-def _transform_inner_roles(messages: list[dict]) -> list[dict]:
-    """Transform 'user'/'assistant' roles to 'inner_user'/'inner_assistant'.
-
-    Disambiguates the inspected loop's transcript from the inspection loop's
-    own conversation and from the outer parent context (which uses
-    'outer_user'/'outer_assistant').
-    """
-    transformed = []
-    for msg in messages:
-        new_msg = dict(msg)
-        role = new_msg.get("role", "")
-        if role == "user":
-            new_msg["role"] = "inner_user"
-        elif role == "assistant":
-            new_msg["role"] = "inner_assistant"
-        transformed.append(new_msg)
-    return transformed
-
-
-_PARENT_CTX_POINTER = (
-    "## Parent Chat Context\n"
-    "[The parent chat context that was available to this loop has been omitted "
-    "from this transcript to avoid duplication. Refer to the Parent Chat Context "
-    "section in your system context for the full, up-to-date version.]"
-)
-
-# ── Digest-first inspection of COMPLETED handles ────────────────────────────
-# A completed handle's ask() no longer re-pays its entire transcript on every
-# question (that path stays for still-running handles — see the branch in
-# `ask()` below). Instead it embeds a mechanically-built digest, cached after
-# the first build so every subsequent ask against the same handle reuses the
-# identical bytes and hits the provider's prefix cache.
-_DIGEST_URL_RE = re.compile(r"https?://[^\s\"'<>\]\)]+")
-_DIGEST_SOURCES_CAP = 20
-_DIGEST_RESULT_HEAD_CHARS = 240
-
-# Long trajectories would otherwise grow the digest unboundedly (measured:
-# ~45 tokens/turn, so an uncapped digest blows past the ~2k-token design
-# budget for digests well before 100 turns and the 20k inspection-request
-# ceiling around 340). Cap turns at head+tail with an explicit elision
-# marker in between — elided turns keep their original transcript `idx`, so
-# they stay reachable via read_child_message even though they're not listed
-# individually.
-_DIGEST_TURNS_HEAD = 17
-_DIGEST_TURNS_TAIL = 17
-_DIGEST_MAX_TURNS = _DIGEST_TURNS_HEAD + _DIGEST_TURNS_TAIL
+# ── Inspection prompt ────────────────────────────────────────────────────────
+# ``ask()`` spawns a read-only loop whose system message carries the inspected
+# transcript in one of two shapes: a completed handle embeds a byte-stable
+# digest (built once, cached, so repeat asks hit the provider's prefix cache)
+# plus a drill-down tool; a still-running handle embeds a live snapshot.
 
 _DIGEST_SYSTEM_HEADER = (
     "You are inspecting a COMPLETED tool-use conversation to answer a question "
@@ -113,54 +76,89 @@ _DIGEST_SYSTEM_HEADER = (
     "transcript verbatim (compact-serialized, capped at 32KB)."
 )
 
+_LIVE_SYSTEM_HEADER = (
+    "You are inspecting a running tool-use conversation to answer a question about it."
+)
 
-def _digest_result_head(text: str) -> str:
-    """Pick a representative preview line from a tool result's text.
+_LIVE_TRANSCRIPT_DESCRIPTION = (
+    "This is the transcript of the tool/loop you are being asked about. "
+    "Messages use 'inner_user' and 'inner_assistant' roles to clearly "
+    "distinguish them from your current conversation. "
+    "Use this to answer the user's question about the current state or progress."
+)
 
-    A bare ``splitlines()[0]`` previews as noise whenever the first line is
-    purely structural (a pretty-printed JSON opening brace, a rule of
-    dashes) — the actual content sits on line 2+. Prefer the first line that
-    has real content; fall back to a flat character slice when no line
-    qualifies (e.g. single-line results, which are the common case).
+_LIVE_TRANSCRIPT_PARENT_NOTE = (
+    " Note: this is separate from the Parent Chat Context that may "
+    "appear below — that context shows the broader conversation that "
+    "led to this request, while this transcript is what you are "
+    "answering questions about."
+)
+
+_INNER_LOOP_TOOLS_HINT = (
+    "You have access to `ask_*` tools that query inner tool loops for detailed information. "
+    "Each inner tool loop has its own transcript that may contain details NOT visible in the "
+    "context above. If that context does not contain enough information "
+    "to answer the question — for example if a tool's result only shows a placeholder or "
+    "summary — you MUST call the corresponding `ask_*` tool to get details from that "
+    "tool's own internal context. Only answer directly from the context above when it clearly "
+    "contains the specific information being asked about."
+)
+
+_INSPECTION_FOOTER = (
+    "Answer the user's follow-up question using the context above and any tools exposed to you.",
+    "Do not ask the user questions or request clarification. If information is missing,",
+    "state what is known and, if helpful, briefly note assumptions. Respond in a single, concise paragraph.",
+)
+
+
+def _inflight_status_entry(elapsed: float) -> dict:
+    """Final transcript entry for a loop that is waiting on an LLM response."""
+    return {
+        "role": "system",
+        "_loop_status": True,
+        "content": (
+            "STATUS: the inspected loop is currently waiting on "
+            f"an in-flight LLM request that started {elapsed:.0f} "
+            "seconds ago and has not returned yet. The transcript "
+            "ends here because the model is still thinking, not "
+            "because a tool is stuck or anything failed. Answer "
+            "progress questions from this fact first; only reach "
+            "for inspection tools if the question is about "
+            "something this does not explain."
+        ),
+    }
+
+
+def _inspection_prompt(context_parts: list[str], *, has_inner_tools: bool) -> str:
+    """System message for the inspection loop: the transcript context, a hint
+    about ``ask_*`` tools when inner loops are reachable, and the answer
+    instructions. Whether inner tools exist is fixed once a handle has
+    completed, so the digest branch stays byte-stable across asks."""
+    parts = [*context_parts]
+    if has_inner_tools:
+        parts.extend(["", "## Inner Loop Tools", _INNER_LOOP_TOOLS_HINT])
+    parts.extend(["", *_INSPECTION_FOOTER])
+    return "\n".join(parts)
+
+
+def _inspection_failed_answer(exc: Exception) -> str:
+    """Answer returned when the inspection loop itself fails.
+
+    A read-only inspection must never surface as the inspected work failing:
+    the inspection loop runs with ``max_consecutive_failures=1``, so one flaky
+    introspection tool would otherwise raise out of ``result()`` and be
+    mistaken for the parent task crashing.
     """
-    stripped = text.strip()
-    if not stripped:
-        return ""
-    for line in stripped.splitlines():
-        candidate = line.strip()
-        if len(candidate) >= 3 and any(ch.isalnum() for ch in candidate):
-            return candidate[:_DIGEST_RESULT_HEAD_CHARS]
-    return stripped[:_DIGEST_RESULT_HEAD_CHARS]
+    return (
+        "I couldn't determine the progress right now — the read-only "
+        f"inspection step itself failed ({type(exc).__name__}: {exc}). "
+        "This does NOT mean the underlying task failed; it may still be "
+        "running. Do not treat this as a task failure or stop the task on "
+        "account of it — just try checking again shortly."
+    )
 
 
-def _replace_runtime_parent_context(messages: list[dict]) -> list[dict]:
-    """Replace runtime parent-context headers with a short pointer.
-
-    When the inspection loop receives fresh parent context via the standard
-    machinery, the stale copy embedded in the inspected transcript is redundant.
-    This finds any message tagged ``_parent_chat_context=True`` and replaces
-    the Parent Chat Context portion of its content with a pointer, preserving
-    other sections (e.g. Caller Context) in the same message.
-    """
-    result = []
-    for msg in messages:
-        if msg.get("_parent_chat_context"):
-            new_msg = dict(msg)
-            # The runtime context message may contain multiple sections
-            # (e.g. Caller Context + Parent Chat Context).  Replace only the
-            # Parent Chat Context portion.
-            content = new_msg.get("content") or ""
-            pcc_idx = content.find("## Parent Chat Context")
-            if pcc_idx >= 0:
-                new_msg["content"] = content[:pcc_idx] + _PARENT_CTX_POINTER
-            result.append(new_msg)
-        else:
-            result.append(msg)
-    return result
-
-
-# Tiny handle objects exposed to callers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Handles ──────────────────────────────────────────────────────────────────
 from abc import ABC, abstractmethod
 
 
@@ -172,38 +170,32 @@ class SteerableToolHandle(ABC):
     ``result``), and event APIs (``next_clarification``,
     ``next_notification``, ``answer_clarification``).
 
-    Notes on context parameters
-    ---------------------------
-    Steering methods accept context parameters that are plumbing parameters
-    automatically hidden from LLM tool schemas (injected by orchestrating code):
+    Context parameters
+    ------------------
+    Steering methods accept plumbing parameters that are hidden from LLM tool
+    schemas by their underscore prefix and injected by orchestrating code:
 
-    - ``_parent_chat_context_cont`` (for ``interject``): Continuation of the parent
-      conversation since this loop started. Used to inject incremental updates into
-      an ongoing conversation.
+    - ``_parent_chat_context_cont`` (for ``interject``): continuation of the
+      parent conversation since this loop started, injected into the ongoing
+      conversation as an incremental update.
 
-    - ``_parent_chat_context`` (for ``ask``): Full context snapshot for initializing
-      a fresh inspection loop. Since ``ask`` spawns a new loop, it needs initial
-      context, not a continuation. Hidden from LLM schemas via underscore prefix;
-      orchestrating code injects this based on the LLM's ``include_parent_chat_context`` choice.
+    - ``_parent_chat_context`` (for ``ask``): full context snapshot for the
+      fresh inspection loop ``ask`` spawns, injected according to the LLM's
+      ``include_parent_chat_context`` choice.
 
     Signature extension contract
     ----------------------------
-    Derived classes **may** extend any steering method signature with additional
-    keyword arguments that are specific to their domain.  For example, an
-    actor handle's ``interject`` accepts ``_parent_chat_context_cont`` alongside
-    the message.
-
-    The signatures defined here represent the **minimum universal contract** —
-    the set of parameters that every handle is guaranteed to accept.  Callers
-    that hold a reference typed as ``SteerableToolHandle`` may safely pass only
+    Derived classes may extend any steering method signature with additional
+    keyword arguments specific to their domain. The signatures defined here
+    are the minimum universal contract every handle accepts, so callers that
+    hold a reference typed as ``SteerableToolHandle`` may safely pass only
     these base parameters.
 
     When dispatching a steering call to a handle whose concrete type is
     unknown, use ``forward_handle_call`` (from
-    ``unify.common._async_tool.messages``).  It introspects the target
-    method's actual signature, filters out kwargs the target does not accept,
-    and applies positional fallbacks — removing the need for hand-written
-    ``try/except TypeError`` cascades at every delegation boundary.
+    ``unify.common._async_tool.messages``): it introspects the target
+    method's signature, filters out kwargs the target does not accept, and
+    applies positional fallbacks.
     """
 
     @abstractmethod
@@ -274,7 +266,6 @@ class SteerableToolHandle(ABC):
     def result(self) -> Awaitable[str] | str:
         """Wait for the assistant's *final* reply."""
 
-    # ── bottom-up event APIs (abstract surface) -------------------------------
     @abstractmethod
     async def next_clarification(self) -> dict:
         """Await the next clarification event pushed by a running tool."""
@@ -292,27 +283,14 @@ class SteerableToolHandle(ABC):
         """
 
     def get_history(self) -> list[dict]:
-        """Returns the conversational history of the loop.
-
-        Default implementation returns empty list. Subclasses with
-        LLM clients should override to return the full conversation
-        history including tool calls and reasoning.
-
-        Returns
-        -------
-        list[dict]
-            List of message dicts in the format used by the LLM client.
-            For handles without an LLM client, returns an empty list.
-        """
+        """The loop's conversational history, in the LLM client's message
+        format. Empty for handles without an LLM client."""
         return []
 
 
 class AsyncToolLoopHandle(SteerableToolHandle):
-    """
-    Returned by `start_async_tool_loop`.  Lets you
-      • queue extra user messages while the loop runs and
-      • stop the loop at any time.
-    """
+    """Returned by ``start_async_tool_loop``: steers the running loop and
+    answers read-only questions about it."""
 
     def __init__(
         self,
@@ -332,47 +310,42 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         self._queue = interject_queue
         self._cancel_event = cancel_event
         self._stop_event = stop_event
-        # "running" ⇢ Event **set**,  "paused" ⇢ Event **cleared**
+        # "running" ⇢ Event set, "paused" ⇢ Event cleared
         self._pause_event = pause_event or asyncio.Event()
         self._client = client
         self._pause_event.set()
         self._loop_id: str = loop_id
-        # Human-friendly label for logs (includes 4-hex suffix when available).
-        # This is populated by the inner loop as soon as it constructs LoopConfig.
-        # Until then, fall back to the bare loop_id.
+        # Log label with the 4-hex suffix, set by the inner loop once it
+        # builds its LoopConfig; the bare loop_id until then.
         self._log_label: str = loop_id
         self._loop_cfg: Optional[Any] = None
-        # Only the top-level handle should emit the public stop log.
-        # Nested/adopted handles will inherit False to avoid duplicate logging.
+        # Only the top-level handle emits the public stop log; nested and
+        # adopted handles keep False to avoid duplicate logging.
         self._is_root_handle: bool = False
-        # When set, result() parses the raw JSON string from the loop into a
-        # Pydantic model instance so callers don't need bespoke parsing.
+        # When set, result() parses the loop's raw JSON string into this
+        # Pydantic model.
         self._response_format: Optional[Any] = response_format
 
-        # Maintain a user-visible history (what the end-user would see):
-        # Records: original prompt (user), interjections (user), ask Q/A (user/assistant).
+        # What the end user would see: the original prompt, interjections and
+        # ask questions (user), and ask answers (assistant).
         self._user_visible_history: list[dict] = []
         if initial_user_message:
             self._user_visible_history.append(
                 {"role": "user", "content": initial_user_message},
             )
 
-        # Event streams for bottom-up signals
         self._clar_q: asyncio.Queue[dict] = asyncio.Queue()
         self._notification_q: asyncio.Queue[dict] = asyncio.Queue()
 
-        # Context compression state (all fields live in CompressionState)
         self._compression = CompressionState()
         self._loop_config: Optional[dict] = None
         self._runtime_state = runtime_state or ToolLoopRuntimeState()
 
-        # digest()'s cached output (built once, at first completed ask) and
-        # the sanitized transcript snapshot it was built from — the latter
-        # backs read_child_message(idx) drill-down. See digest().
+        # digest()'s cached text and the sanitized transcript snapshot it was
+        # built from, which backs the read_child_message(idx) drill-down.
         self._digest_cache: Optional[str] = None
         self._digest_messages: Optional[list[dict]] = None
 
-    # small local helpers to keep user-visible history consistent
     def _append_user_visible_user(
         self,
         message: str,
@@ -414,6 +387,15 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         with suppress(Exception):
             await to_event_bus(msg, cfg, kind=_kind)
 
+    async def _mirror(self, method: str, kwargs: dict) -> None:
+        """Queue a synthetic helper tool_call so the inner loop records this
+        steering call in its transcript without an LLM step."""
+        try:
+            await self._queue.put({"_mirror": {"method": method, "kwargs": kwargs}})
+        except Exception:
+            pass
+
+    # ── ask: read-only inspection ------------------------------------------------
     async def ask(
         self,
         question: str,
@@ -426,192 +408,150 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         _label = getattr(self, "_log_label", None) or self._loop_id
         LOGGER.info(f"{ICONS['clarification']} [{_label}] Ask requested: {question}")
 
-        # Record the user-visible question immediately (even if delegated)
         self._append_user_visible_user(question, _parent_chat_context)
 
-        # Whether this handle has already completed decides the inspection
-        # representation: a completed handle gets the byte-stable digest
-        # (built once, cached — repeat asks reuse identical bytes and hit the
-        # provider's prefix cache); a still-running handle keeps today's live
-        # snapshot (the transcript so far, compact-serialized) since a digest
-        # only exists from completion onward. No ``await`` precedes this
-        # check (the statements above are synchronous), so nothing can yield
-        # control and let the task finish out from under the branch chosen.
-        _is_completed = self.done()
+        # done() picks the inspection shape: a completed handle gets the
+        # cached digest, a still-running one the live snapshot. No await
+        # precedes this check, so the task cannot finish between the check
+        # and the branch it selects.
+        completed = self.done()
 
         parent_chat_context_safe = make_messages_safe_for_context_dump(
             _parent_chat_context,
         )
+        ask_tools, completed_askable_tools = self._inspection_tool_surface()
 
-        # 1b. Snapshot ask_* tools available at invocation time so the
-        #     inspection loop can propagate questions to inner handles.
-        ask_tools: dict = {}
-        with suppress(Exception):
-            _get_ask_tools = getattr(self._task, "get_ask_tools", lambda: {})
-            ask_tools = _get_ask_tools()
-
-        # 1c. Snapshot the completed-askable registry too: the inspected
-        #     transcript announces its finished steerable calls as
-        #     "[askable <call_id>] ... ask_about_completed_tool(...)", and the
-        #     inspection loop's own ask_about_completed_tool must resolve those
-        #     ids to the same handles rather than to its (empty) registry.
-        completed_askable_tools: dict = {}
-        with suppress(Exception):
-            _get_completed = getattr(
-                self._task,
-                "get_completed_tool_metadata",
-                lambda: {},
-            )
-            completed_askable_tools = _get_completed()
-
-        # 2.  Prepare an *in-memory* Unify client for the **inspection** loop
-        #     (LLM sees only the system header + follow-up user question).
-        from .llm_client import new_llm_client
-
-        parent_model: str | None = None
-        with suppress(Exception):
-            if self._client is not None:
-                parent_model = self._client.endpoint
-
-        inspection_client = new_llm_client(parent_model)
-
+        inspection_client = new_llm_client(self._client_model())
         inspection_tools: dict = dict(ask_tools)
 
-        if _is_completed:
-            # Digest-first: mechanical, cached summary instead of the full
-            # transcript. read_child_message(idx) is the drill-down tool for
-            # anything the digest's previews leave out. digest() must run
-            # first — it populates self._digest_messages, which the
-            # drill-down closure captures.
-            digest_text = self.digest()
+        if completed:
+            # digest() must run first: it populates self._digest_messages,
+            # which the drill-down tool captures.
+            context_parts = [_DIGEST_SYSTEM_HEADER, "", self.digest()]
             inspection_tools["read_child_message"] = (
                 self._make_read_child_message_tool()
             )
-
-            sys_msg_parts = [_DIGEST_SYSTEM_HEADER, "", digest_text]
         else:
-            # 1.  Gather a *read-only* snapshot of the loop being asked about.
-            loop_chat_context = []
-            with suppress(Exception):
-                msgs = getattr(self._client, "messages", []) if self._client else []
-                if msgs is None:
-                    msgs = []
-                loop_chat_context = list(msgs)
-            loop_chat_context_safe = make_messages_safe_for_context_dump(
-                loop_chat_context,
-            )
+            context_parts = self._live_inspection_context(bool(_parent_chat_context))
 
-            # When fresh parent context is provided, replace the stale runtime
-            # parent-context header in the transcript with a pointer.  This avoids
-            # duplicating the (potentially large) parent context while preserving
-            # the structural marker so the inspection LLM knows the loop received
-            # parent context and where it appeared in the conversation.
-            if _parent_chat_context:
-                loop_chat_context_safe = _replace_runtime_parent_context(
-                    loop_chat_context_safe,
-                )
-
-            # Build system message with the inspected loop's transcript.
-            # Transform roles to inner_user/inner_assistant so the inspection LLM
-            # can distinguish the inspected conversation from its own messages and
-            # from the outer parent context (which uses outer_user/outer_assistant).
-            loop_chat_context_transformed = _transform_inner_roles(
-                loop_chat_context_safe,
-            )
-
-            # A transcript snapshot dead-ends silently while the loop is waiting on
-            # an LLM response — there is no message for "the model has not answered
-            # yet", so inspectors misread the pause as a stall and reach for
-            # progress tools that cannot help. Surface the in-flight window
-            # (stamped by ``generate_with_preprocess``) as an explicit final entry.
-            with suppress(Exception):
-                _inflight_since = (
-                    getattr(self._client, "_llm_inflight_since", None)
-                    if self._client is not None
-                    else None
-                )
-                if _inflight_since:
-                    import time as _time
-
-                    _elapsed = max(0.0, _time.time() - float(_inflight_since))
-                    loop_chat_context_transformed = [
-                        *loop_chat_context_transformed,
-                        {
-                            "role": "system",
-                            "_loop_status": True,
-                            "content": (
-                                "STATUS: the inspected loop is currently waiting on "
-                                f"an in-flight LLM request that started {_elapsed:.0f} "
-                                "seconds ago and has not returned yet. The transcript "
-                                "ends here because the model is still thinking, not "
-                                "because a tool is stuck or anything failed. Answer "
-                                "progress questions from this fact first; only reach "
-                                "for inspection tools if the question is about "
-                                "something this does not explain."
-                            ),
-                        },
-                    ]
-
-            transcript_description = (
-                "This is the transcript of the tool/loop you are being asked about. "
-                "Messages use 'inner_user' and 'inner_assistant' roles to clearly "
-                "distinguish them from your current conversation. "
-                "Use this to answer the user's question about the current state or progress."
-            )
-            if _parent_chat_context:
-                transcript_description += (
-                    " Note: this is separate from the Parent Chat Context that may "
-                    "appear below — that context shows the broader conversation that "
-                    "led to this request, while this transcript is what you are "
-                    "answering questions about."
-                )
-
-            sys_msg_parts = [
-                "You are inspecting a running tool-use conversation to answer a question about it.",
-                "",
-                "## Inspected Loop Transcript",
-                transcript_description,
-                "",
-                json.dumps(loop_chat_context_transformed, separators=(",", ":")),
-            ]
-
-        # If inner-handle ask_* tools are available, hint the LLM about them
-        # (stable once the handle has completed — nothing mutates its closed
-        # loop's tools_data afterward — so this never re-breaks the digest
-        # branch's byte-stability).
-        if ask_tools:
-            sys_msg_parts.extend(
-                [
-                    "",
-                    "## Inner Loop Tools",
-                    (
-                        "You have access to `ask_*` tools that query inner tool loops for detailed information. "
-                        "Each inner tool loop has its own transcript that may contain details NOT visible in the "
-                        "context above. If that context does not contain enough information "
-                        "to answer the question — for example if a tool's result only shows a placeholder or "
-                        "summary — you MUST call the corresponding `ask_*` tool to get details from that "
-                        "tool's own internal context. Only answer directly from the context above when it clearly "
-                        "contains the specific information being asked about."
-                    ),
-                ],
-            )
-
-        sys_msg_parts.extend(
-            [
-                "",
-                "Answer the user's follow-up question using the context above and any tools exposed to you.",
-                "Do not ask the user questions or request clarification. If information is missing,",
-                "state what is known and, if helpful, briefly note assumptions. Respond in a single, concise paragraph.",
-            ],
+        inspection_client.set_system_message(
+            _inspection_prompt(context_parts, has_inner_tools=bool(ask_tools)),
         )
 
-        inspection_client.set_system_message("\n".join(sys_msg_parts))
+        helper_handle = await self._start_inspection_loop(
+            inspection_client,
+            question,
+            inspection_tools,
+            completed_askable_tools,
+            parent_chat_context=(
+                parent_chat_context_safe if _parent_chat_context else None
+            ),
+            propagate_chat_context=_propagate_chat_context,
+            return_reasoning_steps=_return_reasoning_steps,
+        )
+        await self._mirror("ask", {"question": question, **(kwargs or {})})
+        return helper_handle
 
-        # 3.  Fire off a *stand-alone* read-only loop.
-        # Compose a clear loop identifier so logs show exactly which loop the
-        # question refers to, e.g. "Question(CodeActActor.act)" or
-        # "Question(CodeActActor.act->FunctionManager.execute)" when a single
-        # nested handle is present.
+    def _client_model(self) -> str | None:
+        with suppress(Exception):
+            if self._client is not None:
+                return self._client.endpoint
+        return None
+
+    def _inspection_tool_surface(self) -> tuple[dict, dict]:
+        """Snapshot the inspected loop's ``ask_*`` tools and its completed-
+        askable registry.
+
+        The inspection loop needs both: the ``ask_*`` tools let it propagate
+        a question into a still-running inner handle, and the registry is
+        required because the inspected transcript announces its finished
+        steerable calls as "[askable <call_id>]", so the inspection loop's
+        own ``ask_about_completed_tool`` must resolve those ids to the same
+        handles rather than to its (empty) registry.
+        """
+        ask_tools: dict = {}
+        with suppress(Exception):
+            ask_tools = getattr(self._task, "get_ask_tools", lambda: {})()
+        completed_askable_tools: dict = {}
+        with suppress(Exception):
+            completed_askable_tools = getattr(
+                self._task,
+                "get_completed_tool_metadata",
+                lambda: {},
+            )()
+        return ask_tools, completed_askable_tools
+
+    def _transcript_snapshot(self) -> list[dict]:
+        """This loop's messages so far, deep-copied with image blobs redacted."""
+        return make_messages_safe_for_context_dump(
+            list(getattr(self._client, "messages", None) or []),
+        )
+
+    def _live_inspection_context(self, has_parent_context: bool) -> list[str]:
+        """System-message parts carrying a still-running loop's transcript."""
+        snapshot = self._transcript_snapshot()
+
+        # Fresh parent context reaches the inspection loop through its own
+        # header, so the stale copy embedded in the transcript is reduced to
+        # a pointer. The structural marker stays so the model still sees
+        # that, and where, the loop received parent context.
+        if has_parent_context:
+            snapshot = _replace_runtime_parent_context(snapshot)
+        snapshot = _transform_inner_roles(snapshot)
+
+        # A snapshot dead-ends silently while the loop waits on an LLM
+        # response — there is no message for "the model has not answered
+        # yet", so inspectors misread the pause as a stall and reach for
+        # progress tools that cannot help. Surface the in-flight window
+        # (stamped by ``generate_with_preprocess``) as an explicit final entry.
+        with suppress(Exception):
+            inflight_since = (
+                getattr(self._client, "_llm_inflight_since", None)
+                if self._client is not None
+                else None
+            )
+            if inflight_since:
+                elapsed = max(0.0, time.time() - float(inflight_since))
+                snapshot = [*snapshot, _inflight_status_entry(elapsed)]
+
+        description = _LIVE_TRANSCRIPT_DESCRIPTION
+        if has_parent_context:
+            description += _LIVE_TRANSCRIPT_PARENT_NOTE
+
+        return [
+            _LIVE_SYSTEM_HEADER,
+            "",
+            "## Inspected Loop Transcript",
+            description,
+            "",
+            json.dumps(snapshot, separators=(",", ":")),
+        ]
+
+    async def _start_inspection_loop(
+        self,
+        inspection_client: "unillm.AsyncUnify",
+        question: str,
+        tools: dict,
+        completed_askable_tools: dict,
+        *,
+        parent_chat_context: list[dict] | None,
+        propagate_chat_context: ChatContextPropagation,
+        return_reasoning_steps: bool,
+    ) -> "SteerableToolHandle":
+        """Start the stand-alone read-only loop that answers *question*.
+
+        The returned handle's ``result()`` records the answer in the
+        user-visible history, publishes the outgoing boundary event, and
+        returns ``(answer, inspection_messages)`` when
+        *return_reasoning_steps* is set.
+        """
+        from ..events.manager_event_logging import (
+            new_call_id,
+            publish_manager_method_event,
+        )
+        from secrets import token_hex
+
+        # Loop identifier for logs, e.g. "Question(CodeActActor.act)".
         parent_label: str = "unknown"
         with suppress(Exception):
             parent_label = (
@@ -619,194 +559,99 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 or getattr(self, "_loop_id", "unknown")
                 or "unknown"
             )
-
         loop_id_label = f"Question({parent_label})"
 
-        # ── Sibling lineage for the ask sub-loop ──────────────────────
-        # The ask loop is a *sibling* of the parent loop (not a child).
-        # It shares the parent's parent lineage so the frontend can
-        # place it at the correct nesting level in the action tree.
-        _parent_hierarchy = list(getattr(self, "_log_hierarchy", None) or [])
-        _sibling_lineage = _parent_hierarchy[:-1] if len(_parent_hierarchy) > 1 else []
+        # The inspection loop is a sibling of this loop, not a child: it
+        # shares this loop's parent lineage so the action tree places it at
+        # the same nesting level.
+        parent_hierarchy = list(getattr(self, "_log_hierarchy", None) or [])
+        sibling_lineage = parent_hierarchy[:-1] if len(parent_hierarchy) > 1 else []
 
-        # ── Boundary ManagerMethod events ─────────────────────────────
-        # Publish incoming/outgoing ManagerMethod events around the sub-loop
-        # so the frontend can create a distinct node for each ask() call.
-        # This mirrors the boundary wrapper pattern used by execute_code
-        # and execute_function in CodeActActor.
-        from secrets import token_hex as _token_hex
-        from ..events.manager_event_logging import (
-            new_call_id as _new_call_id,
-            publish_manager_method_event as _pub_mm,
-        )
+        # Boundary ManagerMethod events give every ask() its own node in the
+        # action tree, mirroring the execute_code/execute_function wrappers
+        # in CodeActActor.
+        call_id = new_call_id()
+        suffix = token_hex(2)
+        manager = (self._loop_id or "").split(".")[0] or "unknown"
+        hierarchy = [*sibling_lineage, f"{loop_id_label}({suffix})"]
 
-        _ask_call_id = _new_call_id()
-        _ask_suffix = _token_hex(2)
-        _ask_manager = (self._loop_id or "").split(".")[0] or "unknown"
-        _ask_hierarchy = [*_sibling_lineage, f"{loop_id_label}({_ask_suffix})"]
-
-        await _pub_mm(
-            _ask_call_id,
-            _ask_manager,
+        await publish_manager_method_event(
+            call_id,
+            manager,
             "ask",
             phase="incoming",
             display_label="Answering question",
             question=question,
-            hierarchy=_ask_hierarchy,
+            hierarchy=hierarchy,
         )
 
-        # The question is sent as a plain user message (context is in system message)
-        _ask_message = question
-
-        # Set _PENDING_LOOP_SUFFIX so the inner LoopConfig picks up
-        # the same suffix as our boundary event.
-        _suffix_token = _PENDING_LOOP_SUFFIX.set(_ask_suffix)
+        # The inner LoopConfig picks up the same suffix as the boundary event.
+        suffix_token = _PENDING_LOOP_SUFFIX.set(suffix)
         try:
             helper_handle = start_async_tool_loop(
                 inspection_client,
-                _ask_message,
-                inspection_tools,  # ask_* tools (+ read_child_message when completed)
+                question,
+                tools,
                 completed_askable_tools=completed_askable_tools,
                 loop_id=loop_id_label,
-                parent_lineage=_sibling_lineage,
-                parent_chat_context=(
-                    parent_chat_context_safe if _parent_chat_context else None
-                ),
-                propagate_chat_context=_propagate_chat_context,
+                parent_lineage=sibling_lineage,
+                parent_chat_context=parent_chat_context,
+                propagate_chat_context=propagate_chat_context,
                 prune_tool_duplicates=False,
                 interrupt_llm_with_interjections=False,
                 max_consecutive_failures=1,
             )
         finally:
-            _PENDING_LOOP_SUFFIX.reset(_suffix_token)
+            _PENDING_LOOP_SUFFIX.reset(suffix_token)
 
-        # A read-only inspection (``ask``) must never surface as the inspected
-        # work failing. The inspection sub-loop runs with a tiny failure budget
-        # (``max_consecutive_failures=1``), so a single flaky introspection tool
-        # — e.g. ``ask_computer_progress`` hitting an unreachable backend — would
-        # otherwise raise ``RuntimeError`` out of ``result()`` and be mistaken
-        # for the parent task crashing. Degrade to a diagnostic answer instead.
-        def _inspection_failed_answer(exc: Exception) -> str:
-            return (
-                "I couldn't determine the progress right now — the read-only "
-                f"inspection step itself failed ({type(exc).__name__}: {exc}). "
-                "This does NOT mean the underlying task failed; it may still be "
-                "running. Do not treat this as a task failure or stop the task on "
-                "account of it — just try checking again shortly."
-            )
+        original_result = helper_handle.result
 
-        # Monkey-patch result() to record the assistant answer when available
-        # AND publish the outgoing ManagerMethod boundary event.
-        if not _return_reasoning_steps:
-            _orig_result = helper_handle.result
-
-            async def _rec_result():  # type: ignore[return-type]
-                try:
-                    ans = await _orig_result()
-                except Exception as exc:
-                    ans = _inspection_failed_answer(exc)
-                self._append_user_visible_assistant(ans)
-                await _pub_mm(
-                    _ask_call_id,
-                    _ask_manager,
-                    "ask",
-                    phase="outgoing",
-                    display_label="Answering question",
-                    answer=ans if isinstance(ans, str) else str(ans),
-                    hierarchy=_ask_hierarchy,
-                )
-                return ans
-
-            helper_handle.result = _rec_result  # type: ignore[attr-defined]
-            # Mirror as synthetic helper tool_call (no LLM step)
+        async def _result():
             try:
-                await self._queue.put(
-                    {
-                        "_mirror": {
-                            "method": "ask",
-                            "kwargs": {
-                                "question": question,
-                                **(kwargs or {}),
-                            },
-                        },
-                    },
-                )
-            except Exception:
-                pass
-            return helper_handle
-
-        _orig_result_rs = helper_handle.result
-
-        async def _wrap():
-            try:
-                answer = await _orig_result_rs()
+                answer = await original_result()
             except Exception as exc:
                 answer = _inspection_failed_answer(exc)
             self._append_user_visible_assistant(answer)
-            await _pub_mm(
-                _ask_call_id,
-                _ask_manager,
+            await publish_manager_method_event(
+                call_id,
+                manager,
                 "ask",
                 phase="outgoing",
                 display_label="Answering question",
                 answer=answer if isinstance(answer, str) else str(answer),
-                hierarchy=_ask_hierarchy,
+                hierarchy=hierarchy,
             )
-            return answer, inspection_client.messages
+            if return_reasoning_steps:
+                return answer, inspection_client.messages
+            return answer
 
-        helper_handle.result = _wrap  # type: ignore[attr-defined]
-        # Mirror as synthetic helper tool_call (no LLM step)
-        try:
-            await self._queue.put(
-                {
-                    "_mirror": {
-                        "method": "ask",
-                        "kwargs": {
-                            "question": question,
-                            **(kwargs or {}),
-                        },
-                    },
-                },
-            )
-        except Exception:
-            pass
+        helper_handle.result = _result  # type: ignore[attr-defined]
         return helper_handle
 
     def digest(self) -> str:
         """Return a compact, byte-stable digest of this handle's completed run.
 
-        Built once, mechanically (no LLM call), from data the loop already
-        retains: the original request, each tool call in execution order
-        (name, its ``thought`` argument when the tool supplied one, a preview
-        of its result and the result's size in bytes, and the message index
-        it corresponds to — capped at ``_DIGEST_MAX_TURNS`` with an elision
-        marker for anything in between), source URLs seen across the run, and
-        the final result. Cached after the first build so every subsequent
-        call — and every completed-``ask()`` that embeds it — returns
-        byte-identical text, which is what lets a second question about the
-        same handle hit the provider's prefix cache.
+        Built once, mechanically, from the transcript and the task's result
+        (see ``build_digest``) and cached, so every subsequent call — and
+        every completed-``ask()`` that embeds it — returns byte-identical
+        text, which is what lets a second question about the same handle hit
+        the provider's prefix cache.
 
-        Meaningful only once the handle has completed. If this handle's own
-        loop compressed its context internally, ``self._client.messages``
-        already reflects the post-compression state by the time this can
-        run — the wrapper task that adopted this handle (see
-        ``ToolsData.adopt_nested``) awaits ``self.result()`` to completion,
-        which resolves any compression restarts, before this handle is ever
-        reachable as "completed" — so the digest is built from that final
-        state, not a stale pre-compression snapshot.
+        If this handle's loop compressed its context, ``self._client.messages``
+        already reflects the post-compression state by the time this can run:
+        the wrapper task that adopted this handle (``ToolsData.adopt_nested``)
+        awaits ``self.result()`` to completion, which resolves any compression
+        restarts, before the handle is ever reachable as "completed".
 
         Raises
         ------
         asyncio.InvalidStateError
-            If called before the handle has completed. ``ask()`` only ever
-            reaches this on its completed branch (guarded by ``done()``),
-            so this only fires on a direct, premature call — and it must
-            fire rather than mislabel the run: without this guard, reading
-            ``self._task.result()`` on a still-running task raises its own
-            ``InvalidStateError`` ("Result is not set"), which would
-            otherwise be caught below and rendered as a false "this run
-            ended with an error" outcome for a run that neither errored
-            nor finished.
+            If called before the handle has completed. ``ask()`` only reaches
+            this on its completed branch; the guard exists so a premature
+            direct call fails loudly instead of being mislabelled — without
+            it, reading ``self._task.result()`` on a running task raises its
+            own ``InvalidStateError``, which would be rendered as a false
+            "this run ended with an error" outcome.
         """
         if self._digest_cache is not None:
             return self._digest_cache
@@ -817,187 +662,57 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 "live-snapshot ask() path for a still-running handle.",
             )
 
-        raw_messages = list(getattr(self._client, "messages", None) or [])
-        safe_messages = make_messages_safe_for_context_dump(raw_messages)
-        self._digest_messages = safe_messages
+        self._digest_messages = self._transcript_snapshot()
 
-        original_request = None
+        request = None
         if self._user_visible_history:
-            first_content = self._user_visible_history[0].get("content")
-            if isinstance(first_content, dict):
-                first_content = first_content.get("message")
-            original_request = first_content
+            request = self._user_visible_history[0].get("content")
+            if isinstance(request, dict):
+                request = request.get("message")
 
-        # The authoritative final answer: the task backing this (completed)
-        # handle already holds it. Reading it directly avoids guessing at the
-        # answer's shape in the transcript — the guess is wrong whenever the
-        # loop submitted its answer through a tool (e.g. a structured-output
-        # loop's final_response/send_response) rather than as a bare
-        # assistant message, since then the last such message is only
-        # narration ("Working on it, one moment.") that preceded the real
-        # answer. A task that errored still gets a truthful final_result
-        # instead of silently falling through to whatever narration happens
-        # to be last.
-        final_result = None
-        _task_result_available = False
-        try:
-            _raw_result = self._task.result()
-        except asyncio.CancelledError:
-            final_result = "(this run was stopped before producing a result)"
-            _task_result_available = True
-        except asyncio.InvalidStateError:
-            # Must never happen — the done() guard above rules this out —
-            # but re-raise rather than let the generic handler below
-            # mislabel a not-actually-finished task as one that errored.
-            raise
-        except Exception as exc:
-            final_result = (
-                f"(this run ended with an error: {type(exc).__name__}: {exc})"
-            )
-            _task_result_available = True
-        else:
-            # `_COMPRESSION_SIGNAL` means no one has driven this task's
-            # `result()` through a compression restart yet — the digest
-            # shouldn't have been reachable in that state (see the
-            # docstring), but fall through to the heuristic rather than
-            # surface the sentinel if it somehow is.
-            if _raw_result is not _COMPRESSION_SIGNAL:
-                final_result = (
-                    _raw_result
-                    if isinstance(_raw_result, str)
-                    else json.dumps(_raw_result, separators=(",", ":"), default=str)
-                )
-                _task_result_available = True
-
-        # Index tool_calls by id so the matching tool-result message can look
-        # up its name/thought below.
-        call_meta: dict[str, dict] = {}
-        for m in safe_messages:
-            if m.get("role") != "assistant":
-                continue
-            for tc in m.get("tool_calls") or []:
-                fn = tc.get("function") or {}
-                thought = None
-                with suppress(Exception):
-                    parsed_args = json.loads(fn.get("arguments") or "{}")
-                    if isinstance(parsed_args, dict) and isinstance(
-                        parsed_args.get("thought"),
-                        str,
-                    ):
-                        thought = parsed_args["thought"]
-                call_meta[tc.get("id")] = {"name": fn.get("name"), "thought": thought}
-
-        turns: list[dict] = []
-        seen_urls: list[str] = []
-        seen_urls_set: set[str] = set()
-        heuristic_final_result = None
-
-        for idx, m in enumerate(safe_messages):
-            role = m.get("role")
-            content = m.get("content")
-            if isinstance(content, str):
-                text = content
-            elif content:
-                try:
-                    text = json.dumps(content, separators=(",", ":"))
-                except Exception:
-                    text = str(content)
-            else:
-                text = ""
-
-            if text:
-                for url in _DIGEST_URL_RE.findall(text):
-                    if url not in seen_urls_set:
-                        seen_urls_set.add(url)
-                        seen_urls.append(url)
-
-            if role == "tool":
-                meta = call_meta.get(m.get("tool_call_id"), {})
-                turns.append(
-                    {
-                        "idx": idx,
-                        "tool": meta.get("name") or m.get("name"),
-                        "thought": meta.get("thought"),
-                        "result_head": _digest_result_head(text),
-                        "result_bytes": len(text.encode("utf-8")),
-                    },
-                )
-            elif (
-                role == "assistant"
-                and not m.get("tool_calls")
-                and isinstance(content, str)
-                and content.strip()
-            ):
-                # Fallback only — used when the task result itself wasn't
-                # available above (see the comment there).
-                heuristic_final_result = content
-
-        if not _task_result_available:
-            final_result = heuristic_final_result
-
-        if len(turns) > _DIGEST_MAX_TURNS:
-            head = turns[:_DIGEST_TURNS_HEAD]
-            tail = turns[-_DIGEST_TURNS_TAIL:] if _DIGEST_TURNS_TAIL else []
-            elided = turns[_DIGEST_TURNS_HEAD : len(turns) - _DIGEST_TURNS_TAIL]
-            marker = {
-                "elided": True,
-                "count": len(elided),
-                "idx_range": [elided[0]["idx"], elided[-1]["idx"]],
-                "note": (
-                    f"{len(elided)} turns elided to keep the digest compact "
-                    "(count is turns; idx_range is transcript positions, "
-                    "which interleave with non-tool messages so it is not "
-                    "contiguous per turn) — each elided turn still has a "
-                    "stable idx; retrieve any one verbatim via "
-                    "read_child_message(idx)."
-                ),
-            }
-            turns = [*head, marker, *tail]
-
-        digest_obj = {
-            "request": original_request,
-            "turns": turns,
-            "sources": seen_urls[:_DIGEST_SOURCES_CAP],
-            "final_result": final_result,
-        }
-        self._digest_cache = json.dumps(digest_obj, separators=(",", ":"), default=str)
+        self._digest_cache = build_digest(
+            self._digest_messages,
+            request=request,
+            final_result=self._final_result_text(),
+        )
         return self._digest_cache
 
-    def _make_read_child_message_tool(self) -> Callable:
-        """Build the drill-down tool for the digest-first inspection sub-loop.
+    def _final_result_text(self) -> Optional[str]:
+        """The completed task's result as digest text, or ``None`` when the
+        task holds no result yet.
 
-        Must be called after ``digest()`` has populated ``self._digest_messages``
-        (``ask()`` guarantees this ordering). Returns one message from this
-        handle's own completed transcript, verbatim, compact-serialized and
-        capped at 32KB — the counterpart to the digest's ``idx`` fields.
+        Reading the task directly, rather than guessing the answer's shape in
+        the transcript, keeps the digest truthful for structured-output loops
+        (whose answer went through a tool) and for runs that errored or were
+        stopped.
         """
-        messages = self._digest_messages if self._digest_messages is not None else []
+        try:
+            raw = self._task.result()
+        except asyncio.CancelledError:
+            return "(this run was stopped before producing a result)"
+        except asyncio.InvalidStateError:
+            # digest()'s done() guard rules this out; re-raise rather than
+            # let the generic handler below mislabel a not-actually-finished
+            # task as one that errored.
+            raise
+        except Exception as exc:
+            return f"(this run ended with an error: {type(exc).__name__}: {exc})"
+        # `_COMPRESSION_SIGNAL` means no one has driven this task's result()
+        # through a compression restart yet. The digest should be unreachable
+        # in that state (see digest()), but fall back to the transcript rather
+        # than surface the sentinel if it somehow is.
+        if raw is _COMPRESSION_SIGNAL:
+            return None
+        if isinstance(raw, str):
+            return raw
+        return json.dumps(raw, separators=(",", ":"), default=str)
 
-        async def read_child_message(idx: int) -> str:
-            if not (0 <= idx < len(messages)):
-                return (
-                    f"⚠️ No message at idx={idx}. Valid range: "
-                    f"0-{max(len(messages) - 1, 0)}."
-                )
-            serialized = json.dumps(messages[idx], separators=(",", ":"), default=str)
-            return _truncate_tool_text(serialized, limit=TOOL_RESULT_TEXT_CHAR_LIMIT)
+    def _make_read_child_message_tool(self) -> Callable:
+        """Drill-down tool over the snapshot ``digest()`` built; ``ask()``
+        calls ``digest()`` first."""
+        return make_read_child_message_tool(self._digest_messages or [])
 
-        read_child_message.__doc__ = (
-            "Fetch one message from the completed tool's transcript, verbatim.\n\n"
-            "Parameters\n"
-            "----------\n"
-            "idx : int\n"
-            "    The message index, as listed in the digest's `turns` entries "
-            "(`idx` field).\n\n"
-            "Returns\n"
-            "-------\n"
-            "str\n"
-            "    The message, compact-serialized JSON, capped at 32KB (beyond "
-            "that the middle is omitted with a marker)."
-        )
-        return read_child_message
-
-    # -- public API -----------------------------------------------------------
+    # ── steering ---------------------------------------------------------------
     @functools.wraps(SteerableToolHandle.interject, updated=())
     async def interject(
         self,
@@ -1011,10 +726,8 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         LOGGER.debug(
             f"{ICONS['interjection']} [{_label}] Interject requested: {message}",
         )
-        # Record user-visible immediately
         self._append_user_visible_user(message, _parent_chat_context_cont)
 
-        # Buffer then forward to resolver loop. Support dict payloads when continued context provided.
         payload = {
             "message": message,
             "_parent_chat_context_continued": _parent_chat_context_cont,
@@ -1024,26 +737,12 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 False,
             ),
         }
-        # Use put_nowait to ensure the interjection is registered *synchronously* before
-        # we yield control. This prevents a race where a fast-running loop completes
-        # its turn and exits before seeing the queued item.
+        # put_nowait registers the interjection synchronously, before this
+        # coroutine yields; otherwise a fast loop can finish its turn and
+        # exit before seeing the queued item.
         self._queue.put_nowait(payload)
 
-        # Also mirror as synthetic helper tool_calls immediately (no LLM step)
-        try:
-            await self._queue.put(
-                {
-                    "_mirror": {
-                        "method": "interject",
-                        "kwargs": {
-                            "message": message,
-                            **(kwargs or {}),
-                        },
-                    },
-                },
-            )
-        except Exception:
-            pass
+        await self._mirror("interject", {"message": message, **(kwargs or {})})
 
     @functools.wraps(SteerableToolHandle.stop, updated=())
     async def stop(
@@ -1051,16 +750,16 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         reason: Optional[str] = None,
         **kwargs,
     ) -> None:
-        # Idempotent guard: if already stopping, do nothing and DO NOT log again
+        # Idempotent: a second stop neither logs nor re-signals.
         if self._cancel_event.is_set():
             return
 
         await self._emit_steering_event("stop", reason or "")
-
-        # Ensure the loop is not paused so the inner loop can observe and process the stop immediately
+        # Un-pause so the inner loop can observe the stop immediately.
         with suppress(Exception):
             self._pause_event.set()
-        # Mirror as synthetic helper tool_call (no LLM step) before signalling cancel/stop
+        # The mirror must be queued before cancel/stop are signalled: the
+        # inner loop exits after processing it.
         try:
             self._queue.put_nowait(
                 {
@@ -1075,90 +774,54 @@ class AsyncToolLoopHandle(SteerableToolHandle):
             )
         except Exception:
             pass
-        # Now signal cancellation and stop for any waiters; inner loop will exit after processing mirror
         with suppress(Exception):
             self._cancel_event.set()
         with suppress(Exception):
             self._stop_event.set()
+
+    def _set_base_tool_pause_events(self, running: bool) -> None:
+        """Toggle the pause events of base (non-steerable) tools directly.
+
+        Steerable handles are paused and resumed through the mirror path,
+        which synthesizes helper tool_calls in the transcript so the outer
+        LLM sees that the inner tool was paused. Base tools have no handle —
+        only a raw pause_event — and the mirror's dispatch would reach them
+        too, but toggling here removes the latency window before the next
+        loop iteration drains the mirror.
+        """
+        with suppress(Exception):
+            task_info = getattr(self._task, "task_info", {})
+            items = task_info.items() if isinstance(task_info, dict) else []
+            for _t, _inf in items:
+                if getattr(_inf, "handle", None) is not None:
+                    continue
+                ev = getattr(_inf, "pause_event", None)
+                if ev is not None and hasattr(ev, "set" if running else "clear"):
+                    with suppress(Exception):
+                        if running:
+                            ev.set()
+                        else:
+                            ev.clear()
 
     @functools.wraps(SteerableToolHandle.pause, updated=())
     async def pause(self, **kwargs) -> None:
         _label = getattr(self, "_log_label", None) or self._loop_id
         LOGGER.info(f"{ICONS['pause']} [{_label}] Pause requested")
         await self._emit_steering_event("pause")
-
-        # Immediately toggle pause_event for base (non-steerable) tools.
-        # Steerable handles (h is not None) are intentionally skipped here;
-        # they are paused via the mirror path below, which synthesizes
-        # helper tool_calls in the transcript so the outer LLM has full
-        # visibility that the inner tool was paused. Base tools have no
-        # handle — only a raw pause_event — so the mirror's
-        # _dispatch_steering_to_child would reach them too, but toggling
-        # the event directly here eliminates any latency window between
-        # this call and the next loop iteration that drains the mirror.
-        with suppress(Exception):
-            task_info = getattr(self._task, "task_info", {})
-            items = task_info.items() if isinstance(task_info, dict) else []
-            for _t, _inf in items:
-                h = getattr(_inf, "handle", None)
-                if h is None:
-                    ev = getattr(_inf, "pause_event", None)
-                    if ev is not None and hasattr(ev, "clear"):
-                        with suppress(Exception):
-                            ev.clear()
-
+        self._set_base_tool_pause_events(running=False)
         self._pause_event.clear()
-        # Mirror as synthetic helper tool_call (no LLM step).
-        # The inner loop processes this via _synthesize_mirrored_helper_calls,
-        # which dispatches pause to ALL children (steerable and base alike).
-        try:
-            await self._queue.put(
-                {
-                    "_mirror": {
-                        "method": "pause",
-                        "kwargs": dict(kwargs or {}),
-                    },
-                },
-            )
-        except Exception:
-            pass
+        # The inner loop dispatches the mirrored pause to all children,
+        # steerable and base alike.
+        await self._mirror("pause", dict(kwargs or {}))
 
     @functools.wraps(SteerableToolHandle.resume, updated=())
     async def resume(self, **kwargs) -> None:
         _label = getattr(self, "_log_label", None) or self._loop_id
         LOGGER.info(f"{ICONS['resume']} [{_label}] Resume requested")
         await self._emit_steering_event("resume")
-        # Immediately toggle pause_event for base (non-steerable) tools.
-        # Steerable handles are resumed via the mirror path below (see the
-        # symmetric comment in pause() for the full rationale). Direct
-        # toggling here gives base tools instant resume without waiting
-        # for the next loop iteration to drain the mirror.
-        with suppress(Exception):
-            task_info = getattr(self._task, "task_info", {})
-            items = task_info.items() if isinstance(task_info, dict) else []
-            for _t, _inf in items:
-                h = getattr(_inf, "handle", None)
-                if h is None:
-                    ev = getattr(_inf, "pause_event", None)
-                    if ev is not None and hasattr(ev, "set"):
-                        with suppress(Exception):
-                            ev.set()
-
+        self._set_base_tool_pause_events(running=True)
         self._pause_event.set()
-        # Mirror as synthetic helper tool_call (no LLM step).
-        # The inner loop processes this via _synthesize_mirrored_helper_calls,
-        # which dispatches resume to ALL children (steerable and base alike).
-        try:
-            await self._queue.put(
-                {
-                    "_mirror": {
-                        "method": "resume",
-                        "kwargs": dict(kwargs or {}),
-                    },
-                },
-            )
-        except Exception:
-            pass
+        await self._mirror("resume", dict(kwargs or {}))
 
     @functools.wraps(SteerableToolHandle.done, updated=())
     def done(self) -> bool:
@@ -1166,17 +829,15 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
     @functools.wraps(SteerableToolHandle.result, updated=())
     async def result(self):
-        """Return the final answer once the conversation loop (or delegate) completes.
+        """Return the final answer once the conversation loop completes.
 
         When *response_format* was supplied to ``start_async_tool_loop``, the
-        raw JSON string produced by the inner loop is automatically parsed into
-        a Pydantic model instance.  Callers receive the typed object directly
-        and do not need to call ``model_validate_json`` themselves.
+        raw JSON string produced by the inner loop is parsed into a Pydantic
+        model instance.
 
         If the inner loop returns ``_COMPRESSION_SIGNAL``, the handle
-        orchestrates context compression and starts a new loop transparently.
-        This may repeat multiple times; callers always receive the final
-        real result.
+        compresses the context and starts a new loop transparently, as many
+        times as needed; callers always receive the final real result.
         """
         _stopped_notice = "processed stopped early, no result"
         while True:
@@ -1219,11 +880,10 @@ class AsyncToolLoopHandle(SteerableToolHandle):
     async def _restart_with_compressed_context(self) -> None:
         """Compress context and start a new loop iteration.
 
-        Delegates all data transformation to ``compress_and_rebuild`` in
-        ``context_compression``.  This method only handles the loop lifecycle:
-        replacing client messages, creating a new ``asyncio.Task``, and swapping
-        the task reference so that steering methods automatically target the
-        new loop.
+        ``compress_and_rebuild`` does the data transformation; this method
+        handles the loop lifecycle: replacing client messages, creating a new
+        ``asyncio.Task``, and swapping the task reference so steering methods
+        target the new loop.
         """
         cfg = self._loop_config
         if cfg is None:
@@ -1258,9 +918,9 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         inner_kwargs = {
             k: v for k, v in cfg.items() if k not in ("parent_lineage", "tools")
         }
-        # Parent context was already captured in the first loop pass (often
-        # embedded in compressed system messages). Re-injecting the full blob
-        # on every compression restart can immediately re-trigger compression.
+        # Parent context was captured in the first loop pass (often embedded
+        # in the compressed system messages); re-injecting the full blob on
+        # every restart could immediately re-trigger compression.
         inner_kwargs["parent_chat_context"] = None
         cfg["parent_chat_context"] = None
 
@@ -1296,19 +956,8 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         )
 
     def get_history(self) -> list[dict]:
-        """Returns the full LLM conversation history including tool calls and reasoning.
-
-        This provides access to the rich internal trace of the async tool loop,
-        including assistant reasoning, tool calls, and tool outputs. This is
-        particularly valuable for understanding the
-        decision-making process within the loop.
-
-        Returns
-        -------
-        list[dict]
-            The complete message history from the LLM client, or empty list
-            if no client is available.
-        """
+        """The full LLM conversation history including assistant reasoning,
+        tool calls and tool outputs; empty when no client is available."""
         if self._client is not None:
             return self._client.messages
         return []
@@ -1326,23 +975,9 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
     @functools.wraps(SteerableToolHandle.answer_clarification, updated=())
     async def answer_clarification(self, call_id: str, answer: str) -> None:
-        # Mirror as synthetic helper tool_call (no LLM step)
-        try:
-            await self._queue.put(
-                {
-                    "_mirror": {
-                        "method": "clarify",
-                        "kwargs": {"call_id": call_id, "answer": answer},
-                    },
-                },
-            )
-        except Exception:
-            pass
+        await self._mirror("clarify", {"call_id": call_id, "answer": answer})
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3.  A convenience wrapper that *starts* the loop and returns the handle
-# ─────────────────────────────────────────────────────────────────────────────
 def start_async_tool_loop(
     client: unillm.AsyncUnify,
     message: str | dict | list[str | dict],
@@ -1398,8 +1033,8 @@ def start_async_tool_loop(
     on_notify: Optional[Callable[[str], Any]] = None,
 ) -> AsyncToolLoopHandle:
     """
-    Kick off `_async_tool_use_loop_inner` in its own task and give the caller
-    a handle for live interaction.
+    Run ``async_tool_loop_inner`` in its own task and return a handle for
+    live interaction.
 
     Parameters
     ----------
@@ -1454,7 +1089,7 @@ def start_async_tool_loop(
         awareness of wall-clock time and tool execution durations.  If
         ``False``, the time-context table is omitted entirely.
     """
-    # Ensure a stable loop_id for consistent logging across handle and inner loop
+    # One stable loop_id shared by the handle and the inner loop.
     if loop_id is not None:
         client.set_origin(loop_id)
     loop_id = loop_id if loop_id is not None else short_id()
@@ -1465,32 +1100,26 @@ def start_async_tool_loop(
     pause_event.set()  # start un-paused
     runtime_state = ToolLoopRuntimeState()
 
-    # A single-element list is a mutable container that the inner loop can use
-    # to access the outer handle once it exists.
+    # Mutable container through which the inner loop reaches the outer handle
+    # once it exists.
     outer_handle_container: list = [None]
 
-    # Determine lineage for this loop start (inherit from context when not provided)
     _parent = (
         parent_lineage if parent_lineage is not None else TOOL_LOOP_LINEAGE.get([])
     )
     _lineage = [*_parent, loop_id]
 
-    # --- multi-handle mode setup -------------------------------------------
-    # Create the coordinator if multi_handle is enabled
     multi_handle_coordinator: MultiHandleCoordinator | None = None
     if multi_handle:
-        # We need to reference clarification_channels which is set on the task later
-        # Use a placeholder dict that will be updated when the task starts
+        # clarification_channels is set on the task later; the coordinator
+        # starts with a placeholder dict that is swapped once the task has it.
         _clarification_channels_ref: dict = {}
         multi_handle_coordinator = MultiHandleCoordinator(
             interject_queue=interject_queue,
             clarification_channels=_clarification_channels_ref,
             persist=persist,
         )
-        # Register the first request (request_id=0)
         multi_handle_coordinator.register_request()
-
-    # Run the async tool loop
 
     async def _loop_wrapper():
         try:
@@ -1547,8 +1176,8 @@ def start_async_tool_loop(
 
     task = asyncio.create_task(_loop_wrapper(), name="ToolUseLoop")
 
-    # Make introspection surfaces available immediately on the wrapper task.
-    # The inner loop rebinding will point these to the live dicts once running.
+    # Introspection surfaces are available on the wrapper task immediately;
+    # the inner loop rebinds them to its live dicts once running.
     try:  # pragma: no cover
         setattr(task, "task_info", {})  # asyncio.Task -> ToolCallMetadata
         setattr(task, "clarification_channels", {})  # call_id -> (up_q, down_q)
@@ -1561,7 +1190,7 @@ def start_async_tool_loop(
     except Exception:
         pass
 
-    # Determine initial_user_message for the handle from diverse input forms
+    # The handle's initial user message, from whichever input form was given.
     init_content = None
     if isinstance(message, dict):
         init_content = message.get("content")
@@ -1590,8 +1219,8 @@ def start_async_tool_loop(
     )
     handle._runtime_state = runtime_state
 
-    # Store loop config so _restart_with_compressed_context can re-create
-    # the loop with identical settings after compression.
+    # _restart_with_compressed_context re-creates the loop from this config
+    # with identical settings after compression.
     handle._loop_config = {
         "loop_id": loop_id,
         "parent_lineage": list(_parent),
@@ -1627,22 +1256,20 @@ def start_async_tool_loop(
         "runtime_state": runtime_state,
     }
 
-    # Attach lineage to handle for optional external inspection
     with suppress(Exception):
         handle._lineage = list(_lineage)  # type: ignore[attr-defined]
 
-    # Mark this handle as the root/top-level for single-stop logging semantics
+    # The root handle is the one that emits the public stop log.
     with suppress(Exception):
         handle._is_root_handle = True  # type: ignore[attr-defined]
 
-    # Let the inner coroutine discover the outer handle so it can switch
-    # steering when a nested handle requests pass-through behaviour.
+    # Lets the inner coroutine switch steering to the outer handle when a
+    # nested handle requests pass-through behaviour.
     outer_handle_container[0] = handle
 
-    # --- multi-handle mode: return a MultiRequestHandle for request 0 ---
     if multi_handle and multi_handle_coordinator is not None:
-        # Update the clarification channels reference once the task has it
-        # This is a bit of a hack but necessary since the task attr is set after creation
+        # The task attribute is set after creation, so the coordinator's
+        # channel reference is swapped in here.
         try:
             multi_handle_coordinator._clarification_channels = getattr(
                 task,
@@ -1652,14 +1279,12 @@ def start_async_tool_loop(
         except Exception:
             pass
 
-        # Create and return the request handle for request_id=0
         request_handle = MultiRequestHandle(
             request_id=0,
             coordinator=multi_handle_coordinator,
             loop_id=loop_id,
         )
 
-        # Store handle reference in registry
         state = multi_handle_coordinator.registry.get(0)
         if state:
             state.handle_ref = request_handle

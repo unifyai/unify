@@ -129,7 +129,7 @@ _IN_FLIGHT_ACTIONS_PATTERN = re.compile(
 )
 
 # Completed-action (and any other) <steering_tools> blocks list CM-only
-# ask_/stop_/pause_/interject_* names that are not in the Actor's scope.
+# ``*_action(handle_id=N, ...)`` invocations that are not in the Actor's scope.
 _STEERING_TOOLS_PATTERN = re.compile(
     r"<steering_tools>.*?</steering_tools>\s*",
     re.DOTALL,
@@ -140,14 +140,14 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     """Filter CM state snapshot before passing to Actor as parent context.
 
     The CM state snapshot contains <in_flight_actions> with <steering_tools>
-    listing CM-level tools (stop_, pause_, interject_, ask_) for each action.
-    <completed_actions> keeps the same <steering_tools> surface for post-hoc
-    ask_* tools. These are CM brain tools that exist only in the CM's tool
-    surface.
+    listing CM-level invocations (stop_action, pause_action, interject_action,
+    ask_action, ...) for each action. <completed_actions> keeps the same
+    <steering_tools> surface for post-hoc ask_action calls. These are CM
+    brain tools that exist only in the CM's tool surface.
 
     If passed verbatim to the Actor, the Actor LLM may interpret these tool
     names as callable functions and generate code like:
-        await stop_search_the_web_for__1()
+        await stop_action(handle_id=1)
     This causes NameError since these tools don't exist in the Actor's scope.
 
     This function strips the <in_flight_actions> section and any remaining
@@ -645,22 +645,11 @@ class ConversationManagerBrainActionTools:
                 question: What to ask about the action's work or results.
             """
             hid, handle_data = _in_flight(handle_id)
-            if handle_data is not None:
-                return await _delegate("ask", hid, handle_data)(question=question)
-            completed = (
-                (cm.completed_actions or {}).get(hid) if hid is not None else None
-            )
-            if completed is not None:
-                ask_op = OPERATION_MAP["ask"]
-                tool_fn = self._make_completed_action_ask_tool(
-                    hid,
-                    completed.get("handle"),
-                    ask_op.param_name,
-                    ask_op.get_docstring(),
-                    completed.get("query", ""),
-                )
-                return await tool_fn(question=question)
-            return _missing(handle_id, "ask")
+            if handle_data is None and hid is not None:
+                handle_data = (cm.completed_actions or {}).get(hid)
+            if handle_data is None:
+                return _missing(handle_id, "ask")
+            return await _delegate("ask", hid, handle_data)(question=question)
 
         async def answer_clarification_action(
             handle_id: int,
@@ -735,11 +724,6 @@ class ConversationManagerBrainActionTools:
             "answer_clarification_action": answer_clarification_action,
         }
 
-    def build_completed_action_tools(self) -> dict[str, "Callable[..., Any]"]:
-        """Completed actions are served by ``ask_action`` (see
-        ``build_action_steering_tools``); no per-action tools remain."""
-        return {}
-
     @staticmethod
     def _extract_tool_param_value(
         *,
@@ -755,102 +739,6 @@ class ConversationManagerBrainActionTools:
                 return kwargs.get(name, "")
         return ""
 
-    def _make_completed_action_ask_tool(
-        self,
-        handle_id: int,
-        handle: Any,
-        param_name: str,
-        docstring: str,
-        query: str,
-    ) -> "Callable[..., Any]":
-        """Create an ask tool closure for a completed action."""
-
-        cm = self._cm
-        event_broker = cm.event_broker
-        ask_param_aliases = tuple(
-            name for name in ("question", "query") if name != param_name
-        )
-
-        async def ask_completed_action(
-            **kwargs: Any,
-        ) -> dict[str, Any]:
-            param_value = self._extract_tool_param_value(
-                kwargs=kwargs,
-                primary_name=param_name,
-                aliases=ask_param_aliases,
-            )
-
-            # Get handle_data from completed_actions
-            handle_data = cm.completed_actions.get(handle_id)
-
-            # Record action with pending status
-            if handle_data:
-                handle_data["handle_actions"].append(
-                    {
-                        "action_name": f"ask_{handle_id}",
-                        "query": param_value,
-                        "status": "pending",
-                        "timestamp": prompt_now(),
-                    },
-                )
-
-            _handle = handle
-            _param_value = param_value
-            _handle_id = handle_id
-            _parent_context = (
-                [cm._current_state_snapshot] if cm._current_state_snapshot else None
-            )
-
-            async def _perform_ask_and_emit():
-                try:
-                    ask_handle = await _handle.ask(
-                        _param_value,
-                        _parent_chat_context=_parent_context,
-                    )
-                    ask_result = await ask_handle.result()
-                except Exception as e:
-                    ask_result = f"Error: {e}"
-                await event_broker.publish(
-                    f"app:actor:handle_response_{_handle_id}",
-                    ActorHandleResponse(
-                        handle_id=_handle_id,
-                        action_name="ask",
-                        query=_param_value,
-                        response=ask_result,
-                        call_id="",
-                    ).to_json(),
-                )
-
-            task = asyncio.create_task(_perform_ask_and_emit())
-            cm._pending_steering_tasks.add(task)
-            task.add_done_callback(cm._pending_steering_tasks.discard)
-
-            return {
-                "status": "ok",
-                "operation": "ask",
-                "result": (
-                    "Query submitted. You will receive another turn "
-                    "when the answer is ready."
-                ),
-            }
-
-        # Build signature with proper parameter name
-        if param_name:
-            params = [
-                inspect.Parameter(
-                    param_name,
-                    inspect.Parameter.KEYWORD_ONLY,
-                    annotation=str,
-                ),
-            ]
-        else:
-            params = []
-
-        ask_completed_action.__signature__ = inspect.Signature(params)
-        base_doc = docstring or "Ask about this completed action."
-        ask_completed_action.__doc__ = f"{base_doc}\n\nFor action: {query}"
-        return ask_completed_action
-
     def _make_steering_tool(
         self,
         handle_id: int,
@@ -861,7 +749,13 @@ class ConversationManagerBrainActionTools:
         query: str,
         call_id: str | None = None,
     ) -> "Callable[..., Any]":
-        """Create a closure for an action steering operation."""
+        """Create a closure for an action steering operation.
+
+        ``ask`` also serves completed actions: the handle keeps its
+        trajectory after ``ActorResult`` moves it to ``completed_actions``,
+        so the closure resolves the action's record from either registry at
+        call time.
+        """
 
         cm = self._cm
         # Use cm.event_broker to ensure the same broker is used throughout
@@ -882,7 +776,9 @@ class ConversationManagerBrainActionTools:
                 aliases=param_aliases,
             )
 
-            handle_data = cm.in_flight_actions.get(handle_id)
+            handle_data = cm.in_flight_actions.get(
+                handle_id,
+            ) or cm.completed_actions.get(handle_id)
 
             result = ""
             try:

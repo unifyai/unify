@@ -18,7 +18,7 @@ def test_filter_cm_state_strips_completed_action_steering_tools() -> None:
             "  - act_completed: Found three sources.\n"
             "</history>\n"
             "<steering_tools>\n"
-            "  - ask_search_web_3: Ask about this completed action\n"
+            "  - ask_action(handle_id=3, ...): Ask about this completed action\n"
             "</steering_tools>\n"
             "</action>\n"
             "</completed_actions>\n"
@@ -30,7 +30,7 @@ def test_filter_cm_state_strips_completed_action_steering_tools() -> None:
     filtered = _filter_cm_state_for_actor(snapshot)
     content = filtered["content"]
     assert "<steering_tools>" not in content
-    assert "ask_search_web_3" not in content
+    assert "ask_action(handle_id=3" not in content
     assert "<result>Found three sources.</result>" in content
     assert "<original_request>Search the web for X</original_request>" in content
     assert "User: please continue" in content
@@ -45,7 +45,7 @@ def test_filter_cm_state_strips_in_flight_actions_pane() -> None:
             "<action id='1' short_name='search_web' status='executing' type='act'>\n"
             "<original_request>Search the web for X</original_request>\n"
             "<steering_tools>\n"
-            "  - stop_search_web__1: Stop this task\n"
+            "  - stop_action(handle_id=1, ...): Stop this task\n"
             "</steering_tools>\n"
             "</action>\n"
             "</in_flight_actions>\n\n"
@@ -58,7 +58,7 @@ def test_filter_cm_state_strips_in_flight_actions_pane() -> None:
     filtered = _filter_cm_state_for_actor(snapshot)
     content = filtered["content"]
     assert "<in_flight_actions>" not in content
-    assert "stop_search_web__1" not in content
+    assert "stop_action(handle_id=1" not in content
     assert "<notifications>" in content
     assert "User: please continue" in content
     assert filtered["_cm_state_snapshot"] is True

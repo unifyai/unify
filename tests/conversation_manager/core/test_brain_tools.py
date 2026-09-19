@@ -711,6 +711,45 @@ class TestBuildActionSteeringTools:
         mock_handle.ask.assert_called_once()
         assert result["status"] == "ok"
         assert result["operation"] == "ask"
+        recorded = mock_cm.completed_actions[0]["handle_actions"][-1]
+        assert recorded["action_name"] == "ask_0"
+        assert recorded["query"] == "What did you find?"
+
+    @pytest.mark.asyncio
+    async def test_ask_on_completed_action_honours_context_opt_out(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """A completed action that opted out of conversation context keeps
+        that choice for post-completion asks, like an in-flight one."""
+        mock_handle = MagicMock()
+        mock_ask_handle = MagicMock()
+        mock_ask_handle.result = AsyncMock(return_value="Answer")
+        mock_handle.ask = AsyncMock(return_value=mock_ask_handle)
+
+        mock_cm.in_flight_actions = {}
+        mock_cm.completed_actions = {
+            0: {
+                "query": "Find the report",
+                "handle": mock_handle,
+                "handle_actions": [],
+                "context_opted_in": False,
+            },
+        }
+        mock_cm._current_state_snapshot = {
+            "role": "user",
+            "content": "<state>should not appear</state>",
+        }
+
+        tools = brain_action_tools.build_action_steering_tools()
+        await tools["ask_action"](handle_id=0, question="What did you find?")
+
+        for task in list(mock_cm._pending_steering_tasks):
+            await task
+
+        mock_handle.ask.assert_called_once()
+        assert mock_handle.ask.call_args.kwargs["_parent_chat_context"] is None
 
     @pytest.mark.asyncio
     async def test_ask_unknown_handle_errors(self, brain_action_tools, mock_cm):
@@ -1160,43 +1199,6 @@ class TestToolDocstrings:
 # =============================================================================
 # Integration Tests
 # =============================================================================
-
-
-class TestCompletedActionTools:
-    """Completed actions expose no per-action tools; ask_action serves them."""
-
-    def test_no_completed_actions_yields_no_tools(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Empty completed_actions yields no tools."""
-        mock_cm.completed_actions = {}
-        tools = brain_action_tools.build_completed_action_tools()
-        assert tools == {}
-
-    def test_completed_actions_yield_no_per_action_tools(
-        self,
-        brain_action_tools,
-        mock_cm,
-    ):
-        """Completed actions add nothing to the tool surface — the fixed
-        ask_action steering tool serves them by handle_id."""
-        mock_cm.completed_actions = {
-            0: {
-                "query": "Find the report",
-                "handle": MagicMock(),
-                "handle_actions": [],
-            },
-            1: {
-                "query": "Summarise the thread",
-                "handle": MagicMock(),
-                "handle_actions": [],
-            },
-        }
-
-        tools = brain_action_tools.build_completed_action_tools()
-        assert tools == {}
 
 
 class TestBrainToolsIntegration:

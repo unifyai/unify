@@ -129,12 +129,8 @@ COMPRESSION_MULTI_PASS_ADDENDUM = (
 )
 
 
-# ── Sentinel returned by the loop when compression is requested ──────────────
-
+# Returned by the loop in place of a result when compression is requested.
 _COMPRESSION_SIGNAL = object()
-
-
-# ── Marker tool exposed to the loop LLM ─────────────────────────────────────
 
 
 def compress_context() -> str:
@@ -153,20 +149,12 @@ def tag_images_in_messages(
     messages: list[dict],
     start_id: int = 0,
 ) -> tuple[list[dict], dict[int, dict], int]:
-    """Replace image blocks with ``[img:N]`` text tags and build an image registry.
+    """Replace every ``image``/``image_url`` content block with a text block
+    holding a unique ``[img:N]`` tag; other blocks and plain-string messages
+    pass through unchanged.
 
-    Walks every message; each ``image`` or ``image_url`` content block is
-    replaced by a text block containing its unique tag.  All other blocks
-    (text, thinking, etc.) and plain-string messages pass through unchanged.
-
-    Returns
-    -------
-    tagged_messages : list[dict]
-        Deep-ish copy of *messages* with image blocks replaced by tags.
-    image_registry : dict[int, dict]
-        Mapping from ``img_id`` to the original image content block.
-    next_id : int
-        The next available ID (``start_id`` + number of images found).
+    Returns the tagged copy of *messages*, the registry mapping each
+    ``img_id`` to its original block, and the next free id.
     """
     result: list[dict] = []
     registry: dict[int, dict] = {}
@@ -221,12 +209,8 @@ _SANDBOX_GLOBALS = None
 
 
 def _get_sandbox_globals() -> dict:
-    """Lazy-init sandbox globals for transformation exec.
-
-    Extends ``create_base_globals()`` with ``re`` and ``json`` for
-    regex and JSON operations. The result is cached at module level
-    for reuse.
-    """
+    """Sandbox globals for transformation exec: ``create_base_globals()``
+    plus ``re`` and ``json``, built once."""
     global _SANDBOX_GLOBALS
     if _SANDBOX_GLOBALS is None:
         g = create_base_globals()
@@ -237,24 +221,18 @@ def _get_sandbox_globals() -> dict:
 
 
 def _eval_transformation(transformation_str: str, content: str) -> str:
-    """Execute transformation code against message content.
-
-    The code receives the current content as ``x`` and must leave the
-    transformed result in ``x`` after execution.  Single expressions
-    (e.g. ``x.replace("old", "new")``) are auto-assigned to ``x``.
-
-    Returns the transformed content string.  Raises on syntax errors
-    or runtime errors (caller should catch and report to the LLM).
+    """Execute transformation code that receives the content as ``x`` and
+    leaves the result in ``x``. Raises on syntax or runtime errors; the
+    caller reports them to the LLM.
     """
     sandbox = dict(_get_sandbox_globals())
     sandbox["x"] = content
 
     code = transformation_str.strip()
 
-    # Support bare expressions: if the code is a single expression with no
-    # assignment, wrap it as ``x = <expr>`` so the user doesn't need to
-    # write the boilerplate.  Multi-line code or code containing ``=``
-    # is executed as-is and expected to mutate ``x`` directly.
+    # A bare expression such as ``x.replace("old", "new")`` is wrapped as
+    # ``x = <expr>``; multi-line code or code containing ``=`` runs as-is
+    # and must assign ``x`` itself.
     if "\n" not in code and "=" not in code:
         try:
             compile(code, "<transformation>", "eval")
@@ -281,7 +259,6 @@ def _compute_token_usage(entries: dict[int, str], endpoint: str) -> str:
 
 
 def _make_update_tool(entries: dict[int, str], endpoint: str) -> callable:
-    """Build the ``update`` tool closure over a mutable entries dict."""
 
     def update(index: int, transformation: str) -> str:
         """Transform a message to compress it in-place.
@@ -336,12 +313,9 @@ def _make_archive_lookup_tool(
     *,
     for_compression: bool = False,
 ) -> callable:
-    """Build an archive-lookup tool closure over raw message archives.
-
-    When ``for_compression`` is True the docstring is tailored for the
-    compression sub-loop (``get_raw``).  When False it is tailored for
-    the restarted main loop (``unpack_messages``).
-    """
+    """Archive-lookup tool over the raw message archives: ``get_raw`` for
+    the compression sub-loop when *for_compression*, else ``unpack_messages``
+    for the restarted main loop."""
 
     def _lookup(index: int, n: int = 1) -> str:
         flat = [msg for archive in raw_archives for msg in archive]
@@ -407,7 +381,6 @@ async def compress_messages(
             f"messages length ({len(messages)})",
         )
 
-    # Build entries dict: prior entries + new messages
     entries: dict[int, str] = {}
     if prior_entries:
         for idx, content in prior_entries:
@@ -451,7 +424,6 @@ async def compress_messages(
             f"{serialized}"
         )
 
-    # Build multimodal user prompt when images are provided.
     if image_blocks:
         content_blocks: list[dict] = [{"type": "text", "text": text_prompt}]
         for img_id in sorted(image_blocks):
@@ -504,14 +476,13 @@ async def compress_and_rebuild(
     Returns the rebuilt system messages and augmented tools dict needed to
     start a new loop iteration.
     """
-    # 1. Archive messages for raw access.
     all_messages = copy.deepcopy(all_messages)
     state.raw_archives.append(all_messages)
     archive_base = sum(len(a) for a in state.raw_archives[:-1])
 
-    # 2. Separate new messages (skip the compressed-context system message
-    #    which is already represented via prior entries) and assign global
-    #    indices for continuous numbering across passes.
+    # The compressed-context system message is already represented by the
+    # prior entries; every other message gets a global index so numbering
+    # stays continuous across passes.
     new_messages: list[dict] = []
     new_msg_global_indices: list[int] = []
     for i, msg in enumerate(all_messages):
@@ -520,7 +491,6 @@ async def compress_and_rebuild(
         new_messages.append(msg)
         new_msg_global_indices.append(archive_base + i)
 
-    # 3. Tag images in new messages and accumulate to the registry.
     tagged_messages, new_image_blocks, next_id = tag_images_in_messages(
         new_messages,
         start_id=state.next_image_id,
@@ -535,7 +505,6 @@ async def compress_and_rebuild(
         else None
     )
 
-    # 4. Compress with prior entries visible alongside new messages.
     compressed = await compress_messages(
         tagged_messages,
         endpoint,
@@ -548,7 +517,7 @@ async def compress_and_rebuild(
     if live_images:
         state.live_image_ids = compressed.surviving_image_ids
 
-    # 5. Split results: first N are re-compressed prior, rest map to new.
+    # The first n_prior results are the re-compressed prior entries.
     n_prior = len(state.entries)
     prior_results = compressed.messages[:n_prior]
     new_results = compressed.messages[n_prior:]
@@ -580,7 +549,6 @@ async def compress_and_rebuild(
 
     state.entries = conversation_entries
 
-    # 6. Render compressed-context system message.
     body = "\n".join(f"[{idx}] {content}" for idx, content in state.entries)
     combined = _COMPRESSED_HEADER + body
 
@@ -613,7 +581,6 @@ async def compress_and_rebuild(
         },
     )
 
-    # 7. Build augmented tools dict: original tools + unpack_messages.
     tools = dict(original_tools)
     tools["unpack_messages"] = _make_archive_lookup_tool(state.raw_archives)
 

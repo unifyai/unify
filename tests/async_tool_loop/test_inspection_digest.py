@@ -21,6 +21,7 @@ import json
 import pytest
 
 from unify.common import async_tool_loop as atl
+from unify.common._async_tool.transcript_ops import _DIGEST_MAX_TURNS
 from unify.common.async_tool_loop import AsyncToolLoopHandle, start_async_tool_loop
 from unify.common.llm_client import new_llm_client
 from unify.common.token_utils import count_tokens
@@ -480,7 +481,7 @@ async def test_digest_caps_turn_count_with_elision_marker():
     digest_obj = json.loads(digest_text)
 
     turns = digest_obj["turns"]
-    max_turns = atl._DIGEST_MAX_TURNS
+    max_turns = _DIGEST_MAX_TURNS
     assert len(turns) == max_turns + 1, "head + one elision marker + tail"
 
     markers = [t for t in turns if isinstance(t, dict) and t.get("elided")]

@@ -742,14 +742,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         steering_tool_dict = action_tools.build_action_steering_tools()
         _steering_tools_ms = (_rl_time.perf_counter() - _tools_step_t0) * 1000
         _tools_step_t0 = _rl_time.perf_counter()
-        completed_tool_dict = action_tools.build_completed_action_tools()
-        _completed_tools_ms = (_rl_time.perf_counter() - _tools_step_t0) * 1000
-        _tools_step_t0 = _rl_time.perf_counter()
         tools = {
             **brain_tool_dict,
             **action_tool_dict,
             **steering_tool_dict,
-            **completed_tool_dict,
         }
         _tools_merge_ms = (_rl_time.perf_counter() - _tools_step_t0) * 1000
         _tools_ms = (_rl_time.perf_counter() - _t0) * 1000
@@ -759,9 +755,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "⏱️ [StartupTiming] llm_preamble.tools.detail "
                 "run_id=%s total=%.0fms brain_init=%.0fms action_init=%.0fms "
                 "brain_tools=%.0fms action_tools=%.0fms steering=%.0fms "
-                "completed=%.0fms merge=%.0fms "
+                "merge=%.0fms "
                 "brain_tool_count=%d action_tool_count=%d steering_tool_count=%d "
-                "completed_tool_count=%d total_tool_count=%d"
+                "total_tool_count=%d"
             ),
             run_id,
             _tools_ms,
@@ -770,12 +766,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             _brain_tools_ms,
             _action_tools_ms,
             _steering_tools_ms,
-            _completed_tools_ms,
             _tools_merge_ms,
             len(brain_tool_dict),
             len(action_tool_dict),
             len(steering_tool_dict),
-            len(completed_tool_dict),
             len(tools),
         )
 

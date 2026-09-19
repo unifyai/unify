@@ -84,18 +84,10 @@ def _truncate_llm_content_blocks(blocks: List[dict]) -> List[dict]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Protocol for tool results that control their own LLM formatting
-# ---------------------------------------------------------------------------
-
-
 @runtime_checkable
 class FormattedToolResult(Protocol):
-    """Protocol for tool results that provide their own LLM content formatting.
-
-    Tools can return objects implementing this protocol to take full control
-    of how their output appears in the LLM transcript, bypassing the default
-    serialization logic in serialize_tool_content.
+    """A tool result that formats its own LLM content, bypassing the default
+    serialization in serialize_tool_content.
 
     Example:
         class MyToolResult:
@@ -117,10 +109,8 @@ class FormattedToolResult(Protocol):
 
 
 def _detect_mime_from_b64(b64_str: str) -> str:
-    """Detect MIME type from base64-encoded image data by inspecting the header bytes.
-
-    Returns "image/jpeg" for JPEG, "image/png" for PNG, or "image/png" as fallback.
-    """
+    """MIME type from the header bytes of base64 image data; "image/png"
+    when unrecognised."""
     try:
         raw = base64.b64decode(b64_str[:32])
         if raw[:2] == b"\xff\xd8":
@@ -138,26 +128,21 @@ def serialize_tool_content(
     payload: Any,
     is_final: bool,
 ) -> Union[str, list]:
-    """
-    Produce the exact content that will be inserted into the transcript for a tool message.
+    """The exact transcript content for a tool message.
 
-    - When is_final=True:
-      - If payload implements FormattedToolResult protocol, delegate to its to_llm_content().
-        This gives the tool full control over how its output appears in the LLM transcript.
-      - Otherwise, serialize payload and promote any embedded base64 images into image_url blocks.
-      - If there are images, the content becomes a list of blocks (text first, then image_url items).
-      - If there are no images, the content is a pretty-printed JSON string.
-
-    - When is_final=False (progress/notification placeholder):
-      - Wrap the payload as {"_placeholder": "progress", "tool": tool_name, ...}
-        and serialize to a pretty-printed JSON string.
+    A final result that implements FormattedToolResult supplies its own
+    content blocks. Otherwise the payload is serialized with any embedded
+    base64 images promoted into image_url blocks: a list of blocks (text
+    first) when images are present, a pretty-printed JSON string when not.
+    A progress/notification placeholder (is_final=False) is wrapped as
+    {"_placeholder": "progress", "tool": tool_name, ...} so the tool name
+    stays visible.
     """
 
     if not is_final:
         content_payload = (
             payload if isinstance(payload, dict) else {"message": str(payload)}
         )
-        # Keep the tool name visible for progress/notification placeholders and mark explicitly
         return _truncate_tool_text(
             _dumps(
                 {"_placeholder": "progress", "tool": tool_name, **content_payload},
@@ -166,25 +151,22 @@ def serialize_tool_content(
             ),
         )
 
-    # Check if payload implements FormattedToolResult protocol
-    # This gives tools full control over their LLM formatting
     if isinstance(payload, FormattedToolResult):
         return _truncate_llm_content_blocks(payload.to_llm_content())
 
-    # Pydantic models → dict so the existing dict serialization path handles them.
+    # Pydantic models take the dict serialization path.
     try:
         if hasattr(payload, "model_dump"):
             payload = payload.model_dump(mode="json")
     except Exception:
         pass
 
-    # Legacy path: Final result – promote embedded images, keep a clean textual view without raw base64
-    # Additionally, when payload is a pure string that contains JSON, parse & pretty-print it; otherwise keep as-is.
+    # A string holding a JSON object/array is pretty-printed as structure;
+    # any other string stays as-is.
     parsed_payload = payload
     if isinstance(payload, str):
         with suppress(Exception):
             maybe = json.loads(payload)
-            # Only adopt parsed structure when it's a JSON object/array; otherwise treat as plain text
             if isinstance(maybe, (dict, list)):
                 parsed_payload = maybe
 
@@ -192,8 +174,8 @@ def serialize_tool_content(
     with suppress(Exception):
         _collect_images(parsed_payload, images)
 
-    # Always apply prune + shorthand for final tool results so models that support
-    # these modes render compactly and consistently in tool outputs
+    # prune + shorthand keep final results compact and consistent across
+    # models that support those modes.
     if isinstance(parsed_payload, (dict, list)):
         text_repr = _dumps(
             _strip_image_keys(parsed_payload),
@@ -201,8 +183,6 @@ def serialize_tool_content(
             context={"prune_empty": True, "shorthand": True},
         )
     else:
-        # Fallback: always provide a string for non-structured payloads
-        # (e.g., numbers, booleans). Preserve plain strings as-is.
         text_repr = payload if isinstance(payload, str) else str(payload)
 
     text_repr = _truncate_tool_text(text_repr)
@@ -241,13 +221,8 @@ def _sanitize_base64_str(value: str) -> str:
 
 
 def sanitize_tool_msg_for_logging(msg: dict) -> dict:
-    """
-    Return a sanitized deep copy of a tool message suitable for human-readable logs.
-
-    - Preserves all keys/structure (including image/image_url keys).
-    - Redacts base64 payloads from data URLs and obvious base64 fields in strings.
-    - Keeps pretty-printability by leaving content strings intact except for redactions.
-    """
+    """A deep copy of a tool message for human-readable logs: every key and
+    structure is preserved, base64 payloads in data URLs are redacted."""
 
     import copy
     import json
@@ -264,19 +239,18 @@ def sanitize_tool_msg_for_logging(msg: dict) -> dict:
         if isinstance(obj, list):
             return [_sanitize_obj(v) for v in obj]
         if isinstance(obj, str):
-            # Attempt to catch embedded data URLs in arbitrary strings
             return _sanitize_base64_str(obj)
         return obj
 
     cloned = copy.deepcopy(msg)
-    # If content is a JSON string, parse → sanitize → embed parsed object for readability
+    # A JSON-string content is embedded as the parsed object so the outer
+    # json.dumps(..., indent=4) pretty-prints it.
     try:
         content = cloned.get("content")
         if isinstance(content, str):
             with suppress(Exception):
                 parsed = json.loads(content)
                 parsed = _sanitize_obj(parsed)
-                # Embed parsed object so outer json.dumps(..., indent=4) pretty-prints it
                 cloned["content"] = parsed
         else:
             cloned["content"] = _sanitize_obj(content)

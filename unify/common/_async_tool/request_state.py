@@ -1,8 +1,5 @@
-"""Request state management for multi-handle async tool loops.
-
-This module provides the foundational dataclasses and registry for tracking
-multiple concurrent requests within a single async tool loop instance.
-"""
+"""Per-request state and the registry that tracks the concurrent requests
+of one multi-handle async tool loop."""
 
 from __future__ import annotations
 
@@ -25,36 +22,25 @@ class RequestStatus(Enum):
 
 @dataclass
 class RequestState:
-    """State for a single request in a multi-handle tool loop.
-
-    Attributes
-    ----------
-    request_id : int
-        Auto-assigned integer identifier for this request (0-indexed).
-    status : RequestStatus
-        Current lifecycle status of the request.
-    result_future : asyncio.Future | None
-        Future that resolves when the request completes or is cancelled.
-        Created lazily on first access to avoid event loop issues.
-    handle_ref : SteerableToolHandle | None
-        Reference to the handle associated with this request.
-    """
+    """One request of a multi-handle loop: its 0-indexed id, lifecycle
+    status, the future resolved on completion or cancellation, and the
+    handle (a SteerableToolHandle, typed Any to avoid a circular import)."""
 
     request_id: int
     status: RequestStatus = RequestStatus.PENDING
     _result_future: asyncio.Future | None = field(default=None, repr=False)
-    handle_ref: Any = None  # Typed as Any to avoid circular import issues
+    handle_ref: Any = None
 
     @property
     def result_future(self) -> asyncio.Future:
-        """Get the result future, creating it lazily if needed."""
+        """The result future, created on first access so it binds to the
+        loop that is running by then."""
         if self._result_future is None:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                # No running loop - create a new one and set it
-                # This handles sync test contexts and Python 3.12+ where
-                # get_event_loop() no longer auto-creates a loop
+                # Outside a running loop (sync contexts), get_event_loop()
+                # does not auto-create one on Python 3.12+.
                 try:
                     loop = asyncio.get_event_loop()
                 except RuntimeError:
@@ -65,21 +51,16 @@ class RequestState:
 
     @property
     def is_pending(self) -> bool:
-        """Return True if this request is still pending."""
         return self.status == RequestStatus.PENDING
 
     @property
     def is_done(self) -> bool:
-        """Return True if this request is no longer pending."""
         return self.status != RequestStatus.PENDING
 
 
 class RequestRegistry:
-    """Registry for managing multiple requests within a single tool loop.
-
-    Handles auto-incrementing request IDs, lifecycle transitions, and
-    provides query methods for checking loop termination conditions.
-    """
+    """Auto-incrementing request ids, lifecycle transitions and the queries
+    that decide when a multi-handle loop terminates."""
 
     def __init__(self) -> None:
         self._requests: dict[int, RequestState] = {}
@@ -87,27 +68,12 @@ class RequestRegistry:
         self._closed: bool = False
 
     def next_id(self) -> int:
-        """Return the next request ID that would be assigned (without registering)."""
+        """The id the next registration would receive."""
         return self._next_request_id
 
     def register(self, handle_ref: Any = None) -> int:
-        """Register a new request and return its assigned ID.
-
-        Parameters
-        ----------
-        handle_ref : Any, optional
-            Reference to the handle associated with this request.
-
-        Returns
-        -------
-        int
-            The auto-assigned request ID (0-indexed, auto-incrementing).
-
-        Raises
-        ------
-        RuntimeError
-            If the registry has been closed.
-        """
+        """Register a request and return its id; raises RuntimeError once
+        the registry is closed."""
         if self._closed:
             raise RuntimeError(
                 "Request registry is closed. Start a new loop via start_async_tool_loop().",
@@ -124,36 +90,11 @@ class RequestRegistry:
         return request_id
 
     def get(self, request_id: int) -> RequestState | None:
-        """Get the state for a specific request ID.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to look up.
-
-        Returns
-        -------
-        RequestState | None
-            The request state, or None if not found.
-        """
         return self._requests.get(request_id)
 
     def complete(self, request_id: int, result: str) -> bool:
-        """Mark a request as completed and resolve its future.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to complete.
-        result : str
-            The final answer/result for this request.
-
-        Returns
-        -------
-        bool
-            True if the request was successfully completed, False if the
-            request_id was invalid or the request was already done.
-        """
+        """Complete a request and resolve its future with *result*; False
+        when the id is invalid or the request is already done."""
         state = self._requests.get(request_id)
         if state is None:
             return False
@@ -166,21 +107,8 @@ class RequestRegistry:
         return True
 
     def cancel(self, request_id: int, reason: str | None = None) -> bool:
-        """Mark a request as cancelled and resolve its future.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to cancel.
-        reason : str | None, optional
-            Optional reason for cancellation.
-
-        Returns
-        -------
-        bool
-            True if the request was successfully cancelled, False if the
-            request_id was invalid or the request was already done.
-        """
+        """Cancel a request and resolve its future with a cancellation
+        notice; False when the id is invalid or the request is already done."""
         state = self._requests.get(request_id)
         if state is None:
             return False
@@ -196,17 +124,15 @@ class RequestRegistry:
         return True
 
     def pending_count(self) -> int:
-        """Return the number of requests still pending."""
         return sum(1 for s in self._requests.values() if s.is_pending)
 
     def is_empty(self) -> bool:
-        """Return True if there are no pending requests."""
+        """True when no request is pending."""
         return self.pending_count() == 0
 
     def is_closed(self) -> bool:
-        """Return True if the registry has been closed."""
         return self._closed
 
     def close(self) -> None:
-        """Close the registry, preventing new registrations."""
+        """Refuse new registrations from now on."""
         self._closed = True

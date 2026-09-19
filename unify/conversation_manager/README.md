@@ -96,9 +96,10 @@ The brain's tools fall into three groups:
   into the query so the actor can open the files.
 - **Steering**: six fixed, handle-addressed tools (`interject_action`,
   `ask_action`, `pause_action`, `resume_action`, `stop_action`,
-  `answer_clarification_action`) steer any in-flight action;
-  `task_actions.py` renders the ready-to-use invocations shown in the state
-  panes.
+  `answer_clarification_action`) steer any in-flight action, and
+  `ask_action` also answers questions about a completed one from its
+  preserved trajectory; `task_actions.py` renders the ready-to-use
+  invocations shown in the state panes.
 
 Prompt composition lives in `prompt_builders.py`; `domains/renderer.py`
 renders the panes the brain reads each turn: notifications, in-flight and

@@ -33,23 +33,17 @@ def _add_code_delimiters(args: dict) -> None:
 
 
 def format_json_for_log(body: dict) -> str:
-    """Format a dict as human-readable JSON for terminal logging.
-
-    Expands escaped newlines in string values so that multi-line content
-    (prompts, markdown, code) renders naturally. For execute_code tool calls,
-    adds visual delimiters around the code block.
-    """
+    """Human-readable JSON for terminal logging, with escaped newlines in
+    string values expanded so prompts, markdown and code render naturally."""
     return _expand_string_newlines(
         json.dumps(body, indent=4, default=str, ensure_ascii=False),
     )
 
 
 def format_llm_response_for_log(msg: dict) -> str:
-    """Format an LLM assistant message for terminal logging.
-
-    Parses stringified tool-call arguments into dicts for pretty-printing
-    and adds visual delimiters around execute_code code blocks.
-    """
+    """An assistant message for terminal logging: stringified tool-call
+    arguments are parsed for pretty-printing and execute_code blocks get
+    markdown fences."""
     msg = copy.deepcopy(msg)
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function", {})
@@ -60,29 +54,15 @@ def format_llm_response_for_log(msg: dict) -> str:
 
 
 def get_handle_paused_state(handle) -> bool | None:
-    """Check if a SteerableToolHandle is paused by inspecting its _pause_event.
-
-    This is the canonical way to determine whether a handle is currently paused.
-    The pattern follows the async tool loop convention where:
-    - Event **set** = running (not paused)
-    - Event **cleared** = paused
-
-    All steerable handles should expose a `_pause_event` attribute (or property)
-    that follows this convention. For handles that track state differently
-    (e.g., via an enum), they should expose a `_pause_event` property that
-    returns a proxy object with an `is_set()` method.
-
-    Args:
-        handle: A SteerableToolHandle or any object with a `_pause_event` attribute.
-
-    Returns:
-        True if paused (event cleared), False if running (event set),
-        None if unknown (no _pause_event, not an Event, or error).
+    """Whether a steerable handle is paused, read from its ``_pause_event``
+    (set = running, cleared = paused). A handle that tracks pause state
+    another way exposes ``_pause_event`` as a proxy with ``is_set()``.
+    Returns None when the handle has no such event.
     """
     try:
         pev = getattr(handle, "_pause_event", None)
         if pev is not None and hasattr(pev, "is_set"):
-            return not pev.is_set()  # running ⇢ set, paused ⇢ cleared
+            return not pev.is_set()
     except Exception:
         pass
     return None

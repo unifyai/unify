@@ -43,15 +43,12 @@ if TYPE_CHECKING:  # TODO: remove once dependencies are fixed
 # Sentinel for bare top-level handles (no label needed).
 _HANDLE_SENTINEL = "<steerable handle — now in-flight>"
 
-# ── user visibility guidance ────────────────────────────────────────────
-#
-# Explains to the model what the end-user can and cannot see, so it doesn't
+# Tells the model what the end-user can and cannot see, so it does not
 # mistake automatically-appended [progress]/[clarification] tail messages
-# for a real user interjection it's told elsewhere to "consider and
-# incorporate". Injected on demand — see _ensure_visibility_guidance_injected
-# and the loop's own interjection-triggered call into the same method —
-# rather than unconditionally at loop start, to keep the model focused on
-# the task until one of those triggers actually fires.
+# for a real user interjection it is told elsewhere to "consider and
+# incorporate". Injected on demand (see _ensure_visibility_guidance_injected
+# and the loop's own interjection-triggered call into it) rather than at
+# loop start, so the model stays on task until a trigger actually fires.
 USER_VISIBILITY_GUIDANCE = (
     "## User Visibility Context\n"
     "IMPORTANT: The end-user who initiated this conversation can ONLY see:\n"
@@ -105,14 +102,12 @@ def _record_failure(
 ) -> None:
     """Tally a failed call. Never raises — the caller decides when to stop.
 
-    Refusals and unexpected exceptions are counted differently on purpose: a
-    refusal is how a caller converges on an argspec, so only repetition ends the
-    loop, while consecutive unexpected exceptions mean something is broken and a
-    few is already too many.
-
-    Stopping is left to ``tracker.stop_reason()`` at the end of the call, so the
-    failure still reaches the transcript first — a loop that aborts before
-    recording why is one nobody can diagnose.
+    Refusals and unexpected exceptions are counted differently: a refusal is
+    how a caller converges on an argspec, so only repetition ends the loop,
+    while consecutive unexpected exceptions mean something is broken and a
+    few is already too many. Stopping is left to ``tracker.stop_reason()`` at
+    the end of the call so the failure reaches the transcript first — a loop
+    that aborts before recording why is one nobody can diagnose.
     """
     if isinstance(exc, ToolInputError):
         tracker.note_refusal(
@@ -150,15 +145,14 @@ class _MultiHandleState:
     ) -> None:
         """Merge one child's terminal result into the shared placeholder.
 
-        Each call is a *final* result for that one child (a multi-handle
-        child completes exactly once, success or error) — not an
-        intermediate update. While the shared placeholder is still mutable,
-        rebuild it in place with every result resolved so far (a bundled
-        progressive view, free since nothing has been dispatched yet). Once
-        it has been sent, it is frozen for good — a shared placeholder can't
-        keep reporting new children finishing without rewriting already-sent
-        bytes — so this child's own result is instead delivered on its own
-        synthesized call_id via a per-child check_status pair.
+        A multi-handle child completes exactly once (success or error), so
+        every call here is that child's final result. While the shared
+        placeholder is still mutable it is rebuilt in place with every
+        result resolved so far (free, since nothing has been dispatched).
+        Once sent it is frozen for good — it cannot keep reporting new
+        children without rewriting already-sent bytes — so this child's
+        result is delivered instead on its own synthesized call_id via a
+        per-child check_status pair.
         """
         if tools_data._mutable(self.placeholder_msg):
             updated = _rebuild_multi_handle_content(self.template, self.results)
@@ -286,53 +280,38 @@ def compute_context_injection(
     target_context_opted_in: Optional[bool] = None,
     is_continuation_only: bool = False,
 ) -> Tuple[dict, bool]:
-    """
-    Shared helper for computing context injection kwargs.
+    """Compute the parent-chat-context kwargs for one tool call.
 
-    This is used by both base tool dispatch and dynamic tool dispatch to ensure
-    consistent handling of include_parent_chat_context and include_parent_chat_context_cont.
+    Shared by base tool dispatch and dynamic tool dispatch so
+    ``include_parent_chat_context`` and ``include_parent_chat_context_cont``
+    are handled identically.
 
-    Parameters
-    ----------
-    args : dict
-        The tool call arguments (will be mutated to pop context control params).
-    propagate_chat_context : ChatContextPropagation
-        The loop's propagation mode (ALWAYS, NEVER, or LLM_DECIDES).
-    context_state : LoopContextState
-        The loop's context tracking state.
-    client_messages : list
-        The current conversation messages (filtered for _ctx_header if needed).
-    call_id : str
-        Unique identifier for this tool call (used for context tracking).
-    accepts_parent_ctx : bool
-        Whether the target function accepts _parent_chat_context.
-    accepts_parent_ctx_cont : bool
-        Whether the target function accepts _parent_chat_context_cont.
-    target_context_opted_in : Optional[bool]
-        For steering tools: whether the target tool initially opted into context.
-        If None, this is treated as a new tool call (not steering).
-    is_continuation_only : bool
-        If True, only compute continuation context (for interject_*).
-        If False, compute full initial context (for base tools and ask_*).
+    ``args`` is the tool call's arguments and is mutated: the two control
+    params are popped. ``propagate_chat_context`` is the loop's mode (ALWAYS,
+    NEVER or LLM_DECIDES), ``context_state`` its context tracker,
+    ``client_messages`` the current conversation (``_ctx_header`` messages are
+    filtered out) and ``call_id`` identifies the call for context tracking.
+    ``accepts_parent_ctx`` / ``accepts_parent_ctx_cont`` say whether the target
+    function accepts ``_parent_chat_context`` / ``_parent_chat_context_cont``.
+    ``target_context_opted_in`` is, for steering tools, whether the target
+    tool initially opted into context; ``None`` means a fresh tool call, not
+    steering. ``is_continuation_only`` computes only the continuation context
+    (for interject_*) instead of the full initial context (base tools and
+    ask_*).
 
-    Returns
-    -------
-    Tuple[dict, bool]
-        (extra_kwargs, context_opted_in) where extra_kwargs contains the context
-        params to inject and context_opted_in indicates the opt-in decision.
+    Returns ``(extra_kwargs, context_opted_in)``: the context params to
+    inject, and the opt-in decision.
     """
     extra_kwargs: dict = {}
 
-    # Pop the LLM control parameters from args. Initial context injection is
-    # opt-in: an omitted include_parent_chat_context means no parent context.
+    # Initial context injection is opt-in: an omitted
+    # include_parent_chat_context means no parent context.
     llm_include_ctx = args.pop("include_parent_chat_context", False)
     llm_include_ctx_cont = args.pop("include_parent_chat_context_cont", True)
 
-    # Determine whether to inject context based on propagation mode
     should_inject_ctx = False
 
     if is_continuation_only:
-        # For steering tools like interject_*, check if the target tool opted in
         if target_context_opted_in:
             if propagate_chat_context == ChatContextPropagation.ALWAYS:
                 should_inject_ctx = True
@@ -340,7 +319,6 @@ def compute_context_injection(
                 should_inject_ctx = llm_include_ctx_cont
             # NEVER mode: should_inject_ctx stays False
     else:
-        # For base tools and ask_*, use the standard logic
         if accepts_parent_ctx or accepts_parent_ctx_cont:
             if propagate_chat_context == ChatContextPropagation.ALWAYS:
                 should_inject_ctx = True
@@ -349,12 +327,10 @@ def compute_context_injection(
             elif propagate_chat_context == ChatContextPropagation.LLM_DECIDES:
                 should_inject_ctx = llm_include_ctx
 
-    # Compute and inject context if needed
     if should_inject_ctx:
         cur_msgs = [m for m in client_messages if not m.get("_ctx_header")]
 
         if is_continuation_only:
-            # For steering tools, only compute continuation
             _, ctx_cont = context_state.compute_context_for_inner_tool(
                 call_id,
                 cur_msgs,
@@ -362,7 +338,6 @@ def compute_context_injection(
             if ctx_cont and accepts_parent_ctx_cont:
                 extra_kwargs["_parent_chat_context_cont"] = ctx_cont
         else:
-            # For base tools / ask_*, compute full context
             parent_ctx, parent_ctx_cont = context_state.compute_context_for_inner_tool(
                 call_id,
                 cur_msgs,
@@ -406,17 +381,17 @@ class ToolsData:
         self._on_handle_adopted: Optional[Callable[[asyncio.Task], None]] = None
         # Time context for inline timing annotations on tool results
         self._time_ctx: Optional["TimeContext"] = time_ctx
-        # Reference to DynamicToolFactory.live_ask_fns for the current turn —
-        # per-call `ask` closures kept ONLY to seed recursive inspection-loop
-        # tool schemas (get_ask_tools()); never part of the outer loop's own
-        # visible schema, which only ever holds the static
-        # wait/steer/ask_about_completed_tool surface.
+        # DynamicToolFactory.live_ask_fns for the current turn: per-call `ask`
+        # closures kept only to seed recursive inspection-loop tool schemas
+        # (get_ask_tools()); never part of the outer loop's own visible
+        # schema, which holds only the static wait/steer/ask_about_completed_tool
+        # surface.
         self._live_ask_fns_ref: Optional[Dict[str, Callable]] = None
         self._completed_ask_handles: Dict[str, Callable] = {}
         self._task_ask_keys: Dict[asyncio.Task, str] = {}
-        # Metadata for completed steerable tools, keyed by call_id.
-        # Each entry: {"name": str, "call_id": str, "ask_fn": Callable, "handle": Any}
-        # Seeded by an inspection loop with the registry of the loop it
+        # Metadata for completed steerable tools, keyed by call_id; each entry
+        # is {"name": str, "call_id": str, "ask_fn": Callable, "handle": Any}.
+        # An inspection loop seeds this with the registry of the loop it
         # inspects: that transcript announces "[askable <call_id>]" ids from
         # the inspected loop's namespace, so ask_about_completed_tool must
         # resolve them here too.
@@ -428,22 +403,20 @@ class ToolsData:
         self._extra_ask_tools: Dict[str, Callable] = (
             dict(extra_ask_tools) if extra_ask_tools else {}
         )
-        # Shared with the loop's own interjection-triggered injection (see
-        # ensure_visibility_guidance_injected) so the guidance lands at most
-        # once regardless of which trigger — a user interjection or the
-        # first [progress]/[clarification] message — fires first.
+        # Shared with the loop's own interjection-triggered injection so the
+        # guidance lands at most once, whichever trigger — a user interjection
+        # or the first [progress]/[clarification] message — fires first.
         self._visibility_guidance_injected: bool = False
 
     def get_ask_tools(self) -> Dict[str, Callable]:
-        """Return a snapshot of currently available ``ask_*`` dynamic tools.
+        """Snapshot of the currently available ``ask_*`` dynamic tools.
 
-        Merges three sources with increasing precedence:
-        completed ask handles < extra_ask_tools < live ask closures.
-
-        Used solely to seed a *recursive* inspection loop's own tool schema
+        Merges three sources with increasing precedence: completed ask
+        handles < extra_ask_tools < live ask closures. Used solely to seed a
+        *recursive* inspection loop's own tool schema
         (SteerableToolHandle.ask()) so it can propagate a question into a
-        still-nested grandchild — an internal plumbing surface, distinct
-        from (and never merged into) the outer loop's own visible schema.
+        still-nested grandchild; never merged into the outer loop's own
+        visible schema.
         """
         result = dict(self._completed_ask_handles)
         result.update(self._extra_ask_tools)
@@ -452,10 +425,9 @@ class ToolsData:
             result.update(live)
         return result
 
-    # Local helper: pretty-print tool payloads consistently
     @staticmethod
     def _pretty_tool_payload(tool_name: str, payload: Any) -> str:
-        # Centralized serialization for progress/notification placeholders
+        # Non-final serialization, for progress/notification placeholders.
         return serialize_tool_content(
             tool_name=tool_name,
             payload=payload,
@@ -476,24 +448,20 @@ class ToolsData:
         """Inject the user-visibility guidance before the first status-shaped
         tail message a user could mistake for an interjection.
 
-        Shared with the loop's own interjection-triggered injection (same
-        flag) so the guidance lands exactly once, whichever trigger — a real
-        user interjection, or the first ``[progress]``/``[clarification]``
+        Shares its flag with the loop's own interjection-triggered injection
+        so the guidance lands exactly once, whichever trigger — a real user
+        interjection, or the first ``[progress]``/``[clarification]``
         message — fires first. Most loops never see a user interjection, so
-        gating solely on that (the previous behavior) left every sub-agent
-        and unattended task without the guidance that tells the model these
-        messages are not requests to incorporate.
+        gating solely on that would leave every sub-agent and unattended task
+        without the guidance that says these messages are not requests.
 
-        The check-await-set pattern below assumes a single coroutine calls
-        this per ``ToolsData`` instance at a time (true today — the async
-        tool loop drives one turn at a time even with concurrent tools in
-        flight, since notification/clarification handling and the
-        interjection drain are not themselves run concurrently with each
-        other). Two truly concurrent callers could both read
-        ``_visibility_guidance_injected`` as ``False`` before either sets it,
-        double-injecting the guidance — harmless (an idempotent system
-        message, not a correctness issue) but worth knowing if that
-        assumption ever stops holding.
+        The check-await-set pattern assumes one coroutine calls this per
+        ``ToolsData`` instance at a time: the loop drives one turn at a time
+        even with concurrent tools in flight, since notification/clarification
+        handling and the interjection drain never run concurrently with each
+        other. Two truly concurrent callers could both read the flag as
+        ``False`` before either sets it and double-inject — harmless, since
+        the system message is idempotent.
         """
         if self._visibility_guidance_injected:
             return
@@ -517,14 +485,13 @@ class ToolsData:
     ) -> None:
         """Coalesce-then-freeze progress delivery.
 
-        Progress notifications land as ``[progress <call_id>]``-prefixed
-        user-role tail messages, tracked in ``info.progress_msg`` — separate
-        from ``info.tool_reply_msg`` so the eventual final result never
-        shares a slot with transient progress text. While the current
-        progress message is still above the sent watermark it is free to
-        edit in place, coalescing a burst of notifications into one message;
-        once it has been dispatched it is frozen, and the next notification
-        starts a fresh tail message instead of reaching back to mutate it.
+        Progress lands as ``[progress <call_id>]``-prefixed user-role tail
+        messages tracked in ``info.progress_msg``, separate from
+        ``info.tool_reply_msg`` so the final result never shares a slot with
+        transient progress text. While the current progress message is still
+        above the sent watermark it is edited in place, coalescing a burst
+        into one message; once dispatched it is frozen and the next
+        notification starts a fresh tail message.
         """
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = f"[progress {call_id}] {pretty}"
@@ -545,14 +512,13 @@ class ToolsData:
     ) -> None:
         """Coalesce-then-freeze clarification-question delivery.
 
-        Mirrors ``record_progress``, but tracked separately in
-        ``info.clarify_msg`` and prefixed ``[clarification <call_id>]`` so
-        the model recognizes it wants a reply via
-        ``steer(call_id=<call_id>, action="clarify", payload=<answer>)``,
-        unlike a status-only ``[progress ...]`` message. ``info.tool_reply_msg``
-        (the pending stub) is never touched here — the tool's eventual
-        final result still lands there, or on ``clarify_placeholder`` once
-        the model answers, never on this tail message.
+        Mirrors ``record_progress`` but is tracked in ``info.clarify_msg``
+        and prefixed ``[clarification <call_id>]`` so the model knows it
+        wants a reply via ``steer(call_id=<call_id>, action="clarify",
+        payload=<answer>)``, unlike a status-only ``[progress ...]`` message.
+        ``info.tool_reply_msg`` (the pending stub) is never touched: the
+        final result lands there, or on ``clarify_placeholder`` once the
+        model answers, never on this tail message.
         """
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
@@ -572,15 +538,14 @@ class ToolsData:
     @staticmethod
     def _describe_custom_methods(handle: Any, call_id: str) -> str:
         """Render a handle's custom methods (beyond the core steering surface)
-        as a short listing — name, signature, one-line docstring — the only
-        place this can live now that `action="call"` methods are validated
-        at execution time instead of minted as their own self-documenting
-        tool. Returns "" when there are none.
+        as a short listing: name, signature, one-line docstring. Custom
+        `action="call"` methods are validated at execution time rather than
+        exposed as tools of their own, so this listing is the model's only
+        description of them. Returns "" when there are none.
         """
         with suppress(Exception):
-            # Deferred import: dynamic_tools_factory imports this module at
-            # top level, so importing it back here at call time (not module
-            # load time) avoids a circular import.
+            # Imported at call time: dynamic_tools_factory imports this
+            # module at top level, so a module-level import would be circular.
             from .dynamic_tools_factory import DynamicToolFactory
 
             custom_methods = DynamicToolFactory._discover_custom_public_methods(
@@ -613,17 +578,14 @@ class ToolsData:
 
         One-shot, append-only tail message (same shape as record_progress /
         record_clarification, minus coalescing — a call starts exactly
-        once). Replaces the old signal a per-call-id minted tool used to
-        carry implicitly (its mere presence in the schema meant "X is now
-        steerable"); with the static schema that signal has to live in the
-        transcript instead.
+        once). The tool schema is static, so the transcript is the only
+        place this signal can live.
 
         Deliberately carries no argument payload — the adjacent assistant
         `tool_calls` entry already has the full arguments; duplicating them
         here would freeze a second copy into the prefix forever.
-        Custom-method discoverability, when a handle is already attached,
-        lives in `record_tool_capability_delta` instead, so a call that
-        never gets a handle never pays for that either.
+        Custom-method discoverability lives in `record_tool_capability_delta`,
+        so a call that never gets a handle never pays for that either.
         """
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = f"[steerable {info.call_id}] {info.name} started."
@@ -639,9 +601,9 @@ class ToolsData:
         """Announce that a call already covered by `record_tool_started`
         just widened its steer() surface (a handle was adopted).
 
-        Not a re-announcement: no arguments, no restatement of "started" —
-        only the capability delta (which of interject/pause/ask are newly
-        available) plus any custom methods the handle exposes.
+        Not a re-announcement: no arguments, no restatement of "started",
+        only which of interject/pause/ask became available plus any custom
+        methods the handle exposes.
         """
         handle = info.handle
         caps = []
@@ -670,15 +632,12 @@ class ToolsData:
     ) -> None:
         """Announce that a completed call's trajectory is now askable.
 
-        Replaces the old live listing embedded in ``ask_about_completed_tool``'s
-        docstring (which churned the schema on every completion, even when
-        nothing else changed) with an appended tail message — the docstring
-        itself is now frozen.
-
-        Deliberately carries no argument payload, same as
-        ``record_tool_started`` — the adjacent assistant `tool_calls` entry
-        already has the full arguments; duplicating them here would freeze a
-        second copy into the prefix forever.
+        An appended tail message rather than a live listing in
+        ``ask_about_completed_tool``'s docstring, which would churn the
+        schema on every completion; that docstring stays frozen. Carries no
+        argument payload, same as ``record_tool_started``: the adjacent
+        assistant `tool_calls` entry already has the full arguments, and a
+        copy here would freeze into the prefix forever.
         """
         await self._ensure_visibility_guidance_injected(msg_dispatcher)
         content = (
@@ -695,18 +654,15 @@ class ToolsData:
     ) -> Tuple[Optional[asyncio.Task], Optional["ToolCallMetadata"]]:
         """Exact-match lookup of the live (pending) task for *call_id*.
 
-        The steer() dispatcher targets calls by their real id verbatim —
-        unlike the old per-call-id minted tools, there is no name-length
-        budget forcing a truncated suffix, so no suffix/endswith matching
-        is needed (or wanted: it was a source of ambiguity).
+        steer() targets calls by their real id verbatim; suffix/endswith
+        matching would only add ambiguity.
 
-        Scans ``self.pending`` and additionally requires ``not t.done()`` —
-        a task can briefly sit in ``self.pending``/``self.info`` after its
-        underlying coroutine has already finished but before
-        ``process_completed_task`` has popped it. A call in that window must
-        resolve as "not live" so steer() routes it to the same instructive
-        "already completed" error as any other finished call, never
-        dispatches against it as if it were still running.
+        Also requires ``not t.done()``: a task can briefly sit in
+        ``self.pending``/``self.info`` after its coroutine has finished but
+        before ``process_completed_task`` has popped it. A call in that
+        window must resolve as "not live" so steer() routes it to the same
+        instructive "already completed" error as any other finished call
+        rather than dispatching against it as if it were still running.
         """
         for t in self.pending:
             if t.done():
@@ -735,8 +691,8 @@ class ToolsData:
         self.info[coro] = metadata
 
     def pop_task(self, coro: asyncio.Task) -> ToolCallMetadata:
-        # Before removing, retain the ask_* dynamic tool handle for this task
-        # so handle.ask() can propagate post-completion.
+        # Retain this task's ask_* handle so handle.ask() can still propagate
+        # after completion.
         info = self.info.get(coro)
         ask_name = self._task_ask_keys.pop(coro, None)
         if ask_name is not None:
@@ -776,24 +732,22 @@ class ToolsData:
         self.pending.clear()
 
     def prune_over_quota_tool_calls(self, asst_msg: dict) -> None:
-        """
-        In-place remove tool_calls from asst_msg if they would exceed the per-tool quota.
-        This ensures strict provider compliance: calls that are not executed
-        must not remain in the history without a response.
+        """Remove, in place, the tool_calls of asst_msg that would exceed the
+        per-tool quota. Calls that are not executed must not remain in the
+        history without a response, or the provider rejects the request.
 
-        Only ever safe to call while asst_msg is still mutable (not yet
-        included in a dispatched request) — an in-place tool_calls edit
-        below the sent watermark would shift every already-dispatched
-        message that follows. Both call sites today only ever reach a
-        message at preflight (watermark 0) or the current turn's own
-        message (index == watermark); asserting it here makes that a
-        stated invariant instead of an accident of caller discipline.
+        Only safe while asst_msg is still mutable (not yet included in a
+        dispatched request): an in-place tool_calls edit below the sent
+        watermark would shift every already-dispatched message that follows.
+        Both call sites only reach a message at preflight (watermark 0) or
+        the current turn's own message (index == watermark); the assertion
+        makes that a stated invariant instead of caller discipline.
         """
         tcs = asst_msg.get("tool_calls")
         if not tcs:
             return
         if not is_mutable(self._client, asst_msg):
-            # Logged explicitly: known callers (preflight repair, the
+            # Logged explicitly: the callers (preflight repair, the
             # persist-mode branch) wrap this in suppress/except-pass, which
             # would otherwise swallow the raise along with the failure.
             _msg = (
@@ -804,8 +758,8 @@ class ToolsData:
             self._logger.error(_msg, prefix="🚨")
             raise ValueError(_msg)
 
-        # Track counts locally to handle multiple calls in this single batch
-        # without permanently modifying self.call_counts yet (that happens on schedule).
+        # Count locally across this batch; self.call_counts itself is only
+        # incremented when a call is scheduled.
         temp_counts = self.call_counts.copy()
 
         valid_tcs = []
@@ -823,26 +777,23 @@ class ToolsData:
                 current = temp_counts.get(name, 0)
 
                 if limit is not None and current >= limit:
-                    # Prune this call - do not add to valid_tcs
                     continue
 
-                # Keep it, and increment temp counter
                 temp_counts[name] = current + 1
                 valid_tcs.append(tc)
             except Exception:
                 # Malformed tool call, keep it
                 valid_tcs.append(tc)
 
-        # In-place mutation of the assistant message
         asst_msg["tool_calls"] = valid_tcs
 
-        # If the message becomes empty (no content, no tools), inject a placeholder content
-        # to satisfy API constraints and inform the model.
+        # An assistant message with neither content nor tool_calls is
+        # rejected by the API; a placeholder also tells the model why.
         has_content = bool(asst_msg.get("content"))
         if not valid_tcs and not has_content:
             asst_msg["content"] = "(Tool calls were removed due to quota limits)"
 
-    # Helper: schedule a base tool call (shared by main path and backfill)
+    # Shared by the main dispatch path and backfill.
     async def schedule_base_tool_call(
         self,
         asst_msg: dict,
@@ -857,14 +808,13 @@ class ToolsData:
         msg_dispatcher: Optional["LoopMessageDispatcher"] = None,
         initial_paused: bool = False,
     ) -> None:
-        # Base tool must exist
         if name not in self.normalized:
             return
 
         fn = self.normalized[name].fn
 
-        # Enforce hidden per-tool total call quota: should be pre-pruned from
-        # the assistant message, but guard here as well and simply skip.
+        # Over-quota calls should already be pruned from the assistant
+        # message; skip silently if one slipped through.
         with suppress(Exception):
             lim = self.normalized[name].max_total_calls
             if lim is not None and self.call_counts.get(name, 0) >= lim:
@@ -876,7 +826,7 @@ class ToolsData:
             p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
         )
 
-        # Parse args early so we can check include_parent_chat_context
+        # Parsed before context injection, which pops include_parent_chat_context.
         with suppress(Exception):
             call_args = (
                 json.loads(args_json)
@@ -889,7 +839,6 @@ class ToolsData:
         sig_accepts_parent_ctx = "_parent_chat_context" in params or has_varkw
         sig_accepts_parent_ctx_cont = "_parent_chat_context_cont" in params or has_varkw
 
-        # Use shared helper for context injection logic
         ctx_extra_kwargs, context_opted_in = compute_context_injection(
             args=call_args,
             propagate_chat_context=propagate_chat_context,
@@ -901,7 +850,6 @@ class ToolsData:
             is_continuation_only=False,
         )
 
-        # Build extra kwargs (chat context, interject/clarification/pause)
         extra_kwargs: dict = dict(ctx_extra_kwargs)
 
         sig_accepts_interject_q = "_interject_queue" in params or has_varkw
@@ -938,33 +886,24 @@ class ToolsData:
             sub_q = asyncio.Queue()
             extra_kwargs["_interject_queue"] = sub_q
 
-        # Filter extras to match fn signature, and normalise base call args via shared helper
         filtered_extras = {
             k: v for k, v in extra_kwargs.items() if k in params or has_varkw
         }
         allowed_call_args = _normalise_kwargs_for_bound_method(fn, call_args)
         merged_kwargs = {**allowed_call_args, **filtered_extras}
 
-        # Backfill advisory args advertised as required but safe to default at
-        # runtime (e.g. execute_code's `thought`). Keeps the schema's strong
-        # `required` signal while preventing a model omission from raising
-        # TypeError mid-trajectory.
+        # Backfill advisory args advertised as required but safe to default
+        # (e.g. execute_code's `thought`): the schema keeps its strong
+        # `required` signal without a model omission raising TypeError.
         merged_kwargs = apply_llm_soft_required_defaults(fn, merged_kwargs)
 
-        # Legacy arg-scoped image normalization removed; inner tools should accept ImageRefs explicitly.
-
-        # (Argument pretty-printing now handled in assistant message logs only)
-
-        # Build coroutine. Argument binding for an async fn happens
-        # synchronously at coroutine creation, so a model omitting a
-        # required argument raises TypeError HERE — outside the task
-        # machinery that turns failures into tool results. Convert it
-        # into a task-level failure so the model sees the error and
-        # self-corrects instead of the whole trajectory dying (seen in
-        # prod: act dispatch killed by execute_code missing a required
-        # argument).
-        # The sync branch is already safe: asyncio.to_thread defers
-        # binding into the task.
+        # Argument binding for an async fn happens synchronously at coroutine
+        # creation, so a model omitting a required argument raises TypeError
+        # here — outside the task machinery that turns failures into tool
+        # results. Convert it into a task-level failure so the model sees the
+        # error and self-corrects instead of the whole trajectory dying. The
+        # sync branch is already safe: asyncio.to_thread defers binding into
+        # the task.
         if asyncio.iscoroutinefunction(fn):
             try:
                 coro = fn(**merged_kwargs)
@@ -1020,7 +959,7 @@ class ToolsData:
             with suppress(Exception):
                 await self.record_tool_started(metadata, msg_dispatcher)
 
-        # Increment hidden quota counter only once scheduling succeeds
+        # The quota counter moves only once scheduling has succeeded.
         with suppress(Exception):
             self.call_counts[name] = self.call_counts.get(name, 0) + 1
 
@@ -1033,7 +972,6 @@ class ToolsData:
         # Ensure assistant meta exists for deterministic insertion ordering
         assistant_meta.setdefault(id(asst_msg), {"results_count": 0})
 
-    # ── *single* authoritative implementation of "task finished" handling ──
     async def process_completed_task(
         self,
         task: asyncio.Task,
@@ -1042,15 +980,11 @@ class ToolsData:
         assistant_meta,
         msg_dispatcher,
     ) -> bool:
-        """
-        Deal with a finished tool *task* exactly once:
-
-        1.  Pop bookkeeping (``pending`` / ``task_info``).
-        2.  Serialise *success* or *exception* into ``result``.
-        3.  Patch or insert the correct **tool** message.
-        4.  Emit the event-bus hook (if configured).
-        5.  Record the payload in ``completed_results`` for potential post-hoc lookups.
-        6.  Enforce the *max_consecutive_failures* safety valve.
+        """Deal with a finished tool *task* exactly once: pop its bookkeeping
+        (``pending`` / ``info``), serialise success or exception into
+        ``result``, patch or insert the tool message, publish it to the event
+        bus, record the payload in ``completed_results`` for post-hoc lookups
+        and enforce the *max_consecutive_failures* safety valve.
         """
         import time as _pct_time
 
@@ -1064,8 +998,7 @@ class ToolsData:
         call_id = info.call_id
 
         # Announce retrospective askability now that pop_task has (possibly)
-        # promoted this call_id into _completed_askable_tools — replaces the
-        # old live-listing docstring on ask_about_completed_tool.
+        # promoted this call_id into _completed_askable_tools.
         askable_entry = self._completed_askable_tools.get(call_id)
         if askable_entry is not None:
             with suppress(Exception):
@@ -1081,8 +1014,8 @@ class ToolsData:
             f"total_elapsed={_pickup_delay:.2f}s",
         )
 
-        # 1️⃣-a. Drain any pending notifications that arrived just before completion
-        #      (prevents missing progress events when the tool finishes quickly).
+        # Drain notifications that arrived just before completion, so a
+        # fast-finishing tool's progress events are not lost.
         try:
             q = info.notification_queue
         except Exception:
@@ -1096,7 +1029,6 @@ class ToolsData:
                 except Exception:
                     break
 
-                # Pretty-print content for the progress message
                 pretty = self._pretty_tool_payload(name, payload)
 
                 # Coalesce-then-freeze into a separate [progress <call_id>]
@@ -1104,7 +1036,7 @@ class ToolsData:
                 # must stay byte-frozen once sent (see record_progress).
                 await self.record_progress(info, call_id, pretty, msg_dispatcher)
 
-                # Forward a programmatic notification event to the outer handle
+                # Forward a programmatic notification event to the outer handle.
                 with suppress(Exception):
                     outer = (
                         outer_handle_container[0] if outer_handle_container else None
@@ -1128,15 +1060,11 @@ class ToolsData:
             f"⏱️ [ToolsData.process_completed +{_pct_ms()}] {name} notification drain done",
         )
 
-        # 2️⃣  obtain result -------------------------------------------------
         try:
             raw = task.result()
 
-            # ───────────────────────────────────────────────────────────────
-            #  Multi-handle child: progressive placeholder update.
-            #  Each child completes independently; the shared placeholder
-            #  is rebuilt with the newly resolved result.
-            # ───────────────────────────────────────────────────────────────
+            # Multi-handle child: each completes independently and the shared
+            # placeholder is rebuilt with the newly resolved result.
             mh_state = getattr(info, "_multi_handle_state", None)
             if mh_state is not None:
                 label = info._multi_handle_label
@@ -1162,9 +1090,7 @@ class ToolsData:
                     )
                 return True
 
-            # ───────────────────────────────────────────────────────────────
-            #  Bare handle: the tool returned a SteerableToolHandle directly.
-            # ───────────────────────────────────────────────────────────────
+            # Bare handle: the tool returned a SteerableToolHandle directly.
             from unify.common.async_tool_loop import SteerableToolHandle
 
             if isinstance(raw, SteerableToolHandle):
@@ -1177,11 +1103,9 @@ class ToolsData:
                 )
                 return False  # ⬅️  no LLM turn required
 
-            # ───────────────────────────────────────────────────────────────
-            #  Composite return: one or more handles nested inside a
-            #  dict/list/tuple alongside intermediate data surfaced to the
-            #  LLM as progress while each handle is steered independently.
-            # ───────────────────────────────────────────────────────────────
+            # Composite return: one or more handles nested inside a
+            # dict/list/tuple alongside intermediate data, surfaced to the
+            # LLM as progress while each handle is steered independently.
             nested_handles, cleaned = _extract_nested_handle(raw)
             if nested_handles is not None:
                 await self.adopt_multi_nested(
@@ -1194,20 +1118,15 @@ class ToolsData:
                 )
                 return True  # ⬅️  LLM turn required — intermediate content to process
 
-            # ───────────────────────────────────────────────────────────────
-            #  Normal (non-handle) result – unchanged path
-            # ───────────────────────────────────────────────────────────────
-            # ── finished successfully – promote any embedded images ─────────
-            # Centralized serialization for final tool results
+            # Plain (non-handle) result.
             result = serialize_tool_content(tool_name=name, payload=raw, is_final=True)
 
-            # Wrap with inline timing metadata for non-dynamic (base) tools
             if self._time_ctx is not None and not info.is_dynamic:
                 result = self._time_ctx.wrap_result(result, info.scheduled_time)
 
             consecutive_failures.reset_failures()
         except Exception as exc:
-            # Multi-handle child error: update shared placeholder and return early
+            # Multi-handle child error: update the shared placeholder and return.
             mh_state = getattr(info, "_multi_handle_state", None)
             if mh_state is not None:
                 label = info._multi_handle_label
@@ -1250,9 +1169,8 @@ class ToolsData:
                     f"(attempt {consecutive_failures.current_failures}/{consecutive_failures.max_failures}):\n{result}",
                     prefix="❌",
                 )
-                # Additional debug context: show the exact tool schema and arguments
-                # that were presented to the LLM for this failed call. This helps
-                # diagnose docstrings/argspec mismatches that cause tool misuse.
+                # The exact schema and arguments the LLM saw for this call, to
+                # diagnose docstring/argspec mismatches behind tool misuse.
                 with suppress(Exception):
                     debug_payload = {
                         "tool_name": name,
@@ -1266,7 +1184,7 @@ class ToolsData:
                         prefix="🧩",
                     )
 
-        # 3️⃣  remember so later lookups can answer instantly
+        # Remembered so later lookups can answer instantly.
         self.completed_results[call_id] = result
         self._completed_tool_names[call_id] = name
 
@@ -1274,26 +1192,23 @@ class ToolsData:
             f"⏱️ [ToolsData.process_completed +{_pct_ms()}] {name} result obtained",
         )
 
-        # 4️⃣  update / insert tool-result message --------------------------
         asst_msg = info.assistant_msg
         clarify_ph = info.clarify_placeholder
         tool_reply_msg = info.tool_reply_msg
 
-        # Placeholder handling under the sent-watermark invariant:
-        # - Still mutable (not yet dispatched): update in-place — free, no
-        #   cache cost.
-        # - Immutable (already sent): the stub is never rewritten again — it
-        #   was self-describing from the start (see ensure_placeholders_for_pending)
-        #   — and the result is delivered solely via an appended check_status
-        #   pair.
+        # Placeholder handling under the sent-watermark invariant: while still
+        # mutable (not yet dispatched) it is updated in place, free of cache
+        # cost; once sent the stub is never rewritten — it was self-describing
+        # from the start (see ensure_placeholders_for_pending) — and the result
+        # is delivered solely via an appended check_status pair.
         placeholder = clarify_ph or tool_reply_msg
 
         if placeholder is not None:
             if self._mutable(placeholder):
                 placeholder["content"] = result
                 tool_msg = placeholder
-                # Publish the now-complete tool message to EventBus
-                # (placeholder insertion skipped EventBus; now we have final content)
+                # Placeholder insertion skipped the event bus; publish now
+                # that the content is final.
                 await msg_dispatcher.publish_to_event_bus([tool_msg])
             else:
                 tool_msg = await emit_completion_pair(
@@ -1319,10 +1234,8 @@ class ToolsData:
             f"⏱️ [ToolsData.process_completed +{_pct_ms()}] {name} tool message emitted",
         )
 
-        # ── optional console logging for every finished tool call ────────────
-        #     (mirrors the assistant-message logging above)
         if self._logger.log_steps:
-            # Log EXACLY what was inserted, but redact base64 data URLs for readability
+            # Exactly what was inserted, with base64 data URLs redacted.
             try:
                 safe_for_logs = sanitize_tool_msg_for_logging(tool_msg)
                 self._logger.info(
@@ -1332,17 +1245,15 @@ class ToolsData:
             except Exception:
                 pass
 
-        # 5️⃣  failure guard -------------------------------------------------
         stop_reason = consecutive_failures.stop_reason()
         if stop_reason:
             if self._logger.log_steps:
                 self._logger.error(f"Aborting: {stop_reason}", prefix="🚨")
             raise RuntimeError(stop_reason)
 
-        # successful (or failed) *final* result → LLM may need to react
+        # A final result, success or failure: the LLM may need to react.
         return True
 
-    # ── Helper: adopt a nested SteerableToolHandle into the current loop -----
     async def adopt_nested(
         self,
         info: "ToolCallMetadata",
@@ -1355,16 +1266,13 @@ class ToolsData:
     ) -> None:
         """Adopt a child SteerableToolHandle returned by a tool into this loop.
 
-        Creates/updates a single placeholder tool message, schedules the child's
-        result as a nested task with inherited metadata, and wires clarification
-        channels.
-
-        When *intermediate_content* is provided (from a composite return where
-        the handle was nested inside a data structure), the placeholder is
-        populated with the intermediate data formatted as a progress notification
-        so the LLM can react to it while steering continues.
+        Creates or updates the single placeholder tool message, schedules the
+        child's result as a nested task with inherited metadata, and wires
+        clarification channels. When *intermediate_content* is given (a
+        composite return with the handle nested inside data), the placeholder
+        carries that data formatted as a progress notification so the LLM can
+        react to it while steering continues.
         """
-        # Upgrade interject flag based on child capability
         if hasattr(child_handle, "interject"):
             info.is_interjectable = True
 
@@ -1376,16 +1284,12 @@ class ToolsData:
                 "'clarification_up_q' / 'clarification_down_q'. Both are required (or neither).",
             )
 
-        # Schedule child's result as nested task
         if inspect.iscoroutinefunction(child_handle.result):
             nested_coro = child_handle.result()
         else:
             nested_coro = asyncio.to_thread(child_handle.result)
         nested_task = asyncio.create_task(nested_coro)
 
-        # Insert/update single placeholder for this call_id.
-        # When intermediate_content is provided the placeholder carries
-        # the partial data formatted as progress so the LLM can react.
         if intermediate_content is not None:
             placeholder_content = serialize_tool_content(
                 tool_name=info.name,
@@ -1416,19 +1320,16 @@ class ToolsData:
             )
             info.tool_reply_msg = ph
         elif self._mutable(ph):
-            # Common fast path: nothing has dispatched ph yet, so editing it
-            # in place to reflect "now running as a nested handle" is free —
-            # this is also what test helpers (_wait_for_tool_result and
-            # friends) key off of to know adoption happened, so preserving
-            # it here keeps them from racing ahead of it.
+            # Nothing has dispatched ph yet, so editing it in place to say
+            # "now running as a nested handle" is free; observers waiting on
+            # the tool result key off this edit to know adoption happened.
             ph["content"] = placeholder_content
         else:
-            # ph is already frozen (dispatched). This update is non-final —
-            # a transient status marker, not the call's terminal result,
-            # which still lands on `ph` untouched (via process_completed_task's
-            # own gate) when the nested task actually finishes — so route it
-            # through the same coalesce-then-freeze progress delivery as
-            # tool notifications rather than rewriting the frozen `ph`.
+            # ph is already frozen (dispatched). This update is a transient
+            # status marker, not the call's terminal result — that still
+            # lands on `ph` via process_completed_task's own gate when the
+            # nested task finishes — so it goes through the same
+            # coalesce-then-freeze progress delivery as tool notifications.
             pretty = (
                 placeholder_content
                 if isinstance(placeholder_content, str)
@@ -1436,7 +1337,6 @@ class ToolsData:
             )
             await self.record_progress(info, info.call_id, pretty, msg_dispatcher)
 
-        # Book-keeping for the new task (inherit, share placeholder)
         metadata = dataclasses.replace(
             info,
             handle=child_handle,
@@ -1449,17 +1349,15 @@ class ToolsData:
         self.save_task(nested_task, metadata)
         if h_up_q is not None:
             self.clarification_channels[info.call_id] = (h_up_q, h_down_q)
-        # Refresh dynamic helpers immediately now that handle is available
+        # Refresh dynamic helpers immediately, now that a handle is available.
         if self._on_handle_adopted is not None:
             with suppress(Exception):
                 self._on_handle_adopted(nested_task)
-        # Announce the capability delta now that a real handle backs this
-        # call_id — not a re-announcement of "started" (record_tool_started
-        # already covered call_id discovery when this call was scheduled).
+        # Only the capability delta: record_tool_started already covered
+        # call_id discovery when this call was scheduled.
         with suppress(Exception):
             await self.record_tool_capability_delta(metadata, msg_dispatcher)
 
-    # ── Helper: adopt multiple handles from a single composite return --------
     async def adopt_multi_nested(
         self,
         info: "ToolCallMetadata",
@@ -1472,16 +1370,14 @@ class ToolsData:
     ) -> None:
         """Adopt multiple handles from a single tool's composite return.
 
-        Creates one placeholder for the parent call_id with intermediate content
-        showing labeled sentinels (``[h0: steerable]``, etc.), then schedules
-        each handle as an independent child task with a synthesized call_id.
-
-        Each child completes independently, progressively updating the shared
-        placeholder via :class:`_MultiHandleState`.
+        One placeholder for the parent call_id carries the intermediate
+        content with labeled sentinels (``[h0: steerable]``, …); each handle
+        is scheduled as an independent child task with a synthesized call_id
+        and progressively updates that placeholder via
+        :class:`_MultiHandleState`.
         """
         parent_call_id = info.call_id
 
-        # Create / update placeholder with intermediate content
         placeholder_content = serialize_tool_content(
             tool_name=info.name,
             payload=intermediate_content,
@@ -1504,17 +1400,15 @@ class ToolsData:
                 bypass_watermark=True,  # first-ever reply to this call_id — legality, not caching
             )
         else:
-            # `ph` becomes `state.placeholder_msg` below — the single shared
-            # slot `_MultiHandleState.record_child_result` will keep
-            # managing (mutate-if-mutable, else per-child check_status)
-            # for the rest of this call's lifetime. Only refresh it here if
-            # it's still free to edit; if it's already been dispatched,
-            # leave it frozen rather than forking a second, disconnected
-            # view that record_child_result never touches.
+            # `ph` becomes `state.placeholder_msg`, the single shared slot
+            # `_MultiHandleState.record_child_result` keeps managing
+            # (mutate-if-mutable, else per-child check_status) for the rest
+            # of this call. If it has already been dispatched, leave it
+            # frozen rather than forking a second, disconnected view that
+            # record_child_result never touches.
             if self._mutable(ph):
                 ph["content"] = placeholder_content
 
-        # Shared state that all children reference
         state = _MultiHandleState(
             parent_call_id=parent_call_id,
             parent_name=info.name,
@@ -1524,19 +1418,17 @@ class ToolsData:
         )
 
         for handle, label in handles:
-            # Append label directly (no underscore) so the 8-char safe_call_id
-            # includes both parent uniqueness and the handle label, avoiding
-            # collisions when multiple parents each have an h0.
+            # The label is appended without an underscore so the 8-char
+            # safe_call_id carries both parent uniqueness and the label, and
+            # two parents that each have an h0 cannot collide.
             synth_call_id = f"{parent_call_id}{label}"
 
-            # Schedule the handle's result coroutine
             if inspect.iscoroutinefunction(handle.result):
                 nested_coro = handle.result()
             else:
                 nested_coro = asyncio.to_thread(handle.result)
             nested_task = asyncio.create_task(nested_coro)
 
-            # Wire clarification channels from the handle
             h_up_q = getattr(handle, "clarification_up_q", None)
             h_down_q = getattr(handle, "clarification_down_q", None)
 
@@ -1549,11 +1441,9 @@ class ToolsData:
                 clar_up_queue=h_up_q,
                 clar_down_queue=h_down_q,
                 notification_queue=None,
-                # Each child gets its own clean slate rather than inheriting
-                # the parent's in-flight progress/clarify message reference
-                # — otherwise two children sharing that reference would
-                # coalesce their updates onto one tail message instead of
-                # each getting its own.
+                # A clean slate per child: two children inheriting the
+                # parent's progress/clarify message reference would coalesce
+                # their updates onto one tail message.
                 progress_msg=None,
                 clarify_msg=None,
                 _multi_handle_state=state,
@@ -1568,13 +1458,12 @@ class ToolsData:
                 with suppress(Exception):
                     self._on_handle_adopted(nested_task)
 
-            # Announce this child's own synthesized call_id — steer() needs
-            # it verbatim, and (unlike the single-handle case) it's not the
-            # same id as the original tool call, so there is nothing else
-            # in the transcript the model could read it back from. Unlike
-            # schedule_base_tool_call, this child already has its handle at
-            # birth, so the capability delta fires right after — this is
-            # its only announcement, not a re-announcement of anything.
+            # Announce this child's synthesized call_id: steer() needs it
+            # verbatim and, unlike the single-handle case, it differs from
+            # the original call's id, so nothing else in the transcript
+            # carries it. The child has its handle at birth, so the
+            # capability delta fires right after as part of this one
+            # announcement.
             with suppress(Exception):
                 await self.record_tool_started(metadata, msg_dispatcher)
                 await self.record_tool_capability_delta(metadata, msg_dispatcher)

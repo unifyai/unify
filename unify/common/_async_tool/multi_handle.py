@@ -1,8 +1,5 @@
-"""Multi-handle coordination for async tool loops.
-
-This module provides the coordinator and per-request handle classes that enable
-a single async tool loop to serve multiple concurrent requests with shared context.
-"""
+"""Coordinator and per-request handles that let one async tool loop serve
+several concurrent requests over shared context."""
 
 from __future__ import annotations
 
@@ -19,11 +16,8 @@ from .tagging import (
 
 
 class MultiHandleCoordinator:
-    """Coordinates multiple requests within a single async tool loop.
-
-    This class manages the shared state between multiple request handles,
-    routing messages and results to the appropriate request based on ID.
-    """
+    """Shared state behind the per-request handles of one loop: routes
+    messages and results to the right request by id."""
 
     def __init__(
         self,
@@ -32,94 +26,38 @@ class MultiHandleCoordinator:
         clarification_channels: dict,
         persist: bool = False,
     ) -> None:
-        """Initialize the coordinator.
-
-        Parameters
-        ----------
-        interject_queue : asyncio.Queue
-            The shared interjection queue for the loop.
-        clarification_channels : dict
-            The shared clarification channels mapping (call_id -> queues).
-        persist : bool
-            Whether the loop should persist after all requests complete.
-        """
         self._registry = RequestRegistry()
         self._interject_queue = interject_queue
+        # call_id -> (up_q, down_q), shared with the loop.
         self._clarification_channels = clarification_channels
+        # Whether the loop persists after all requests complete.
         self._persist = persist
-        # Per-request clarification queues (request_id -> Queue)
         self._request_clarification_queues: dict[int, asyncio.Queue] = {}
-        # Per-request notification queues (request_id -> Queue)
         self._request_notification_queues: dict[int, asyncio.Queue] = {}
 
     @property
     def registry(self) -> RequestRegistry:
-        """Return the underlying request registry."""
         return self._registry
 
     def register_request(self, handle_ref: Any = None) -> int:
-        """Register a new request and return its ID.
-
-        Parameters
-        ----------
-        handle_ref : Any, optional
-            Reference to the handle for this request.
-
-        Returns
-        -------
-        int
-            The assigned request ID.
-        """
+        """Register a new request, with its own event queues, and return its id."""
         request_id = self._registry.register(handle_ref)
-        # Create per-request event queues
         self._request_clarification_queues[request_id] = asyncio.Queue()
         self._request_notification_queues[request_id] = asyncio.Queue()
         return request_id
 
     def complete_request(self, request_id: int, result: str) -> bool:
-        """Mark a request as completed with the given result.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to complete.
-        result : str
-            The final answer for this request.
-
-        Returns
-        -------
-        bool
-            True if successful, False if request_id invalid or already done.
-        """
+        """Complete a request with its final answer; False when the id is
+        invalid or the request is already done."""
         return self._registry.complete(request_id, result)
 
     def cancel_request(self, request_id: int, reason: str | None = None) -> bool:
-        """Mark a request as cancelled.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to cancel.
-        reason : str | None
-            Optional cancellation reason.
-
-        Returns
-        -------
-        bool
-            True if successful, False if request_id invalid or already done.
-        """
+        """Cancel a request; False when the id is invalid or the request is
+        already done."""
         return self._registry.cancel(request_id, reason)
 
     def inject_interjection(self, request_id: int, message: str) -> None:
-        """Inject a tagged interjection into the shared queue.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID this interjection belongs to.
-        message : str
-            The interjection message.
-        """
+        """Queue *message* tagged with its request id."""
         tagged = tag_message_with_request(message, request_id)
         self._interject_queue.put_nowait(tagged)
 
@@ -128,37 +66,17 @@ class MultiHandleCoordinator:
         request_id: int,
         reason: str | None = None,
     ) -> None:
-        """Inject a cancellation notice into the loop.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID being cancelled.
-        reason : str | None
-            Optional cancellation reason.
-        """
+        """Tell the LLM that a request was cancelled."""
         notice = format_request_cancelled_notice(request_id, reason)
         self._interject_queue.put_nowait(notice)
 
     def inject_pause_notice(self, request_id: int) -> None:
-        """Inject a pause notice into the loop.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID being paused.
-        """
+        """Tell the LLM that a request was paused."""
         notice = format_request_paused_notice(request_id)
         self._interject_queue.put_nowait(notice)
 
     def inject_resume_notice(self, request_id: int) -> None:
-        """Inject a resume notice into the loop.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID being resumed.
-        """
+        """Tell the LLM that a request was resumed."""
         notice = format_request_resumed_notice(request_id)
         self._interject_queue.put_nowait(notice)
 
@@ -167,92 +85,42 @@ class MultiHandleCoordinator:
         request_id: int,
         clarification: dict,
     ) -> None:
-        """Route a clarification question to the appropriate request's queue.
-
-        Parameters
-        ----------
-        request_id : int
-            The target request ID.
-        clarification : dict
-            The clarification event dict.
-        """
+        """Deliver a clarification event to its request's queue."""
         q = self._request_clarification_queues.get(request_id)
         if q is not None:
             q.put_nowait(clarification)
 
     def get_clarification_queue(self, request_id: int) -> asyncio.Queue | None:
-        """Get the clarification queue for a request."""
         return self._request_clarification_queues.get(request_id)
 
     def get_notification_queue(self, request_id: int) -> asyncio.Queue | None:
-        """Get the notification queue for a request."""
         return self._request_notification_queues.get(request_id)
 
     def should_terminate(self) -> bool:
-        """Check if the loop should terminate.
-
-        Returns
-        -------
-        bool
-            True if all requests are done and persist is False.
-        """
+        """True once every request is done, unless the loop persists."""
         if self._persist:
             return False
         return self._registry.is_empty()
 
     def is_closed(self) -> bool:
-        """Check if the coordinator is closed."""
         return self._registry.is_closed()
 
     def close(self) -> None:
-        """Close the coordinator, preventing new requests."""
+        """Refuse new requests from now on."""
         self._registry.close()
 
     def get_request_future(self, request_id: int) -> asyncio.Future | None:
-        """Get the result future for a request.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID.
-
-        Returns
-        -------
-        asyncio.Future | None
-            The future, or None if request not found.
-        """
         state = self._registry.get(request_id)
         return state.result_future if state else None
 
     def is_request_done(self, request_id: int) -> bool:
-        """Check if a specific request is done.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to check.
-
-        Returns
-        -------
-        bool
-            True if the request is completed or cancelled.
-        """
+        """True when the request is completed, cancelled or unknown."""
         state = self._registry.get(request_id)
         return state.is_done if state else True
 
     def validate_request_id(self, request_id: int) -> str | None:
-        """Validate a request ID and return an error message if invalid.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID to validate.
-
-        Returns
-        -------
-        str | None
-            Error message if invalid, None if valid.
-        """
+        """An error message when the request id is unknown or already done,
+        else None."""
         state = self._registry.get(request_id)
         if state is None:
             return f"Invalid request_id {request_id}: no such request exists."
@@ -262,11 +130,8 @@ class MultiHandleCoordinator:
 
 
 class MultiRequestHandle:
-    """Per-request handle for multi-handle async tool loops.
-
-    This handle wraps a specific request_id and routes all steering
-    operations through the shared MultiHandleCoordinator.
-    """
+    """Per-request handle of a multi-handle loop: wraps one request_id and
+    routes every steering operation through the shared coordinator."""
 
     def __init__(
         self,
@@ -275,17 +140,6 @@ class MultiRequestHandle:
         *,
         loop_id: str = "",
     ) -> None:
-        """Initialize the per-request handle.
-
-        Parameters
-        ----------
-        request_id : int
-            The request ID this handle represents.
-        coordinator : MultiHandleCoordinator
-            The shared coordinator managing all requests.
-        loop_id : str
-            The loop identifier for logging.
-        """
         self._request_id = request_id
         self._coordinator = coordinator
         self._loop_id = loop_id
@@ -334,9 +188,7 @@ class MultiRequestHandle:
         if state is None or state.is_done:
             return
 
-        # Notify the LLM that this request is cancelled
         self._coordinator.inject_cancellation_notice(self._request_id, reason)
-        # Mark the request as cancelled
         self._coordinator.cancel_request(self._request_id, reason)
 
     async def pause(self) -> None:
@@ -368,7 +220,7 @@ class MultiRequestHandle:
         """Await the next clarification for this request."""
         q = self._coordinator.get_clarification_queue(self._request_id)
         if q is None:
-            # Block forever if no queue (request doesn't exist)
+            # An unknown request never produces events: block forever.
             await asyncio.Future()
         return await q.get()
 
@@ -412,20 +264,13 @@ class MultiRequestHandle:
                 "Loop has terminated. Start a new loop via start_async_tool_loop().",
             )
 
-        # Register the new request
         new_request_id = self._coordinator.register_request()
-
-        # Inject the tagged message into the loop
         self._coordinator.inject_interjection(new_request_id, message)
-
-        # Create and return a new handle
         new_handle = MultiRequestHandle(
             new_request_id,
             self._coordinator,
             loop_id=self._loop_id,
         )
-
-        # Store handle reference in registry
         state = self._coordinator.registry.get(new_request_id)
         if state:
             state.handle_ref = new_handle
