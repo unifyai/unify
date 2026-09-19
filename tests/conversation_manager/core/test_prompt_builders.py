@@ -123,12 +123,12 @@ class TestToolListing:
     def test_action_steering_tools_listed(self):
         prompt = _build()
         for name in (
-            "ask_*",
-            "interject_*",
-            "stop_*",
-            "pause_*",
-            "resume_*",
-            "answer_clarification_*",
+            "ask_action",
+            "interject_action",
+            "stop_action",
+            "pause_action",
+            "resume_action",
+            "answer_clarification_action",
         ):
             assert f"- `{name}`:" in prompt
 

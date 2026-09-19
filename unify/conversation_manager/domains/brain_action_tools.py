@@ -351,11 +351,11 @@ class ConversationManagerBrainActionTools:
                 **Key differences from the default (persist=False):**
 
                 - The action will **never** complete on its own.  You must
-                  explicitly call ``stop_*`` to end the session.
+                  explicitly call ``stop_action`` to end the session.
                 - Intermediate responses from the actor appear as **response**
                   events in the action's history (marked ``awaiting_input``).
                   Each response means the actor has finished its current turn
-                  and is waiting for your next instruction via ``interject_*``.
+                  and is waiting for your next instruction via ``interject_action``.
                 - Progress updates (notifications) may still arrive while the
                   actor is working, before it sends a response.
 

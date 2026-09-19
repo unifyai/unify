@@ -34,12 +34,12 @@ def _build_action_steering_tool_listing() -> str:
     """Build the shared action steering tools block for the output format section."""
     return "\n".join(
         [
-            "- `ask_*`: Ask about a running action's progress, or a completed action's process/methodology",
-            "- `interject_*`: Provide new information or instructions to a running action",
-            "- `stop_*`: Cancel a running action entirely",
-            "- `pause_*`: Temporarily halt a running action",
-            "- `resume_*`: Continue a paused running action",
-            "- `answer_clarification_*`: Respond to a question from a running action",
+            "- `ask_action`: Ask about a running action's progress, or a completed action's process/methodology",
+            "- `interject_action`: Provide new information or instructions to a running action",
+            "- `stop_action`: Cancel a running action entirely",
+            "- `pause_action`: Temporarily halt a running action",
+            "- `resume_action`: Continue a paused running action",
+            "- `answer_clarification_action`: Respond to a question from a running action",
         ],
     )
 
@@ -70,7 +70,7 @@ notifications:
 in_flight_actions:
     action id='0' short_name='summarise_the_report' status='executing' type='act'
         original_request: [the original query that started this action - this work is ALREADY IN PROGRESS]
-        steering_tools: [tools to interact with this running action: ask_*, stop_*, pause_*, etc.]
+        steering_tools: [tools to interact with this running action: ask_action, stop_action, pause_action, etc.]
         history: [events and responses from this action so far]
 
 conversation:
@@ -114,7 +114,7 @@ All actions are performed by calling the available tools. The tools I have acces
 **Action tools:**
 {action_tool_listing}
 
-**Action steering tools** (`ask_*` also works for completed actions):
+**Action steering tools** (`ask_action` also works for completed actions):
 {action_steering_tool_listing}"""
 
 
@@ -143,7 +143,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Completed an action → `wait` (do not announce completion unless asked).
 - Unsure what to *say* but the user sent a new message → still reply briefly with what I know; only `wait` when there is genuinely nothing new to address.
 
-**Understanding `wait`**: Calling `wait()` (no delay) yields control back to the system indefinitely; I automatically get another turn when a new inbound message arrives, or an in-flight action completes, asks a clarification question, or sends a progress notification — so I never poll or check on actions (calling `ask_*` for action status is only appropriate when the user explicitly asks about progress). Calling `wait(delay=<seconds>)` also yields, but schedules a follow-up thinking turn after that many seconds — for *proactively* revisiting (probing a long-running action, a status update, re-evaluating changed conditions), never busy-polling; a real event arriving earlier wakes me immediately instead. Finishing a turn **without** calling `wait` triggers an **Open slow-brain turn** (System notification) and another thinking turn, recurring until I explicitly call `wait()` or `wait(delay=…)` — separate from the event-driven wakes above.
+**Understanding `wait`**: Calling `wait()` (no delay) yields control back to the system indefinitely; I automatically get another turn when a new inbound message arrives, or an in-flight action completes, asks a clarification question, or sends a progress notification — so I never poll or check on actions (calling `ask_action` for action status is only appropriate when the user explicitly asks about progress). Calling `wait(delay=<seconds>)` also yields, but schedules a follow-up thinking turn after that many seconds — for *proactively* revisiting (probing a long-running action, a status update, re-evaluating changed conditions), never busy-polling; a real event arriving earlier wakes me immediately instead. Finishing a turn **without** calling `wait` triggers an **Open slow-brain turn** (System notification) and another thinking turn, recurring until I explicitly call `wait()` or `wait(delay=…)` — separate from the event-driven wakes above.
 
 **Important: This restraint applies to COMMUNICATION only.**
 - `wait` is preferred over sending *extra* messages after I have already answered — not over answering inbound chat
@@ -154,7 +154,7 @@ def _build_action_steering_guidelines_block() -> str:
     """Build action-steering guidance for system prompts."""
     return """Action steering guidelines
 --------------------------
-Actions shown in in_flight_actions are ALREADY EXECUTING their original request — the work is happening right now. I use steering tools to interact with them; I do NOT call `act` to duplicate work already in progress. If the user asks "how's that going?" about a running action, or "how did you do that?" about a completed one, I use `ask_*` on that action — never a new `act` to re-derive the answer. After starting an action, call `wait` — do NOT poll status (see Understanding `wait`).
+Actions shown in in_flight_actions are ALREADY EXECUTING their original request — the work is happening right now. I use steering tools to interact with them; I do NOT call `act` to duplicate work already in progress. If the user asks "how's that going?" about a running action, or "how did you do that?" about a completed one, I use `ask_action` on that action — never a new `act` to re-derive the answer. After starting an action, call `wait` — do NOT poll status (see Understanding `wait`).
 
 **After an action completes** I see an "Action completed: ..." notification — authoritative output. Compare the original request and its result against the user's intent:
 - Fully satisfies the request → take the appropriate follow-up (send the result / confirm) or `wait` if nothing else is needed.
@@ -162,11 +162,11 @@ Actions shown in in_flight_actions are ALREADY EXECUTING their original request 
 - Clearly wrong relative to the request → start a NEW action with a materially revised query (new constraints, corrected objective) — never blindly repeat the same query.
 
 **The steering tools** — use them when the user explicitly engages with an action ("how's that going?", "how did you do that?", "stop that", "pause it", a mid-flight correction):
-- `ask_*`: query a running action's progress, or a completed action's process/methodology — it has the full internal trajectory, so always prefer it over a new `act` for follow-up questions about prior work (combine with a new `act` only when fresh resources are also needed). ASYNCHRONOUS: "Query submitted" returns immediately; the response appears in the action's history and I automatically get another turn to act on it.
-- `stop_*`: end/cancel/abandon an action — it keeps running until I call this. "Cancel this, start over" → `stop_*`. "That's everything, you've got the hang of it now" ending a guided session → `stop_*` (teaching complete). But "now do the next step" during a guided session → `interject_*` (the session needs to continue executing)
-- `pause_*` / `resume_*`: temporarily halt an action keeping its state / continue it from where it stopped.
-- `interject_*`: proactively provide new information or updated instructions to a running action ("actually, only include the last quarter"). It changes how the action does its own job — scope, constraints, corrections — it does not hand the action a second job: a new deliverable is a new `act`, even when it touches the same file or data as work already running ("now pull the Los Angeles figures out of the same CSV" while the New York pull runs → `act`, not `interject_*`). Requests to remember/save what an action is doing also go here ("Please save this as a skill") — the action stores skills on its own while continuing to run.
-- `answer_clarification_*`: respond to a specific question the action asked (shown in its history). The key distinction: `interject_*` is proactive (I'm volunteering information); `answer_clarification_*` is reactive (the action asked)."""
+- `ask_action`: query a running action's progress, or a completed action's process/methodology — it has the full internal trajectory, so always prefer it over a new `act` for follow-up questions about prior work (combine with a new `act` only when fresh resources are also needed). ASYNCHRONOUS: "Query submitted" returns immediately; the response appears in the action's history and I automatically get another turn to act on it.
+- `stop_action`: end/cancel/abandon an action — it keeps running until I call this. "Cancel this, start over" → `stop_action`. "That's everything, you've got the hang of it now" ending a guided session → `stop_action` (teaching complete). But "now do the next step" during a guided session → `interject_action` (the session needs to continue executing)
+- `pause_action` / `resume_action`: temporarily halt an action keeping its state / continue it from where it stopped.
+- `interject_action`: proactively provide new information or updated instructions to a running action ("actually, only include the last quarter"). It changes how the action does its own job — scope, constraints, corrections — it does not hand the action a second job: a new deliverable is a new `act`, even when it touches the same file or data as work already running ("now pull the Los Angeles figures out of the same CSV" while the New York pull runs → `act`, not `interject_action`). Requests to remember/save what an action is doing also go here ("Please save this as a skill") — the action stores skills on its own while continuing to run.
+- `answer_clarification_action`: respond to a specific question the action asked (shown in its history). The key distinction: `interject_action` is proactive (I'm volunteering information); `answer_clarification_action` is reactive (the action asked)."""
 
 
 def _build_uncertainty_handling_block() -> str:
@@ -203,7 +203,7 @@ def _build_persistent_sessions_block() -> str:
     """Build persistent-session guidance for system prompts."""
     return """Persistent sessions (persist=True)
 -----------------------------------
-A ``persist=False`` action completes on its own and is gone — a follow-up instruction after it finishes has no session to receive it. Use ``persist=True`` whenever the action may need further direction: the session stays alive and subsequent instructions arrive via ``interject_*``.
+A ``persist=False`` action completes on its own and is gone — a follow-up instruction after it finishes has no session to receive it. Use ``persist=True`` whenever the action may need further direction: the session stays alive and subsequent instructions arrive via ``interject_action``.
 
 **Default to persist=True.** In ambiguous cases it is always better to start a persistent session and stop it explicitly than to restart from scratch, losing accumulated context (discovered credentials, intermediate results, loaded guidance).
 
@@ -219,7 +219,7 @@ A ``persist=False`` action completes on its own and is gone — a follow-up inst
 
 **Combine entangled objectives into a single ``act`` call.** A moment with both a storage component ("remember the procedure I just showed you") and an interactive one ("now you try it") is ONE ``act(persist=True)`` with a query covering both — not two separate actions that lose shared context.
 
-Once a persistent action is running, all further instructions belonging to the same session go through ``interject_*`` — I do NOT start a new ``act`` for each step."""
+Once a persistent action is running, all further instructions belonging to the same session go through ``interject_action`` — I do NOT start a new ``act`` for each step."""
 
 
 def _build_base_concurrent_action_ack_block() -> str:

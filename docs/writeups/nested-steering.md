@@ -27,13 +27,13 @@ The outer loop is the [`ConversationManager`](https://github.com/unifyai/unify/b
   </picture>
 </p>
 
-Every running action is tracked in `in_flight_actions`. The ConversationManager's own tool list is then regenerated dynamically, with per-action steering tools for each one:
+Every running action is tracked in `in_flight_actions`, and the ConversationManager steers any of them through six tools addressed by the action's id:
 
-- `interject_<name>__<id>` — push a correction or follow-up into the running task
-- `ask_<name>__<id>` — inspect what the task is doing without disturbing it
-- `pause_<name>__<id>` / `resume_<name>__<id>` — suspend and continue
-- `stop_<name>__<id>` — cancel
-- `answer_clarification_<name>__<id>__<call>` — appears only while the task is blocked on a question
+- `interject_action(handle_id, message)` — push a correction or follow-up into the running task
+- `ask_action(handle_id, question)` — inspect what the task is doing without disturbing it, or how a completed one did its work
+- `pause_action(handle_id)` / `resume_action(handle_id)` — suspend and continue
+- `stop_action(handle_id, reason)` — cancel
+- `answer_clarification_action(handle_id, answer, call_id)` — reply to the question a task is blocked on
 
 So when you message the assistant mid-task, the model deciding what to do with your message literally has a tool named after the running task sitting in front of it. Routing your correction into the right piece of in-flight work is an ordinary tool call, not a special case.
 
@@ -60,11 +60,11 @@ return final_content  # persist=False: DONE
 
 The ConversationManager sees the response, marks the action `awaiting_input`, and keeps it in `in_flight_actions`. The task is done but the session is alive. The full inner transcript is still in memory, and so is the Python sandbox with whatever state the work built up.
 
-There's deliberately no separate "resume session" API. Continuation is just another interjection. When you say "now do March", the outer model calls `interject_<name>__<id>` and the same loop wakes up, with the new instruction appended to the transcript it already has. From the inner model's point of view, a follow-up is indistinguishable from a mid-task correction. That's the right semantics, because that's what it is.
+There's deliberately no separate "resume session" API. Continuation is just another interjection. When you say "now do March", the outer model calls `interject_action` on that id and the same loop wakes up, with the new instruction appended to the transcript it already has. From the inner model's point of view, a follow-up is indistinguishable from a mid-task correction. That's the right semantics, because that's what it is.
 
 This sounds like a small difference from "start a new task with a summary of the old one". It isn't. Summaries lose the things you didn't know would matter. A live session keeps state that never made it into text — an authenticated client object sitting in a sandbox variable, say. The monthly-report follow-up that would have been a cold start becomes one line into a warm context.
 
-The cost is that keeping sessions alive is a real decision. Our system prompt pushes the outer model to default to `persist=True` whenever a follow-up is plausible, and to close sessions explicitly with `stop_*` instead of letting `persist=False` silently throw away context we turn out to need.
+The cost is that keeping sessions alive is a real decision. Our system prompt pushes the outer model to default to `persist=True` whenever a follow-up is plausible, and to close sessions explicitly with `stop_action` instead of letting `persist=False` silently throw away context we turn out to need.
 
 ## Talking down: interjection
 
@@ -75,7 +75,7 @@ It's also immediate. The inner loop runs with `interrupt_llm_with_interjections`
 
 ## Talking up: clarification
 
-The inner loop gets the mirror-image channel. An actor started with clarification enabled has `request_clarification(question)` in its tool surface. Calling it blocks that exact call site. The question travels up through the handle's clarification queue, the ConversationManager wakes and relays it to the user, and an `answer_clarification_*` tool appears for the pending question. When the answer comes back, it's routed down the same queues and the blocked call returns with the answer as its value.
+The inner loop gets the mirror-image channel. An actor started with clarification enabled has `request_clarification(question)` in its tool surface. Calling it blocks that exact call site. The question travels up through the handle's clarification queue, the ConversationManager wakes and relays it to the user, and an `answer_clarification_action` tool appears for the pending question. When the answer comes back, it's routed down the same queues and the blocked call returns with the answer as its value.
 
 So "which of these two exports did you mean?" doesn't kill the task. The task is suspended at precisely the point of ambiguity, and resumes from that point with the answer in hand.
 
@@ -97,7 +97,7 @@ Models behave badly when their context changes silently underneath them. They be
 
 Sessions are in-process. The handle and its sandbox live in the runtime's memory, so a persistent session survives across hours of conversation but not across a process restart. Durable state still has to be written somewhere real, and the actor does that explicitly. Python variables persist across `execute_code` calls in the default per-act session; a stateless cell is a clean slate per call, for when isolation is what you want.
 
-Persistence also has a footprint. A session holds its sandbox open, so a runtime that never stops its sessions slowly accumulates them. We chose to make the outer model responsible for `stop_*`, with the same first-class tooling as everything else.
+Persistence also has a footprint. A session holds its sandbox open, so a runtime that never stops its sessions slowly accumulates them. We chose to make the outer model responsible for `stop_action`, with the same first-class tooling as everything else.
 
 I wonder whether the industry ends up here anyway. A chat loop over persistent working loops is a pretty natural shape once you've lived with it.
 
